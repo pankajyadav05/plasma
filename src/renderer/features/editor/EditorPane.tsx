@@ -107,7 +107,7 @@ export function EditorPane() {
           </div>
 
           {/* ── Monaco editor body ── */}
-          <div className="relative min-h-0 flex-1 overflow-hidden">
+          <div className="relative min-h-0 flex-1 pt-4 overflow-hidden">
             {isTable && (
               <div className="absolute left-4 top-2 z-10 font-display text-xs italic text-ink-muted">
                 compiled from table browser — read-only

@@ -179,9 +179,11 @@ body {
 :root[data-platform="darwin"] .topbar-pad {
   padding-left: 80px;
 }
+/* Win/Linux: custom titlebar buttons live inside the topbar (right edge),
+   they bring their own width — no extra padding needed. */
 :root[data-platform="win32"] .topbar-pad,
 :root[data-platform="linux"] .topbar-pad {
-  padding-right: 140px;
+  padding-right: 0;
 }
 
 /* ─── Monaco editor overrides (Paper theme surface) ─── */

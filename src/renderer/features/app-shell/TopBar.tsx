@@ -1,7 +1,11 @@
-import { Clock, Command as CommandIcon, Moon, PanelLeft, PanelLeftClose, Settings, Sun } from "lucide-react";
+import { Command as CommandIcon, Lock, PanelLeft, PanelLeftClose, Pencil } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
+import { cn } from "@/lib/cn";
 import { useSession } from "@/stores/session";
+import { WindowControls } from "./WindowControls";
+
+const isMac = window.plasma?.platform === "darwin";
 
 export function TopBar() {
   const activeConfig = useSession((s) => s.activeConfig);
@@ -9,13 +13,24 @@ export function TopBar() {
   const openDialog = useSession((s) => s.openDialog);
   const editConnection = useSession((s) => s.editConnection);
   const togglePalette = useSession((s) => s.togglePalette);
-  const setSettingsOpen = useSession((s) => s.setSettingsOpen);
-  const setHistoryOpen = useSession((s) => s.setHistoryOpen);
-  const loadHistory = useSession((s) => s.loadHistory);
-  const toggleTheme = useSession((s) => s.toggleTheme);
   const toggleSidebar = useSession((s) => s.toggleSidebar);
   const sidebarCollapsed = useSession((s) => s.settings.sidebarCollapsed);
-  const theme = useSession((s) => s.settings.theme);
+  const editMode = useSession((s) => s.editMode);
+  const toggleEditMode = useSession((s) => s.toggleEditMode);
+
+  // Any overlay (dialog, sheet, palette, confirm prompt) that should
+  // cover the TopBar. When one is open we drop `.drag` so the
+  // `-webkit-app-region` compositor layer doesn't float above modal
+  // overlays, and disable pointer events so the topbar can't be
+  // interacted with while a modal is up.
+  const overlayOpen = useSession(
+    (s) =>
+      s.dialogOpen ||
+      s.paletteOpen ||
+      s.settingsOpen ||
+      s.historyOpen ||
+      s.deleteConfirmConnectionId !== null,
+  );
 
   const dotClass =
     connectionState === "connected"
@@ -27,7 +42,12 @@ export function TopBar() {
           : "bg-ink-disabled";
 
   return (
-    <header className="drag topbar-pad relative z-20 flex h-12 items-center gap-3 bg-paper">
+    <header
+      className={cn(
+        "topbar-pad relative z-20 flex h-12 items-center gap-3 bg-paper",
+        overlayOpen ? "pointer-events-none" : "drag",
+      )}
+    >
       <div className="no-drag flex items-center">
         <Button
           variant="ghost"
@@ -92,48 +112,37 @@ export function TopBar() {
 
       <div className="flex-1" />
 
-      <div className="no-drag flex items-center gap-0.5">
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          aria-label="Query history (⌘H)"
-          title="Query history (⌘H)"
-          onClick={() => {
-            setHistoryOpen(true);
-            void loadHistory();
-          }}
+      {activeConfig && (
+        <button
+          type="button"
+          onClick={toggleEditMode}
+          title={editMode ? "Writes enabled — click to lock" : "Read-only — click to enable writes"}
+          className={cn(
+            "no-drag flex h-7 items-center gap-1.5 rounded-sm border px-2.5 font-mono text-xs uppercase tracking-[0.08em] transition-colors",
+            editMode
+              ? "border-accent bg-accent text-paper hover:bg-accent-hover"
+              : "border-border-soft text-ink-muted hover:border-accent hover:text-accent",
+          )}
         >
-          <Clock />
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          aria-label={theme === "paper" ? "Dark theme" : "Light theme"}
-          title={theme === "paper" ? "Dark theme" : "Light theme"}
-          onClick={() => void toggleTheme()}
-        >
-          {theme === "paper" ? <Moon /> : <Sun />}
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          aria-label="Settings"
-          title="Settings"
-          onClick={() => setSettingsOpen(true)}
-        >
-          <Settings />
-        </Button>
+          {editMode ? <Pencil className="h-3 w-3" /> : <Lock className="h-3 w-3" />}
+          {editMode ? "edit mode" : "read only"}
+        </button>
+      )}
+
+      <div className="no-drag flex items-center">
         <Button
           variant="secondary"
           size="sm"
           onClick={togglePalette}
-          title="Command palette (⌘K)"
+          title="Command palette (⌘K) — history, theme, settings"
           className="ml-2 h-7 gap-1.5 px-2.5 font-mono text-xs normal-case tracking-[0.04em] text-ink"
         >
           <CommandIcon className="h-3 w-3" />
           <span>K</span>
         </Button>
       </div>
+
+      {!isMac && <WindowControls />}
     </header>
   );
 }

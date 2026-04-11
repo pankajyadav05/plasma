@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useRef } from "react";
-import { Code2, Table2 } from "lucide-react";
-import type { ColumnMeta, QueryResult } from "@shared/protocol";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Code2, Table2, Trash2 } from "lucide-react";
+import type { ColumnMeta } from "@shared/protocol";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/cn";
 import { copyCellToClipboard } from "@/lib/export";
@@ -21,6 +21,53 @@ export function ResultGrid() {
   const connectionState = useSession((s) => s.connectionState);
   const setSort = useSession((s) => s.setSort);
   const setSelectedCell = useSession((s) => s.setSelectedCell);
+  const editMode = useSession((s) => s.editMode);
+  const updateCell = useSession((s) => s.updateCell);
+  const deleteRow = useSession((s) => s.deleteRow);
+  const schema = useSession((s) => s.schema);
+
+  // Inline cell edit state — local to the grid, only one cell at a time.
+  const [editingCell, setEditingCell] = useState<
+    { row: number; col: number; value: string } | null
+  >(null);
+  const [editError, setEditError] = useState<string | null>(null);
+
+  const isTableTab = tab?.kind === "table";
+  const writable =
+    Boolean(
+      isTableTab &&
+        editMode &&
+        tab?.tableSchema &&
+        tab?.tableName &&
+        schema?.columns.some(
+          (c) =>
+            c.schema === tab.tableSchema &&
+            c.table === tab.tableName &&
+            c.isPrimaryKey,
+        ),
+    );
+
+  const commitEdit = async () => {
+    if (!editingCell) return;
+    const { row, col, value } = editingCell;
+    setEditError(null);
+    try {
+      await updateCell(row, col, value);
+      setEditingCell(null);
+    } catch (err) {
+      setEditError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const handleDeleteRow = async (rowIndex: number) => {
+    if (!window.confirm("Delete this row? This cannot be undone.")) return;
+    setEditError(null);
+    try {
+      await deleteRow(rowIndex);
+    } catch (err) {
+      setEditError(err instanceof Error ? err.message : String(err));
+    }
+  };
 
   // Compute display rows.
   //
@@ -100,6 +147,16 @@ export function ResultGrid() {
         <div className="max-w-4xl p-8">
           <div className="mb-2 font-display text-xl italic text-accent">query error</div>
           <pre className="whitespace-pre-wrap break-words font-mono text-base text-ink">{tab.queryError}</pre>
+          {tab.queryErrorSql && (
+            <>
+              <div className="mt-6 mb-2 font-mono text-xs uppercase tracking-widest text-ink-muted">
+                sql sent to server
+              </div>
+              <pre className="whitespace-pre-wrap break-words rounded-sm border border-border-soft bg-paper-panel p-3 font-mono text-sm text-ink">
+                {tab.queryErrorSql}
+              </pre>
+            </>
+          )}
         </div>
       </div>
     );
@@ -181,6 +238,18 @@ export function ResultGrid() {
 
   return (
     <div ref={containerRef} className="min-h-0 flex-1 overflow-auto bg-paper-canvas">
+      {editError && (
+        <div className="sticky top-0 z-20 border-b border-accent bg-accent/10 px-4 py-2 font-mono text-xs text-accent">
+          {editError}{" "}
+          <button
+            type="button"
+            onClick={() => setEditError(null)}
+            className="ml-2 underline"
+          >
+            dismiss
+          </button>
+        </div>
+      )}
       <table className="min-w-full border-collapse font-mono text-base tabular-nums">
         <thead className="sticky top-0 z-10 bg-paper-canvas">
           <tr>
@@ -209,6 +278,12 @@ export function ResultGrid() {
                 </th>
               );
             })}
+            {writable && (
+              <th
+                className="sticky right-0 w-10 border-b-2 border-border-strong bg-paper-canvas"
+                aria-label="row actions"
+              />
+            )}
           </tr>
         </thead>
         <tbody>
@@ -218,28 +293,84 @@ export function ResultGrid() {
               <tr
                 // biome-ignore lint/suspicious/noArrayIndexKey: stable per-query
                 key={`row-${visibleRow}-${entry.originalIndex}`}
-                className={cn("transition-colors", rowSelected ? "bg-paper-selected" : "hover:bg-[var(--bg-hover)]")}
+                className={cn("group/row transition-colors", rowSelected ? "bg-paper-selected" : "hover:bg-[var(--bg-hover)]")}
               >
                 {entry.row.map((cell, j) => {
                   const cellSelected = tab.selectedCell?.row === visibleRow && tab.selectedCell?.col === j;
+                  const isEditing =
+                    editingCell?.row === visibleRow && editingCell?.col === j;
                   return (
                     <td
                       key={`${visibleRow}-${j}`}
-                      onClick={() => setSelectedCell({ row: visibleRow, col: j })}
+                      onClick={() => {
+                        if (!isEditing) setSelectedCell({ row: visibleRow, col: j });
+                      }}
                       onDoubleClick={() => {
-                        void copyCellToClipboard(cell);
+                        if (writable) {
+                          setEditingCell({
+                            row: visibleRow,
+                            col: j,
+                            value: cell === null || cell === undefined ? "" : String(cell),
+                          });
+                        } else {
+                          void copyCellToClipboard(cell);
+                        }
                       }}
                       className={cn(
-                        "h-[34px] max-w-[480px] cursor-cell truncate whitespace-nowrap border-b border-border-soft px-[18px] text-ink",
+                        "h-[34px] max-w-[480px] whitespace-nowrap border-b border-border-soft px-[18px] text-ink",
+                        !isEditing && "cursor-cell truncate",
                         cellClass(columns[j]),
-                        cellSelected && "outline outline-2 -outline-offset-2 outline-accent",
+                        cellSelected && !isEditing && "outline outline-2 -outline-offset-2 outline-accent",
+                        isEditing && "bg-paper-canvas p-0 outline outline-2 -outline-offset-2 outline-accent",
                       )}
-                      title={cellTitle(cell)}
+                      title={!isEditing ? cellTitle(cell) : undefined}
                     >
-                      {formatCell(cell)}
+                      {isEditing ? (
+                        <input
+                          autoFocus
+                          type="text"
+                          value={editingCell.value}
+                          onChange={(e) =>
+                            setEditingCell({
+                              row: visibleRow,
+                              col: j,
+                              value: e.target.value,
+                            })
+                          }
+                          onBlur={() => {
+                            void commitEdit();
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") {
+                              e.preventDefault();
+                              void commitEdit();
+                            } else if (e.key === "Escape") {
+                              e.preventDefault();
+                              setEditingCell(null);
+                            }
+                          }}
+                          className="h-[32px] w-full border-0 bg-transparent px-[18px] font-mono text-base text-ink outline-none"
+                        />
+                      ) : (
+                        formatCell(cell)
+                      )}
                     </td>
                   );
                 })}
+                {writable && (
+                  <td className="sticky right-0 w-10 border-b border-border-soft bg-paper-canvas px-1 text-right">
+                    <Button
+                      variant="ghost"
+                      size="icon-xs"
+                      className="opacity-0 transition-opacity group-hover/row:opacity-100"
+                      onClick={() => void handleDeleteRow(visibleRow)}
+                      aria-label="Delete row"
+                      title="Delete this row"
+                    >
+                      <Trash2 />
+                    </Button>
+                  </td>
+                )}
               </tr>
             );
           })}

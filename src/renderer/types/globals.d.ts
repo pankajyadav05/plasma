@@ -9,7 +9,7 @@ declare global {
   interface Window {
     plasma: PlasmaAPI;
     plasmaEvents: {
-      on(channel: string, handler: () => void): () => void;
+      on(channel: string, handler: (...args: unknown[]) => void): () => void;
     };
   }
 }

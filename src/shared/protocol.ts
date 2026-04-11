@@ -87,6 +87,9 @@ export const SchemaInfo = z.object({
       name: z.string(),
       dataType: z.string(),
       ordinal: z.number().int(),
+      isPrimaryKey: z.boolean().default(false),
+      isNullable: z.boolean().default(true),
+      hasDefault: z.boolean().default(false),
     }),
   ),
 });
@@ -205,6 +208,11 @@ export const IpcChannel = {
   TxnBegin: 'plasma:txn:begin',
   TxnCommit: 'plasma:txn:commit',
   TxnRollback: 'plasma:txn:rollback',
+  // Window controls (custom titlebar — Windows/Linux)
+  WindowMinimize: 'plasma:window:minimize',
+  WindowMaximizeToggle: 'plasma:window:maximizeToggle',
+  WindowClose: 'plasma:window:close',
+  WindowIsMaximized: 'plasma:window:isMaximized',
   // Dev sanity checks
   PingMain: 'plasma:ping:main',
   PingWorker: 'plasma:ping:worker',
@@ -268,5 +276,11 @@ export interface PlasmaAPI {
   ping: {
     main(req: PingRequest): Promise<PingResponse>;
     worker(req: PingRequest): Promise<PingResponse>;
+  };
+  window: {
+    minimize(): Promise<void>;
+    maximizeToggle(): Promise<void>;
+    close(): Promise<void>;
+    isMaximized(): Promise<boolean>;
   };
 }

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Download, FileJson, FileText, FileType2, RefreshCw } from "lucide-react";
+import { Download, FileJson, FileText, FileType2, Plus, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Separator } from "@/components/ui/separator";
@@ -8,6 +8,7 @@ import { useActiveTab, useSession } from "@/stores/session";
 import { FilterPopover } from "./FilterPopover";
 import { ColumnsPopover } from "./ColumnsPopover";
 import { SortPopover } from "./SortPopover";
+import { InsertRowDialog } from "./InsertRowDialog";
 
 /**
  * Toolbar above the result grid. Layout:
@@ -23,7 +24,9 @@ export function ResultToolbar() {
   const tab = useActiveTab();
   const refreshTable = useSession((s) => s.refreshTable);
   const runQuery = useSession((s) => s.runQuery);
+  const editMode = useSession((s) => s.editMode);
   const [exportOpen, setExportOpen] = useState(false);
+  const [insertOpen, setInsertOpen] = useState(false);
 
   // Listen for menu-driven export events so File → Export Results works
   useEffect(() => {
@@ -66,8 +69,25 @@ export function ResultToolbar() {
           <FilterPopover />
           <ColumnsPopover />
           <SortPopover />
+          {editMode && (
+            <>
+              <Separator orientation="vertical" className="mx-1 h-4" />
+              <Button
+                variant="outline"
+                size="xs"
+                className="border-accent text-accent"
+                onClick={() => setInsertOpen(true)}
+                title="Insert a new row"
+              >
+                <Plus />
+                Add row
+              </Button>
+            </>
+          )}
         </div>
       )}
+
+      <InsertRowDialog open={insertOpen} onOpenChange={setInsertOpen} />
 
       <div className="flex-1" />
 

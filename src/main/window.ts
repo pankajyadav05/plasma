@@ -50,40 +50,20 @@ interface WindowBounds {
 type Theme = 'paper' | 'midnight';
 
 /**
- * Read the persisted theme and compute the colors to use for the
- * native window background and title bar overlay. Called at window
- * creation time and (via `applyThemeToWindow`) whenever the renderer
- * flips theme in settings.
+ * Read the persisted theme and compute the native window background
+ * color. Called at window creation and (via `applyThemeToWindow`)
+ * whenever the renderer flips theme in settings.
  */
 export function themeColors(theme: Theme) {
   if (theme === 'midnight') {
-    return {
-      background: '#1B1812',
-      overlayColor: '#1B1812',
-      symbolColor: '#FAF7F0',
-    };
+    return { background: '#1B1812' };
   }
-  return {
-    background: '#FAF7F0',
-    overlayColor: '#FAF7F0',
-    symbolColor: '#1C1A14',
-  };
+  return { background: '#FAF7F0' };
 }
 
 export function applyThemeToWindow(win: BrowserWindow, theme: Theme): void {
   const colors = themeColors(theme);
   win.setBackgroundColor(colors.background);
-  if (process.platform !== 'darwin') {
-    try {
-      win.setTitleBarOverlay({
-        color: colors.overlayColor,
-        symbolColor: colors.symbolColor,
-        height: 48,
-      });
-    } catch {
-      /* ignore — platform may not support it */
-    }
-  }
 }
 
 export function createMainWindow(): BrowserWindow {
@@ -109,15 +89,6 @@ export function createMainWindow(): BrowserWindow {
     icon: iconPath,
     titleBarStyle: isMac ? 'hiddenInset' : 'hidden',
     ...(isMac ? { trafficLightPosition: { x: 16, y: 16 } } : {}),
-    ...(isMac
-      ? {}
-      : {
-          titleBarOverlay: {
-            color: colors.overlayColor,
-            symbolColor: colors.symbolColor,
-            height: 48,
-          },
-        }),
     webPreferences: {
       preload: join(__dirname, '../preload/index.cjs'),
       sandbox: false,
@@ -146,6 +117,16 @@ export function createMainWindow(): BrowserWindow {
   };
   win.on('resize', persistBounds);
   win.on('move', persistBounds);
+
+  // Notify renderer when maximize state changes so the custom titlebar
+  // can swap the maximize/restore icon. Double-clicking the drag region
+  // and Win+Up/Down shortcuts both go through these events.
+  const sendMaximized = (value: boolean) => {
+    if (win.isDestroyed()) return;
+    win.webContents.send('plasma:window:maximizedChanged', value);
+  };
+  win.on('maximize', () => sendMaximized(true));
+  win.on('unmaximize', () => sendMaximized(false));
 
   win.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url);

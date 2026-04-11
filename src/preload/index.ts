@@ -50,6 +50,12 @@ const api: PlasmaAPI = {
     main: (req) => ipcRenderer.invoke(IpcChannel.PingMain, req),
     worker: (req) => ipcRenderer.invoke(IpcChannel.PingWorker, req),
   },
+  window: {
+    minimize: () => ipcRenderer.invoke(IpcChannel.WindowMinimize),
+    maximizeToggle: () => ipcRenderer.invoke(IpcChannel.WindowMaximizeToggle),
+    close: () => ipcRenderer.invoke(IpcChannel.WindowClose),
+    isMaximized: () => ipcRenderer.invoke(IpcChannel.WindowIsMaximized),
+  },
 };
 
 contextBridge.exposeInMainWorld('plasma', api);
@@ -68,15 +74,16 @@ const eventChannels = [
   'plasma:menu:runQuery',
   'plasma:menu:cancelQuery',
   'plasma:menu:history',
+  'plasma:window:maximizedChanged',
 ] as const;
 type EventChannel = (typeof eventChannels)[number];
 
 contextBridge.exposeInMainWorld('plasmaEvents', {
-  on(channel: EventChannel, handler: () => void): () => void {
+  on(channel: EventChannel, handler: (...args: unknown[]) => void): () => void {
     if (!eventChannels.includes(channel)) {
       throw new Error(`unknown event channel: ${channel}`);
     }
-    const wrapped = () => handler();
+    const wrapped = (_: unknown, ...args: unknown[]) => handler(...args);
     ipcRenderer.on(channel, wrapped);
     return () => ipcRenderer.off(channel, wrapped);
   },
@@ -86,7 +93,7 @@ declare global {
   interface Window {
     plasma: PlasmaAPI;
     plasmaEvents: {
-      on(channel: EventChannel, handler: () => void): () => void;
+      on(channel: EventChannel, handler: (...args: unknown[]) => void): () => void;
     };
   }
 }

@@ -9,7 +9,15 @@ import type {
   TxnState,
 } from '@shared/protocol';
 import { ipc } from '@/lib/ipc';
-import { buildCountSql, buildDataSql, type Filter, type TableSort } from '@/lib/table-query';
+import {
+  buildCountSql,
+  buildDataSql,
+  buildDeleteSql,
+  buildInsertSql,
+  buildUpdateSql,
+  type Filter,
+  type TableSort,
+} from '@/lib/table-query';
 
 /**
  * Session store — the single source of truth for all renderer state.
@@ -46,6 +54,7 @@ export interface QueryTab {
   queryRunState: QueryRunState;
   queryResult: QueryResult | null;
   queryError: string | null;
+  queryErrorSql: string | null;
   page: number;
   pageSize: number;
   selectedCell: { row: number; col: number } | null;
@@ -96,6 +105,7 @@ function createEmptyTab(pageSize: number, title = 'query-1.sql'): QueryTab {
     queryRunState: 'idle',
     queryResult: null,
     queryError: null,
+    queryErrorSql: null,
     page: 0,
     pageSize,
     sortColumn: null,
@@ -123,6 +133,7 @@ function createTableTab(
     queryRunState: 'idle',
     queryResult: null,
     queryError: null,
+    queryErrorSql: null,
     page: 0,
     pageSize,
     sortColumn: null,
@@ -150,6 +161,45 @@ function columnsForTable(
     .map((c) => c.name);
 }
 
+function columnMetaFor(
+  schemaInfo: SchemaInfo | null,
+  schemaName: string,
+  tableName: string,
+): SchemaInfo['columns'] {
+  if (!schemaInfo) return [];
+  return schemaInfo.columns
+    .filter((c) => c.schema === schemaName && c.table === tableName)
+    .sort((a, b) => a.ordinal - b.ordinal);
+}
+
+/**
+ * Given a row from a table tab's current query result, pull the PK
+ * column values so we can build an UPDATE / DELETE WHERE clause. Returns
+ * null if the table has no primary key (row-editing is refused in that
+ * case — we never issue an unqualified write).
+ */
+function pkValuesForRow(
+  schemaInfo: SchemaInfo | null,
+  tab: QueryTab,
+  row: unknown[],
+): Record<string, unknown> | null {
+  if (!tab.queryResult || !tab.tableSchema || !tab.tableName) return null;
+  const pkCols = (schemaInfo?.columns ?? []).filter(
+    (c) => c.schema === tab.tableSchema && c.table === tab.tableName && c.isPrimaryKey,
+  );
+  if (pkCols.length === 0) return null;
+  const nameToIndex = new Map(
+    tab.queryResult.columns.map((c, i) => [c.name, i] as const),
+  );
+  const out: Record<string, unknown> = {};
+  for (const pk of pkCols) {
+    const idx = nameToIndex.get(pk.name);
+    if (idx === undefined) return null; // PK column not in SELECT — refuse
+    out[pk.name] = row[idx];
+  }
+  return out;
+}
+
 interface SessionState {
   // ── connection ──
   activeConfig: ConnectionConfig | null;
@@ -171,6 +221,10 @@ interface SessionState {
 
   // ── editor drawer ──
   editorExpanded: boolean;
+
+  // ── edit mode ──
+  /** Global safety gate for writes. When false, all mutation UI is hidden. */
+  editMode: boolean;
 
   // ── dialogs & overlays ──
   dialogOpen: boolean;
@@ -194,6 +248,7 @@ interface SessionState {
   closeDialog(): void;
   setPaletteOpen(open: boolean): void;
   togglePalette(): void;
+  toggleEditMode(): void;
   setSettingsOpen(open: boolean): void;
   setHistoryOpen(open: boolean): void;
   requestDeleteConnection(id: string | null): void;
@@ -224,6 +279,11 @@ interface SessionState {
   toggleColumnHidden(column: string): Promise<void>;
   showAllColumns(): Promise<void>;
   refreshTable(): Promise<void>;
+
+  // Row editing (table tabs, edit mode only)
+  updateCell(rowIndex: number, columnIndex: number, newValue: string | null): Promise<void>;
+  insertRow(values: Record<string, string | null>): Promise<void>;
+  deleteRow(rowIndex: number): Promise<void>;
 
   // Tab management
   addTab(): void;
@@ -285,6 +345,8 @@ export const useSession = create<SessionState>((set, get) => ({
 
   editorExpanded: false,
 
+  editMode: false,
+
   dialogOpen: false,
   dialogPrefill: null,
   paletteOpen: false,
@@ -305,6 +367,8 @@ export const useSession = create<SessionState>((set, get) => ({
 
   setPaletteOpen: (open) => set({ paletteOpen: open }),
   togglePalette: () => set({ paletteOpen: !get().paletteOpen }),
+
+  toggleEditMode: () => set({ editMode: !get().editMode }),
 
   setSettingsOpen: (open) => set({ settingsOpen: open }),
   setHistoryOpen: (open) => set({ historyOpen: open }),
@@ -446,7 +510,11 @@ export const useSession = create<SessionState>((set, get) => ({
 
     const sql = tab.sql.trim();
     if (!sql) return;
-    patchActiveTab(set, get, { queryRunState: 'running', queryError: null });
+    patchActiveTab(set, get, {
+      queryRunState: 'running',
+      queryError: null,
+      queryErrorSql: null,
+    });
     try {
       const result = await ipc.query.run(sql);
       patchActiveTab(set, get, {
@@ -459,6 +527,7 @@ export const useSession = create<SessionState>((set, get) => ({
     } catch (err) {
       patchActiveTab(set, get, {
         queryError: err instanceof Error ? err.message : String(err),
+        queryErrorSql: sql,
         queryRunState: 'idle',
       });
     }
@@ -639,6 +708,89 @@ export const useSession = create<SessionState>((set, get) => ({
   async refreshTable() {
     const tab = activeTab(get());
     if (!tab || tab.kind !== 'table') return;
+    await runTableDataQuery(set, get, tab.id);
+    void runTableCountQuery(set, get, tab.id);
+  },
+
+  // ── row editing (table tabs only, gated by editMode) ──
+
+  async updateCell(rowIndex, columnIndex, newValue) {
+    const state = get();
+    if (!state.editMode) throw new Error('edit mode is off');
+    const tab = activeTab(state);
+    if (!tab || tab.kind !== 'table' || !tab.tableSchema || !tab.tableName) return;
+    if (!tab.queryResult) return;
+
+    const col = tab.queryResult.columns[columnIndex];
+    if (!col) return;
+    const row = tab.queryResult.rows[rowIndex];
+    if (!row) return;
+
+    const pkValues = pkValuesForRow(state.schema, tab, row);
+    if (!pkValues) {
+      throw new Error('table has no primary key — cannot edit rows safely');
+    }
+
+    const { sql, params } = buildUpdateSql({
+      schema: tab.tableSchema,
+      table: tab.tableName,
+      set: { [col.name]: newValue },
+      pkValues,
+    });
+    await ipc.query.run(sql, params);
+    await runTableDataQuery(set, get, tab.id);
+  },
+
+  async insertRow(values) {
+    const state = get();
+    if (!state.editMode) throw new Error('edit mode is off');
+    const tab = activeTab(state);
+    if (!tab || tab.kind !== 'table' || !tab.tableSchema || !tab.tableName) return;
+
+    // Drop empty strings on columns with defaults — let Postgres apply them.
+    const cols = columnMetaFor(state.schema, tab.tableSchema, tab.tableName);
+    const toInsert: Record<string, unknown> = {};
+    for (const c of cols) {
+      const raw = values[c.name];
+      if (raw === undefined) continue;
+      if (raw === '' && c.hasDefault) continue;
+      toInsert[c.name] = raw === '' && c.isNullable ? null : raw;
+    }
+    if (Object.keys(toInsert).length === 0) {
+      throw new Error('nothing to insert');
+    }
+
+    const { sql, params } = buildInsertSql({
+      schema: tab.tableSchema,
+      table: tab.tableName,
+      values: toInsert,
+    });
+    await ipc.query.run(sql, params);
+    await runTableDataQuery(set, get, tab.id);
+    void runTableCountQuery(set, get, tab.id);
+  },
+
+  async deleteRow(rowIndex) {
+    const state = get();
+    if (!state.editMode) throw new Error('edit mode is off');
+    const tab = activeTab(state);
+    if (!tab || tab.kind !== 'table' || !tab.tableSchema || !tab.tableName) return;
+    if (!tab.queryResult) return;
+
+    const row = tab.queryResult.rows[rowIndex];
+    if (!row) return;
+
+    const pkValues = pkValuesForRow(state.schema, tab, row);
+    if (!pkValues) {
+      throw new Error('table has no primary key — cannot delete rows safely');
+    }
+
+    const { sql, params } = buildDeleteSql({
+      schema: tab.tableSchema,
+      table: tab.tableName,
+      pkValues,
+    });
+    await ipc.query.run(sql, params);
     await runTableDataQuery(set, get, tab.id);
     void runTableCountQuery(set, get, tab.id);
   },
@@ -912,6 +1064,7 @@ async function runTableDataQuery(
   patchTabById(set, tabId, {
     queryRunState: 'running',
     queryError: null,
+    queryErrorSql: null,
     sql, // store for display / copy
   });
 
@@ -925,6 +1078,7 @@ async function runTableDataQuery(
   } catch (err) {
     patchTabById(set, tabId, {
       queryError: err instanceof Error ? err.message : String(err),
+      queryErrorSql: sql,
       queryRunState: 'idle',
     });
   }

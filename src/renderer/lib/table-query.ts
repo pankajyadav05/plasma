@@ -163,6 +163,97 @@ export function buildDataSql(input: BuildInput): BuiltSql {
 }
 
 /**
+ * Build an UPDATE for a single row identified by its primary-key columns.
+ *
+ *   UPDATE "schema"."table" SET "col" = $1 WHERE "pk1" = $2 AND "pk2" = $3
+ *
+ * `set` is the map of column → new raw value (string or native). `pkValues`
+ * is the map of PK column → its current value from the row being edited.
+ */
+export function buildUpdateSql(input: {
+  schema: string;
+  table: string;
+  set: Record<string, unknown>;
+  pkValues: Record<string, unknown>;
+}): BuiltSql {
+  const setCols = Object.keys(input.set);
+  const pkCols = Object.keys(input.pkValues);
+  if (setCols.length === 0) throw new Error('nothing to update');
+  if (pkCols.length === 0) {
+    throw new Error('cannot update a row without primary-key columns');
+  }
+
+  const params: unknown[] = [];
+  const addParam = (value: unknown) => {
+    params.push(value);
+    return `$${params.length}`;
+  };
+
+  const setClause = setCols
+    .map((c) => `${quoteIdent(c)} = ${addParam(input.set[c])}`)
+    .join(', ');
+  const whereClause = pkCols
+    .map((c) => `${quoteIdent(c)} = ${addParam(input.pkValues[c])}`)
+    .join(' AND ');
+
+  const from = `${quoteIdent(input.schema)}.${quoteIdent(input.table)}`;
+  const sql = `UPDATE ${from} SET ${setClause} WHERE ${whereClause}`;
+  return { sql, params };
+}
+
+/**
+ * Build an INSERT. Columns omitted from `values` keep their table default
+ * (so auto-increment / serial / generated columns can be left blank).
+ */
+export function buildInsertSql(input: {
+  schema: string;
+  table: string;
+  values: Record<string, unknown>;
+}): BuiltSql {
+  const cols = Object.keys(input.values);
+  if (cols.length === 0) throw new Error('nothing to insert');
+
+  const params: unknown[] = [];
+  const addParam = (value: unknown) => {
+    params.push(value);
+    return `$${params.length}`;
+  };
+
+  const colList = cols.map(quoteIdent).join(', ');
+  const valList = cols.map((c) => addParam(input.values[c])).join(', ');
+  const from = `${quoteIdent(input.schema)}.${quoteIdent(input.table)}`;
+  const sql = `INSERT INTO ${from} (${colList}) VALUES (${valList})`;
+  return { sql, params };
+}
+
+/**
+ * Build a DELETE for a single row identified by its primary-key columns.
+ */
+export function buildDeleteSql(input: {
+  schema: string;
+  table: string;
+  pkValues: Record<string, unknown>;
+}): BuiltSql {
+  const pkCols = Object.keys(input.pkValues);
+  if (pkCols.length === 0) {
+    throw new Error('cannot delete a row without primary-key columns');
+  }
+
+  const params: unknown[] = [];
+  const addParam = (value: unknown) => {
+    params.push(value);
+    return `$${params.length}`;
+  };
+
+  const whereClause = pkCols
+    .map((c) => `${quoteIdent(c)} = ${addParam(input.pkValues[c])}`)
+    .join(' AND ');
+  const from = `${quoteIdent(input.schema)}.${quoteIdent(input.table)}`;
+  const sql = `DELETE FROM ${from} WHERE ${whereClause}`;
+  return { sql, params };
+}
+
+/**
  * Build the count query. Shares the same WHERE clause as the data query
  * so filtered totals are accurate. No SELECT/ORDER BY/LIMIT — just the
  * row count.

@@ -322,6 +322,27 @@ function registerIpcHandlers() {
 
   // ── Dev sanity checks ──
 
+  // ── Window controls (custom titlebar buttons) ──
+
+  ipcMain.handle(IpcChannel.WindowMinimize, (e): void => {
+    BrowserWindow.fromWebContents(e.sender)?.minimize();
+  });
+
+  ipcMain.handle(IpcChannel.WindowMaximizeToggle, (e): void => {
+    const win = BrowserWindow.fromWebContents(e.sender);
+    if (!win) return;
+    if (win.isMaximized()) win.unmaximize();
+    else win.maximize();
+  });
+
+  ipcMain.handle(IpcChannel.WindowClose, (e): void => {
+    BrowserWindow.fromWebContents(e.sender)?.close();
+  });
+
+  ipcMain.handle(IpcChannel.WindowIsMaximized, (e): boolean => {
+    return BrowserWindow.fromWebContents(e.sender)?.isMaximized() ?? false;
+  });
+
   ipcMain.handle(IpcChannel.PingMain, (_e, req: PingRequest): PingResponse => {
     return { echo: req.message, via: 'main', timestamp: Date.now() };
   });

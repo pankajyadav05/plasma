@@ -192,15 +192,29 @@ export class PostgresDriver {
       name: string;
       data_type: string;
       ordinal: number;
+      is_pk: boolean;
+      is_nullable: boolean;
+      has_default: boolean;
     }>(
       `SELECT n.nspname AS schema,
               c.relname  AS "table",
               a.attname  AS name,
               format_type(a.atttypid, a.atttypmod) AS data_type,
-              a.attnum   AS ordinal
+              a.attnum   AS ordinal,
+              COALESCE(pk.is_pk, false) AS is_pk,
+              NOT a.attnotnull AS is_nullable,
+              a.atthasdef AS has_default
        FROM pg_attribute a
        JOIN pg_class c ON c.oid = a.attrelid
        JOIN pg_namespace n ON n.oid = c.relnamespace
+       LEFT JOIN LATERAL (
+         SELECT true AS is_pk
+         FROM pg_constraint con
+         WHERE con.conrelid = c.oid
+           AND con.contype = 'p'
+           AND a.attnum = ANY (con.conkey)
+         LIMIT 1
+       ) pk ON true
        WHERE a.attnum > 0
          AND NOT a.attisdropped
          AND c.relkind IN ('r', 'v', 'm')
@@ -225,6 +239,9 @@ export class PostgresDriver {
         name: r.name,
         dataType: r.data_type,
         ordinal: r.ordinal,
+        isPrimaryKey: r.is_pk,
+        isNullable: r.is_nullable,
+        hasDefault: r.has_default,
       })),
     };
   }

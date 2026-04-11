@@ -113,7 +113,7 @@ export function StatusBar({ meta }: StatusBarProps) {
       {serverVersion && (
         <>
           <Seg>{shortVersion(serverVersion)}</Seg>
-          <Sep />
+          {/* <Sep /> */}
         </>
       )}
     </footer>
