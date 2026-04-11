@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Plasma · Round 2 — five wild directions</title>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,500;12..96,700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --bg: #08070C;
+  --fg: #F0EDE6;
+  --fg-2: #B5B0A5;
+  --fg-muted: #6B6760;
+  --line: rgba(255,255,255,0.08);
+}
+html, body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: 'Bricolage Grotesque', system-ui, sans-serif;
+  min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+}
+/* Atmospheric */
+body::before {
+  content: '';
+  position: fixed; inset: 0;
+  background:
+    radial-gradient(ellipse 1000px 500px at 20% 0%, rgba(124,92,255,0.10), transparent 50%),
+    radial-gradient(ellipse 800px 600px at 90% 50%, rgba(0,229,198,0.08), transparent 55%),
+    radial-gradient(ellipse 700px 500px at 50% 100%, rgba(255,107,213,0.07), transparent 55%);
+  pointer-events: none;
+  z-index: 0;
+}
+body::after {
+  content: '';
+  position: fixed; inset: 0;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='200' height='200'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9'/><feColorMatrix values='0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 0.04 0'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
+  pointer-events: none;
+  z-index: 1;
+  opacity: 0.5;
+}
+.wrap { max-width: 1100px; margin: 0 auto; padding: 96px 56px 120px; position: relative; z-index: 2; }
+
+.kicker {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  color: var(--fg-muted);
+  margin-bottom: 24px;
+}
+.brand {
+  font-family: 'Bricolage Grotesque', serif;
+  font-weight: 700;
+  font-variation-settings: 'opsz' 96;
+  font-size: 96px;
+  letter-spacing: -0.04em;
+  line-height: 0.9;
+  margin-bottom: 28px;
+}
+.brand .dot {
+  display: inline-block;
+  width: 22px; height: 22px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #FF6BD5, #7C5CFF, #00E5C6);
+  vertical-align: 8px;
+  margin-left: 6px;
+  box-shadow: 0 0 32px rgba(124,92,255,0.6);
+}
+.intro {
+  font-family: 'Bricolage Grotesque', serif;
+  font-size: 22px;
+  line-height: 1.5;
+  color: var(--fg-2);
+  max-width: 680px;
+  margin-bottom: 72px;
+  font-weight: 400;
+}
+.intro b { color: var(--fg); font-weight: 500; }
+.intro em { font-style: italic; color: var(--fg); }
+
+.cards { display: grid; gap: 24px; }
+.card {
+  display: grid;
+  grid-template-columns: 96px 1fr auto;
+  gap: 32px;
+  padding: 32px 36px;
+  background: rgba(20,18,28,0.55);
+  backdrop-filter: blur(20px) saturate(150%);
+  -webkit-backdrop-filter: blur(20px) saturate(150%);
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  text-decoration: none;
+  color: inherit;
+  align-items: center;
+  position: relative;
+  overflow: hidden;
+  transition: transform 220ms cubic-bezier(0.16,1,0.3,1), border-color 140ms linear;
+  box-shadow: 0 1px 0 0 rgba(255,255,255,0.04) inset, 0 16px 48px rgba(0,0,0,0.4);
+}
+.card::before {
+  content: '';
+  position: absolute; inset: 0;
+  background: var(--card-glow);
+  opacity: 0;
+  transition: opacity 220ms cubic-bezier(0.16,1,0.3,1);
+  pointer-events: none;
+}
+.card:hover { transform: translateY(-2px); border-color: rgba(255,255,255,0.16); }
+.card:hover::before { opacity: 1; }
+
+.card .num {
+  font-family: 'Bricolage Grotesque', serif;
+  font-weight: 700;
+  font-variation-settings: 'opsz' 96;
+  font-size: 72px;
+  line-height: 1;
+  background: var(--num-grad);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  position: relative;
+  z-index: 1;
+}
+.card .body { position: relative; z-index: 1; }
+.card h2 {
+  font-family: 'Bricolage Grotesque', serif;
+  font-weight: 600;
+  font-variation-settings: 'opsz' 48;
+  font-size: 36px;
+  letter-spacing: -0.02em;
+  margin-bottom: 6px;
+}
+.card .tag {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--fg-muted);
+  margin-bottom: 14px;
+}
+.card p {
+  font-family: 'Bricolage Grotesque', serif;
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--fg-2);
+  max-width: 580px;
+}
+.card .swatches { display: flex; gap: 6px; margin-top: 16px; }
+.card .sw { width: 22px; height: 22px; border-radius: 5px; border: 1px solid rgba(255,255,255,0.08); }
+.card .arrow {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 28px;
+  color: var(--fg-muted);
+  position: relative;
+  z-index: 1;
+  transition: color 140ms linear, transform 220ms cubic-bezier(0.16,1,0.3,1);
+}
+.card:hover .arrow { color: var(--fg); transform: translateX(6px); }
+
+/* Per-card glows */
+.card.a { --card-glow: radial-gradient(ellipse at left, rgba(124,92,255,0.16), transparent 60%); --num-grad: linear-gradient(135deg, #FF6BD5, #7C5CFF, #00E5C6); }
+.card.b { --card-glow: radial-gradient(ellipse at left, rgba(255,217,0,0.14), transparent 60%); --num-grad: linear-gradient(135deg, #FFD900, #FF2E97); }
+.card.c { --card-glow: radial-gradient(ellipse at left, rgba(186,140,90,0.14), transparent 60%); --num-grad: linear-gradient(135deg, #C8956D, #6B4423); }
+.card.d { --card-glow: radial-gradient(ellipse at left, rgba(255,179,0,0.16), transparent 60%); --num-grad: linear-gradient(135deg, #FFB300, #FF6B00); }
+.card.e { --card-glow: radial-gradient(ellipse at left, rgba(124,179,66,0.16), transparent 60%); --num-grad: linear-gradient(135deg, #7CB342, #C8956D); }
+
+.footer {
+  margin-top: 96px;
+  padding-top: 32px;
+  border-top: 1px solid var(--line);
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11px;
+  color: var(--fg-muted);
+  display: flex; justify-content: space-between;
+  letter-spacing: 0.04em;
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="kicker">round 02 · five wild directions · 2026-04-10</div>
+  <h1 class="brand">Plasma<span class="dot"></span></h1>
+  <p class="intro">
+    Five <em>genuinely</em> different aesthetic territories for the same database client.
+    Round one was too tame and too lo-fi. This round each mockup carries <b>real ambient motion</b>,
+    <b>layered depth</b>, and a point of view I'd be willing to defend in a meeting.
+    None of them look like a normal dev tool. That's the point.
+  </p>
+
+  <div class="cards">
+    <a class="card a" href="01-iridescent.html">
+      <div class="num">A</div>
+      <div class="body">
+        <h2>Iridescent</h2>
+        <div class="tag">holographic · animated mesh · glass jewelry</div>
+        <p>The accent color literally shifts hue as you sit with it. The wordmark is a holographic foil. Panels are real stacked-blur glass over a slowly-cycling gradient mesh. The Run button catches light like chrome. Bricolage Grotesque + IBM Plex Mono.</p>
+        <div class="swatches">
+          <div class="sw" style="background:#08070C"></div>
+          <div class="sw" style="background:linear-gradient(135deg,#FF6BD5,#7C5CFF)"></div>
+          <div class="sw" style="background:linear-gradient(135deg,#7C5CFF,#00E5C6)"></div>
+          <div class="sw" style="background:#F0EDE6"></div>
+          <div class="sw" style="background:#FFD166"></div>
+        </div>
+      </div>
+      <div class="arrow">→</div>
+    </a>
+
+    <a class="card b" href="02-carson.html">
+      <div class="num">B</div>
+      <div class="body">
+        <h2>Carson</h2>
+        <div class="tag">y2k brutalist magazine · ransom-note typography</div>
+        <p>David Carson runs a database client. Asymmetric layout, three radically clashing typefaces, flat primary-color blocks, the result grid is rotated 0.4°, the wordmark bleeds off the screen. Numbers in the grid are huge because the data is the point.</p>
+        <div class="swatches">
+          <div class="sw" style="background:#FFFEF7"></div>
+          <div class="sw" style="background:#0B0B0B"></div>
+          <div class="sw" style="background:#FFD900"></div>
+          <div class="sw" style="background:#FF2E97"></div>
+          <div class="sw" style="background:#00BFFF"></div>
+        </div>
+      </div>
+      <div class="arrow">→</div>
+    </a>
+
+    <a class="card c" href="03-atlas.html">
+      <div class="num">C</div>
+      <div class="body">
+        <h2>Atlas</h2>
+        <div class="tag">victorian specimen catalog · cream paper · brass</div>
+        <p>A 19th-century botanical atlas became a database client. Cream deckled paper, hand-engraved labels, callout lines pointing at columns like an anatomy diagram, fleurons in the margins, a brass Run plate, a ribbon bookmark on the active tab.</p>
+        <div class="swatches">
+          <div class="sw" style="background:#F2EBD8"></div>
+          <div class="sw" style="background:#1A1410"></div>
+          <div class="sw" style="background:#7A2E1F"></div>
+          <div class="sw" style="background:#C8956D"></div>
+          <div class="sw" style="background:#2C5F6F"></div>
+        </div>
+      </div>
+      <div class="arrow">→</div>
+    </a>
+
+    <a class="card d" href="04-console.html">
+      <div class="num">D</div>
+      <div class="body">
+        <h2>Console</h2>
+        <div class="tag">industrial hardware · amber LED · CRT curvature</div>
+        <p>The app shell is a physical instrument. Brushed metal bezel, real rivets, ventilation grilles, an LED that pulses while the connection is live. The result grid is a vintage stock-ticker terminal — amber on black, faint scanlines, subtle CRT curvature.</p>
+        <div class="swatches">
+          <div class="sw" style="background:#1A1D22"></div>
+          <div class="sw" style="background:#2E3338"></div>
+          <div class="sw" style="background:#FFB300"></div>
+          <div class="sw" style="background:#4A5320"></div>
+          <div class="sw" style="background:#0A0A06"></div>
+        </div>
+      </div>
+      <div class="arrow">→</div>
+    </a>
+
+    <a class="card e" href="05-greenhouse.html">
+      <div class="num">E</div>
+      <div class="body">
+        <h2>Greenhouse</h2>
+        <div class="tag">organic · hand-drawn · breathing rows</div>
+        <p>The opposite of every dev tool ever made. Hand-drawn imperfect borders, slow-drifting blob backgrounds, selected rows that gently breathe, botanical illustrated icons for each table. Moss, terracotta, bone, dried lavender. A SQL client for Sunday mornings.</p>
+        <div class="swatches">
+          <div class="sw" style="background:#F4EFE2"></div>
+          <div class="sw" style="background:#2E3D2C"></div>
+          <div class="sw" style="background:#7CB342"></div>
+          <div class="sw" style="background:#C8704A"></div>
+          <div class="sw" style="background:#A89A82"></div>
+        </div>
+      </div>
+      <div class="arrow">→</div>
+    </a>
+  </div>
+
+  <div class="footer">
+    <span>plasma · v0.0.0 · round 02 · high-fidelity exploration</span>
+    <span>open A first → tell me if i'm on track</span>
+  </div>
+</div>
+</body>
+</html>

@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 520 160" role="img" aria-label="Plasma (monochrome oxblood)">
+  <title>Plasma</title>
+  <defs>
+    <style>
+      .accent { fill: #7B2D26; }
+      .wordmark {
+        font-family: 'Newsreader', 'Georgia', 'Times New Roman', serif;
+        font-style: italic;
+        font-weight: 500;
+        font-size: 120px;
+        letter-spacing: -1px;
+      }
+    </style>
+  </defs>
+  <!-- Everything in oxblood — for special uses (bookends, swag, singular brand beats). -->
+  <text x="24" y="108" class="wordmark accent">Plasma</text>
+  <rect x="24" y="122" width="360" height="4" class="accent"/>
+</svg>

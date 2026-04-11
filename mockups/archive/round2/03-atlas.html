@@ -1,0 +1,736 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>C · Atlas — Plasma</title>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;0,700;1,400;1,500;1,600&family=Crimson+Pro:ital,wght@0,400;0,500;0,600;1,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+/* ============================================================
+   CONCEPT C · ATLAS
+   victorian specimen catalog · cream paper · brass · ink
+   ============================================================ */
+:root {
+  --paper: #F2EBD8;
+  --paper-light: #F8F2DF;
+  --paper-dark: #E8DFC2;
+  --paper-shadow: #D8CDA8;
+  --ink: #1A1410;
+  --ink-2: #3A2E22;
+  --ink-3: #5C4A36;
+  --ink-muted: #8B7958;
+  --ink-faded: #B5A483;
+  --rule: #C0AC85;
+  --rule-faint: #DBC9A0;
+  --oxblood: #7A2E1F;
+  --oxblood-deep: #5A1F12;
+  --ochre: #B47E11;
+  --petrol: #2C5F6F;
+  --moss: #4A6B3E;
+  --brass: #C8956D;
+  --brass-dark: #8B6240;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body {
+  height: 100vh;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: 'Crimson Pro', Georgia, serif;
+  font-size: 14px;
+  font-feature-settings: 'tnum';
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+
+/* Cream paper texture — turbulence + warm tone */
+body::before {
+  content: '';
+  position: fixed; inset: 0;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='320' height='320'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.6' numOctaves='3' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0.1  0 0 0 0 0.07  0 0 0 0 0.04  0 0 0 0.10 0'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
+  pointer-events: none;
+  z-index: 50;
+  mix-blend-mode: multiply;
+  opacity: 0.7;
+}
+/* Foxing — subtle aged spots */
+body::after {
+  content: '';
+  position: fixed; inset: 0;
+  background:
+    radial-gradient(ellipse 200px 80px at 8% 12%, rgba(122,46,31,0.05), transparent 70%),
+    radial-gradient(ellipse 140px 60px at 92% 38%, rgba(180,126,17,0.05), transparent 70%),
+    radial-gradient(ellipse 180px 80px at 70% 88%, rgba(122,46,31,0.04), transparent 70%);
+  pointer-events: none;
+  z-index: 49;
+}
+
+.app {
+  display: grid;
+  grid-template-rows: 96px 1fr 32px;
+  height: 100vh;
+  position: relative;
+  z-index: 1;
+}
+
+/* Hairline rule helper */
+.rule { border-bottom: 1px solid var(--rule); }
+.double-rule { border-bottom: 3px double var(--ink); }
+
+/* ----------- TOP BAR — like a book frontispiece ----------- */
+.topbar {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  padding: 0 36px;
+  background: var(--paper);
+  border-bottom: 3px double var(--ink);
+  position: relative;
+}
+.topbar::before, .topbar::after {
+  content: '❦';
+  position: absolute;
+  bottom: -10px;
+  font-size: 14px;
+  color: var(--oxblood);
+  background: var(--paper);
+  padding: 0 8px;
+}
+.topbar::before { left: 50%; transform: translateX(-50%); }
+.topbar::after { display: none; }
+
+.crumb-left {
+  font-family: 'Cormorant Garamond', serif;
+  font-style: italic;
+  font-size: 13px;
+  color: var(--ink-muted);
+  letter-spacing: 0.04em;
+}
+.crumb-left .label {
+  display: block;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9px;
+  font-style: normal;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  color: var(--oxblood);
+  margin-bottom: 4px;
+}
+.crumb-left .value {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 16px;
+  color: var(--ink);
+  font-weight: 500;
+}
+.crumb-left .dot {
+  width: 9px; height: 9px;
+  background: var(--moss);
+  border: 1.5px solid var(--ink);
+  border-radius: 50%;
+}
+
+.brand {
+  text-align: center;
+  position: relative;
+}
+.brand .top-mark {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.24em;
+  color: var(--ink-muted);
+  margin-bottom: 4px;
+}
+.brand .top-mark::before, .brand .top-mark::after {
+  content: '— ';
+  color: var(--oxblood);
+}
+.brand .top-mark::after { content: ' —'; }
+.wordmark {
+  font-family: 'Cormorant Garamond', serif;
+  font-weight: 600;
+  font-size: 44px;
+  letter-spacing: 0.04em;
+  line-height: 0.9;
+  color: var(--ink);
+  /* Engraved letterpress effect */
+  text-shadow:
+    0 1px 0 rgba(255,255,255,0.4),
+    0 -1px 0 rgba(0,0,0,0.18);
+}
+.wordmark .swash {
+  font-style: italic;
+  color: var(--oxblood);
+  font-weight: 500;
+}
+.brand .sub {
+  font-family: 'Cormorant Garamond', serif;
+  font-style: italic;
+  font-size: 12px;
+  color: var(--ink-muted);
+  margin-top: 2px;
+  letter-spacing: 0.04em;
+}
+
+.crumb-right {
+  text-align: right;
+  font-family: 'Cormorant Garamond', serif;
+  font-style: italic;
+  font-size: 13px;
+  color: var(--ink-muted);
+}
+.crumb-right .label {
+  display: block;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9px;
+  font-style: normal;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  color: var(--oxblood);
+  margin-bottom: 4px;
+}
+.crumb-right .value {
+  font-size: 16px;
+  color: var(--ink);
+  font-weight: 500;
+  display: flex; justify-content: flex-end; align-items: center; gap: 12px;
+}
+.iconbtn {
+  width: 28px; height: 28px;
+  display: grid; place-items: center;
+  color: var(--ink-2);
+  cursor: pointer;
+  font-size: 14px;
+  border: 1px solid transparent;
+  border-radius: 50%;
+}
+.iconbtn:hover { color: var(--oxblood); border-color: var(--oxblood); }
+
+/* ----------- BODY ----------- */
+.body { display: grid; grid-template-columns: 296px 1fr; min-height: 0; position: relative; }
+
+/* SIDEBAR — like the index of a book */
+.sidebar {
+  background: var(--paper-light);
+  border-right: 1px solid var(--ink);
+  overflow-y: auto;
+  position: relative;
+}
+.sidebar::before {
+  content: '';
+  position: absolute;
+  top: 0; bottom: 0; right: 4px;
+  width: 1px;
+  background: var(--rule);
+}
+
+.section { padding: 24px 0 16px; position: relative; }
+.section + .section::before {
+  content: '❧';
+  position: absolute;
+  top: -12px; left: 50%;
+  transform: translateX(-50%);
+  background: var(--paper-light);
+  padding: 0 12px;
+  font-size: 14px;
+  color: var(--oxblood);
+}
+.section + .section { border-top: 1px solid var(--ink); }
+.section-head {
+  display: flex; align-items: baseline; justify-content: space-between;
+  padding: 0 24px 14px;
+  font-family: 'Cormorant Garamond', serif;
+  font-weight: 600;
+  font-style: italic;
+  font-size: 22px;
+  color: var(--ink);
+  letter-spacing: 0.01em;
+}
+.section-head .roman {
+  font-family: 'Cormorant Garamond', serif;
+  font-style: normal;
+  font-weight: 600;
+  font-size: 11px;
+  color: var(--oxblood);
+  margin-right: 8px;
+  letter-spacing: 0.12em;
+}
+.section-head .add {
+  font-family: 'Cormorant Garamond', serif;
+  font-style: normal;
+  font-size: 18px;
+  color: var(--ink-muted);
+  cursor: pointer;
+}
+.section-head .add:hover { color: var(--oxblood); }
+
+.row {
+  display: grid;
+  grid-template-columns: 16px 1fr auto;
+  align-items: center;
+  gap: 10px;
+  height: 28px;
+  padding: 0 24px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  color: var(--ink-2);
+  cursor: pointer;
+  position: relative;
+}
+.row:hover { background: var(--paper-dark); }
+.row.active {
+  color: var(--ink);
+  background: var(--paper-dark);
+  font-weight: 500;
+}
+.row.active::before {
+  content: '';
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  width: 4px;
+  background: var(--oxblood);
+}
+.row .glyph {
+  font-family: 'Cormorant Garamond', serif;
+  font-style: italic;
+  font-weight: 600;
+  color: var(--ink-muted);
+  text-align: center;
+  font-size: 13px;
+}
+.row.active .glyph { color: var(--oxblood); }
+.row .meta {
+  font-family: 'Cormorant Garamond', serif;
+  font-style: italic;
+  font-size: 12px;
+  color: var(--ink-muted);
+  font-weight: 500;
+}
+.depth-2 { padding-left: 36px; }
+.depth-3 { padding-left: 52px; }
+
+/* Decorative connector lines on schema (like an anatomy diagram) */
+.row.depth-3 {
+  position: relative;
+}
+.row.depth-3::after {
+  content: '';
+  position: absolute;
+  left: 28px;
+  top: 50%;
+  width: 14px;
+  height: 1px;
+  background: var(--rule);
+}
+
+/* ----------- MAIN ----------- */
+.main { display: flex; flex-direction: column; min-width: 0; background: var(--paper); position: relative; }
+
+.tabs {
+  display: flex; align-items: stretch;
+  height: 48px;
+  border-bottom: 3px double var(--ink);
+  background: var(--paper);
+  padding: 0 8px;
+}
+.tab {
+  position: relative;
+  display: flex; align-items: center; gap: 12px;
+  padding: 0 28px;
+  font-family: 'Cormorant Garamond', serif;
+  font-style: italic;
+  font-size: 18px;
+  color: var(--ink-muted);
+  cursor: pointer;
+  border-right: 1px solid var(--rule);
+}
+.tab.active {
+  color: var(--ink);
+  font-weight: 600;
+}
+/* Ribbon bookmark on active tab */
+.tab.active::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 18px;
+  height: 28px;
+  background: var(--oxblood);
+  clip-path: polygon(0 0, 100% 0, 100% 100%, 50% 80%, 0 100%);
+  box-shadow: 0 2px 4px rgba(0,0,0,0.15);
+}
+.tab.active::after {
+  content: '';
+  position: absolute;
+  bottom: -3px; left: 0; right: 0;
+  height: 3px;
+  background: var(--oxblood);
+}
+.tab .x { font-style: normal; color: var(--ink-muted); font-family: 'Cormorant Garamond'; font-size: 16px; }
+.tab-add {
+  align-self: center;
+  padding: 0 16px;
+  color: var(--ink-muted);
+  cursor: pointer;
+  font-family: 'Cormorant Garamond', serif;
+  font-size: 22px;
+  font-style: italic;
+}
+
+.editor-grid { display: grid; grid-template-rows: 38% 1fr; min-height: 0; }
+
+/* ----------- EDITOR ----------- */
+.editor {
+  background: var(--paper);
+  position: relative;
+  border-bottom: 1px solid var(--ink);
+  overflow: hidden;
+  padding: 28px 0 0 0;
+}
+.editor::before {
+  content: '— Folio I —';
+  position: absolute;
+  top: 12px; left: 0; right: 0;
+  text-align: center;
+  font-family: 'Cormorant Garamond', serif;
+  font-style: italic;
+  font-size: 13px;
+  color: var(--ink-muted);
+  letter-spacing: 0.06em;
+}
+.editor-code {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 13px;
+  line-height: 22px;
+  padding: 16px 0;
+  display: grid;
+  grid-template-columns: 64px 1fr;
+}
+.gutter {
+  text-align: right;
+  padding-right: 16px;
+  user-select: none;
+  font-family: 'Cormorant Garamond', serif;
+  font-style: italic;
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--ink-muted);
+  line-height: 22px;
+}
+.gutter .a { color: var(--oxblood); font-size: 16px; }
+.code { white-space: pre; color: var(--ink); }
+.kw { color: var(--oxblood); font-weight: 500; }
+.fn { color: var(--ink); font-weight: 500; }
+.str { color: var(--moss); }
+.num { color: var(--petrol); font-weight: 500; }
+.com {
+  color: var(--ink-muted);
+  font-style: italic;
+  font-family: 'Cormorant Garamond', serif;
+  font-size: 15px;
+}
+.op { color: var(--ochre); }
+
+/* Brass plate Run button */
+.run-btn {
+  position: absolute; bottom: 18px; right: 24px;
+  display: flex; align-items: center; gap: 14px;
+  height: 46px; padding: 0 26px;
+  background: linear-gradient(180deg, #E8C49A 0%, #C8956D 35%, #A87748 65%, #8B6240 100%);
+  color: var(--paper);
+  border: 1.5px solid var(--ink);
+  border-radius: 2px;
+  font-family: 'Cormorant Garamond', serif;
+  font-style: italic;
+  font-weight: 600;
+  font-size: 20px;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  box-shadow:
+    0 1px 0 rgba(255,255,255,0.5) inset,
+    0 -2px 6px rgba(0,0,0,0.25) inset,
+    0 4px 8px rgba(26,20,16,0.35),
+    0 1px 0 rgba(255,255,255,0.4);
+  text-shadow:
+    0 1px 0 rgba(255,255,255,0.35),
+    0 -1px 0 rgba(0,0,0,0.35);
+  position: absolute;
+}
+.run-btn::before, .run-btn::after {
+  content: '';
+  position: absolute;
+  top: 50%; transform: translateY(-50%);
+  width: 5px; height: 5px;
+  background: radial-gradient(circle at 30% 30%, #E8C49A, #5A3A20);
+  border-radius: 50%;
+  box-shadow: 0 1px 1px rgba(0,0,0,0.4);
+}
+.run-btn::before { left: 8px; }
+.run-btn::after { right: 8px; }
+.run-btn .arrow { font-style: normal; }
+.run-btn .kbd {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  font-style: normal;
+  background: rgba(26,20,16,0.32);
+  padding: 2px 7px;
+  border-radius: 2px;
+  font-weight: 500;
+  text-shadow: none;
+}
+
+.ai-pill {
+  position: absolute; top: 12px; right: 24px;
+  display: flex; align-items: center; gap: 8px;
+  height: 26px; padding: 0 14px;
+  background: var(--paper-light);
+  border: 1px solid var(--ink);
+  font-family: 'Cormorant Garamond', serif;
+  font-style: italic;
+  font-size: 14px;
+  color: var(--ink);
+  cursor: pointer;
+}
+.ai-pill::before { content: '✦'; color: var(--oxblood); }
+
+/* ----------- RESULTS — like a specimen index ----------- */
+.results {
+  background: var(--paper);
+  overflow: auto;
+  min-height: 0;
+}
+.results-head {
+  display: flex; align-items: baseline; justify-content: space-between;
+  padding: 18px 32px 14px;
+  border-bottom: 3px double var(--ink);
+  position: sticky; top: 0;
+  background: var(--paper);
+  z-index: 2;
+}
+.results-head .title {
+  font-family: 'Cormorant Garamond', serif;
+  font-style: italic;
+  font-weight: 600;
+  font-size: 22px;
+  color: var(--ink);
+}
+.results-head .meta {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  color: var(--ink-muted);
+}
+.results-head .meta .v { color: var(--oxblood); font-weight: 500; }
+
+table { width: 100%; border-collapse: collapse; font-family: 'JetBrains Mono', monospace; font-size: 12px; }
+thead { position: sticky; top: 60px; background: var(--paper); z-index: 1; }
+th {
+  height: 44px;
+  text-align: left;
+  padding: 0 18px;
+  font-family: 'Cormorant Garamond', serif;
+  font-style: italic;
+  font-weight: 600;
+  font-size: 16px;
+  color: var(--ink);
+  border-bottom: 1.5px solid var(--ink);
+  border-top: 1px solid var(--rule);
+  white-space: nowrap;
+  letter-spacing: 0.01em;
+}
+th .type {
+  display: block;
+  font-family: 'JetBrains Mono', monospace;
+  font-style: normal;
+  font-weight: 400;
+  font-size: 8px;
+  color: var(--oxblood);
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  margin-bottom: 1px;
+}
+th .sort { color: var(--oxblood); margin-left: 4px; font-style: normal; }
+td {
+  height: 32px;
+  padding: 0 18px;
+  color: var(--ink);
+  border-bottom: 1px solid var(--rule-faint);
+  white-space: nowrap;
+}
+td.num {
+  font-family: 'Cormorant Garamond', serif;
+  font-style: italic;
+  font-weight: 500;
+  font-size: 17px;
+  color: var(--petrol);
+}
+td.date { color: var(--ink-muted); font-size: 11px; }
+tr:hover td { background: var(--paper-dark); }
+tr.selected td {
+  background: var(--paper-dark);
+  border-bottom-color: var(--oxblood);
+}
+tr.selected td:first-child {
+  position: relative;
+}
+tr.selected td:first-child::before {
+  content: '';
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  width: 4px;
+  background: var(--oxblood);
+}
+
+/* ----------- STATUS BAR ----------- */
+.statusbar {
+  display: flex; align-items: center;
+  padding: 0 24px;
+  background: var(--paper-light);
+  border-top: 3px double var(--ink);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9px;
+  color: var(--ink-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+}
+.statusbar .seg { display: flex; align-items: center; gap: 7px; padding: 0 14px; border-right: 1px solid var(--rule-faint); }
+.statusbar .seg.first { padding-left: 0; border-left: none; }
+.statusbar .seg.last { border-right: none; }
+.statusbar .ldot {
+  width: 7px; height: 7px;
+  background: var(--moss);
+  border: 1px solid var(--ink);
+  border-radius: 50%;
+}
+.statusbar .v { color: var(--oxblood); font-weight: 500; }
+.statusbar .ornament { color: var(--oxblood); }
+</style>
+</head>
+<body>
+<div class="app">
+  <!-- TOP BAR -->
+  <header class="topbar">
+    <div class="crumb-left">
+      <span class="label">Connection</span>
+      <span class="value"><span class="dot"></span>prod-rds-postgres</span>
+    </div>
+    <div class="brand">
+      <div class="top-mark">a database client</div>
+      <h1 class="wordmark">Pl<span class="swash">a</span>sma</h1>
+      <div class="sub">— being a register of tables &amp; their inhabitants —</div>
+    </div>
+    <div class="crumb-right">
+      <span class="label">Schema</span>
+      <span class="value">public<div class="iconbtn">⚙</div></span>
+    </div>
+  </header>
+
+  <!-- BODY -->
+  <div class="body">
+    <!-- SIDEBAR -->
+    <aside class="sidebar">
+      <div class="section">
+        <div class="section-head"><span><span class="roman">I.</span>Connections</span><span class="add">+</span></div>
+        <div class="row active"><span class="glyph">●</span><span>prod-rds-postgres</span><span class="meta">live</span></div>
+        <div class="row"><span class="glyph">○</span><span>staging-postgres</span><span class="meta">idle</span></div>
+        <div class="row"><span class="glyph">○</span><span>localhost:5432</span><span class="meta">—</span></div>
+        <div class="row"><span class="glyph">○</span><span>analytics-replica</span><span class="meta">idle</span></div>
+      </div>
+      <div class="section">
+        <div class="section-head"><span><span class="roman">II.</span>Schemata</span><span class="add">+</span></div>
+        <div class="row"><span class="glyph">▾</span><span>public</span><span class="meta"></span></div>
+        <div class="row depth-2 active"><span class="glyph">▾</span><span>users</span><span class="meta">cxlii</span></div>
+        <div class="row depth-3"><span class="glyph">i.</span><span>id</span><span class="meta">int8</span></div>
+        <div class="row depth-3"><span class="glyph">ii.</span><span>email</span><span class="meta">text</span></div>
+        <div class="row depth-3"><span class="glyph">iii.</span><span>full_name</span><span class="meta">text</span></div>
+        <div class="row depth-3"><span class="glyph">iv.</span><span>created_at</span><span class="meta">date</span></div>
+        <div class="row depth-3"><span class="glyph">v.</span><span>plan</span><span class="meta">text</span></div>
+        <div class="row depth-3"><span class="glyph">vi.</span><span>status</span><span class="meta">text</span></div>
+        <div class="row depth-2"><span class="glyph">▸</span><span>posts</span><span class="meta">38k</span></div>
+        <div class="row depth-2"><span class="glyph">▸</span><span>orders</span><span class="meta">812k</span></div>
+        <div class="row depth-2"><span class="glyph">▸</span><span>sessions</span><span class="meta">2.1m</span></div>
+        <div class="row depth-2"><span class="glyph">▸</span><span>products</span><span class="meta">1247</span></div>
+        <div class="row"><span class="glyph">▸</span><span>auth</span><span class="meta"></span></div>
+        <div class="row"><span class="glyph">▸</span><span>analytics</span><span class="meta"></span></div>
+      </div>
+    </aside>
+
+    <!-- MAIN -->
+    <main class="main">
+      <div class="tabs">
+        <div class="tab active">users-recent.sql<span class="x">×</span></div>
+        <div class="tab">cohort-analysis.sql<span class="x">×</span></div>
+        <div class="tab">orders-by-day.sql<span class="x">×</span></div>
+        <div class="tab-add">+</div>
+      </div>
+      <div class="editor-grid">
+        <!-- EDITOR -->
+        <div class="editor">
+          <div class="editor-code">
+            <div class="gutter">
+              <div>1</div><div>2</div><div>3</div><div class="a">4</div><div>5</div><div>6</div><div>7</div>
+            </div><pre class="code"><span class="com">— recently active subscribers, on paid plans —</span>
+<span class="kw">SELECT</span> id, email, full_name, created_at, plan, status
+<span class="kw">FROM</span> users
+<span class="kw">WHERE</span> created_at <span class="op">&gt;</span> <span class="fn">now()</span> <span class="op">-</span> <span class="kw">interval</span> <span class="str">'7 days'</span>
+  <span class="kw">AND</span> plan <span class="kw">IN</span> (<span class="str">'pro'</span>, <span class="str">'team'</span>)
+<span class="kw">ORDER BY</span> created_at <span class="kw">DESC</span>
+<span class="kw">LIMIT</span> <span class="num">100</span>;</pre>
+          </div>
+          <div class="ai-pill">✦ consult the oracle</div>
+          <button class="run-btn"><span class="arrow">▸</span>Execute<span class="kbd">⌘⏎</span></button>
+        </div>
+
+        <!-- RESULTS -->
+        <div class="results">
+          <div class="results-head">
+            <div class="title">Specimens — <em>recently active subscribers</em></div>
+            <div class="meta"><span class="v">142,381 rows</span> · <span class="v">87 ms</span> · cxlii thousand</div>
+          </div>
+          <table>
+            <thead>
+              <tr>
+                <th><span class="type">int8</span>id <span class="sort">↓</span></th>
+                <th><span class="type">text</span>email</th>
+                <th><span class="type">text</span>full_name</th>
+                <th><span class="type">timestamptz</span>created_at</th>
+                <th><span class="type">text</span>plan</th>
+                <th><span class="type">text</span>status</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr class="selected"><td class="num">47892</td><td>ada.lovelace@gmail.com</td><td>Ada Lovelace</td><td class="date">2026-04-09 14:22:11</td><td>pro</td><td>active</td></tr>
+              <tr><td class="num">47891</td><td>alan.turing@proton.me</td><td>Alan Turing</td><td class="date">2026-04-09 12:01:44</td><td>pro</td><td>active</td></tr>
+              <tr><td class="num">47890</td><td>katherine.j@nasa.gov</td><td>Katherine Johnson</td><td class="date">2026-04-09 09:55:02</td><td>team</td><td>active</td></tr>
+              <tr><td class="num">47889</td><td>grace.h@navy.mil</td><td>Grace Hopper</td><td class="date">2026-04-08 23:18:30</td><td>pro</td><td>trial</td></tr>
+              <tr><td class="num">47888</td><td>linus@kernel.org</td><td>Linus Torvalds</td><td class="date">2026-04-08 21:04:17</td><td>team</td><td>active</td></tr>
+              <tr><td class="num">47887</td><td>margaret.h@mit.edu</td><td>Margaret Hamilton</td><td class="date">2026-04-08 18:42:09</td><td>pro</td><td>active</td></tr>
+              <tr><td class="num">47886</td><td>ken.t@bell-labs.com</td><td>Ken Thompson</td><td class="date">2026-04-08 16:30:55</td><td>team</td><td>active</td></tr>
+              <tr><td class="num">47885</td><td>dennis.r@bell-labs.com</td><td>Dennis Ritchie</td><td class="date">2026-04-08 14:11:22</td><td>pro</td><td>active</td></tr>
+              <tr><td class="num">47884</td><td>barbara.l@stanford.edu</td><td>Barbara Liskov</td><td class="date">2026-04-08 11:08:41</td><td>pro</td><td>active</td></tr>
+              <tr><td class="num">47883</td><td>donald.k@stanford.edu</td><td>Donald Knuth</td><td class="date">2026-04-08 09:30:14</td><td>team</td><td>active</td></tr>
+              <tr><td class="num">47882</td><td>tim.bl@w3.org</td><td>Tim Berners-Lee</td><td class="date">2026-04-07 23:50:00</td><td>pro</td><td>active</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <!-- STATUS BAR -->
+  <footer class="statusbar">
+    <div class="seg first"><span class="ldot"></span>connected</div>
+    <div class="seg">prod-rds-postgres</div>
+    <div class="seg">public</div>
+    <div class="seg"><span class="v">142,381 rows</span></div>
+    <div class="seg"><span class="v">lxxxvii ms</span></div>
+    <div class="seg">txn: idle</div>
+    <div class="seg">utf-8</div>
+    <div class="seg">pg 16.2</div>
+    <div style="flex:1; border-right:none"></div>
+    <div class="seg last"><span class="ornament">❦</span> ⌘ k</div>
+  </footer>
+</div>
+</body>
+</html>

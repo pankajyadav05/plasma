@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-label="Plasma">
+  <title>Plasma</title>
+  <desc>Application icon — exact 16× scale of favicon.svg for pixel-perfect brand match.</desc>
+  <!--
+    This is the favicon composition at 1024×1024. Every value is the
+    favicon multiplied by 16 so the visual proportions (P size, padding,
+    corner radius, frame weight, signature bar) are identical.
+  -->
+  <defs>
+    <style>
+      .bg     { fill: #FAF7F0; }
+      .ink    { fill: #1C1A14; }
+      .accent { fill: #7B2D26; }
+      .frame  { fill: none; stroke: #1C1A14; stroke-width: 40; }
+      .p-glyph {
+        font-family: 'Newsreader', 'Georgia', 'Times New Roman', serif;
+        font-style: italic;
+        font-weight: 600;
+        font-size: 768px;
+      }
+    </style>
+  </defs>
+  <!-- Cream rounded-square card -->
+  <rect x="48" y="48" width="928" height="928" rx="160" class="bg"/>
+  <!-- Ink frame (card edge) -->
+  <rect x="48" y="48" width="928" height="928" rx="160" class="frame"/>
+  <!-- Center-anchored italic P -->
+  <text x="512" y="704" class="p-glyph ink" text-anchor="middle">P</text>
+  <!-- Oxblood signature bar, centered and inset inside the frame -->
+  <rect x="288" y="768" width="448" height="48" class="accent"/>
+</svg>

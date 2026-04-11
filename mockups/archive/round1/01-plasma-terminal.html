@@ -1,0 +1,389 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>01 · Plasma Terminal</title>
+<link rel="preconnect" href="https://fonts.bunny.net">
+<link href="https://fonts.bunny.net/css?family=geist:400,500,600|geist-mono:400|instrument-serif:400i&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg-base: #0B0B0E;
+  --bg-canvas: #0F0F14;
+  --bg-panel: #131318;
+  --bg-elevated: #1B1B22;
+  --bg-overlay: #22222B;
+  --bg-hover: rgba(255,255,255,0.035);
+  --bg-selected: rgba(212,255,61,0.08);
+  --border-faint: #1E1E25;
+  --border-subtle: #26262E;
+  --border: #32323C;
+  --border-strong: #44444F;
+  --fg: #F4F2EE;
+  --fg-2: #C8C6C0;
+  --fg-muted: #8A8884;
+  --fg-disabled: #555255;
+  --accent: #D4FF3D;
+  --type-num: #7FB8FF;
+  --type-str: #C8C6C0;
+  --type-date: #C9A4FF;
+  --type-bool: #6EE7B7;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body {
+  height: 100vh;
+  background: var(--bg-base);
+  color: var(--fg);
+  font-family: 'Geist', system-ui, sans-serif;
+  font-size: 13px;
+  font-feature-settings: 'tnum';
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+.app { display: grid; grid-template-rows: 40px 1fr 24px; height: 100vh; }
+
+/* TOP BAR */
+.topbar {
+  display: flex; align-items: center; gap: 20px;
+  padding: 0 16px;
+  background: var(--bg-base);
+  border-bottom: 1px solid var(--border-subtle);
+  -webkit-app-region: drag;
+}
+.wordmark {
+  font-family: 'Instrument Serif', serif;
+  font-style: italic;
+  font-size: 22px;
+  letter-spacing: -0.01em;
+  line-height: 1;
+}
+.wordmark::before { content: '◈'; color: var(--accent); font-style: normal; font-size: 14px; margin-right: 6px; vertical-align: 2px; }
+.breadcrumb {
+  display: flex; align-items: center; gap: 8px;
+  font-family: 'Geist Mono', monospace;
+  font-size: 11px;
+  color: var(--fg-2);
+}
+.dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 8px var(--accent); }
+.sep { color: var(--fg-disabled); }
+.spacer { flex: 1; }
+.iconbtn {
+  width: 26px; height: 26px;
+  display: grid; place-items: center;
+  color: var(--fg-muted);
+  border-radius: 4px;
+  font-size: 14px;
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+}
+.iconbtn:hover { color: var(--fg); background: var(--bg-hover); }
+.cmdk-hint {
+  font-family: 'Geist Mono', monospace;
+  font-size: 10px;
+  padding: 4px 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  color: var(--fg-muted);
+  -webkit-app-region: no-drag;
+}
+
+/* BODY */
+.body { display: grid; grid-template-columns: 252px 1fr; min-height: 0; }
+.sidebar {
+  background: var(--bg-panel);
+  border-right: 1px solid var(--border-subtle);
+  overflow-y: auto;
+  display: flex; flex-direction: column;
+}
+.section { padding: 12px 0 8px; border-bottom: 1px solid var(--border-faint); }
+.section-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0 14px 8px;
+  font-family: 'Geist', sans-serif;
+  font-size: 10px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--fg-muted);
+}
+.section-head .add { font-size: 14px; color: var(--fg-disabled); cursor: pointer; }
+.section-head .add:hover { color: var(--accent); }
+.row {
+  display: flex; align-items: center; gap: 8px;
+  height: 22px; padding: 0 14px;
+  font-family: 'Geist Mono', monospace;
+  font-size: 11px;
+  color: var(--fg-2);
+  cursor: pointer;
+}
+.row:hover { background: var(--bg-hover); }
+.row.active {
+  color: var(--fg);
+  background: var(--bg-selected);
+  border-left: 2px solid var(--accent);
+  padding-left: 12px;
+}
+.row .glyph { color: var(--fg-muted); width: 12px; text-align: center; font-size: 10px; }
+.row.active .glyph { color: var(--accent); }
+.row .meta { margin-left: auto; font-size: 9px; color: var(--fg-disabled); letter-spacing: 0.02em; }
+.depth-2 { padding-left: 28px; }
+.depth-2.active { padding-left: 26px; }
+.depth-3 { padding-left: 44px; }
+
+/* MAIN */
+.main { display: flex; flex-direction: column; min-width: 0; }
+.tabs {
+  display: flex; align-items: stretch;
+  height: 32px;
+  background: var(--bg-base);
+  border-bottom: 1px solid var(--border-subtle);
+}
+.tab {
+  display: flex; align-items: center; gap: 8px;
+  padding: 0 16px;
+  font-family: 'Geist Mono', monospace;
+  font-size: 11px;
+  color: var(--fg-muted);
+  border-right: 1px solid var(--border-subtle);
+  cursor: pointer;
+}
+.tab.active { color: var(--fg); background: var(--bg-canvas); position: relative; }
+.tab.active::after { content: ''; position: absolute; left: 0; right: 0; top: 0; height: 1px; background: var(--accent); }
+.tab .marker { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+.tab .x { color: var(--fg-disabled); margin-left: 4px; font-family: 'Geist'; }
+.tab-add { padding: 0 14px; color: var(--fg-muted); cursor: pointer; align-self: center; font-size: 14px; }
+
+.editor-grid { display: grid; grid-template-rows: 38% 1fr; min-height: 0; }
+
+/* EDITOR */
+.editor {
+  background: var(--bg-base);
+  position: relative;
+  border-bottom: 1px solid var(--border-subtle);
+  overflow: hidden;
+}
+.editor-code {
+  font-family: 'Geist Mono', monospace;
+  font-size: 13px;
+  line-height: 19px;
+  padding: 14px 0;
+  color: var(--fg);
+  display: grid;
+  grid-template-columns: 44px 1fr;
+}
+.gutter { color: var(--fg-disabled); text-align: right; padding-right: 14px; user-select: none; }
+.gutter .a { color: var(--accent); }
+.code { white-space: pre; }
+.kw { color: var(--accent); }
+.fn { color: var(--fg); }
+.str { color: #6EE7B7; }
+.num { color: #7FB8FF; }
+.com { color: var(--fg-disabled); font-style: italic; }
+.op { color: var(--fg-2); }
+
+.run-btn {
+  position: absolute; bottom: 14px; right: 16px;
+  display: flex; align-items: center; gap: 10px;
+  height: 30px; padding: 0 14px;
+  background: var(--accent); color: var(--bg-base);
+  border: none;
+  border-radius: 5px;
+  font-family: 'Geist', sans-serif;
+  font-size: 12px;
+  font-weight: 500;
+  box-shadow: 0 0 0 1px var(--accent), 0 0 24px rgba(212,255,61,0.18);
+  cursor: pointer;
+}
+.run-btn .kbd { font-family: 'Geist Mono', monospace; font-size: 10px; opacity: 0.7; }
+
+.ai-pill {
+  position: absolute; top: 14px; right: 16px;
+  display: flex; align-items: center; gap: 6px;
+  height: 24px; padding: 0 10px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  font-family: 'Geist Mono', monospace;
+  font-size: 10px;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+.ai-pill::before { content: '✦'; color: var(--accent); }
+.ai-pill:hover { color: var(--fg); border-color: var(--accent); }
+
+/* RESULTS */
+.results { background: var(--bg-canvas); overflow: auto; min-height: 0; }
+table { width: 100%; border-collapse: collapse; font-family: 'Geist Mono', monospace; font-size: 12px; }
+thead { position: sticky; top: 0; background: var(--bg-panel); z-index: 1; }
+th {
+  height: 28px;
+  text-align: left;
+  padding: 0 12px;
+  font-family: 'Geist', sans-serif;
+  font-size: 10px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--fg-muted);
+  border-bottom: 1px solid var(--border-subtle);
+  border-right: 1px solid var(--border-faint);
+  white-space: nowrap;
+}
+th .type { color: var(--fg-disabled); margin-right: 6px; font-family: 'Geist Mono', monospace; }
+th .sort { color: var(--accent); margin-left: 4px; }
+td {
+  height: 26px;
+  padding: 0 12px;
+  color: var(--fg-2);
+  border-bottom: 1px solid var(--border-faint);
+  white-space: nowrap;
+  border-left: 2px solid transparent;
+}
+td.c-num { color: var(--type-num); border-left-color: var(--type-num); }
+td.c-str { border-left-color: var(--type-str); }
+td.c-date { color: var(--type-date); border-left-color: var(--type-date); }
+td.c-bool { color: var(--type-bool); border-left-color: var(--type-bool); }
+tr:hover td { background: var(--bg-hover); }
+tr.selected td { background: var(--bg-selected); }
+tr.selected td:first-child { box-shadow: inset 2px 0 0 var(--accent); }
+
+/* STATUS BAR */
+.statusbar {
+  display: flex; align-items: center; gap: 0;
+  padding: 0 12px;
+  background: var(--bg-panel);
+  border-top: 1px solid var(--border-subtle);
+  font-family: 'Geist Mono', monospace;
+  font-size: 10px;
+  color: var(--fg-muted);
+}
+.statusbar .seg { display: flex; align-items: center; gap: 6px; padding: 0 10px; }
+.statusbar .seg.first { padding-left: 0; }
+.statusbar .ldot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 6px var(--accent); }
+.statusbar .b { color: var(--border); }
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="topbar">
+    <div class="wordmark">Plasma</div>
+    <div class="breadcrumb">
+      <span class="dot"></span>
+      <span>prod-rds-postgres</span>
+      <span class="sep">›</span>
+      <span>analytics</span>
+      <span class="sep">›</span>
+      <span>public</span>
+    </div>
+    <div class="spacer"></div>
+    <div class="iconbtn" title="History">⏱</div>
+    <div class="iconbtn" title="Notifications">◔</div>
+    <div class="iconbtn" title="Settings">⚙</div>
+    <div class="cmdk-hint">⌘ K</div>
+  </header>
+
+  <div class="body">
+    <aside class="sidebar">
+      <div class="section">
+        <div class="section-head">Connections <span class="add">+</span></div>
+        <div class="row active"><span class="glyph">◉</span><span>prod-rds-postgres</span></div>
+        <div class="row"><span class="glyph">◯</span><span>staging-postgres</span></div>
+        <div class="row"><span class="glyph">◯</span><span>localhost:5432</span></div>
+        <div class="row"><span class="glyph">◯</span><span>analytics-replica</span></div>
+      </div>
+      <div class="section">
+        <div class="section-head">Schema · public</div>
+        <div class="row"><span class="glyph">▾</span><span>public</span></div>
+        <div class="row depth-2 active"><span class="glyph">▾</span><span>users</span><span class="meta">142k</span></div>
+        <div class="row depth-3"><span class="glyph">#</span><span>id</span></div>
+        <div class="row depth-3"><span class="glyph">T</span><span>email</span></div>
+        <div class="row depth-3"><span class="glyph">T</span><span>full_name</span></div>
+        <div class="row depth-3"><span class="glyph">d</span><span>created_at</span></div>
+        <div class="row depth-3"><span class="glyph">T</span><span>plan</span></div>
+        <div class="row depth-3"><span class="glyph">T</span><span>status</span></div>
+        <div class="row depth-2"><span class="glyph">▸</span><span>posts</span><span class="meta">38k</span></div>
+        <div class="row depth-2"><span class="glyph">▸</span><span>orders</span><span class="meta">812k</span></div>
+        <div class="row depth-2"><span class="glyph">▸</span><span>sessions</span><span class="meta">2.1m</span></div>
+        <div class="row depth-2"><span class="glyph">▸</span><span>products</span><span class="meta">1.2k</span></div>
+        <div class="row"><span class="glyph">▸</span><span>auth</span></div>
+        <div class="row"><span class="glyph">▸</span><span>analytics</span></div>
+      </div>
+    </aside>
+
+    <main class="main">
+      <div class="tabs">
+        <div class="tab active"><span class="marker"></span>users-recent.sql<span class="x">×</span></div>
+        <div class="tab">cohort-analysis.sql<span class="x">×</span></div>
+        <div class="tab">orders-by-day.sql<span class="x">×</span></div>
+        <div class="tab-add">+</div>
+      </div>
+      <div class="editor-grid">
+        <div class="editor">
+          <div class="editor-code">
+            <div class="gutter">
+              <div>1</div><div>2</div><div>3</div><div class="a">4</div><div>5</div><div>6</div><div>7</div>
+            </div><pre class="code"><span class="com">-- recently active users on paid plans</span>
+<span class="kw">SELECT</span> id, email, full_name, created_at, plan, status
+<span class="kw">FROM</span> users
+<span class="kw">WHERE</span> created_at <span class="op">&gt;</span> <span class="fn">now()</span> <span class="op">-</span> <span class="kw">interval</span> <span class="str">'7 days'</span>
+  <span class="kw">AND</span> plan <span class="kw">IN</span> (<span class="str">'pro'</span>, <span class="str">'team'</span>)
+<span class="kw">ORDER BY</span> created_at <span class="kw">DESC</span>
+<span class="kw">LIMIT</span> <span class="num">100</span>;</pre>
+          </div>
+          <div class="ai-pill">ask ai · ⌘I</div>
+          <button class="run-btn">▶ Run <span class="kbd">⌘⏎</span></button>
+        </div>
+
+        <div class="results">
+          <table>
+            <thead>
+              <tr>
+                <th><span class="type">#</span>id <span class="sort">↓</span></th>
+                <th><span class="type">T</span>email</th>
+                <th><span class="type">T</span>full_name</th>
+                <th><span class="type">d</span>created_at</th>
+                <th><span class="type">T</span>plan</th>
+                <th><span class="type">T</span>status</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr class="selected"><td class="c-num">47892</td><td class="c-str">ada.lovelace@gmail.com</td><td class="c-str">Ada Lovelace</td><td class="c-date">2026-04-09 14:22:11</td><td class="c-str">pro</td><td class="c-str">active</td></tr>
+              <tr><td class="c-num">47891</td><td class="c-str">alan.turing@proton.me</td><td class="c-str">Alan Turing</td><td class="c-date">2026-04-09 12:01:44</td><td class="c-str">pro</td><td class="c-str">active</td></tr>
+              <tr><td class="c-num">47890</td><td class="c-str">katherine.j@nasa.gov</td><td class="c-str">Katherine Johnson</td><td class="c-date">2026-04-09 09:55:02</td><td class="c-str">team</td><td class="c-str">active</td></tr>
+              <tr><td class="c-num">47889</td><td class="c-str">grace.h@navy.mil</td><td class="c-str">Grace Hopper</td><td class="c-date">2026-04-08 23:18:30</td><td class="c-str">pro</td><td class="c-str">trial</td></tr>
+              <tr><td class="c-num">47888</td><td class="c-str">linus@kernel.org</td><td class="c-str">Linus Torvalds</td><td class="c-date">2026-04-08 21:04:17</td><td class="c-str">team</td><td class="c-str">active</td></tr>
+              <tr><td class="c-num">47887</td><td class="c-str">margaret.h@mit.edu</td><td class="c-str">Margaret Hamilton</td><td class="c-date">2026-04-08 18:42:09</td><td class="c-str">pro</td><td class="c-str">active</td></tr>
+              <tr><td class="c-num">47886</td><td class="c-str">ken.t@bell-labs.com</td><td class="c-str">Ken Thompson</td><td class="c-date">2026-04-08 16:30:55</td><td class="c-str">team</td><td class="c-str">active</td></tr>
+              <tr><td class="c-num">47885</td><td class="c-str">dennis.r@bell-labs.com</td><td class="c-str">Dennis Ritchie</td><td class="c-date">2026-04-08 14:11:22</td><td class="c-str">pro</td><td class="c-str">active</td></tr>
+              <tr><td class="c-num">47884</td><td class="c-str">barbara.l@stanford.edu</td><td class="c-str">Barbara Liskov</td><td class="c-date">2026-04-08 11:08:41</td><td class="c-str">pro</td><td class="c-str">active</td></tr>
+              <tr><td class="c-num">47883</td><td class="c-str">donald.k@stanford.edu</td><td class="c-str">Donald Knuth</td><td class="c-date">2026-04-08 09:30:14</td><td class="c-str">team</td><td class="c-str">active</td></tr>
+              <tr><td class="c-num">47882</td><td class="c-str">tim.bl@w3.org</td><td class="c-str">Tim Berners-Lee</td><td class="c-date">2026-04-07 23:50:00</td><td class="c-str">pro</td><td class="c-str">active</td></tr>
+              <tr><td class="c-num">47881</td><td class="c-str">edsger@dijkstra.eu</td><td class="c-str">Edsger Dijkstra</td><td class="c-date">2026-04-07 19:22:18</td><td class="c-str">team</td><td class="c-str">active</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <footer class="statusbar">
+    <div class="seg first"><span class="ldot"></span>connected</div>
+    <span class="b">·</span>
+    <div class="seg">prod-rds-postgres</div>
+    <span class="b">·</span>
+    <div class="seg">public</div>
+    <span class="b">·</span>
+    <div class="seg">142,381 rows</div>
+    <span class="b">·</span>
+    <div class="seg">87 ms</div>
+    <span class="b">·</span>
+    <div class="seg">txn: idle</div>
+    <span class="b">·</span>
+    <div class="seg">UTF-8</div>
+    <span class="b">·</span>
+    <div class="seg">PG 16.2</div>
+    <div style="flex:1"></div>
+    <div class="seg">⌘ K</div>
+  </footer>
+</div>
+</body>
+</html>

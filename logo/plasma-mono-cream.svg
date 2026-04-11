@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 520 160" role="img" aria-label="Plasma (monochrome cream)">
+  <title>Plasma</title>
+  <defs>
+    <style>
+      .cream { fill: #FAF7F0; }
+      .wordmark {
+        font-family: 'Newsreader', 'Georgia', 'Times New Roman', serif;
+        font-style: italic;
+        font-weight: 500;
+        font-size: 120px;
+        letter-spacing: -1px;
+      }
+    </style>
+  </defs>
+  <!-- Everything in cream — for dark backgrounds (midnight theme, photography, etc.). -->
+  <text x="24" y="108" class="wordmark cream">Plasma</text>
+  <rect x="24" y="122" width="360" height="4" class="cream"/>
+</svg>

@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-labelledby="title desc">
+  <title id="title">Plasma</title>
+  <desc id="desc">A literary monogram: italic serif P with an oxblood signature stroke.</desc>
+  <defs>
+    <style>
+      .ink { fill: #1C1A14; }
+      .accent { fill: #7B2D26; }
+      .p-glyph {
+        font-family: 'Newsreader', 'Georgia', 'Times New Roman', serif;
+        font-style: italic;
+        font-weight: 500;
+        font-size: 140px;
+        font-feature-settings: 'lnum', 'kern';
+      }
+    </style>
+  </defs>
+  <!-- Italic serif P, center-aligned -->
+  <text x="34" y="108" class="p-glyph ink">P</text>
+  <!-- Oxblood signature stroke — a decisive underline sitting just below the baseline -->
+  <rect x="22" y="116" width="84" height="5" class="accent"/>
+</svg>

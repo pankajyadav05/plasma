@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Plasma — 5 Aesthetic Directions</title>
+<link rel="preconnect" href="https://fonts.bunny.net">
+<link href="https://fonts.bunny.net/css?family=instrument-serif:400i|geist:400,500,600|geist-mono:400&display=swap" rel="stylesheet">
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body {
+  background: #0B0B0E;
+  color: #F4F2EE;
+  font-family: 'Geist', system-ui, sans-serif;
+  min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+}
+.wrap { max-width: 1080px; margin: 0 auto; padding: 96px 48px 120px; }
+.brand {
+  font-family: 'Instrument Serif', serif;
+  font-style: italic;
+  font-size: 64px;
+  letter-spacing: -0.02em;
+  line-height: 1;
+  margin-bottom: 12px;
+}
+.brand::before { content: '◈ '; color: #D4FF3D; font-style: normal; font-size: 44px; vertical-align: 6px; }
+.kicker {
+  font-family: 'Geist Mono', monospace;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  color: #8A8884;
+  margin-bottom: 64px;
+}
+.intro {
+  font-family: 'Instrument Serif', serif;
+  font-style: italic;
+  font-size: 22px;
+  line-height: 1.55;
+  color: #C8C6C0;
+  max-width: 640px;
+  margin-bottom: 80px;
+}
+.intro b { color: #F4F2EE; font-weight: 400; }
+
+.grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1px;
+  background: #26262E;
+  border: 1px solid #26262E;
+}
+.card {
+  display: grid;
+  grid-template-columns: 80px 1fr auto;
+  gap: 32px;
+  padding: 32px 36px;
+  background: #0B0B0E;
+  text-decoration: none;
+  color: inherit;
+  align-items: center;
+  transition: background 80ms linear;
+}
+.card:hover { background: #131318; }
+.num {
+  font-family: 'Instrument Serif', serif;
+  font-style: italic;
+  font-size: 56px;
+  color: #D4FF3D;
+  line-height: 1;
+}
+.body h2 {
+  font-family: 'Instrument Serif', serif;
+  font-style: italic;
+  font-weight: 400;
+  font-size: 32px;
+  letter-spacing: -0.01em;
+  margin-bottom: 4px;
+}
+.body .tag {
+  font-family: 'Geist Mono', monospace;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: #8A8884;
+  margin-bottom: 12px;
+}
+.body p {
+  font-family: 'Geist', sans-serif;
+  font-size: 13px;
+  line-height: 1.55;
+  color: #C8C6C0;
+  max-width: 560px;
+}
+.swatches { display: flex; gap: 6px; margin-top: 14px; }
+.sw { width: 18px; height: 18px; border-radius: 3px; }
+.arrow {
+  font-family: 'Geist Mono', monospace;
+  font-size: 24px;
+  color: #555255;
+  transition: color 80ms linear, transform 140ms cubic-bezier(0.16,1,0.3,1);
+}
+.card:hover .arrow { color: #D4FF3D; transform: translateX(4px); }
+
+.footer {
+  margin-top: 80px;
+  font-family: 'Geist Mono', monospace;
+  font-size: 11px;
+  color: #555255;
+  display: flex; justify-content: space-between;
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1 class="brand">Plasma</h1>
+  <div class="kicker">5 aesthetic directions · pick one · 2026-04-10</div>
+  <p class="intro">
+    Five completely different visual languages for the same database client.
+    Same content. Same data. Same layout bones. Wildly different
+    <b>typography</b>, <b>color</b>, <b>density</b>, and <b>mood</b>.
+    Click each one. Live with it for thirty seconds. Then pick the one
+    that makes you want to write a query right now.
+  </p>
+
+  <div class="grid">
+    <a class="card" href="01-plasma-terminal.html">
+      <div class="num">01</div>
+      <div class="body">
+        <h2>Plasma Terminal</h2>
+        <div class="tag">warm dark · electric lime · serif chrome</div>
+        <p>A modernist scientific instrument. Warm near-black base, a single electric-lime accent used like a laser pointer, italic serif headlines over a brutalist data grid. Geist + Geist Mono + Instrument Serif.</p>
+        <div class="swatches">
+          <div class="sw" style="background:#0B0B0E;border:1px solid #26262E"></div>
+          <div class="sw" style="background:#131318"></div>
+          <div class="sw" style="background:#F4F2EE"></div>
+          <div class="sw" style="background:#D4FF3D"></div>
+          <div class="sw" style="background:#C9A4FF"></div>
+        </div>
+      </div>
+      <div class="arrow">→</div>
+    </a>
+
+    <a class="card" href="02-paper-editor.html">
+      <div class="num">02</div>
+      <div class="body">
+        <h2>Paper Editor</h2>
+        <div class="tag">cream paper · ink · editorial serif</div>
+        <p>A research notebook for SQL. Warm cream paper background, deep ink text, oxblood accent. Newsreader serif headlines, DM Sans body, JetBrains Mono data. Comfortable density. The opposite of dark-mode dev tool fatigue.</p>
+        <div class="swatches">
+          <div class="sw" style="background:#FAF7F0;border:1px solid #26262E"></div>
+          <div class="sw" style="background:#F4F1E8;border:1px solid #26262E"></div>
+          <div class="sw" style="background:#1C1A14"></div>
+          <div class="sw" style="background:#7B2D26"></div>
+          <div class="sw" style="background:#2D5016"></div>
+        </div>
+      </div>
+      <div class="arrow">→</div>
+    </a>
+
+    <a class="card" href="03-tokyo-midnight.html">
+      <div class="num">03</div>
+      <div class="body">
+        <h2>Tokyo Midnight</h2>
+        <div class="tag">OLED black · cyan + magenta · all monospace</div>
+        <p>Cyberpunk terminal aesthetic. Pure black for OLED, cool slate text, dual cyan-magenta accents. Everything in JetBrains Mono including the UI labels. Maximum density. Scanline overlay. Made for the developer who lives in the dark.</p>
+        <div class="swatches">
+          <div class="sw" style="background:#000000;border:1px solid #26262E"></div>
+          <div class="sw" style="background:#0A0A12"></div>
+          <div class="sw" style="background:#E5E5F0"></div>
+          <div class="sw" style="background:#00E5FF"></div>
+          <div class="sw" style="background:#FF2E97"></div>
+        </div>
+      </div>
+      <div class="arrow">→</div>
+    </a>
+
+    <a class="card" href="04-atelier.html">
+      <div class="num">04</div>
+      <div class="body">
+        <h2>Atelier</h2>
+        <div class="tag">swiss white · heavy borders · vermilion</div>
+        <p>Brutalist Swiss editorial design applied to a database tool. Stark white, heavy 2px black borders, single vermilion accent, big uppercase labels, exposed grid. Space Grotesk + Söhne Mono. Like Werkplaats Typografie made you a SQL client.</p>
+        <div class="swatches">
+          <div class="sw" style="background:#FFFFFF;border:1px solid #26262E"></div>
+          <div class="sw" style="background:#F2F2F0"></div>
+          <div class="sw" style="background:#0A0A0A"></div>
+          <div class="sw" style="background:#E63946"></div>
+          <div class="sw" style="background:#F4A300"></div>
+        </div>
+      </div>
+      <div class="arrow">→</div>
+    </a>
+
+    <a class="card" href="05-glass-carbon.html">
+      <div class="num">05</div>
+      <div class="body">
+        <h2>Glass Carbon</h2>
+        <div class="tag">frosted glass · electric blue · sci-fi cockpit</div>
+        <p>Apple Vision Pro meets Tron. Carbon-dark base with subtle noise, frosted glass panels with backdrop blur, electric blue accent, generous shadows, gently rounded corners. Inter Display + JetBrains Mono. Layered, atmospheric, futuristic.</p>
+        <div class="swatches">
+          <div class="sw" style="background:#0A0A0F;border:1px solid #26262E"></div>
+          <div class="sw" style="background:#16161F"></div>
+          <div class="sw" style="background:#E8EAF2"></div>
+          <div class="sw" style="background:#00B8FF"></div>
+          <div class="sw" style="background:#7C5CFF"></div>
+        </div>
+      </div>
+      <div class="arrow">→</div>
+    </a>
+  </div>
+
+  <div class="footer">
+    <span>plasma · v0.0.0 · aesthetic exploration</span>
+    <span>pick one · we start coding tomorrow</span>
+  </div>
+</div>
+</body>
+</html>

@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 160" role="img" aria-labelledby="title desc">
+  <title id="title">Plasma</title>
+  <desc id="desc">Horizontal lockup: monogram mark, vertical rule, wordmark.</desc>
+  <defs>
+    <style>
+      .ink { fill: #1C1A14; }
+      .accent { fill: #7B2D26; }
+      .rule { fill: #C9C2A8; }
+      .p-glyph {
+        font-family: 'Newsreader', 'Georgia', 'Times New Roman', serif;
+        font-style: italic;
+        font-weight: 500;
+        font-size: 120px;
+      }
+      .wordmark {
+        font-family: 'Newsreader', 'Georgia', 'Times New Roman', serif;
+        font-style: italic;
+        font-weight: 500;
+        font-size: 96px;
+        letter-spacing: -0.5px;
+      }
+    </style>
+  </defs>
+  <!-- Mark on the left -->
+  <text x="28" y="108" class="p-glyph ink">P</text>
+  <rect x="18" y="116" width="80" height="5" class="accent"/>
+
+  <!-- Thin vertical rule divider -->
+  <rect x="128" y="36" width="1" height="80" class="rule"/>
+
+  <!-- Wordmark on the right, baseline-aligned with the mark -->
+  <text x="152" y="108" class="wordmark ink">Plasma</text>
+  <rect x="152" y="120" width="288" height="3" class="accent"/>
+</svg>

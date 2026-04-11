@@ -1,0 +1,208 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ─── CSS tokens (mirrored from DESIGN.md) ───────────────────────── */
+
+:root,
+:root[data-theme="paper"] {
+  /* Surfaces — warm cream paper */
+  --bg: #faf7f0;
+  --bg-panel: #f4f0e3;
+  --bg-canvas: #fffef9;
+  --bg-hover: rgba(123, 45, 38, 0.05);
+  --bg-selected: #f3e2d8;
+
+  /* Rules & borders */
+  --rule: #d6cfbb;
+  --border: #e5dfcc;
+  --border-strong: #1c1a14;
+
+  /* Ink */
+  --fg: #1c1a14;
+  --fg-2: #5c5849;
+  --fg-muted: #6b6659;
+  --fg-disabled: #918b7d;
+
+  /* Accent */
+  --accent: #7b2d26;
+  --accent-hover: #8f3731;
+  --accent-press: #661f1a;
+
+  /* Data types */
+  --type-num: #2b4e7a;
+  --type-str: #4a6b2e;
+  --type-date: #5c5849;
+  --type-bool: #7b2d26;
+  --type-null: #918b7d;
+  --type-json: #7a5a08;
+
+  /* Scrollbar */
+  --scrollbar-thumb: rgba(123, 106, 72, 0.28);
+  --scrollbar-thumb-hover: rgba(123, 106, 72, 0.55);
+}
+
+/* ─── Midnight Vellum (dark theme) ─────────────────────────────── */
+
+:root[data-theme="midnight"] {
+  --bg: #1b1812;
+  --bg-panel: #231f18;
+  --bg-canvas: #15120d;
+  --bg-hover: rgba(212, 172, 120, 0.06);
+  --bg-selected: rgba(212, 138, 130, 0.12);
+
+  --rule: #2e2a20;
+  --border: #3a352a;
+  --border-strong: #d4ac78;
+
+  --fg: #faf7f0;
+  --fg-2: #d4cfbf;
+  --fg-muted: #a09882;
+  --fg-disabled: #6b6659;
+
+  --accent: #d48a82;
+  --accent-hover: #e19c94;
+  --accent-press: #c17872;
+
+  --type-num: #7fb8ff;
+  --type-str: #a8c98a;
+  --type-date: #c8c4b5;
+  --type-bool: #d48a82;
+  --type-null: #6b6659;
+  --type-json: #e8b872;
+
+  --scrollbar-thumb: rgba(250, 247, 240, 0.14);
+  --scrollbar-thumb-hover: rgba(250, 247, 240, 0.32);
+}
+
+/* ─── Base ─── */
+
+html,
+body,
+#root {
+  height: 100vh;
+  overflow: hidden;
+}
+
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: "DM Sans", system-ui, sans-serif;
+  font-size: 14px;
+  font-feature-settings: "tnum";
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Paper texture — only on paper theme; midnight gets a subtle noise instead */
+:root[data-theme="paper"] body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  background-image: radial-gradient(rgba(28, 26, 20, 0.025) 1px, transparent 1px);
+  background-size: 4px 4px;
+  pointer-events: none;
+  z-index: 0;
+}
+:root[data-theme="midnight"] body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  background-image: radial-gradient(rgba(255, 250, 230, 0.012) 1px, transparent 1px);
+  background-size: 3px 3px;
+  pointer-events: none;
+  z-index: 0;
+}
+
+#root {
+  position: relative;
+  z-index: 1;
+}
+
+/* ─── Custom scrollbar ─────────────────────────────────────────────
+   Overlay style: transparent track, thumb is a muted overlay that
+   only becomes visible when the container actually needs to scroll.
+   No tan strip anywhere. Works against any background. */
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+  border: none;
+}
+::-webkit-scrollbar-thumb {
+  background-color: var(--scrollbar-thumb);
+  border: 2px solid transparent;
+  background-clip: content-box;
+  border-radius: 0;
+  min-height: 40px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background-color: var(--scrollbar-thumb-hover);
+  background-clip: content-box;
+}
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* Utility for containers that should never show a scrollbar */
+.scrollbar-none {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
+}
+
+/* ─── Focus ring ─── */
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* ─── Window drag regions ─── */
+
+.drag {
+  -webkit-app-region: drag;
+}
+.no-drag {
+  -webkit-app-region: no-drag;
+}
+
+.topbar-pad {
+  padding-left: 20px;
+  padding-right: 20px;
+}
+:root[data-platform="darwin"] .topbar-pad {
+  padding-left: 80px;
+}
+:root[data-platform="win32"] .topbar-pad,
+:root[data-platform="linux"] .topbar-pad {
+  padding-right: 140px;
+}
+
+/* ─── Monaco editor overrides (Paper theme surface) ─── */
+
+.monaco-editor,
+.monaco-editor-background,
+.monaco-editor .margin {
+  background-color: var(--bg) !important;
+}
+.monaco-editor .scroll-decoration {
+  box-shadow: none !important;
+}
+
+/* ─── Reduced motion ─── */
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 80ms !important;
+    transition-duration: 80ms !important;
+    transition-timing-function: linear !important;
+  }
+}

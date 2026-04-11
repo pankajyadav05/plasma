@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 200" role="img" aria-labelledby="title desc">
+  <title id="title">Plasma — a quiet place for queries</title>
+  <desc id="desc">Full brand lockup with wordmark, signature stroke, and editorial tagline.</desc>
+  <defs>
+    <style>
+      .ink { fill: #1C1A14; }
+      .ink-muted { fill: #8B8675; }
+      .accent { fill: #7B2D26; }
+      .wordmark {
+        font-family: 'Newsreader', 'Georgia', 'Times New Roman', serif;
+        font-style: italic;
+        font-weight: 500;
+        font-size: 120px;
+        letter-spacing: -1px;
+      }
+      .tagline {
+        font-family: 'Newsreader', 'Georgia', 'Times New Roman', serif;
+        font-style: italic;
+        font-weight: 400;
+        font-size: 28px;
+        letter-spacing: 0;
+      }
+    </style>
+  </defs>
+  <!-- Wordmark -->
+  <text x="24" y="108" class="wordmark ink">Plasma</text>
+  <rect x="24" y="122" width="360" height="4" class="accent"/>
+
+  <!-- Tagline — em-dash + italic phrase, editorial spacing -->
+  <text x="24" y="168" class="tagline ink-muted">— a quiet place for queries</text>
+</svg>

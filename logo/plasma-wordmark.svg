@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 520 160" role="img" aria-labelledby="title desc">
+  <title id="title">Plasma</title>
+  <desc id="desc">Primary wordmark: "Plasma" set in Newsreader italic with an oxblood signature stroke.</desc>
+  <defs>
+    <style>
+      .ink { fill: #1C1A14; }
+      .accent { fill: #7B2D26; }
+      .wordmark {
+        font-family: 'Newsreader', 'Georgia', 'Times New Roman', serif;
+        font-style: italic;
+        font-weight: 500;
+        font-size: 120px;
+        font-feature-settings: 'lnum', 'kern';
+        letter-spacing: -1px;
+      }
+    </style>
+  </defs>
+  <!-- Wordmark -->
+  <text x="24" y="108" class="wordmark ink">Plasma</text>
+  <!-- Oxblood signature stroke — same visual device as the mark, at wordmark scale -->
+  <rect x="24" y="122" width="360" height="4" class="accent"/>
+</svg>

@@ -1,0 +1,728 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>D · Console — Plasma</title>
+<link href="https://fonts.googleapis.com/css2?family=VT323&family=JetBrains+Mono:wght@400;500;700&family=IBM+Plex+Sans+Condensed:wght@500;600;700&display=swap" rel="stylesheet">
+<style>
+/* ============================================================
+   CONCEPT D · CONSOLE
+   industrial hardware · brushed metal · amber LED · CRT
+   ============================================================ */
+:root {
+  --case-deep: #0A0C0F;
+  --case-dark: #14171C;
+  --case: #1A1D22;
+  --case-mid: #242830;
+  --case-hi: #2E3338;
+  --case-rim: #4A5058;
+  --case-screw: #2A2E34;
+  --vent: #0A0C0F;
+  --lcd-bg: #0A0A06;
+  --lcd-bg-2: #14110A;
+  --lcd-grid: rgba(255,179,0,0.018);
+  --amber: #FFB300;
+  --amber-hi: #FFD55C;
+  --amber-dim: #8B6500;
+  --amber-glow: rgba(255,179,0,0.45);
+  --green-led: #6BFF6B;
+  --green-glow: rgba(107,255,107,0.55);
+  --red-led: #FF3030;
+  --olive: #6B7A33;
+  --label: #BFC6D2;
+  --label-2: #7A8290;
+  --label-dim: #4A5058;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body {
+  height: 100vh;
+  background: var(--case-deep);
+  color: var(--label);
+  font-family: 'IBM Plex Sans Condensed', system-ui, sans-serif;
+  font-size: 12px;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+
+/* Outer rim — looks like the device sits in a darker frame */
+body::before {
+  content: '';
+  position: fixed; inset: 0;
+  background: radial-gradient(ellipse at center, transparent 30%, rgba(0,0,0,0.6) 100%);
+  pointer-events: none;
+  z-index: 100;
+}
+
+.app {
+  display: grid;
+  grid-template-rows: 60px 1fr 36px;
+  height: 100vh;
+  /* The outer brushed-metal case */
+  background:
+    linear-gradient(180deg, var(--case-hi) 0%, var(--case) 8%, var(--case) 92%, var(--case-dark) 100%);
+  position: relative;
+  padding: 14px;
+  gap: 12px;
+}
+/* Brushed metal texture overlay for the entire case */
+.app::before {
+  content: '';
+  position: absolute; inset: 0;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='400' height='4'><filter id='b'><feTurbulence type='fractalNoise' baseFrequency='3 0.1' numOctaves='1' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 0.04 0'/></filter><rect width='100%25' height='100%25' filter='url(%23b)'/></svg>");
+  pointer-events: none;
+  mix-blend-mode: overlay;
+}
+
+/* Helper: rivet (small recessed dome) */
+.rivet {
+  position: absolute;
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 35% 30%, #6A707A 0%, #2E3338 50%, #0A0C0F 100%);
+  box-shadow:
+    0 1px 0 rgba(255,255,255,0.10),
+    inset 0 1px 1px rgba(0,0,0,0.6);
+  z-index: 10;
+}
+
+/* ----------- TOP BAR — front bezel of the device ----------- */
+.topbar {
+  position: relative;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  padding: 0 24px;
+  background:
+    linear-gradient(180deg, var(--case-rim) 0%, var(--case-hi) 20%, var(--case) 100%);
+  border-radius: 8px;
+  border: 1px solid var(--case-deep);
+  box-shadow:
+    0 1px 0 rgba(255,255,255,0.10) inset,
+    0 -1px 0 rgba(0,0,0,0.6) inset,
+    0 4px 12px rgba(0,0,0,0.4);
+}
+.topbar::after {
+  /* horizontal vent grille on the right side */
+  content: '';
+  position: absolute;
+  right: 90px; top: 12px; bottom: 12px;
+  width: 60px;
+  background:
+    repeating-linear-gradient(0deg,
+      var(--vent) 0px, var(--vent) 2px,
+      var(--case-mid) 2px, var(--case-mid) 4px);
+  border-radius: 2px;
+  box-shadow: inset 0 1px 2px rgba(0,0,0,0.7), 0 1px 0 rgba(255,255,255,0.06);
+  opacity: 0.7;
+}
+.topbar .rivet.r1 { top: 6px; left: 6px; }
+.topbar .rivet.r2 { top: 6px; right: 6px; }
+.topbar .rivet.r3 { bottom: 6px; left: 6px; }
+.topbar .rivet.r4 { bottom: 6px; right: 6px; }
+
+.brand-plate {
+  display: flex; align-items: center; gap: 14px;
+  padding: 6px 14px 6px 6px;
+  background: linear-gradient(180deg, var(--case-dark), var(--case-deep));
+  border: 1px solid var(--case-rim);
+  border-radius: 4px;
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.08),
+    inset 0 -1px 0 rgba(0,0,0,0.6),
+    0 1px 0 rgba(255,255,255,0.06);
+}
+.led {
+  width: 12px; height: 12px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 30% 30%, var(--amber-hi), var(--amber) 50%, var(--amber-dim) 100%);
+  box-shadow:
+    0 0 0 1px rgba(0,0,0,0.6),
+    0 0 12px var(--amber-glow),
+    0 0 24px var(--amber-glow),
+    inset 0 1px 0 rgba(255,255,255,0.4);
+  animation: led-pulse 2.4s ease-in-out infinite;
+}
+@keyframes led-pulse {
+  0%, 100% { box-shadow: 0 0 0 1px rgba(0,0,0,0.6), 0 0 8px var(--amber-glow), 0 0 16px var(--amber-glow), inset 0 1px 0 rgba(255,255,255,0.4); }
+  50%      { box-shadow: 0 0 0 1px rgba(0,0,0,0.6), 0 0 14px var(--amber-glow), 0 0 28px var(--amber-glow), inset 0 1px 0 rgba(255,255,255,0.5); }
+}
+.wordmark {
+  font-family: 'VT323', monospace;
+  font-size: 32px;
+  line-height: 1;
+  color: var(--amber);
+  text-shadow: 0 0 6px var(--amber-glow), 0 0 12px var(--amber-glow);
+  letter-spacing: 0.06em;
+}
+
+.brand-meta {
+  display: flex; align-items: center; gap: 18px;
+  padding: 0 24px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  color: var(--label-2);
+}
+.brand-meta .v { color: var(--amber); text-shadow: 0 0 4px var(--amber-glow); }
+.brand-meta .stat { display: flex; align-items: center; gap: 6px; }
+.brand-meta .green-led { width: 6px; height: 6px; border-radius: 50%; background: var(--green-led); box-shadow: 0 0 6px var(--green-glow), 0 0 12px var(--green-glow); }
+
+.actions { display: flex; align-items: center; gap: 8px; }
+.iconbtn {
+  width: 32px; height: 32px;
+  display: grid; place-items: center;
+  background: linear-gradient(180deg, var(--case-mid), var(--case));
+  border: 1px solid var(--case-rim);
+  border-top-color: rgba(255,255,255,0.10);
+  border-bottom-color: var(--case-deep);
+  border-radius: 4px;
+  color: var(--label-2);
+  font-size: 13px;
+  cursor: pointer;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.06), 0 1px 0 rgba(255,255,255,0.06);
+}
+.iconbtn:hover { color: var(--amber); border-color: var(--amber-dim); }
+.cmdk-hint {
+  display: flex; align-items: center; gap: 8px;
+  font-family: 'VT323', monospace;
+  font-size: 16px;
+  padding: 6px 12px;
+  background: var(--lcd-bg);
+  border: 1px solid var(--case-deep);
+  border-radius: 3px;
+  color: var(--amber);
+  text-shadow: 0 0 4px var(--amber-glow);
+  box-shadow: inset 0 1px 4px rgba(0,0,0,0.8);
+  letter-spacing: 0.06em;
+}
+
+/* ----------- BODY ----------- */
+.body { display: grid; grid-template-columns: 256px 1fr; gap: 12px; min-height: 0; }
+
+/* SIDEBAR — looks like a control panel */
+.sidebar {
+  position: relative;
+  background:
+    linear-gradient(180deg, var(--case-rim) 0%, var(--case-hi) 4%, var(--case) 100%);
+  border-radius: 8px;
+  border: 1px solid var(--case-deep);
+  overflow: hidden;
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.10),
+    inset 0 -1px 0 rgba(0,0,0,0.6),
+    0 4px 16px rgba(0,0,0,0.4);
+}
+.sidebar .rivet.r1 { top: 6px; left: 6px; }
+.sidebar .rivet.r2 { top: 6px; right: 6px; }
+.sidebar .rivet.r3 { bottom: 6px; left: 6px; }
+.sidebar .rivet.r4 { bottom: 6px; right: 6px; }
+.sidebar-inner {
+  height: 100%;
+  overflow-y: auto;
+  padding: 18px 0;
+}
+
+.section { padding: 8px 0 14px; }
+.section + .section { margin-top: 8px; padding-top: 14px; border-top: 1px solid var(--case-deep); box-shadow: 0 -1px 0 rgba(255,255,255,0.06); }
+.section-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0 16px 10px;
+  font-family: 'IBM Plex Sans Condensed', sans-serif;
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  color: var(--label-2);
+}
+.section-head .label { display: flex; align-items: center; gap: 8px; }
+.section-head .led-tiny { width: 5px; height: 5px; border-radius: 50%; background: var(--amber); box-shadow: 0 0 4px var(--amber-glow); }
+.section-head .add {
+  width: 22px; height: 18px;
+  display: grid; place-items: center;
+  background: linear-gradient(180deg, var(--case-mid), var(--case));
+  border: 1px solid var(--case-rim);
+  border-top-color: rgba(255,255,255,0.10);
+  border-bottom-color: var(--case-deep);
+  color: var(--amber);
+  font-size: 12px;
+  cursor: pointer;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.06);
+}
+
+.row {
+  display: flex; align-items: center; gap: 10px;
+  height: 24px;
+  padding: 0 16px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  color: var(--label);
+  cursor: pointer;
+  border-bottom: 1px solid rgba(0,0,0,0.20);
+}
+.row:hover { background: rgba(255,179,0,0.05); }
+.row.active {
+  background: linear-gradient(180deg, rgba(255,179,0,0.16), rgba(255,179,0,0.08));
+  color: var(--amber);
+  text-shadow: 0 0 4px var(--amber-glow);
+  border-left: 3px solid var(--amber);
+  padding-left: 13px;
+  box-shadow: inset 0 0 12px rgba(255,179,0,0.10);
+}
+.row .glyph { width: 10px; text-align: center; font-size: 10px; color: var(--label-dim); }
+.row.active .glyph { color: var(--amber); }
+.row .meta {
+  margin-left: auto;
+  font-family: 'VT323', monospace;
+  font-size: 13px;
+  color: var(--label-dim);
+}
+.row.active .meta { color: var(--amber); text-shadow: 0 0 4px var(--amber-glow); }
+.depth-2 { padding-left: 26px; }
+.depth-2.active { padding-left: 23px; }
+.depth-3 { padding-left: 40px; }
+
+/* ----------- MAIN ----------- */
+.main { display: flex; flex-direction: column; min-width: 0; gap: 12px; }
+
+.tabs {
+  position: relative;
+  display: flex; align-items: stretch;
+  height: 40px;
+  background: linear-gradient(180deg, var(--case-rim) 0%, var(--case-hi) 20%, var(--case) 100%);
+  border-radius: 8px;
+  border: 1px solid var(--case-deep);
+  padding: 0 6px;
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.10),
+    inset 0 -1px 0 rgba(0,0,0,0.6),
+    0 4px 12px rgba(0,0,0,0.35);
+}
+.tabs .rivet.r1 { top: 4px; left: 4px; }
+.tabs .rivet.r2 { top: 4px; right: 4px; }
+.tabs .rivet.r3 { bottom: 4px; left: 4px; }
+.tabs .rivet.r4 { bottom: 4px; right: 4px; }
+.tab {
+  display: flex; align-items: center; gap: 10px;
+  padding: 0 18px;
+  margin: 4px 2px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--label-2);
+  cursor: pointer;
+  border-radius: 4px;
+  background: linear-gradient(180deg, var(--case-mid), var(--case-dark));
+  border: 1px solid var(--case-deep);
+  border-top-color: rgba(255,255,255,0.06);
+}
+.tab.active {
+  color: var(--amber);
+  text-shadow: 0 0 4px var(--amber-glow);
+  background: linear-gradient(180deg, rgba(255,179,0,0.16), rgba(255,179,0,0.04));
+  border-color: var(--amber-dim);
+  box-shadow: inset 0 0 12px rgba(255,179,0,0.12), 0 0 8px rgba(255,179,0,0.20);
+}
+.tab .marker { width: 6px; height: 6px; border-radius: 50%; background: var(--label-dim); }
+.tab.active .marker { background: var(--amber); box-shadow: 0 0 6px var(--amber-glow); }
+.tab .x { color: var(--label-dim); }
+.tab-add {
+  display: grid; place-items: center;
+  width: 32px; margin: 4px 2px;
+  background: linear-gradient(180deg, var(--case-mid), var(--case-dark));
+  border: 1px solid var(--case-deep);
+  border-radius: 4px;
+  color: var(--amber);
+  cursor: pointer;
+  font-size: 14px;
+  font-family: 'VT323', monospace;
+}
+
+.editor-grid { display: grid; grid-template-rows: 38% 1fr; gap: 12px; min-height: 0; }
+
+/* ----------- EDITOR — recessed LCD panel ----------- */
+.editor {
+  position: relative;
+  background: var(--lcd-bg);
+  border-radius: 6px;
+  border: 2px solid var(--case-deep);
+  overflow: hidden;
+  box-shadow:
+    inset 0 0 0 1px rgba(255,179,0,0.06),
+    inset 0 0 24px rgba(0,0,0,0.8),
+    inset 0 4px 12px rgba(0,0,0,0.7),
+    0 1px 0 rgba(255,255,255,0.06);
+}
+/* CRT scanlines */
+.editor::before {
+  content: '';
+  position: absolute; inset: 0;
+  background-image: repeating-linear-gradient(0deg,
+    transparent 0px, transparent 2px,
+    rgba(0,0,0,0.18) 2px, rgba(0,0,0,0.18) 3px);
+  pointer-events: none;
+  z-index: 2;
+}
+/* Subtle vignette + curvature illusion */
+.editor::after {
+  content: '';
+  position: absolute; inset: 0;
+  background: radial-gradient(ellipse at center, transparent 50%, rgba(0,0,0,0.45) 100%);
+  pointer-events: none;
+  z-index: 3;
+}
+.editor-code {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 13px;
+  line-height: 22px;
+  padding: 18px 0;
+  display: grid;
+  grid-template-columns: 50px 1fr;
+  position: relative;
+  z-index: 1;
+}
+.gutter {
+  text-align: right;
+  padding-right: 14px;
+  user-select: none;
+  font-family: 'VT323', monospace;
+  font-size: 18px;
+  color: var(--amber-dim);
+  line-height: 22px;
+}
+.gutter .a { color: var(--amber); text-shadow: 0 0 6px var(--amber-glow); }
+.code { white-space: pre; color: var(--amber); text-shadow: 0 0 4px var(--amber-glow); }
+.kw { color: var(--amber-hi); text-shadow: 0 0 6px var(--amber-glow); font-weight: 700; }
+.fn { color: var(--green-led); text-shadow: 0 0 4px var(--green-glow); }
+.str { color: var(--label); text-shadow: 0 0 3px rgba(191,198,210,0.4); }
+.num { color: var(--green-led); text-shadow: 0 0 4px var(--green-glow); }
+.com { color: var(--olive); }
+.op { color: var(--label-2); }
+
+/* The big physical Run button */
+.run-btn {
+  position: absolute; bottom: 14px; right: 16px;
+  display: flex; align-items: center; gap: 12px;
+  height: 42px; padding: 0 22px;
+  background: radial-gradient(ellipse at 50% 30%, #FF4444 0%, #C81818 60%, #7A0E0E 100%);
+  color: white;
+  border: 2px solid #5A0808;
+  border-radius: 6px;
+  font-family: 'IBM Plex Sans Condensed', sans-serif;
+  font-size: 13px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  cursor: pointer;
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.4),
+    inset 0 -2px 4px rgba(0,0,0,0.5),
+    0 4px 0 #5A0808,
+    0 6px 8px rgba(0,0,0,0.6);
+  text-shadow: 0 -1px 0 rgba(0,0,0,0.6);
+  z-index: 4;
+  transition: transform 80ms linear, box-shadow 80ms linear;
+}
+.run-btn:hover {
+  transform: translateY(1px);
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.4),
+    inset 0 -2px 4px rgba(0,0,0,0.5),
+    0 3px 0 #5A0808,
+    0 5px 8px rgba(0,0,0,0.6);
+}
+.run-btn .arrow { font-size: 14px; }
+.run-btn .kbd {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  background: rgba(0,0,0,0.4);
+  padding: 3px 7px;
+  border-radius: 3px;
+  border: 1px solid rgba(255,255,255,0.20);
+  letter-spacing: 0;
+  font-weight: 500;
+  text-shadow: none;
+}
+
+.ai-pill {
+  position: absolute; top: 14px; right: 16px;
+  display: flex; align-items: center; gap: 8px;
+  height: 24px; padding: 0 12px;
+  background: var(--case-dark);
+  border: 1px solid var(--amber-dim);
+  border-radius: 3px;
+  font-family: 'VT323', monospace;
+  font-size: 14px;
+  color: var(--amber);
+  text-shadow: 0 0 4px var(--amber-glow);
+  cursor: pointer;
+  z-index: 4;
+  letter-spacing: 0.06em;
+}
+
+/* ----------- RESULTS — vintage stock-ticker LCD ----------- */
+.results {
+  position: relative;
+  background: var(--lcd-bg);
+  border-radius: 6px;
+  border: 2px solid var(--case-deep);
+  overflow: auto;
+  min-height: 0;
+  box-shadow:
+    inset 0 0 0 1px rgba(255,179,0,0.06),
+    inset 0 0 24px rgba(0,0,0,0.85),
+    inset 0 4px 12px rgba(0,0,0,0.7),
+    0 1px 0 rgba(255,255,255,0.06);
+}
+.results::before {
+  content: '';
+  position: sticky; top: 0; left: 0;
+  display: block;
+  width: 100%; height: 0;
+  z-index: 5;
+}
+.results-overlay {
+  pointer-events: none;
+  position: sticky;
+  top: 0;
+  z-index: 4;
+}
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: 'VT323', monospace;
+  font-size: 16px;
+  position: relative;
+}
+table::before {
+  /* scanlines on the table */
+  content: '';
+  position: absolute; inset: 0;
+  background-image: repeating-linear-gradient(0deg,
+    transparent 0px, transparent 2px,
+    rgba(0,0,0,0.15) 2px, rgba(0,0,0,0.15) 3px);
+  pointer-events: none;
+}
+thead {
+  position: sticky; top: 0;
+  background: var(--lcd-bg-2);
+  z-index: 1;
+}
+th {
+  height: 32px;
+  text-align: left;
+  padding: 0 16px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--amber);
+  text-shadow: 0 0 4px var(--amber-glow);
+  border-bottom: 1px solid var(--amber-dim);
+  white-space: nowrap;
+}
+th .type {
+  font-weight: 400;
+  font-size: 8px;
+  color: var(--olive);
+  margin-right: 6px;
+  text-shadow: none;
+}
+th .sort { color: var(--amber-hi); margin-left: 4px; }
+td {
+  height: 26px;
+  padding: 0 16px;
+  color: var(--amber);
+  text-shadow: 0 0 4px var(--amber-glow);
+  border-bottom: 1px dashed rgba(255,179,0,0.10);
+  white-space: nowrap;
+}
+td.num { color: var(--green-led); text-shadow: 0 0 4px var(--green-glow); font-weight: 500; }
+td.date { color: var(--amber-dim); text-shadow: none; font-size: 14px; }
+tr:hover td { background: rgba(255,179,0,0.05); }
+tr.selected td { background: rgba(255,179,0,0.10); }
+tr.selected td:first-child {
+  position: relative;
+}
+tr.selected td:first-child::before {
+  content: '►';
+  position: absolute;
+  left: 4px;
+  color: var(--amber);
+  font-family: 'VT323';
+  text-shadow: 0 0 6px var(--amber-glow);
+  animation: led-pulse 1.4s ease-in-out infinite;
+}
+
+/* ----------- STATUS BAR ----------- */
+.statusbar {
+  position: relative;
+  display: flex; align-items: center;
+  padding: 0 18px;
+  background: linear-gradient(180deg, var(--case-rim) 0%, var(--case-hi) 30%, var(--case) 100%);
+  border-radius: 6px;
+  border: 1px solid var(--case-deep);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9px;
+  color: var(--label-2);
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.10),
+    inset 0 -1px 0 rgba(0,0,0,0.6),
+    0 2px 6px rgba(0,0,0,0.4);
+}
+.statusbar .rivet.r1 { top: 4px; left: 4px; }
+.statusbar .rivet.r2 { top: 4px; right: 4px; }
+.statusbar .rivet.r3 { bottom: 4px; left: 4px; }
+.statusbar .rivet.r4 { bottom: 4px; right: 4px; }
+.statusbar .seg { display: flex; align-items: center; gap: 8px; padding: 0 12px; border-right: 1px solid rgba(0,0,0,0.4); border-left: 1px solid rgba(255,255,255,0.06); }
+.statusbar .seg.first { padding-left: 16px; border-left: none; }
+.statusbar .ldot { width: 7px; height: 7px; border-radius: 50%; background: var(--green-led); box-shadow: 0 0 6px var(--green-glow), 0 0 12px var(--green-glow); }
+.statusbar .v {
+  font-family: 'VT323', monospace;
+  font-size: 14px;
+  color: var(--amber);
+  text-shadow: 0 0 4px var(--amber-glow);
+  letter-spacing: 0.04em;
+}
+</style>
+</head>
+<body>
+<div class="app">
+  <!-- TOP BAR -->
+  <header class="topbar">
+    <div class="rivet r1"></div><div class="rivet r2"></div>
+    <div class="rivet r3"></div><div class="rivet r4"></div>
+    <div class="brand-plate">
+      <div class="led"></div>
+      <div class="wordmark">PLASMA</div>
+    </div>
+    <div class="brand-meta">
+      <div class="stat"><span class="green-led"></span>UNIT 01</div>
+      <div class="stat">PWR · <span class="v">12.4V</span></div>
+      <div class="stat">CONN · <span class="v">prod-rds-postgres</span></div>
+      <div class="stat">SCH · <span class="v">public</span></div>
+    </div>
+    <div class="actions">
+      <div class="iconbtn">⏱</div>
+      <div class="iconbtn">◔</div>
+      <div class="iconbtn">⚙</div>
+      <div class="cmdk-hint">⌘K</div>
+    </div>
+  </header>
+
+  <!-- BODY -->
+  <div class="body">
+    <!-- SIDEBAR -->
+    <aside class="sidebar">
+      <div class="rivet r1"></div><div class="rivet r2"></div>
+      <div class="rivet r3"></div><div class="rivet r4"></div>
+      <div class="sidebar-inner">
+        <div class="section">
+          <div class="section-head"><span class="label"><span class="led-tiny"></span>CONNECTIONS</span><span class="add">+</span></div>
+          <div class="row active"><span class="glyph">●</span><span>prod-rds-postgres</span></div>
+          <div class="row"><span class="glyph">○</span><span>staging-postgres</span></div>
+          <div class="row"><span class="glyph">○</span><span>localhost:5432</span></div>
+          <div class="row"><span class="glyph">○</span><span>analytics-replica</span></div>
+        </div>
+        <div class="section">
+          <div class="section-head"><span class="label"><span class="led-tiny"></span>SCHEMA · PUBLIC</span><span class="add">+</span></div>
+          <div class="row"><span class="glyph">▾</span><span>public</span></div>
+          <div class="row depth-2 active"><span class="glyph">▾</span><span>users</span><span class="meta">142k</span></div>
+          <div class="row depth-3"><span class="glyph">#</span><span>id</span></div>
+          <div class="row depth-3"><span class="glyph">T</span><span>email</span></div>
+          <div class="row depth-3"><span class="glyph">T</span><span>full_name</span></div>
+          <div class="row depth-3"><span class="glyph">d</span><span>created_at</span></div>
+          <div class="row depth-3"><span class="glyph">T</span><span>plan</span></div>
+          <div class="row depth-3"><span class="glyph">T</span><span>status</span></div>
+          <div class="row depth-2"><span class="glyph">▸</span><span>posts</span><span class="meta">38k</span></div>
+          <div class="row depth-2"><span class="glyph">▸</span><span>orders</span><span class="meta">812k</span></div>
+          <div class="row depth-2"><span class="glyph">▸</span><span>sessions</span><span class="meta">2.1m</span></div>
+          <div class="row depth-2"><span class="glyph">▸</span><span>products</span><span class="meta">1247</span></div>
+          <div class="row"><span class="glyph">▸</span><span>auth</span></div>
+          <div class="row"><span class="glyph">▸</span><span>analytics</span></div>
+        </div>
+      </div>
+    </aside>
+
+    <!-- MAIN -->
+    <main class="main">
+      <div class="tabs">
+        <div class="rivet r1"></div><div class="rivet r2"></div>
+        <div class="rivet r3"></div><div class="rivet r4"></div>
+        <div class="tab active"><span class="marker"></span>users-recent.sql<span class="x">×</span></div>
+        <div class="tab"><span class="marker"></span>cohort-analysis.sql<span class="x">×</span></div>
+        <div class="tab"><span class="marker"></span>orders-by-day.sql<span class="x">×</span></div>
+        <div class="tab-add">+</div>
+      </div>
+      <div class="editor-grid">
+        <!-- EDITOR -->
+        <div class="editor">
+          <div class="editor-code">
+            <div class="gutter">
+              <div>1</div><div>2</div><div>3</div><div class="a">4</div><div>5</div><div>6</div><div>7</div>
+            </div><pre class="code"><span class="com">; recently active users on paid plans</span>
+<span class="kw">SELECT</span> id, email, full_name, created_at, plan, status
+<span class="kw">FROM</span> users
+<span class="kw">WHERE</span> created_at <span class="op">&gt;</span> <span class="fn">now()</span> <span class="op">-</span> <span class="kw">interval</span> <span class="str">'7 days'</span>
+  <span class="kw">AND</span> plan <span class="kw">IN</span> (<span class="str">'pro'</span>, <span class="str">'team'</span>)
+<span class="kw">ORDER BY</span> created_at <span class="kw">DESC</span>
+<span class="kw">LIMIT</span> <span class="num">100</span>;</pre>
+          </div>
+          <div class="ai-pill">★ AI · ⌘I</div>
+          <button class="run-btn"><span class="arrow">▶</span>EXECUTE<span class="kbd">⌘⏎</span></button>
+        </div>
+
+        <!-- RESULTS -->
+        <div class="results">
+          <table>
+            <thead>
+              <tr>
+                <th><span class="type">int8</span>id <span class="sort">▼</span></th>
+                <th><span class="type">text</span>email</th>
+                <th><span class="type">text</span>full_name</th>
+                <th><span class="type">tsz</span>created_at</th>
+                <th><span class="type">text</span>plan</th>
+                <th><span class="type">text</span>status</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr class="selected"><td class="num">47892</td><td>ada.lovelace@gmail.com</td><td>ADA LOVELACE</td><td class="date">2026-04-09 14:22:11</td><td>PRO</td><td>ACTIVE</td></tr>
+              <tr><td class="num">47891</td><td>alan.turing@proton.me</td><td>ALAN TURING</td><td class="date">2026-04-09 12:01:44</td><td>PRO</td><td>ACTIVE</td></tr>
+              <tr><td class="num">47890</td><td>katherine.j@nasa.gov</td><td>KATHERINE JOHNSON</td><td class="date">2026-04-09 09:55:02</td><td>TEAM</td><td>ACTIVE</td></tr>
+              <tr><td class="num">47889</td><td>grace.h@navy.mil</td><td>GRACE HOPPER</td><td class="date">2026-04-08 23:18:30</td><td>PRO</td><td>TRIAL</td></tr>
+              <tr><td class="num">47888</td><td>linus@kernel.org</td><td>LINUS TORVALDS</td><td class="date">2026-04-08 21:04:17</td><td>TEAM</td><td>ACTIVE</td></tr>
+              <tr><td class="num">47887</td><td>margaret.h@mit.edu</td><td>MARGARET HAMILTON</td><td class="date">2026-04-08 18:42:09</td><td>PRO</td><td>ACTIVE</td></tr>
+              <tr><td class="num">47886</td><td>ken.t@bell-labs.com</td><td>KEN THOMPSON</td><td class="date">2026-04-08 16:30:55</td><td>TEAM</td><td>ACTIVE</td></tr>
+              <tr><td class="num">47885</td><td>dennis.r@bell-labs.com</td><td>DENNIS RITCHIE</td><td class="date">2026-04-08 14:11:22</td><td>PRO</td><td>ACTIVE</td></tr>
+              <tr><td class="num">47884</td><td>barbara.l@stanford.edu</td><td>BARBARA LISKOV</td><td class="date">2026-04-08 11:08:41</td><td>PRO</td><td>ACTIVE</td></tr>
+              <tr><td class="num">47883</td><td>donald.k@stanford.edu</td><td>DONALD KNUTH</td><td class="date">2026-04-08 09:30:14</td><td>TEAM</td><td>ACTIVE</td></tr>
+              <tr><td class="num">47882</td><td>tim.bl@w3.org</td><td>TIM BERNERS-LEE</td><td class="date">2026-04-07 23:50:00</td><td>PRO</td><td>ACTIVE</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <!-- STATUS BAR -->
+  <footer class="statusbar">
+    <div class="rivet r1"></div><div class="rivet r2"></div>
+    <div class="rivet r3"></div><div class="rivet r4"></div>
+    <div class="seg first"><span class="ldot"></span>LINK OK</div>
+    <div class="seg">PROD-RDS</div>
+    <div class="seg">PUBLIC</div>
+    <div class="seg"><span class="v">142,381</span> ROWS</div>
+    <div class="seg"><span class="v">87 MS</span></div>
+    <div class="seg">TXN: IDLE</div>
+    <div class="seg">UTF-8</div>
+    <div class="seg">PG 16.2</div>
+    <div style="flex:1; border:none"></div>
+    <div class="seg">⌘ K — CMD</div>
+  </footer>
+</div>
+</body>
+</html>

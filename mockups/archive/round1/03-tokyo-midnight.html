@@ -1,0 +1,440 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>03 · Tokyo Midnight</title>
+<link rel="preconnect" href="https://fonts.bunny.net">
+<link href="https://fonts.bunny.net/css?family=jetbrains-mono:400,500,700&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #000000;
+  --bg-2: #050509;
+  --bg-3: #0A0A12;
+  --bg-4: #14141C;
+  --bg-hover: rgba(0,229,255,0.04);
+  --bg-selected: rgba(255,46,151,0.10);
+  --grid: #15151E;
+  --grid-2: #1E1E2C;
+  --grid-3: #2A2A3D;
+  --fg: #E5E5F0;
+  --fg-2: #A8A8BC;
+  --fg-muted: #5A5A72;
+  --fg-disabled: #2E2E40;
+  --cyan: #00E5FF;
+  --magenta: #FF2E97;
+  --yellow: #FFF200;
+  --green: #50FA7B;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body {
+  height: 100vh;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  font-feature-settings: 'tnum';
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+
+/* Scanline overlay */
+body::before {
+  content: '';
+  position: fixed; inset: 0;
+  background-image: repeating-linear-gradient(
+    0deg,
+    rgba(255,255,255,0.012) 0px,
+    rgba(255,255,255,0.012) 1px,
+    transparent 1px,
+    transparent 3px
+  );
+  pointer-events: none;
+  z-index: 100;
+}
+/* Soft cyan/magenta vignette */
+body::after {
+  content: '';
+  position: fixed; inset: 0;
+  background:
+    radial-gradient(circle at 10% 0%, rgba(0,229,255,0.06), transparent 40%),
+    radial-gradient(circle at 90% 100%, rgba(255,46,151,0.06), transparent 40%);
+  pointer-events: none;
+  z-index: 99;
+}
+
+.app { display: grid; grid-template-rows: 36px 1fr 22px; height: 100vh; position: relative; z-index: 1; }
+
+/* TOP BAR */
+.topbar {
+  display: flex; align-items: center; gap: 16px;
+  padding: 0 14px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--grid-2);
+  position: relative;
+}
+.topbar::after {
+  content: ''; position: absolute; left: 0; right: 0; bottom: -2px; height: 1px;
+  background: linear-gradient(90deg, var(--cyan), var(--magenta));
+  opacity: 0.4;
+}
+.wordmark {
+  font-family: 'JetBrains Mono', monospace;
+  font-weight: 700;
+  font-size: 13px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--fg);
+}
+.wordmark::before {
+  content: '◇';
+  color: var(--magenta);
+  margin-right: 6px;
+  text-shadow: 0 0 12px var(--magenta);
+}
+.wordmark::after { content: '_'; color: var(--cyan); animation: blink 1.2s infinite; margin-left: 2px; }
+@keyframes blink { 50% { opacity: 0; } }
+
+.breadcrumb {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 10px;
+  color: var(--fg-2);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.breadcrumb .live { color: var(--cyan); }
+.breadcrumb .live::before { content: '◉ '; text-shadow: 0 0 8px var(--cyan); }
+.sep { color: var(--fg-disabled); }
+.spacer { flex: 1; }
+.cmdk-hint {
+  font-size: 9px;
+  padding: 4px 8px;
+  border: 1px solid var(--grid-3);
+  background: var(--bg-2);
+  color: var(--cyan);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+.iconbtn {
+  width: 24px; height: 24px;
+  display: grid; place-items: center;
+  color: var(--fg-muted);
+  font-size: 12px;
+  cursor: pointer;
+  border: 1px solid transparent;
+}
+.iconbtn:hover { color: var(--cyan); border-color: var(--grid-3); }
+
+/* BODY */
+.body { display: grid; grid-template-columns: 224px 1fr; min-height: 0; }
+.sidebar {
+  background: var(--bg-2);
+  border-right: 1px solid var(--grid-2);
+  overflow-y: auto;
+}
+.section { padding: 10px 0; border-bottom: 1px solid var(--grid); }
+.section-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0 12px 8px;
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  color: var(--magenta);
+  text-shadow: 0 0 8px rgba(255,46,151,0.4);
+}
+.section-head .add { color: var(--cyan); cursor: pointer; font-size: 14px; }
+.row {
+  display: flex; align-items: center; gap: 8px;
+  height: 20px; padding: 0 12px;
+  font-size: 11px;
+  color: var(--fg-2);
+  cursor: pointer;
+}
+.row:hover { background: var(--bg-hover); color: var(--cyan); }
+.row.active {
+  color: var(--magenta);
+  background: var(--bg-selected);
+  border-left: 2px solid var(--magenta);
+  padding-left: 10px;
+  text-shadow: 0 0 8px rgba(255,46,151,0.4);
+}
+.row .glyph { color: var(--fg-muted); width: 12px; text-align: center; font-size: 10px; }
+.row.active .glyph { color: var(--magenta); }
+.row .meta { margin-left: auto; font-size: 9px; color: var(--fg-disabled); }
+.depth-2 { padding-left: 26px; }
+.depth-2.active { padding-left: 24px; }
+.depth-3 { padding-left: 40px; }
+
+/* MAIN */
+.main { display: flex; flex-direction: column; min-width: 0; background: var(--bg); }
+.tabs {
+  display: flex; align-items: stretch;
+  height: 28px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--grid-2);
+}
+.tab {
+  display: flex; align-items: center; gap: 8px;
+  padding: 0 14px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fg-muted);
+  border-right: 1px solid var(--grid);
+  cursor: pointer;
+  position: relative;
+}
+.tab.active {
+  color: var(--cyan);
+  background: var(--bg-3);
+}
+.tab.active::after {
+  content: '';
+  position: absolute; left: 0; right: 0; top: 0; height: 1px;
+  background: var(--cyan);
+  box-shadow: 0 0 8px var(--cyan);
+}
+.tab .x { color: var(--fg-disabled); margin-left: 4px; }
+.tab-add { padding: 0 12px; color: var(--fg-muted); cursor: pointer; align-self: center; font-size: 13px; }
+
+.editor-grid { display: grid; grid-template-rows: 38% 1fr; min-height: 0; }
+.editor {
+  background: var(--bg);
+  position: relative;
+  border-bottom: 1px solid var(--grid-2);
+  overflow: hidden;
+}
+.editor-code {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  line-height: 18px;
+  padding: 12px 0;
+  display: grid;
+  grid-template-columns: 40px 1fr;
+}
+.gutter { color: var(--fg-disabled); text-align: right; padding-right: 12px; user-select: none; }
+.gutter .a { color: var(--cyan); text-shadow: 0 0 6px var(--cyan); }
+.code { white-space: pre; }
+.kw { color: var(--magenta); }
+.fn { color: var(--cyan); }
+.str { color: var(--green); }
+.num { color: var(--yellow); }
+.com { color: var(--fg-muted); font-style: italic; }
+.op { color: var(--fg-2); }
+
+.run-btn {
+  position: absolute; bottom: 12px; right: 14px;
+  display: flex; align-items: center; gap: 10px;
+  height: 28px; padding: 0 14px;
+  background: transparent; color: var(--cyan);
+  border: 1px solid var(--cyan);
+  border-radius: 0;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  cursor: pointer;
+  box-shadow: 0 0 0 1px transparent, 0 0 16px rgba(0,229,255,0.4), inset 0 0 12px rgba(0,229,255,0.1);
+  text-shadow: 0 0 6px var(--cyan);
+}
+.run-btn .kbd { color: var(--fg-2); text-shadow: none; font-weight: 400; opacity: 0.8; }
+
+.ai-pill {
+  position: absolute; top: 12px; right: 14px;
+  display: flex; align-items: center; gap: 6px;
+  height: 22px; padding: 0 10px;
+  background: var(--bg-3);
+  border: 1px solid var(--magenta);
+  font-size: 9px;
+  color: var(--magenta);
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  cursor: pointer;
+  text-shadow: 0 0 6px var(--magenta);
+}
+.ai-pill::before { content: '◈'; }
+
+/* RESULTS */
+.results { background: var(--bg); overflow: auto; min-height: 0; }
+table { width: 100%; border-collapse: collapse; font-family: 'JetBrains Mono', monospace; font-size: 11px; }
+thead { position: sticky; top: 0; background: var(--bg-2); z-index: 1; }
+th {
+  height: 26px;
+  text-align: left;
+  padding: 0 12px;
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--cyan);
+  border-bottom: 1px solid var(--grid-3);
+  border-right: 1px solid var(--grid);
+  white-space: nowrap;
+  text-shadow: 0 0 6px rgba(0,229,255,0.4);
+}
+th .type { color: var(--fg-muted); margin-right: 6px; text-shadow: none; }
+th .sort { color: var(--magenta); margin-left: 4px; text-shadow: 0 0 6px var(--magenta); }
+td {
+  height: 22px;
+  padding: 0 12px;
+  color: var(--fg-2);
+  border-bottom: 1px solid var(--grid);
+  border-right: 1px solid var(--grid);
+  white-space: nowrap;
+}
+td.num { color: var(--yellow); }
+td.str { color: var(--fg); }
+td.date { color: var(--cyan); }
+tr:hover td { background: var(--bg-hover); }
+tr.selected td { background: var(--bg-selected); color: var(--magenta); text-shadow: 0 0 6px rgba(255,46,151,0.3); }
+
+.statusbar {
+  display: flex; align-items: center; gap: 0;
+  padding: 0 12px;
+  background: var(--bg-2);
+  border-top: 1px solid var(--grid-2);
+  font-size: 9px;
+  color: var(--fg-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  position: relative;
+}
+.statusbar::before {
+  content: ''; position: absolute; left: 0; right: 0; top: 0; height: 1px;
+  background: linear-gradient(90deg, var(--magenta), var(--cyan));
+  opacity: 0.4;
+}
+.statusbar .seg { display: flex; align-items: center; gap: 6px; padding: 0 10px; }
+.statusbar .seg.first { padding-left: 0; }
+.statusbar .ldot { width: 6px; height: 6px; border-radius: 50%; background: var(--cyan); box-shadow: 0 0 8px var(--cyan); }
+.statusbar .b { color: var(--grid-3); }
+.statusbar .live { color: var(--cyan); }
+.statusbar .accent { color: var(--magenta); }
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="topbar">
+    <div class="wordmark">PLASMA</div>
+    <div class="breadcrumb">
+      <span class="live">prod-rds-postgres</span>
+      <span class="sep">/</span>
+      <span>analytics</span>
+      <span class="sep">/</span>
+      <span>public</span>
+    </div>
+    <div class="spacer"></div>
+    <div class="iconbtn">⏱</div>
+    <div class="iconbtn">◔</div>
+    <div class="iconbtn">⚙</div>
+    <div class="cmdk-hint">⌘ K</div>
+  </header>
+
+  <div class="body">
+    <aside class="sidebar">
+      <div class="section">
+        <div class="section-head">// connections <span class="add">+</span></div>
+        <div class="row active"><span class="glyph">▸</span><span>prod-rds-postgres</span></div>
+        <div class="row"><span class="glyph">·</span><span>staging-postgres</span></div>
+        <div class="row"><span class="glyph">·</span><span>localhost:5432</span></div>
+        <div class="row"><span class="glyph">·</span><span>analytics-replica</span></div>
+      </div>
+      <div class="section">
+        <div class="section-head">// schema · public</div>
+        <div class="row"><span class="glyph">▾</span><span>public</span></div>
+        <div class="row depth-2 active"><span class="glyph">▾</span><span>users</span><span class="meta">142k</span></div>
+        <div class="row depth-3"><span class="glyph">#</span><span>id</span></div>
+        <div class="row depth-3"><span class="glyph">T</span><span>email</span></div>
+        <div class="row depth-3"><span class="glyph">T</span><span>full_name</span></div>
+        <div class="row depth-3"><span class="glyph">d</span><span>created_at</span></div>
+        <div class="row depth-3"><span class="glyph">T</span><span>plan</span></div>
+        <div class="row depth-3"><span class="glyph">T</span><span>status</span></div>
+        <div class="row depth-2"><span class="glyph">▸</span><span>posts</span><span class="meta">38k</span></div>
+        <div class="row depth-2"><span class="glyph">▸</span><span>orders</span><span class="meta">812k</span></div>
+        <div class="row depth-2"><span class="glyph">▸</span><span>sessions</span><span class="meta">2.1m</span></div>
+        <div class="row depth-2"><span class="glyph">▸</span><span>products</span><span class="meta">1.2k</span></div>
+        <div class="row"><span class="glyph">▸</span><span>auth</span></div>
+        <div class="row"><span class="glyph">▸</span><span>analytics</span></div>
+      </div>
+    </aside>
+
+    <main class="main">
+      <div class="tabs">
+        <div class="tab active">users-recent.sql<span class="x">×</span></div>
+        <div class="tab">cohort-analysis.sql<span class="x">×</span></div>
+        <div class="tab">orders-by-day.sql<span class="x">×</span></div>
+        <div class="tab-add">+</div>
+      </div>
+      <div class="editor-grid">
+        <div class="editor">
+          <div class="editor-code">
+            <div class="gutter">
+              <div>01</div><div>02</div><div>03</div><div class="a">04</div><div>05</div><div>06</div><div>07</div>
+            </div><pre class="code"><span class="com">// recently active users on paid plans</span>
+<span class="kw">SELECT</span> id, email, full_name, created_at, plan, status
+<span class="kw">FROM</span> users
+<span class="kw">WHERE</span> created_at <span class="op">&gt;</span> <span class="fn">now()</span> <span class="op">-</span> <span class="kw">interval</span> <span class="str">'7 days'</span>
+  <span class="kw">AND</span> plan <span class="kw">IN</span> (<span class="str">'pro'</span>, <span class="str">'team'</span>)
+<span class="kw">ORDER BY</span> created_at <span class="kw">DESC</span>
+<span class="kw">LIMIT</span> <span class="num">100</span>;</pre>
+          </div>
+          <div class="ai-pill">ai · ⌘I</div>
+          <button class="run-btn">▶ EXEC <span class="kbd">⌘⏎</span></button>
+        </div>
+
+        <div class="results">
+          <table>
+            <thead>
+              <tr>
+                <th><span class="type">i8</span>id <span class="sort">↓</span></th>
+                <th><span class="type">str</span>email</th>
+                <th><span class="type">str</span>full_name</th>
+                <th><span class="type">tsz</span>created_at</th>
+                <th><span class="type">str</span>plan</th>
+                <th><span class="type">str</span>status</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr class="selected"><td class="num">47892</td><td>ada.lovelace@gmail.com</td><td>Ada Lovelace</td><td>2026-04-09 14:22:11</td><td>pro</td><td>active</td></tr>
+              <tr><td class="num">47891</td><td class="str">alan.turing@proton.me</td><td class="str">Alan Turing</td><td class="date">2026-04-09 12:01:44</td><td class="str">pro</td><td class="str">active</td></tr>
+              <tr><td class="num">47890</td><td class="str">katherine.j@nasa.gov</td><td class="str">Katherine Johnson</td><td class="date">2026-04-09 09:55:02</td><td class="str">team</td><td class="str">active</td></tr>
+              <tr><td class="num">47889</td><td class="str">grace.h@navy.mil</td><td class="str">Grace Hopper</td><td class="date">2026-04-08 23:18:30</td><td class="str">pro</td><td class="str">trial</td></tr>
+              <tr><td class="num">47888</td><td class="str">linus@kernel.org</td><td class="str">Linus Torvalds</td><td class="date">2026-04-08 21:04:17</td><td class="str">team</td><td class="str">active</td></tr>
+              <tr><td class="num">47887</td><td class="str">margaret.h@mit.edu</td><td class="str">Margaret Hamilton</td><td class="date">2026-04-08 18:42:09</td><td class="str">pro</td><td class="str">active</td></tr>
+              <tr><td class="num">47886</td><td class="str">ken.t@bell-labs.com</td><td class="str">Ken Thompson</td><td class="date">2026-04-08 16:30:55</td><td class="str">team</td><td class="str">active</td></tr>
+              <tr><td class="num">47885</td><td class="str">dennis.r@bell-labs.com</td><td class="str">Dennis Ritchie</td><td class="date">2026-04-08 14:11:22</td><td class="str">pro</td><td class="str">active</td></tr>
+              <tr><td class="num">47884</td><td class="str">barbara.l@stanford.edu</td><td class="str">Barbara Liskov</td><td class="date">2026-04-08 11:08:41</td><td class="str">pro</td><td class="str">active</td></tr>
+              <tr><td class="num">47883</td><td class="str">donald.k@stanford.edu</td><td class="str">Donald Knuth</td><td class="date">2026-04-08 09:30:14</td><td class="str">team</td><td class="str">active</td></tr>
+              <tr><td class="num">47882</td><td class="str">tim.bl@w3.org</td><td class="str">Tim Berners-Lee</td><td class="date">2026-04-07 23:50:00</td><td class="str">pro</td><td class="str">active</td></tr>
+              <tr><td class="num">47881</td><td class="str">edsger@dijkstra.eu</td><td class="str">Edsger Dijkstra</td><td class="date">2026-04-07 19:22:18</td><td class="str">team</td><td class="str">active</td></tr>
+              <tr><td class="num">47880</td><td class="str">john.b@bell-labs.com</td><td class="str">John Backus</td><td class="date">2026-04-07 16:08:55</td><td class="str">pro</td><td class="str">active</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <footer class="statusbar">
+    <div class="seg first"><span class="ldot"></span><span class="live">connected</span></div>
+    <span class="b">/</span>
+    <div class="seg">prod-rds-postgres</div>
+    <span class="b">/</span>
+    <div class="seg">public</div>
+    <span class="b">/</span>
+    <div class="seg"><span class="accent">142,381 rows</span></div>
+    <span class="b">/</span>
+    <div class="seg"><span class="live">87 ms</span></div>
+    <span class="b">/</span>
+    <div class="seg">txn: idle</div>
+    <span class="b">/</span>
+    <div class="seg">utf-8</div>
+    <span class="b">/</span>
+    <div class="seg">pg 16.2</div>
+    <div style="flex:1"></div>
+    <div class="seg">⌘ K</div>
+  </footer>
+</div>
+</body>
+</html>

@@ -1,0 +1,513 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>04 · Atelier</title>
+<link rel="preconnect" href="https://fonts.bunny.net">
+<link href="https://fonts.bunny.net/css?family=space-grotesk:400,500,600,700|jetbrains-mono:400,500,700&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #FFFFFF;
+  --bg-2: #F5F5F2;
+  --bg-3: #FAFAF7;
+  --bg-hover: #F0F0EC;
+  --bg-selected: #FFE5E7;
+  --ink: #0A0A0A;
+  --ink-2: #2A2A2A;
+  --ink-muted: #6B6B6B;
+  --ink-disabled: #B0B0B0;
+  --line: #D0D0D0;
+  --vermilion: #E63946;
+  --vermilion-deep: #B82935;
+  --gold: #F4A300;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body {
+  height: 100vh;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: 'Space Grotesk', system-ui, sans-serif;
+  font-size: 13px;
+  font-feature-settings: 'tnum', 'ss01', 'ss02';
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+.app { display: grid; grid-template-rows: 72px 1fr 32px; height: 100vh; }
+
+/* TOP BAR */
+.topbar {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: stretch;
+  border-bottom: 2px solid var(--ink);
+  background: var(--bg);
+}
+.brand-block {
+  display: flex; flex-direction: column; justify-content: center;
+  padding: 0 32px;
+  border-right: 2px solid var(--ink);
+  background: var(--ink);
+  color: var(--bg);
+  min-width: 280px;
+}
+.brand-block .num {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--vermilion);
+  margin-bottom: 4px;
+}
+.wordmark {
+  font-family: 'Space Grotesk', sans-serif;
+  font-weight: 700;
+  font-size: 32px;
+  letter-spacing: -0.04em;
+  line-height: 1;
+  text-transform: lowercase;
+}
+.wordmark .dot { color: var(--vermilion); }
+
+.crumb-block {
+  display: flex; align-items: center; gap: 24px;
+  padding: 0 32px;
+  border-right: 2px solid var(--ink);
+}
+.crumb-label {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  color: var(--ink-muted);
+}
+.crumb-value {
+  font-family: 'Space Grotesk', sans-serif;
+  font-weight: 600;
+  font-size: 18px;
+  letter-spacing: -0.01em;
+  display: flex; align-items: center; gap: 12px;
+}
+.crumb-value .dot { width: 10px; height: 10px; background: var(--vermilion); border-radius: 0; }
+
+.actions-block { display: flex; align-items: stretch; }
+.iconbtn {
+  width: 56px;
+  display: grid; place-items: center;
+  color: var(--ink);
+  cursor: pointer;
+  border-left: 2px solid var(--ink);
+  background: var(--bg);
+  font-size: 18px;
+}
+.iconbtn:hover { background: var(--vermilion); color: var(--bg); }
+.cmdk-block {
+  width: 96px;
+  display: grid; place-items: center;
+  background: var(--ink);
+  color: var(--bg);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  border-left: 2px solid var(--ink);
+}
+
+/* BODY */
+.body { display: grid; grid-template-columns: 280px 1fr; min-height: 0; }
+.sidebar {
+  background: var(--bg-2);
+  border-right: 2px solid var(--ink);
+  overflow-y: auto;
+}
+.section { border-bottom: 2px solid var(--ink); padding: 0 0 8px; }
+.section-head {
+  display: grid;
+  grid-template-columns: 32px 1fr auto;
+  align-items: center;
+  height: 36px;
+  padding: 0 16px 0 0;
+  background: var(--bg);
+  border-bottom: 1px solid var(--ink);
+  font-family: 'Space Grotesk', sans-serif;
+  font-weight: 700;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+}
+.section-head .index {
+  font-family: 'JetBrains Mono', monospace;
+  font-weight: 700;
+  font-size: 11px;
+  background: var(--ink);
+  color: var(--bg);
+  display: grid; place-items: center;
+  height: 36px;
+}
+.section-head .add {
+  font-size: 18px;
+  color: var(--ink);
+  cursor: pointer;
+}
+.section-head .add:hover { color: var(--vermilion); }
+
+.row {
+  display: flex; align-items: center; gap: 12px;
+  height: 30px; padding: 0 16px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  color: var(--ink-2);
+  cursor: pointer;
+}
+.row:hover { background: var(--bg-hover); }
+.row.active {
+  color: var(--ink);
+  background: var(--bg-selected);
+  border-left: 4px solid var(--vermilion);
+  padding-left: 12px;
+  font-weight: 500;
+}
+.row .glyph { color: var(--ink-muted); width: 12px; text-align: center; font-size: 11px; }
+.row.active .glyph { color: var(--vermilion); }
+.row .meta {
+  margin-left: auto;
+  font-family: 'Space Grotesk', sans-serif;
+  font-weight: 600;
+  font-size: 10px;
+  color: var(--ink-muted);
+  letter-spacing: 0.04em;
+}
+.depth-2 { padding-left: 32px; }
+.depth-2.active { padding-left: 28px; }
+.depth-3 { padding-left: 48px; }
+
+/* MAIN */
+.main { display: flex; flex-direction: column; min-width: 0; background: var(--bg); }
+.tabs {
+  display: flex; align-items: stretch;
+  height: 44px;
+  border-bottom: 2px solid var(--ink);
+}
+.tab {
+  display: flex; align-items: center; gap: 12px;
+  padding: 0 24px;
+  font-family: 'Space Grotesk', sans-serif;
+  font-weight: 500;
+  font-size: 13px;
+  letter-spacing: -0.005em;
+  color: var(--ink-muted);
+  border-right: 2px solid var(--ink);
+  cursor: pointer;
+  text-transform: lowercase;
+}
+.tab.active {
+  color: var(--ink);
+  background: var(--bg-3);
+  font-weight: 700;
+  border-bottom: 4px solid var(--vermilion);
+  margin-bottom: -2px;
+}
+.tab .num {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9px;
+  background: var(--ink);
+  color: var(--bg);
+  padding: 2px 5px;
+  font-weight: 700;
+}
+.tab.active .num { background: var(--vermilion); }
+.tab .x { color: var(--ink-muted); font-family: 'Space Grotesk'; }
+.tab-add {
+  padding: 0 20px;
+  align-self: center;
+  color: var(--ink);
+  cursor: pointer;
+  font-size: 18px;
+  font-weight: 700;
+  background: var(--bg-2);
+  border-right: 2px solid var(--ink);
+  display: flex; align-items: center;
+  height: 100%;
+}
+.tab-add:hover { background: var(--vermilion); color: var(--bg); }
+
+.editor-grid { display: grid; grid-template-rows: 38% 1fr; min-height: 0; }
+.editor {
+  background: var(--bg);
+  position: relative;
+  border-bottom: 2px solid var(--ink);
+  overflow: hidden;
+}
+.editor::before {
+  content: '01 / EDITOR';
+  position: absolute; top: 16px; left: 24px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  color: var(--ink-muted);
+  z-index: 2;
+}
+.editor-code {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 13px;
+  line-height: 22px;
+  padding: 40px 0 16px;
+  display: grid;
+  grid-template-columns: 64px 1fr;
+}
+.gutter { color: var(--ink-disabled); text-align: right; padding-right: 16px; user-select: none; font-weight: 500; }
+.gutter .a { color: var(--vermilion); font-weight: 700; }
+.code { white-space: pre; color: var(--ink); }
+.kw { color: var(--vermilion); font-weight: 700; }
+.fn { color: var(--ink); font-weight: 500; }
+.str { color: #1B5E20; }
+.num { color: var(--ink); font-weight: 700; }
+.com { color: var(--ink-muted); font-style: italic; }
+.op { color: var(--ink-2); }
+
+.run-btn {
+  position: absolute; bottom: 16px; right: 24px;
+  display: flex; align-items: center; gap: 14px;
+  height: 44px; padding: 0 24px;
+  background: var(--vermilion);
+  color: var(--bg);
+  border: 2px solid var(--ink);
+  border-radius: 0;
+  font-family: 'Space Grotesk', sans-serif;
+  font-weight: 700;
+  font-size: 13px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: pointer;
+  box-shadow: 6px 6px 0 0 var(--ink);
+}
+.run-btn .arrow { font-size: 18px; }
+.run-btn .kbd {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  font-weight: 700;
+  background: var(--ink);
+  padding: 2px 6px;
+  letter-spacing: 0.04em;
+}
+
+.ai-pill {
+  position: absolute; top: 12px; right: 24px;
+  display: flex; align-items: center; gap: 8px;
+  height: 26px; padding: 0 12px;
+  background: var(--ink);
+  color: var(--bg);
+  border-radius: 0;
+  font-family: 'Space Grotesk', sans-serif;
+  font-weight: 700;
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+.ai-pill::before { content: '★'; color: var(--vermilion); }
+
+/* RESULTS */
+.results {
+  background: var(--bg);
+  overflow: auto;
+  min-height: 0;
+  position: relative;
+}
+.results::before {
+  content: '02 / RESULT — 142,381 rows';
+  position: sticky; top: 0; left: 24px;
+  display: block;
+  padding: 12px 24px 8px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  color: var(--ink-muted);
+  background: var(--bg);
+  border-bottom: 1px solid var(--line);
+  z-index: 2;
+}
+table { width: 100%; border-collapse: collapse; font-family: 'JetBrains Mono', monospace; font-size: 12px; }
+thead { position: sticky; top: 30px; background: var(--bg); z-index: 1; }
+th {
+  height: 48px;
+  text-align: left;
+  padding: 0 18px;
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--ink);
+  border-bottom: 2px solid var(--ink);
+  border-right: 1px solid var(--line);
+  white-space: nowrap;
+  background: var(--bg-3);
+}
+th .type {
+  display: block;
+  font-family: 'JetBrains Mono', monospace;
+  font-weight: 400;
+  font-size: 9px;
+  color: var(--ink-muted);
+  text-transform: lowercase;
+  letter-spacing: 0;
+  margin-bottom: 2px;
+}
+th .sort { color: var(--vermilion); margin-left: 4px; }
+td {
+  height: 38px;
+  padding: 0 18px;
+  color: var(--ink);
+  border-bottom: 1px solid var(--line);
+  border-right: 1px solid var(--bg-2);
+  white-space: nowrap;
+}
+td.num { font-weight: 700; }
+td.muted { color: var(--ink-muted); }
+tr:nth-child(even) td { background: var(--bg-3); }
+tr:hover td { background: var(--bg-hover); }
+tr.selected td { background: var(--bg-selected); border-bottom-color: var(--vermilion); }
+tr.selected td:first-child { box-shadow: inset 4px 0 0 var(--vermilion); }
+
+.statusbar {
+  display: flex; align-items: stretch; gap: 0;
+  background: var(--ink);
+  color: var(--bg);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.statusbar .seg {
+  display: flex; align-items: center; gap: 8px;
+  padding: 0 16px;
+  border-right: 1px solid #2A2A2A;
+}
+.statusbar .ldot { width: 8px; height: 8px; background: var(--vermilion); }
+.statusbar .v { color: var(--vermilion); font-weight: 700; }
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="topbar">
+    <div class="brand-block">
+      <div class="num">v0.0.1 · postgres client</div>
+      <div class="wordmark">plasma<span class="dot">.</span></div>
+    </div>
+    <div class="crumb-block">
+      <div>
+        <div class="crumb-label">connection</div>
+        <div class="crumb-value"><span class="dot"></span>prod-rds-postgres</div>
+      </div>
+      <div>
+        <div class="crumb-label">schema</div>
+        <div class="crumb-value">public</div>
+      </div>
+    </div>
+    <div class="actions-block">
+      <div class="iconbtn">⏱</div>
+      <div class="iconbtn">◔</div>
+      <div class="iconbtn">⚙</div>
+      <div class="cmdk-block">⌘ K</div>
+    </div>
+  </header>
+
+  <div class="body">
+    <aside class="sidebar">
+      <div class="section">
+        <div class="section-head"><span class="index">A</span><span>Connections</span><span class="add">+</span></div>
+        <div class="row active"><span class="glyph">●</span><span>prod-rds-postgres</span></div>
+        <div class="row"><span class="glyph">○</span><span>staging-postgres</span></div>
+        <div class="row"><span class="glyph">○</span><span>localhost:5432</span></div>
+        <div class="row"><span class="glyph">○</span><span>analytics-replica</span></div>
+      </div>
+      <div class="section">
+        <div class="section-head"><span class="index">B</span><span>Schema</span><span class="add">+</span></div>
+        <div class="row"><span class="glyph">▾</span><span>public</span></div>
+        <div class="row depth-2 active"><span class="glyph">▾</span><span>users</span><span class="meta">142,381</span></div>
+        <div class="row depth-3"><span class="glyph">#</span><span>id</span></div>
+        <div class="row depth-3"><span class="glyph">T</span><span>email</span></div>
+        <div class="row depth-3"><span class="glyph">T</span><span>full_name</span></div>
+        <div class="row depth-3"><span class="glyph">d</span><span>created_at</span></div>
+        <div class="row depth-3"><span class="glyph">T</span><span>plan</span></div>
+        <div class="row depth-3"><span class="glyph">T</span><span>status</span></div>
+        <div class="row depth-2"><span class="glyph">▸</span><span>posts</span><span class="meta">38,201</span></div>
+        <div class="row depth-2"><span class="glyph">▸</span><span>orders</span><span class="meta">812,447</span></div>
+        <div class="row depth-2"><span class="glyph">▸</span><span>sessions</span><span class="meta">2,118,003</span></div>
+        <div class="row depth-2"><span class="glyph">▸</span><span>products</span><span class="meta">1,247</span></div>
+        <div class="row"><span class="glyph">▸</span><span>auth</span></div>
+        <div class="row"><span class="glyph">▸</span><span>analytics</span></div>
+      </div>
+    </aside>
+
+    <main class="main">
+      <div class="tabs">
+        <div class="tab active"><span class="num">01</span>users-recent.sql<span class="x">×</span></div>
+        <div class="tab"><span class="num">02</span>cohort-analysis.sql<span class="x">×</span></div>
+        <div class="tab"><span class="num">03</span>orders-by-day.sql<span class="x">×</span></div>
+        <div class="tab-add">+</div>
+      </div>
+      <div class="editor-grid">
+        <div class="editor">
+          <div class="editor-code">
+            <div class="gutter">
+              <div>1</div><div>2</div><div>3</div><div class="a">4</div><div>5</div><div>6</div><div>7</div>
+            </div><pre class="code"><span class="com">— recently active users on paid plans</span>
+<span class="kw">SELECT</span> id, email, full_name, created_at, plan, status
+<span class="kw">FROM</span> users
+<span class="kw">WHERE</span> created_at <span class="op">&gt;</span> <span class="fn">now()</span> <span class="op">-</span> <span class="kw">interval</span> <span class="str">'7 days'</span>
+  <span class="kw">AND</span> plan <span class="kw">IN</span> (<span class="str">'pro'</span>, <span class="str">'team'</span>)
+<span class="kw">ORDER BY</span> created_at <span class="kw">DESC</span>
+<span class="kw">LIMIT</span> <span class="num">100</span>;</pre>
+          </div>
+          <div class="ai-pill">★ ASK AI</div>
+          <button class="run-btn"><span class="arrow">▸</span>RUN<span class="kbd">⌘⏎</span></button>
+        </div>
+
+        <div class="results">
+          <table>
+            <thead>
+              <tr>
+                <th><span class="type">int8</span>ID <span class="sort">↓</span></th>
+                <th><span class="type">text</span>EMAIL</th>
+                <th><span class="type">text</span>FULL_NAME</th>
+                <th><span class="type">timestamptz</span>CREATED_AT</th>
+                <th><span class="type">text</span>PLAN</th>
+                <th><span class="type">text</span>STATUS</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr class="selected"><td class="num">47892</td><td>ada.lovelace@gmail.com</td><td>Ada Lovelace</td><td class="muted">2026-04-09 14:22:11</td><td>pro</td><td>active</td></tr>
+              <tr><td class="num">47891</td><td>alan.turing@proton.me</td><td>Alan Turing</td><td class="muted">2026-04-09 12:01:44</td><td>pro</td><td>active</td></tr>
+              <tr><td class="num">47890</td><td>katherine.j@nasa.gov</td><td>Katherine Johnson</td><td class="muted">2026-04-09 09:55:02</td><td>team</td><td>active</td></tr>
+              <tr><td class="num">47889</td><td>grace.h@navy.mil</td><td>Grace Hopper</td><td class="muted">2026-04-08 23:18:30</td><td>pro</td><td>trial</td></tr>
+              <tr><td class="num">47888</td><td>linus@kernel.org</td><td>Linus Torvalds</td><td class="muted">2026-04-08 21:04:17</td><td>team</td><td>active</td></tr>
+              <tr><td class="num">47887</td><td>margaret.h@mit.edu</td><td>Margaret Hamilton</td><td class="muted">2026-04-08 18:42:09</td><td>pro</td><td>active</td></tr>
+              <tr><td class="num">47886</td><td>ken.t@bell-labs.com</td><td>Ken Thompson</td><td class="muted">2026-04-08 16:30:55</td><td>team</td><td>active</td></tr>
+              <tr><td class="num">47885</td><td>dennis.r@bell-labs.com</td><td>Dennis Ritchie</td><td class="muted">2026-04-08 14:11:22</td><td>pro</td><td>active</td></tr>
+              <tr><td class="num">47884</td><td>barbara.l@stanford.edu</td><td>Barbara Liskov</td><td class="muted">2026-04-08 11:08:41</td><td>pro</td><td>active</td></tr>
+              <tr><td class="num">47883</td><td>donald.k@stanford.edu</td><td>Donald Knuth</td><td class="muted">2026-04-08 09:30:14</td><td>team</td><td>active</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <footer class="statusbar">
+    <div class="seg"><span class="ldot"></span>CONNECTED</div>
+    <div class="seg">PROD-RDS-POSTGRES</div>
+    <div class="seg">PUBLIC</div>
+    <div class="seg"><span class="v">142,381 ROWS</span></div>
+    <div class="seg"><span class="v">87 MS</span></div>
+    <div class="seg">TXN: IDLE</div>
+    <div class="seg">UTF-8</div>
+    <div class="seg">PG 16.2</div>
+    <div style="flex:1"></div>
+    <div class="seg">⌘ K — COMMAND</div>
+  </footer>
+</div>
+</body>
+</html>

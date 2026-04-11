@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 360" role="img" aria-labelledby="title desc">
+  <title id="title">Plasma</title>
+  <desc id="desc">Vertical lockup: monogram mark above wordmark.</desc>
+  <defs>
+    <style>
+      .ink { fill: #1C1A14; }
+      .accent { fill: #7B2D26; }
+      .p-glyph {
+        font-family: 'Newsreader', 'Georgia', 'Times New Roman', serif;
+        font-style: italic;
+        font-weight: 500;
+        font-size: 180px;
+      }
+      .wordmark {
+        font-family: 'Newsreader', 'Georgia', 'Times New Roman', serif;
+        font-style: italic;
+        font-weight: 500;
+        font-size: 96px;
+        letter-spacing: -0.5px;
+      }
+    </style>
+  </defs>
+  <!-- Mark centered -->
+  <text x="200" y="180" class="p-glyph ink" text-anchor="middle">P</text>
+  <rect x="148" y="190" width="104" height="5" class="accent"/>
+
+  <!-- Wordmark centered below -->
+  <text x="200" y="300" class="wordmark ink" text-anchor="middle">Plasma</text>
+  <rect x="108" y="312" width="184" height="3" class="accent"/>
+</svg>

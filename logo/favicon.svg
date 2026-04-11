@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Plasma">
+  <title>Plasma</title>
+  <!--
+    Favicon — optimized for 16/32/48 pixel rendering.
+
+    The P is centered (text-anchor="middle") at a conservative font size
+    so the italic slant's overshoot never touches the frame. Padding
+    math: viewBox 64, frame inset 3px (rx 10), usable canvas 58px. With
+    font-size 48, italic P total width is ≈40px — fits with 9px of
+    side margin per side.
+  -->
+  <defs>
+    <style>
+      .bg    { fill: #FAF7F0; }
+      .ink   { fill: #1C1A14; }
+      .accent { fill: #7B2D26; }
+      .frame { fill: none; stroke: #1C1A14; stroke-width: 2.5; }
+      .p-glyph {
+        font-family: 'Newsreader', 'Georgia', 'Times New Roman', serif;
+        font-style: italic;
+        font-weight: 600;
+        font-size: 48px;
+      }
+    </style>
+  </defs>
+  <!-- Rounded square card -->
+  <rect x="3" y="3" width="58" height="58" rx="10" class="bg"/>
+  <rect x="3" y="3" width="58" height="58" rx="10" class="frame"/>
+  <!-- Center-anchored P -->
+  <text x="32" y="44" class="p-glyph ink" text-anchor="middle">P</text>
+  <!-- Oxblood signature bar — centered, comfortably inside the frame -->
+  <rect x="18" y="48" width="28" height="3" class="accent"/>
+</svg>

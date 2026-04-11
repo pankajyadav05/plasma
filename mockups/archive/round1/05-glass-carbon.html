@@ -1,0 +1,573 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>05 · Glass Carbon</title>
+<link rel="preconnect" href="https://fonts.bunny.net">
+<link href="https://fonts.bunny.net/css?family=manrope:400,500,600,700|jetbrains-mono:400,500&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #0A0A0F;
+  --bg-2: #0E0E16;
+  --glass: rgba(22, 22, 32, 0.62);
+  --glass-strong: rgba(28, 28, 40, 0.78);
+  --glass-hover: rgba(40, 40, 56, 0.55);
+  --glass-selected: rgba(0, 184, 255, 0.10);
+  --line: rgba(255, 255, 255, 0.06);
+  --line-strong: rgba(255, 255, 255, 0.10);
+  --fg: #E8EAF2;
+  --fg-2: #B0B5C8;
+  --fg-muted: #6A6F82;
+  --fg-disabled: #3A3D4A;
+  --blue: #00B8FF;
+  --blue-glow: rgba(0, 184, 255, 0.45);
+  --violet: #7C5CFF;
+  --teal: #00E5C6;
+  --pink: #FF6BD5;
+  --amber: #FFB347;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body {
+  height: 100vh;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: 'Manrope', system-ui, sans-serif;
+  font-size: 13px;
+  font-feature-settings: 'tnum';
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+
+/* Atmospheric background — animated aurora */
+body::before {
+  content: '';
+  position: fixed; inset: 0;
+  background:
+    radial-gradient(ellipse 800px 400px at 15% 0%, rgba(0,184,255,0.18), transparent 50%),
+    radial-gradient(ellipse 600px 500px at 85% 30%, rgba(124,92,255,0.14), transparent 55%),
+    radial-gradient(ellipse 700px 400px at 50% 100%, rgba(0,229,198,0.10), transparent 55%);
+  pointer-events: none;
+  z-index: 0;
+}
+/* Subtle noise */
+body::after {
+  content: '';
+  position: fixed; inset: 0;
+  background-image:
+    radial-gradient(rgba(255,255,255,0.018) 1px, transparent 1px);
+  background-size: 3px 3px;
+  pointer-events: none;
+  z-index: 1;
+  mix-blend-mode: overlay;
+}
+
+.app { display: grid; grid-template-rows: 56px 1fr 32px; height: 100vh; padding: 12px; gap: 12px; position: relative; z-index: 2; }
+
+/* TOP BAR — floating glass capsule */
+.topbar {
+  display: flex; align-items: center; gap: 20px;
+  padding: 0 20px;
+  background: var(--glass);
+  backdrop-filter: blur(24px) saturate(160%);
+  -webkit-backdrop-filter: blur(24px) saturate(160%);
+  border: 1px solid var(--line-strong);
+  border-radius: 16px;
+  box-shadow:
+    0 1px 0 0 rgba(255,255,255,0.06) inset,
+    0 24px 64px rgba(0,0,0,0.6),
+    0 0 0 1px rgba(255,255,255,0.02);
+}
+.wordmark {
+  display: flex; align-items: center; gap: 10px;
+  font-family: 'Manrope', sans-serif;
+  font-weight: 700;
+  font-size: 18px;
+  letter-spacing: -0.025em;
+}
+.logo {
+  width: 28px; height: 28px;
+  background: linear-gradient(135deg, var(--blue), var(--violet));
+  border-radius: 8px;
+  position: relative;
+  box-shadow: 0 0 20px var(--blue-glow), inset 0 1px 0 rgba(255,255,255,0.3);
+}
+.logo::after {
+  content: '◇';
+  position: absolute; inset: 0;
+  display: grid; place-items: center;
+  color: white;
+  font-size: 14px;
+  text-shadow: 0 0 8px rgba(255,255,255,0.6);
+}
+
+.breadcrumb {
+  display: flex; align-items: center; gap: 10px;
+  padding-left: 20px;
+  border-left: 1px solid var(--line-strong);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  color: var(--fg-2);
+}
+.dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: var(--blue);
+  box-shadow: 0 0 12px var(--blue), 0 0 4px white;
+  animation: pulse 2.5s ease-in-out infinite;
+}
+@keyframes pulse {
+  0%, 100% { box-shadow: 0 0 12px var(--blue), 0 0 4px white; }
+  50% { box-shadow: 0 0 18px var(--blue), 0 0 6px white; }
+}
+.sep { color: var(--fg-disabled); }
+.spacer { flex: 1; }
+
+.iconbtn {
+  width: 36px; height: 36px;
+  display: grid; place-items: center;
+  color: var(--fg-2);
+  background: rgba(255,255,255,0.03);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  cursor: pointer;
+  font-size: 16px;
+  transition: all 140ms cubic-bezier(0.16,1,0.3,1);
+}
+.iconbtn:hover {
+  color: var(--blue);
+  background: var(--glass-hover);
+  border-color: var(--blue);
+  box-shadow: 0 0 16px var(--blue-glow);
+}
+.cmdk-hint {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  padding: 8px 14px;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  color: var(--fg-2);
+}
+.cmdk-hint kbd { color: var(--blue); font-weight: 600; }
+
+/* BODY */
+.body { display: grid; grid-template-columns: 256px 1fr; gap: 12px; min-height: 0; }
+
+.sidebar {
+  background: var(--glass);
+  backdrop-filter: blur(24px) saturate(160%);
+  -webkit-backdrop-filter: blur(24px) saturate(160%);
+  border: 1px solid var(--line-strong);
+  border-radius: 16px;
+  overflow-y: auto;
+  box-shadow:
+    0 1px 0 0 rgba(255,255,255,0.05) inset,
+    0 24px 64px rgba(0,0,0,0.5);
+}
+.section { padding: 18px 0 12px; }
+.section + .section { border-top: 1px solid var(--line); }
+.section-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0 18px 12px;
+  font-family: 'Manrope', sans-serif;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--fg-muted);
+}
+.section-head .add {
+  width: 22px; height: 22px;
+  display: grid; place-items: center;
+  border-radius: 6px;
+  font-size: 16px;
+  color: var(--fg-2);
+  cursor: pointer;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid var(--line);
+}
+.section-head .add:hover { color: var(--blue); border-color: var(--blue); }
+
+.row {
+  display: flex; align-items: center; gap: 10px;
+  height: 30px; margin: 0 8px;
+  padding: 0 12px;
+  font-family: 'Manrope', sans-serif;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--fg-2);
+  cursor: pointer;
+  border-radius: 8px;
+  transition: background 80ms linear;
+}
+.row:hover { background: var(--glass-hover); color: var(--fg); }
+.row.active {
+  color: var(--fg);
+  background: linear-gradient(90deg, rgba(0,184,255,0.18), rgba(0,184,255,0.04));
+  border: 1px solid rgba(0,184,255,0.30);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.06), 0 0 16px rgba(0,184,255,0.12);
+}
+.row .glyph {
+  font-family: 'JetBrains Mono', monospace;
+  color: var(--fg-muted); width: 12px; text-align: center; font-size: 11px;
+}
+.row.active .glyph { color: var(--blue); }
+.row .meta {
+  margin-left: auto;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  color: var(--fg-disabled);
+  font-weight: 400;
+}
+.depth-2 { padding-left: 28px; }
+.depth-3 { padding-left: 44px; }
+.tree-glyph { font-family: 'JetBrains Mono', monospace; font-size: 11px; }
+
+/* MAIN */
+.main {
+  display: flex; flex-direction: column; min-width: 0; gap: 12px;
+}
+.tabs {
+  display: flex; align-items: center; gap: 6px;
+  height: 44px; padding: 0 8px;
+  background: var(--glass);
+  backdrop-filter: blur(24px) saturate(160%);
+  -webkit-backdrop-filter: blur(24px) saturate(160%);
+  border: 1px solid var(--line-strong);
+  border-radius: 14px;
+  box-shadow: 0 1px 0 0 rgba(255,255,255,0.05) inset, 0 16px 48px rgba(0,0,0,0.5);
+}
+.tab {
+  display: flex; align-items: center; gap: 8px;
+  height: 30px; padding: 0 14px;
+  font-family: 'Manrope', sans-serif;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--fg-2);
+  cursor: pointer;
+  border-radius: 8px;
+}
+.tab:hover { background: var(--glass-hover); }
+.tab.active {
+  color: var(--fg);
+  background: linear-gradient(180deg, rgba(0,184,255,0.18), rgba(0,184,255,0.04));
+  border: 1px solid rgba(0,184,255,0.30);
+  font-weight: 600;
+  box-shadow: 0 0 16px rgba(0,184,255,0.15);
+}
+.tab .marker {
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: var(--blue);
+  box-shadow: 0 0 8px var(--blue);
+}
+.tab .x { color: var(--fg-muted); margin-left: 2px; }
+.tab-add {
+  width: 30px; height: 30px;
+  display: grid; place-items: center;
+  border-radius: 8px;
+  color: var(--fg-2);
+  cursor: pointer;
+  font-size: 16px;
+}
+.tab-add:hover { background: var(--glass-hover); color: var(--blue); }
+
+.editor-grid { display: grid; grid-template-rows: 38% 1fr; gap: 12px; min-height: 0; }
+
+.editor {
+  background: var(--glass-strong);
+  backdrop-filter: blur(28px) saturate(170%);
+  -webkit-backdrop-filter: blur(28px) saturate(170%);
+  border: 1px solid var(--line-strong);
+  border-radius: 16px;
+  position: relative;
+  overflow: hidden;
+  box-shadow:
+    0 1px 0 0 rgba(255,255,255,0.06) inset,
+    0 24px 64px rgba(0,0,0,0.55);
+}
+.editor::before {
+  content: '';
+  position: absolute; top: 0; left: 0; right: 0; height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(0,184,255,0.5), transparent);
+}
+.editor-code {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 13px;
+  line-height: 22px;
+  padding: 22px 0;
+  display: grid;
+  grid-template-columns: 50px 1fr;
+}
+.gutter { color: var(--fg-disabled); text-align: right; padding-right: 16px; user-select: none; }
+.gutter .a { color: var(--blue); text-shadow: 0 0 6px var(--blue-glow); }
+.code { white-space: pre; color: var(--fg); }
+.kw { color: var(--blue); text-shadow: 0 0 6px var(--blue-glow); }
+.fn { color: var(--teal); }
+.str { color: var(--amber); }
+.num { color: var(--pink); }
+.com { color: var(--fg-muted); font-style: italic; }
+.op { color: var(--fg-2); }
+
+.run-btn {
+  position: absolute; bottom: 16px; right: 18px;
+  display: flex; align-items: center; gap: 12px;
+  height: 38px; padding: 0 20px;
+  background: linear-gradient(135deg, var(--blue), var(--violet));
+  color: white;
+  border: none;
+  border-radius: 12px;
+  font-family: 'Manrope', sans-serif;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: -0.005em;
+  cursor: pointer;
+  box-shadow:
+    0 0 0 1px rgba(0,184,255,0.5),
+    0 0 32px var(--blue-glow),
+    0 8px 24px rgba(0,184,255,0.3),
+    inset 0 1px 0 rgba(255,255,255,0.3);
+}
+.run-btn .arrow { font-size: 14px; }
+.run-btn .kbd {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  opacity: 0.85;
+  background: rgba(0,0,0,0.25);
+  padding: 2px 7px;
+  border-radius: 5px;
+}
+
+.ai-pill {
+  position: absolute; top: 16px; right: 18px;
+  display: flex; align-items: center; gap: 8px;
+  height: 30px; padding: 0 14px;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  font-family: 'Manrope', sans-serif;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--fg);
+  cursor: pointer;
+  backdrop-filter: blur(12px);
+}
+.ai-pill::before {
+  content: '✦';
+  background: linear-gradient(135deg, var(--blue), var(--violet));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  font-size: 13px;
+}
+.ai-pill kbd { color: var(--fg-muted); font-family: 'JetBrains Mono', monospace; font-size: 10px; }
+
+/* RESULTS */
+.results {
+  background: var(--glass);
+  backdrop-filter: blur(24px) saturate(160%);
+  -webkit-backdrop-filter: blur(24px) saturate(160%);
+  border: 1px solid var(--line-strong);
+  border-radius: 16px;
+  overflow: auto;
+  min-height: 0;
+  box-shadow:
+    0 1px 0 0 rgba(255,255,255,0.05) inset,
+    0 24px 64px rgba(0,0,0,0.55);
+}
+table { width: 100%; border-collapse: collapse; font-family: 'JetBrains Mono', monospace; font-size: 12px; }
+thead {
+  position: sticky; top: 0;
+  background: rgba(14,14,22,0.92);
+  backdrop-filter: blur(20px);
+  z-index: 1;
+}
+th {
+  height: 38px;
+  text-align: left;
+  padding: 0 16px;
+  font-family: 'Manrope', sans-serif;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.10em;
+  color: var(--fg-2);
+  border-bottom: 1px solid var(--line-strong);
+  white-space: nowrap;
+}
+th .type {
+  font-family: 'JetBrains Mono', monospace;
+  font-weight: 400;
+  font-size: 9px;
+  color: var(--fg-muted);
+  margin-right: 6px;
+  text-transform: lowercase;
+  letter-spacing: 0;
+}
+th .sort { color: var(--blue); margin-left: 4px; text-shadow: 0 0 6px var(--blue-glow); }
+td {
+  height: 32px;
+  padding: 0 16px;
+  color: var(--fg);
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+}
+td.num { color: var(--pink); }
+td.str { color: var(--fg); }
+td.date { color: var(--teal); }
+tr:hover td { background: rgba(255,255,255,0.025); }
+tr.selected td {
+  background: linear-gradient(90deg, rgba(0,184,255,0.14), rgba(0,184,255,0.02));
+}
+tr.selected td:first-child {
+  box-shadow: inset 3px 0 0 var(--blue), inset 0 0 16px rgba(0,184,255,0.15);
+}
+
+/* STATUS BAR */
+.statusbar {
+  display: flex; align-items: center; gap: 0;
+  padding: 0 18px;
+  background: var(--glass);
+  backdrop-filter: blur(20px) saturate(160%);
+  -webkit-backdrop-filter: blur(20px) saturate(160%);
+  border: 1px solid var(--line-strong);
+  border-radius: 12px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  color: var(--fg-muted);
+  box-shadow: 0 1px 0 0 rgba(255,255,255,0.05) inset, 0 8px 24px rgba(0,0,0,0.4);
+}
+.statusbar .seg { display: flex; align-items: center; gap: 6px; padding: 0 12px; }
+.statusbar .seg.first { padding-left: 0; }
+.statusbar .ldot { width: 7px; height: 7px; border-radius: 50%; background: var(--blue); box-shadow: 0 0 8px var(--blue); }
+.statusbar .b { color: var(--fg-disabled); }
+.statusbar .v { color: var(--blue); text-shadow: 0 0 4px var(--blue-glow); }
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="topbar">
+    <div class="wordmark">
+      <div class="logo"></div>
+      Plasma
+    </div>
+    <div class="breadcrumb">
+      <span class="dot"></span>
+      <span>prod-rds-postgres</span>
+      <span class="sep">/</span>
+      <span>analytics</span>
+      <span class="sep">/</span>
+      <span>public</span>
+    </div>
+    <div class="spacer"></div>
+    <div class="iconbtn">⏱</div>
+    <div class="iconbtn">◔</div>
+    <div class="iconbtn">⚙</div>
+    <div class="cmdk-hint">Search · <kbd>⌘ K</kbd></div>
+  </header>
+
+  <div class="body">
+    <aside class="sidebar">
+      <div class="section">
+        <div class="section-head">Connections <span class="add">+</span></div>
+        <div class="row active"><span class="glyph">◉</span><span>prod-rds-postgres</span></div>
+        <div class="row"><span class="glyph">○</span><span>staging-postgres</span></div>
+        <div class="row"><span class="glyph">○</span><span>localhost:5432</span></div>
+        <div class="row"><span class="glyph">○</span><span>analytics-replica</span></div>
+      </div>
+      <div class="section">
+        <div class="section-head">Schema · public</div>
+        <div class="row"><span class="glyph tree-glyph">▾</span><span>public</span></div>
+        <div class="row depth-2 active"><span class="glyph tree-glyph">▾</span><span>users</span><span class="meta">142k</span></div>
+        <div class="row depth-3"><span class="glyph">#</span><span>id</span></div>
+        <div class="row depth-3"><span class="glyph">T</span><span>email</span></div>
+        <div class="row depth-3"><span class="glyph">T</span><span>full_name</span></div>
+        <div class="row depth-3"><span class="glyph">d</span><span>created_at</span></div>
+        <div class="row depth-3"><span class="glyph">T</span><span>plan</span></div>
+        <div class="row depth-3"><span class="glyph">T</span><span>status</span></div>
+        <div class="row depth-2"><span class="glyph tree-glyph">▸</span><span>posts</span><span class="meta">38k</span></div>
+        <div class="row depth-2"><span class="glyph tree-glyph">▸</span><span>orders</span><span class="meta">812k</span></div>
+        <div class="row depth-2"><span class="glyph tree-glyph">▸</span><span>sessions</span><span class="meta">2.1m</span></div>
+        <div class="row depth-2"><span class="glyph tree-glyph">▸</span><span>products</span><span class="meta">1.2k</span></div>
+        <div class="row"><span class="glyph tree-glyph">▸</span><span>auth</span></div>
+        <div class="row"><span class="glyph tree-glyph">▸</span><span>analytics</span></div>
+      </div>
+    </aside>
+
+    <main class="main">
+      <div class="tabs">
+        <div class="tab active"><span class="marker"></span>users-recent.sql<span class="x">×</span></div>
+        <div class="tab">cohort-analysis.sql<span class="x">×</span></div>
+        <div class="tab">orders-by-day.sql<span class="x">×</span></div>
+        <div class="tab-add">+</div>
+      </div>
+      <div class="editor-grid">
+        <div class="editor">
+          <div class="editor-code">
+            <div class="gutter">
+              <div>1</div><div>2</div><div>3</div><div class="a">4</div><div>5</div><div>6</div><div>7</div>
+            </div><pre class="code"><span class="com">— recently active users on paid plans</span>
+<span class="kw">SELECT</span> id, email, full_name, created_at, plan, status
+<span class="kw">FROM</span> users
+<span class="kw">WHERE</span> created_at <span class="op">&gt;</span> <span class="fn">now()</span> <span class="op">-</span> <span class="kw">interval</span> <span class="str">'7 days'</span>
+  <span class="kw">AND</span> plan <span class="kw">IN</span> (<span class="str">'pro'</span>, <span class="str">'team'</span>)
+<span class="kw">ORDER BY</span> created_at <span class="kw">DESC</span>
+<span class="kw">LIMIT</span> <span class="num">100</span>;</pre>
+          </div>
+          <div class="ai-pill">Ask AI <kbd>⌘I</kbd></div>
+          <button class="run-btn"><span class="arrow">▶</span>Run query<span class="kbd">⌘⏎</span></button>
+        </div>
+
+        <div class="results">
+          <table>
+            <thead>
+              <tr>
+                <th><span class="type">int8</span>id <span class="sort">↓</span></th>
+                <th><span class="type">text</span>email</th>
+                <th><span class="type">text</span>full_name</th>
+                <th><span class="type">timestamptz</span>created_at</th>
+                <th><span class="type">text</span>plan</th>
+                <th><span class="type">text</span>status</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr class="selected"><td class="num">47892</td><td>ada.lovelace@gmail.com</td><td>Ada Lovelace</td><td class="date">2026-04-09 14:22:11</td><td>pro</td><td>active</td></tr>
+              <tr><td class="num">47891</td><td>alan.turing@proton.me</td><td>Alan Turing</td><td class="date">2026-04-09 12:01:44</td><td>pro</td><td>active</td></tr>
+              <tr><td class="num">47890</td><td>katherine.j@nasa.gov</td><td>Katherine Johnson</td><td class="date">2026-04-09 09:55:02</td><td>team</td><td>active</td></tr>
+              <tr><td class="num">47889</td><td>grace.h@navy.mil</td><td>Grace Hopper</td><td class="date">2026-04-08 23:18:30</td><td>pro</td><td>trial</td></tr>
+              <tr><td class="num">47888</td><td>linus@kernel.org</td><td>Linus Torvalds</td><td class="date">2026-04-08 21:04:17</td><td>team</td><td>active</td></tr>
+              <tr><td class="num">47887</td><td>margaret.h@mit.edu</td><td>Margaret Hamilton</td><td class="date">2026-04-08 18:42:09</td><td>pro</td><td>active</td></tr>
+              <tr><td class="num">47886</td><td>ken.t@bell-labs.com</td><td>Ken Thompson</td><td class="date">2026-04-08 16:30:55</td><td>team</td><td>active</td></tr>
+              <tr><td class="num">47885</td><td>dennis.r@bell-labs.com</td><td>Dennis Ritchie</td><td class="date">2026-04-08 14:11:22</td><td>pro</td><td>active</td></tr>
+              <tr><td class="num">47884</td><td>barbara.l@stanford.edu</td><td>Barbara Liskov</td><td class="date">2026-04-08 11:08:41</td><td>pro</td><td>active</td></tr>
+              <tr><td class="num">47883</td><td>donald.k@stanford.edu</td><td>Donald Knuth</td><td class="date">2026-04-08 09:30:14</td><td>team</td><td>active</td></tr>
+              <tr><td class="num">47882</td><td>tim.bl@w3.org</td><td>Tim Berners-Lee</td><td class="date">2026-04-07 23:50:00</td><td>pro</td><td>active</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <footer class="statusbar">
+    <div class="seg first"><span class="ldot"></span>connected</div>
+    <span class="b">·</span>
+    <div class="seg">prod-rds-postgres</div>
+    <span class="b">·</span>
+    <div class="seg">public</div>
+    <span class="b">·</span>
+    <div class="seg"><span class="v">142,381 rows</span></div>
+    <span class="b">·</span>
+    <div class="seg"><span class="v">87 ms</span></div>
+    <span class="b">·</span>
+    <div class="seg">txn: idle</div>
+    <span class="b">·</span>
+    <div class="seg">UTF-8</div>
+    <span class="b">·</span>
+    <div class="seg">PG 16.2</div>
+    <div style="flex:1"></div>
+    <div class="seg">⌘ K</div>
+  </footer>
+</div>
+</body>
+</html>
