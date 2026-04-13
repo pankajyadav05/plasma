@@ -2,6 +2,7 @@ import { Command as CommandIcon, Lock, PanelLeft, PanelLeftClose, Pencil } from 
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/cn";
+import { kbd } from "@/lib/platform";
 import { useSession } from "@/stores/session";
 import { WindowControls } from "./WindowControls";
 
@@ -24,12 +25,7 @@ export function TopBar() {
   // overlays, and disable pointer events so the topbar can't be
   // interacted with while a modal is up.
   const overlayOpen = useSession(
-    (s) =>
-      s.dialogOpen ||
-      s.paletteOpen ||
-      s.settingsOpen ||
-      s.historyOpen ||
-      s.deleteConfirmConnectionId !== null,
+    (s) => s.dialogOpen || s.paletteOpen || s.settingsOpen || s.historyOpen || s.deleteConfirmConnectionId !== null,
   );
 
   const dotClass =
@@ -51,10 +47,11 @@ export function TopBar() {
       <div className="no-drag flex items-center">
         <Button
           variant="ghost"
-          size="icon-sm"
+          size="icon"
           onClick={() => void toggleSidebar()}
-          aria-label={sidebarCollapsed ? "Show sidebar (⌘B)" : "Hide sidebar (⌘B)"}
-          title={sidebarCollapsed ? "Show sidebar (⌘B)" : "Hide sidebar (⌘B)"}
+          aria-label={sidebarCollapsed ? `Show sidebar (${kbd("B")})` : `Hide sidebar (${kbd("B")})`}
+          title={sidebarCollapsed ? `Show sidebar (${kbd("B")})` : `Hide sidebar (${kbd("B")})`}
+          className="[&_svg]:h-5 [&_svg]:w-5"
         >
           {sidebarCollapsed ? <PanelLeft /> : <PanelLeftClose />}
         </Button>
@@ -134,11 +131,17 @@ export function TopBar() {
           variant="secondary"
           size="sm"
           onClick={togglePalette}
-          title="Command palette (⌘K) — history, theme, settings"
+          title={`Command palette (${kbd("K")}) — history, theme, settings`}
           className="ml-2 h-7 gap-1.5 px-2.5 font-mono text-xs normal-case tracking-[0.04em] text-ink"
         >
-          <CommandIcon className="h-3 w-3" />
-          <span>K</span>
+          {isMac ? (
+            <>
+              <CommandIcon className="h-3 w-3" />
+              <span>K</span>
+            </>
+          ) : (
+            <span>Ctrl K</span>
+          )}
         </Button>
       </div>
 

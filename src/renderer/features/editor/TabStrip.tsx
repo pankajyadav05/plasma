@@ -1,6 +1,7 @@
 import { FileCode, Plus, Table2, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/cn';
+import { kbd } from '@/lib/platform';
 import { useSession } from '@/stores/session';
 
 export function TabStrip() {
@@ -71,7 +72,7 @@ export function TabStrip() {
           size="icon"
           onClick={addTab}
           aria-label="New SQL tab"
-          title="New SQL tab (⌘T)"
+          title={`New SQL tab (${kbd("T")})`}
           className="h-full w-10 rounded-none"
         >
           <Plus />

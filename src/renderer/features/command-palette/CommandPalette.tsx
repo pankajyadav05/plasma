@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { Dialog, DialogPortal, DialogOverlay } from "@/components/ui/dialog";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
+import { kbd } from "@/lib/platform";
 import { useSession } from "@/stores/session";
 
 /**
@@ -89,23 +90,23 @@ export function CommandPalette() {
                 heading="Actions"
                 className="[&_[cmdk-group-heading]]:px-3 [&_[cmdk-group-heading]]:py-2 [&_[cmdk-group-heading]]:font-mono [&_[cmdk-group-heading]]:text-xs [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-widest [&_[cmdk-group-heading]]:text-ink-muted"
               >
-                <PaletteItem icon={<Play className="h-3.5 w-3.5" />} onSelect={() => runAction(runQuery)} keys="⌘⏎">
+                <PaletteItem icon={<Play className="h-3.5 w-3.5" />} onSelect={() => runAction(runQuery)} keys={kbd("⏎")}>
                   Run query
                 </PaletteItem>
-                <PaletteItem icon={<Plus className="h-3.5 w-3.5" />} onSelect={() => runAction(addTab)} keys="⌘T">
+                <PaletteItem icon={<Plus className="h-3.5 w-3.5" />} onSelect={() => runAction(addTab)} keys={kbd("T")}>
                   New query tab
                 </PaletteItem>
                 <PaletteItem
                   icon={<CommandIcon className="h-3.5 w-3.5" />}
                   onSelect={() => runAction(toggleEditor)}
-                  keys="⌘J"
+                  keys={kbd("J")}
                 >
                   Toggle query editor
                 </PaletteItem>
                 <PaletteItem
                   icon={<PanelLeft className="h-3.5 w-3.5" />}
                   onSelect={() => runAction(toggleSidebar)}
-                  keys="⌘B"
+                  keys={kbd("B")}
                 >
                   Toggle sidebar
                 </PaletteItem>
@@ -119,7 +120,7 @@ export function CommandPalette() {
                     setHistoryOpen(true);
                     void loadHistory();
                   }}
-                  keys="⌘H"
+                  keys={kbd("H")}
                 >
                   Query history
                 </PaletteItem>

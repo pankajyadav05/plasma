@@ -1,6 +1,7 @@
 import { ChevronLeft, ChevronRight, Play, RefreshCw, Sparkles, Square } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Kbd } from "@/components/ui/kbd";
+import { kbd } from "@/lib/platform";
 import { useActiveTab, useSession } from "@/stores/session";
 import { MonacoEditor } from "./MonacoEditor";
 
@@ -58,7 +59,7 @@ export function EditorPane() {
               size="icon-sm"
               onClick={toggle}
               aria-label="Collapse editor"
-              title="Collapse (⌘J · Esc)"
+              title={`Collapse (${kbd("J")} · Esc)`}
             >
               <ChevronRight />
             </Button>
@@ -90,7 +91,7 @@ export function EditorPane() {
               <Button variant="destructive" size="sm" onClick={handleAction}>
                 <Square />
                 Cancel
-                <Kbd>⌘.</Kbd>
+                <Kbd>{kbd(".")}</Kbd>
               </Button>
             ) : isTable ? (
               <Button variant="secondary" size="sm" onClick={handleAction} disabled={!canRun}>
@@ -101,7 +102,7 @@ export function EditorPane() {
               <Button variant="primary" size="sm" onClick={handleAction} disabled={!canRun}>
                 <Play className="fill-accent text-accent" />
                 Run
-                <Kbd className="border-0 bg-transparent text-paper/70">⌘⏎</Kbd>
+                <Kbd className="border-0 bg-transparent text-paper/70">{kbd("⏎")}</Kbd>
               </Button>
             )}
           </div>
@@ -133,7 +134,7 @@ export function EditorPane() {
           type="button"
           onClick={toggle}
           aria-label="Expand editor"
-          title={`Expand editor (⌘J) — ${tab.title}`}
+          title={`Expand editor (${kbd("J")}) — ${tab.title}`}
           className="group flex h-full w-full cursor-pointer flex-col items-center gap-4 border-0 bg-paper pb-4 pt-4 text-ink-muted transition-colors hover:bg-[var(--bg-hover)] hover:text-accent"
         >
           <ChevronLeft className="h-4 w-4 shrink-0" />
@@ -152,7 +153,7 @@ export function EditorPane() {
             className="shrink-0 font-mono text-xs text-ink-muted"
             style={{ writingMode: "vertical-rl", letterSpacing: "0.08em" }}
           >
-            ⌘J
+            {kbd("J")}
           </span>
         </button>
       )}
