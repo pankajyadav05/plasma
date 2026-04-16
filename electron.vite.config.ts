@@ -60,6 +60,7 @@ export default defineConfig({
       alias: {
         '@': resolve(__dirname, 'src/renderer'),
         '@shared': resolve(__dirname, 'src/shared'),
+        '@logo': resolve(__dirname, 'logo'),
       },
     },
     plugins: [react()],

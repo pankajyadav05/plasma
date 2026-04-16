@@ -12,7 +12,7 @@ export function TabStrip() {
   const addTab = useSession((s) => s.addTab);
 
   return (
-    <div className="flex h-10 shrink-0 items-stretch border-b border-border-soft bg-paper">
+    <div className="flex h-10 shrink-0 items-stretch border-b border-border bg-background">
       <div
         className="scrollbar-none flex min-w-0 flex-1 items-stretch overflow-x-auto overflow-y-hidden"
         style={{ scrollbarWidth: 'none' }}
@@ -24,10 +24,10 @@ export function TabStrip() {
             <div
               key={t.id}
               className={cn(
-                'group relative flex min-w-0 cursor-pointer items-center gap-2 border-r border-border-soft px-4 transition-colors',
+                'group relative flex min-w-0 cursor-pointer items-center gap-2 border-r border-border px-4 transition-colors',
                 active
-                  ? 'bg-paper-canvas text-ink'
-                  : 'text-ink-muted hover:bg-[var(--bg-hover)] hover:text-ink',
+                  ? 'bg-card text-foreground'
+                  : 'text-muted-foreground hover:bg-[var(--bg-hover)] hover:text-foreground',
               )}
               onClick={() => setActiveTab(t.id)}
               role="tab"
@@ -38,21 +38,21 @@ export function TabStrip() {
               }}
             >
               {active && (
-                <span className="absolute inset-x-0 bottom-[-1px] h-0.5 bg-accent" />
+                <span className="absolute inset-x-0 bottom-[-1px] h-0.5 bg-primary" />
               )}
-              <Icon className={cn('h-3.5 w-3.5 shrink-0', active ? 'text-accent' : 'text-ink-muted')} />
+              <Icon className={cn('h-3.5 w-3.5 shrink-0', active ? 'text-primary' : 'text-muted-foreground')} />
               {t.queryRunState === 'running' && (
-                <span className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-none bg-accent" />
+                <span className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-none bg-primary" />
               )}
               {t.queryError && (
-                <span className="shrink-0 text-xs text-accent">!</span>
+                <span className="shrink-0 text-xs text-primary">!</span>
               )}
-              <span className="max-w-[180px] truncate font-mono text-sm">{t.title}</span>
+              <span className="max-w-[180px] truncate text-sm">{t.title}</span>
               {tabs.length > 1 && (
                 <Button
                   variant="ghost"
                   size="icon-xs"
-                  className="h-4 w-4 shrink-0 rounded-sm opacity-0 transition-opacity group-hover:opacity-100"
+                  className="h-5 w-5 shrink-0 opacity-0 transition-opacity group-hover:opacity-100"
                   onClick={(e) => {
                     e.stopPropagation();
                     closeTab(t.id);
@@ -66,14 +66,14 @@ export function TabStrip() {
           );
         })}
       </div>
-      <div className="shrink-0 border-l border-border-soft">
+      <div className="flex shrink-0 items-center border-l">
         <Button
           variant="ghost"
-          size="icon"
+          size="icon-sm"
           onClick={addTab}
           aria-label="New SQL tab"
           title={`New SQL tab (${kbd("T")})`}
-          className="h-full w-10 rounded-none"
+          className="mx-1"
         >
           <Plus />
         </Button>

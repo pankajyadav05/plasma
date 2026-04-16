@@ -1,128 +1,224 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
+@import "tw-animate-css";
 
-/* ─── CSS tokens (mirrored from DESIGN.md) ───────────────────────── */
+@custom-variant dark (&:is(.dark *));
 
-:root,
-:root[data-theme="paper"] {
-  /* Surfaces — warm cream paper */
-  --bg: #faf7f0;
-  --bg-panel: #f4f0e3;
-  --bg-canvas: #fffef9;
-  --bg-hover: rgba(123, 45, 38, 0.05);
-  --bg-selected: #f3e2d8;
+:root {
+  --background: oklch(1.0000 0 0);
+  --foreground: oklch(0.1448 0 0);
+  --card: oklch(1.0000 0 0);
+  --card-foreground: oklch(0.1448 0 0);
+  --popover: oklch(1.0000 0 0);
+  --popover-foreground: oklch(0.1448 0 0);
+  --primary: oklch(0.7122 0.1809 21.6630);
+  --primary-foreground: oklch(0.9851 0 0);
+  --secondary: oklch(0.9702 0 0);
+  --secondary-foreground: oklch(0.2046 0 0);
+  --muted: oklch(0.9702 0 0);
+  --muted-foreground: oklch(0.5555 0 0);
+  --accent: oklch(0.9702 0 0);
+  --accent-foreground: oklch(0.2046 0 0);
+  --destructive: oklch(0.6496 0.2362 26.9032);
+  --destructive-foreground: oklch(0.9851 0 0);
+  --border: oklch(0.9219 0 0);
+  --input: oklch(0.9219 0 0);
+  --ring: oklch(0.1448 0 0);
+  --chart-1: oklch(0.8093 0.0985 252.2024);
+  --chart-2: oklch(0.6182 0.2066 260.2572);
+  --chart-3: oklch(0.5492 0.2491 262.9726);
+  --chart-4: oklch(0.4920 0.2663 263.6097);
+  --chart-5: oklch(0.4184 0.2365 264.0643);
+  --sidebar: oklch(0.9851 0 0);
+  --sidebar-foreground: oklch(0.2138 0.0019 286.2347);
+  --sidebar-primary: oklch(0.2138 0.0019 286.2347);
+  --sidebar-primary-foreground: oklch(0.9851 0 0);
+  --sidebar-accent: oklch(0.9702 0 0);
+  --sidebar-accent-foreground: oklch(0.2138 0.0019 286.2347);
+  --sidebar-border: oklch(0.9219 0 0);
+  --sidebar-ring: oklch(0.7090 0 0);
+  --font-sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Noto Sans', sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji';
+  --font-serif: 'Newsreader', ui-serif, Georgia, Cambria, "Times New Roman", Times, serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  --radius: 0.5rem;
+  --shadow-x: -15px;
+  --shadow-y: 1px;
+  --shadow-blur: 11.5px;
+  --shadow-spread: -40.5px;
+  --shadow-opacity: 0;
+  --shadow-color: oklch(0 0 0);
+  --shadow-2xs: -15px 1px 11.5px -40.5px hsl(0 0% 0% / 0.00);
+  --shadow-xs: -15px 1px 11.5px -40.5px hsl(0 0% 0% / 0.00);
+  --shadow-sm: -15px 1px 11.5px -40.5px hsl(0 0% 0% / 0.00), -15px 1px 2px -41.5px hsl(0 0% 0% / 0.00);
+  --shadow: -15px 1px 11.5px -40.5px hsl(0 0% 0% / 0.00), -15px 1px 2px -41.5px hsl(0 0% 0% / 0.00);
+  --shadow-md: -15px 1px 11.5px -40.5px hsl(0 0% 0% / 0.00), -15px 2px 4px -41.5px hsl(0 0% 0% / 0.00);
+  --shadow-lg: -15px 1px 11.5px -40.5px hsl(0 0% 0% / 0.00), -15px 4px 6px -41.5px hsl(0 0% 0% / 0.00);
+  --shadow-xl: -15px 1px 11.5px -40.5px hsl(0 0% 0% / 0.00), -15px 8px 10px -41.5px hsl(0 0% 0% / 0.00);
+  --shadow-2xl: -15px 1px 11.5px -40.5px hsl(0 0% 0% / 0.00);
+  --tracking-normal: 0em;
+  --spacing: 0.25rem;
 
-  /* Rules & borders */
-  --rule: #d6cfbb;
-  --border: #e5dfcc;
-  --border-strong: #1c1a14;
+  /* Data-type colors (result grid cell tinting) */
+  --type-num: oklch(0.4500 0.1200 255);
+  --type-str: oklch(0.5200 0.1300 135);
+  --type-date: oklch(0.5555 0 0);
+  --type-bool: oklch(0.6496 0.2362 26.9032);
+  --type-null: oklch(0.7200 0 0);
+  --type-json: oklch(0.5500 0.1200 80);
 
-  /* Ink */
-  --fg: #1c1a14;
-  --fg-2: #5c5849;
-  --fg-muted: #6b6659;
-  --fg-disabled: #918b7d;
-
-  /* Accent */
-  --accent: #7b2d26;
-  --accent-hover: #8f3731;
-  --accent-press: #661f1a;
-
-  /* Data types */
-  --type-num: #2b4e7a;
-  --type-str: #4a6b2e;
-  --type-date: #5c5849;
-  --type-bool: #7b2d26;
-  --type-null: #918b7d;
-  --type-json: #7a5a08;
-
-  /* Scrollbar */
-  --scrollbar-thumb: rgba(123, 106, 72, 0.28);
-  --scrollbar-thumb-hover: rgba(123, 106, 72, 0.55);
+  /* Hover surface tint — subtle overlay for drag regions + ghost buttons */
+  --bg-hover: oklch(0 0 0 / 0.05);
 }
 
-/* ─── Midnight Vellum (dark theme) ─────────────────────────────── */
+.dark {
+  --background: oklch(0.1448 0 0);
+  --foreground: oklch(0.9851 0 0);
+  --card: oklch(0.1448 0 0);
+  --card-foreground: oklch(0.9851 0 0);
+  --popover: oklch(0.1448 0 0);
+  --popover-foreground: oklch(0.9851 0 0);
+  --primary: oklch(0.7122 0.1809 21.6630);
+  --primary-foreground: oklch(0.2046 0 0);
+  --secondary: oklch(0.2686 0 0);
+  --secondary-foreground: oklch(0.9851 0 0);
+  --muted: oklch(0.2686 0 0);
+  --muted-foreground: oklch(0.7155 0 0);
+  --accent: oklch(0.2686 0 0);
+  --accent-foreground: oklch(0.9851 0 0);
+  --destructive: oklch(0.4205 0.1668 28.5048);
+  --destructive-foreground: oklch(0.9851 0 0);
+  --border: oklch(0.2686 0 0);
+  --input: oklch(0.2686 0 0);
+  --ring: oklch(0.8699 0 0);
+  --chart-1: oklch(0.8093 0.0985 252.2024);
+  --chart-2: oklch(0.6182 0.2066 260.2572);
+  --chart-3: oklch(0.5492 0.2491 262.9726);
+  --chart-4: oklch(0.4920 0.2663 263.6097);
+  --chart-5: oklch(0.4184 0.2365 264.0643);
+  --sidebar: oklch(0.2138 0.0019 286.2347);
+  --sidebar-foreground: oklch(0.9851 0 0);
+  --sidebar-primary: oklch(0.4915 0.2776 263.8724);
+  --sidebar-primary-foreground: oklch(0.9851 0 0);
+  --sidebar-accent: oklch(0.2686 0 0);
+  --sidebar-accent-foreground: oklch(0.9851 0 0);
+  --sidebar-border: oklch(0.2768 0 0);
+  --sidebar-ring: oklch(0.4386 0 0);
+  --radius: 0.625rem;
+  --shadow-color: oklch(0 0 0);
 
-:root[data-theme="midnight"] {
-  --bg: #1b1812;
-  --bg-panel: #231f18;
-  --bg-canvas: #15120d;
-  --bg-hover: rgba(212, 172, 120, 0.06);
-  --bg-selected: rgba(212, 138, 130, 0.12);
+  --type-num: oklch(0.7500 0.1500 255);
+  --type-str: oklch(0.7800 0.1400 135);
+  --type-date: oklch(0.7155 0 0);
+  --type-bool: oklch(0.7200 0.1800 25);
+  --type-null: oklch(0.4500 0 0);
+  --type-json: oklch(0.7800 0.1400 80);
 
-  --rule: #2e2a20;
-  --border: #3a352a;
-  --border-strong: #d4ac78;
-
-  --fg: #faf7f0;
-  --fg-2: #d4cfbf;
-  --fg-muted: #a09882;
-  --fg-disabled: #6b6659;
-
-  --accent: #d48a82;
-  --accent-hover: #e19c94;
-  --accent-press: #c17872;
-
-  --type-num: #7fb8ff;
-  --type-str: #a8c98a;
-  --type-date: #c8c4b5;
-  --type-bool: #d48a82;
-  --type-null: #6b6659;
-  --type-json: #e8b872;
-
-  --scrollbar-thumb: rgba(250, 247, 240, 0.14);
-  --scrollbar-thumb-hover: rgba(250, 247, 240, 0.32);
+  --bg-hover: oklch(1 0 0 / 0.08);
 }
 
-/* ─── Base ─── */
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
 
-html,
-body,
-#root {
-  height: 100vh;
-  overflow: hidden;
+  --color-type-num: var(--type-num);
+  --color-type-str: var(--type-str);
+  --color-type-date: var(--type-date);
+  --color-type-bool: var(--type-bool);
+  --color-type-null: var(--type-null);
+  --color-type-json: var(--type-json);
+
+  --font-sans: var(--font-sans);
+  --font-mono: var(--font-mono);
+  --font-serif: var(--font-serif);
+  --font-display: var(--font-serif);
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+
+  --shadow-2xs: var(--shadow-2xs);
+  --shadow-xs: var(--shadow-xs);
+  --shadow-sm: var(--shadow-sm);
+  --shadow: var(--shadow);
+  --shadow-md: var(--shadow-md);
+  --shadow-lg: var(--shadow-lg);
+  --shadow-xl: var(--shadow-xl);
+  --shadow-2xl: var(--shadow-2xl);
+  --shadow-offset-sm: 3px 3px 0 0 var(--foreground);
+  --shadow-offset-md: 4px 4px 0 0 var(--primary);
+  --shadow-offset-lg: 6px 6px 0 0 var(--foreground);
+
+  --tracking-tighter: calc(var(--tracking-normal) - 0.05em);
+  --tracking-tight: calc(var(--tracking-normal) - 0.025em);
+  --tracking-normal: var(--tracking-normal);
+  --tracking-wide: calc(var(--tracking-normal) + 0.025em);
+  --tracking-wider: calc(var(--tracking-normal) + 0.05em);
+  --tracking-widest: calc(var(--tracking-normal) + 0.1em);
+
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in: cubic-bezier(0.4, 0, 1, 1);
+
+  --duration-instant: 80ms;
+  --duration-fast: 140ms;
+  --duration-base: 220ms;
 }
 
-body {
-  background: var(--bg);
-  color: var(--fg);
-  font-family: "DM Sans", system-ui, sans-serif;
-  font-size: 14px;
-  font-feature-settings: "tnum";
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  html,
+  body,
+  #root {
+    height: 100vh;
+    overflow: hidden;
+  }
+  body {
+    @apply bg-background text-foreground;
+    font-family: var(--font-sans);
+    font-size: 14px;
+    font-feature-settings: "tnum";
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    letter-spacing: var(--tracking-normal);
+  }
+  #root {
+    position: relative;
+    z-index: 1;
+  }
 }
 
-/* Paper texture — only on paper theme; midnight gets a subtle noise instead */
-:root[data-theme="paper"] body::before {
-  content: "";
-  position: fixed;
-  inset: 0;
-  background-image: radial-gradient(rgba(28, 26, 20, 0.025) 1px, transparent 1px);
-  background-size: 4px 4px;
-  pointer-events: none;
-  z-index: 0;
-}
-:root[data-theme="midnight"] body::before {
-  content: "";
-  position: fixed;
-  inset: 0;
-  background-image: radial-gradient(rgba(255, 250, 230, 0.012) 1px, transparent 1px);
-  background-size: 3px 3px;
-  pointer-events: none;
-  z-index: 0;
-}
-
-#root {
-  position: relative;
-  z-index: 1;
-}
-
-/* ─── Custom scrollbar ─────────────────────────────────────────────
-   Overlay style: transparent track, thumb is a muted overlay that
-   only becomes visible when the container actually needs to scroll.
-   No tan strip anywhere. Works against any background. */
+/* ─── Custom scrollbar — overlay style ────────────────────────────── */
 
 ::-webkit-scrollbar {
   width: 10px;
@@ -133,21 +229,20 @@ body {
   border: none;
 }
 ::-webkit-scrollbar-thumb {
-  background-color: var(--scrollbar-thumb);
+  background-color: oklch(from var(--foreground) l c h / 0.28);
   border: 2px solid transparent;
   background-clip: content-box;
   border-radius: 0;
   min-height: 40px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background-color: var(--scrollbar-thumb-hover);
+  background-color: oklch(from var(--foreground) l c h / 0.55);
   background-clip: content-box;
 }
 ::-webkit-scrollbar-corner {
   background: transparent;
 }
 
-/* Utility for containers that should never show a scrollbar */
 .scrollbar-none {
   scrollbar-width: none;
   -ms-overflow-style: none;
@@ -159,7 +254,7 @@ body {
 /* ─── Focus ring ─── */
 
 :focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--ring);
   outline-offset: 2px;
 }
 
@@ -173,7 +268,8 @@ body {
 }
 
 .topbar-pad {
-  @apply pl-3 pr-5;
+  padding-left: 12px;
+  padding-right: 20px;
 }
 :root[data-platform="darwin"] .topbar-pad {
   padding-left: 80px;
@@ -185,12 +281,12 @@ body {
   padding-right: 0;
 }
 
-/* ─── Monaco editor overrides (Paper theme surface) ─── */
+/* ─── Monaco editor overrides ─── */
 
 .monaco-editor,
 .monaco-editor-background,
 .monaco-editor .margin {
-  background-color: var(--bg) !important;
+  background-color: var(--background) !important;
 }
 .monaco-editor .scroll-decoration {
   box-shadow: none !important;

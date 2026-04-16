@@ -1,24 +1,11 @@
-import { useEffect, useState } from 'react';
-import type { AppMeta } from '@shared/protocol';
-import { ipc } from '@/lib/ipc';
+import { useEffect } from 'react';
 import { useSession } from '@/stores/session';
 import { AppShell } from '@/features/app-shell/AppShell';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 
 export function App() {
-  const [meta, setMeta] = useState<AppMeta | null>(null);
-
-  // App boot: fetch meta, load settings, load saved connections.
-  // Only auto-open the dialog if there are no saved connections.
   useEffect(() => {
     void (async () => {
-      try {
-        const m = await ipc.app.meta();
-        setMeta(m);
-      } catch (err) {
-        console.error('[plasma] app.meta failed', err);
-      }
-
       const session = useSession.getState();
       await session.loadSettings();
       await session.loadSavedConnections();
@@ -55,7 +42,7 @@ export function App() {
 
   return (
     <ErrorBoundary>
-      <AppShell meta={meta} />
+      <AppShell />
     </ErrorBoundary>
   );
 }

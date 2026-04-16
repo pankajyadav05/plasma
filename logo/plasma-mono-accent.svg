@@ -2,12 +2,13 @@
   <title>Plasma</title>
   <defs>
     <style>
-      .accent { fill: #7B2D26; }
+      .accent { fill: var(--primary, #7B2D26); }
       .wordmark {
-        font-family: 'Newsreader', 'Georgia', 'Times New Roman', serif;
+        font-family: var(--font-display, 'Newsreader'), 'Newsreader', 'Georgia', 'Times New Roman', serif;
         font-style: italic;
         font-weight: 500;
         font-size: 120px;
+        font-feature-settings: 'lnum', 'kern';
         letter-spacing: -1px;
       }
     </style>

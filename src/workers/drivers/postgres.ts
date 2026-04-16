@@ -223,6 +223,39 @@ export class PostgresDriver {
        ORDER BY n.nspname, c.relname, a.attnum`,
     );
 
+    // Foreign keys — one row per FK column. `unnest` with WITH ORDINALITY
+    // pairs each `conkey` index to its matching `confkey` index so a
+    // composite FK (two columns) yields two rows sharing a constraint
+    // oid. Filters to system schemas are the same as above.
+    const foreignKeys = await this.primary.query<{
+      schema: string;
+      table: string;
+      column: string;
+      ref_schema: string;
+      ref_table: string;
+      ref_column: string;
+    }>(
+      `SELECT n.nspname   AS schema,
+              c.relname   AS "table",
+              a.attname   AS column,
+              fn.nspname  AS ref_schema,
+              fc.relname  AS ref_table,
+              fa.attname  AS ref_column
+       FROM pg_constraint con
+       JOIN pg_class     c  ON c.oid  = con.conrelid
+       JOIN pg_namespace n  ON n.oid  = c.relnamespace
+       JOIN pg_class     fc ON fc.oid = con.confrelid
+       JOIN pg_namespace fn ON fn.oid = fc.relnamespace
+       JOIN LATERAL unnest(con.conkey)  WITH ORDINALITY AS k(attnum, ord) ON true
+       JOIN LATERAL unnest(con.confkey) WITH ORDINALITY AS fk(attnum, ord) ON fk.ord = k.ord
+       JOIN pg_attribute a  ON a.attrelid  = c.oid  AND a.attnum  = k.attnum
+       JOIN pg_attribute fa ON fa.attrelid = fc.oid AND fa.attnum = fk.attnum
+       WHERE con.contype = 'f'
+         AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+         AND n.nspname NOT LIKE 'pg_temp_%'
+       ORDER BY n.nspname, c.relname, a.attnum`,
+    );
+
     const kindMap = { r: 'table', v: 'view', m: 'matview' } as const;
 
     return {
@@ -242,6 +275,14 @@ export class PostgresDriver {
         isPrimaryKey: r.is_pk,
         isNullable: r.is_nullable,
         hasDefault: r.has_default,
+      })),
+      foreignKeys: foreignKeys.rows.map((r) => ({
+        schema: r.schema,
+        table: r.table,
+        column: r.column,
+        refSchema: r.ref_schema,
+        refTable: r.ref_table,
+        refColumn: r.ref_column,
       })),
     };
   }

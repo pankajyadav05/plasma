@@ -66,29 +66,29 @@ export function CommandPalette() {
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogPortal>
         <DialogOverlay />
-        <DialogPrimitive.Content className="fixed left-1/2 top-[15vh] z-50 w-[620px] max-w-[90vw] -translate-x-1/2 border-2 border-border-strong bg-paper-canvas shadow-offset-lg focus:outline-none data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 duration-200">
+        <DialogPrimitive.Content className="fixed left-1/2 top-[15vh] z-50 w-[620px] max-w-[90vw] -translate-x-1/2 rounded-lg border bg-popover text-popover-foreground shadow-lg focus:outline-none data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 duration-200">
           <DialogPrimitive.Title className="sr-only">Command palette</DialogPrimitive.Title>
           <DialogPrimitive.Description className="sr-only">
             Search tables, connections, and actions
           </DialogPrimitive.Description>
           <Command label="Command palette" shouldFilter>
-            <div className="flex items-center gap-3 border-b border-border-soft px-5 py-4">
-              <Search className="h-4 w-4 shrink-0 text-ink-muted" />
+            <div className="flex items-center gap-3 border-b px-4 py-3">
+              <Search className="h-4 w-4 shrink-0 text-muted-foreground" />
               <Command.Input
                 autoFocus
                 placeholder="Search tables, connections, actions…"
-                className="h-8 flex-1 border-0 bg-transparent font-display text-xl italic text-ink outline-none placeholder:text-ink-muted"
+                className="h-8 flex-1 border-0 bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground"
               />
             </div>
 
             <Command.List className="max-h-[50vh] overflow-y-auto p-2">
-              <Command.Empty className="px-4 py-8 text-center font-display text-base italic text-ink-muted">
+              <Command.Empty className="px-4 py-8 text-center text-sm text-muted-foreground">
                 No matches.
               </Command.Empty>
 
               <Command.Group
                 heading="Actions"
-                className="[&_[cmdk-group-heading]]:px-3 [&_[cmdk-group-heading]]:py-2 [&_[cmdk-group-heading]]:font-mono [&_[cmdk-group-heading]]:text-xs [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-widest [&_[cmdk-group-heading]]:text-ink-muted"
+                className="[&_[cmdk-group-heading]]:px-3 [&_[cmdk-group-heading]]:py-2 [&_[cmdk-group-heading]]:text-xs [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:text-muted-foreground"
               >
                 <PaletteItem icon={<Play className="h-3.5 w-3.5" />} onSelect={() => runAction(runQuery)} keys={kbd("⏎")}>
                   Run query
@@ -143,7 +143,7 @@ export function CommandPalette() {
               {savedConnections.length > 0 && (
                 <Command.Group
                   heading="Connections"
-                  className="[&_[cmdk-group-heading]]:px-3 [&_[cmdk-group-heading]]:py-2 [&_[cmdk-group-heading]]:font-mono [&_[cmdk-group-heading]]:text-xs [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-widest [&_[cmdk-group-heading]]:text-ink-muted"
+                  className="[&_[cmdk-group-heading]]:px-3 [&_[cmdk-group-heading]]:py-2 [&_[cmdk-group-heading]]:text-xs [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:text-muted-foreground"
                 >
                   {savedConnections.map((c) => {
                     const active = c.id === activeConfig?.id;
@@ -154,7 +154,7 @@ export function CommandPalette() {
                         onSelect={() => runAction(() => (active ? Promise.resolve() : connectSaved(c.id)))}
                       >
                         {c.name}
-                        <span className="ml-auto font-mono text-xs text-ink-muted">
+                        <span className="ml-auto text-xs text-muted-foreground">
                           {c.host}:{c.port}/{c.database}
                         </span>
                       </PaletteItem>
@@ -166,7 +166,7 @@ export function CommandPalette() {
               {tables.length > 0 && (
                 <Command.Group
                   heading="Tables"
-                  className="[&_[cmdk-group-heading]]:px-3 [&_[cmdk-group-heading]]:py-2 [&_[cmdk-group-heading]]:font-mono [&_[cmdk-group-heading]]:text-xs [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-widest [&_[cmdk-group-heading]]:text-ink-muted"
+                  className="[&_[cmdk-group-heading]]:px-3 [&_[cmdk-group-heading]]:py-2 [&_[cmdk-group-heading]]:text-xs [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:text-muted-foreground"
                 >
                   {tables.slice(0, 100).map((t) => (
                     <PaletteItem
@@ -177,7 +177,7 @@ export function CommandPalette() {
                     >
                       {t.schema}.{t.name}
                       {t.rowCountEstimate !== null && t.rowCountEstimate >= 0 && (
-                        <span className="ml-auto font-mono text-xs text-ink-muted">
+                        <span className="ml-auto text-xs text-muted-foreground">
                           {formatK(t.rowCountEstimate)} rows
                         </span>
                       )}
@@ -210,11 +210,11 @@ function PaletteItem({
     <Command.Item
       onSelect={onSelect}
       value={value}
-      className="flex cursor-pointer items-center gap-2.5 rounded-sm px-3 py-2 font-sans text-sm text-ink transition-colors aria-selected:bg-paper-selected aria-selected:text-ink data-[selected=true]:bg-paper-selected"
+      className="flex cursor-pointer items-center gap-2 rounded-md px-3 py-2 text-sm text-foreground transition-colors aria-selected:bg-accent aria-selected:text-accent-foreground data-[selected=true]:bg-accent data-[selected=true]:text-accent-foreground"
     >
-      {icon && <span className="shrink-0 text-ink-muted">{icon}</span>}
+      {icon && <span className="shrink-0 text-muted-foreground">{icon}</span>}
       <span className="flex-1 truncate">{children}</span>
-      {keys && <span className="shrink-0 font-mono text-xs text-ink-muted">{keys}</span>}
+      {keys && <span className="shrink-0 text-xs text-muted-foreground">{keys}</span>}
     </Command.Item>
   );
 }

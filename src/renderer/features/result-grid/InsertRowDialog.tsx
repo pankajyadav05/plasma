@@ -79,17 +79,17 @@ export function InsertRowDialog({
               <div key={col.name} className="flex flex-col gap-1.5">
                 <label
                   htmlFor={`insert-${col.name}`}
-                  className="flex items-baseline gap-2 font-mono text-xs text-ink-muted"
+                  className="flex items-baseline gap-2 text-xs text-muted-foreground"
                 >
-                  <span className="font-semibold text-ink">{col.name}</span>
-                  <span className="uppercase tracking-widest">{col.dataType}</span>
+                  <span className="font-semibold text-foreground">{col.name}</span>
+                  <span>{col.dataType}</span>
                   {col.isPrimaryKey && (
-                    <span className="text-accent">pk</span>
+                    <span className="text-primary">pk</span>
                   )}
                   {!col.isNullable && !col.hasDefault && (
-                    <span className="text-accent">required</span>
+                    <span className="text-primary">required</span>
                   )}
-                  {col.hasDefault && <span className="italic">default</span>}
+                  {col.hasDefault && <span>default</span>}
                 </label>
                 <input
                   id={`insert-${col.name}`}
@@ -105,14 +105,14 @@ export function InsertRowDialog({
                         ? "(null)"
                         : ""
                   }
-                  className="h-9 border border-border-soft bg-paper-canvas px-3 font-mono text-sm text-ink outline-none focus:border-accent"
+                  className="h-9 rounded-sm border border-border bg-card px-3 text-sm text-foreground outline-none focus:border-primary"
                 />
               </div>
             ))}
           </div>
 
           {error && (
-            <div className="mt-4 border border-accent bg-accent/10 px-3 py-2 font-mono text-xs text-accent">
+            <div className="mt-4 rounded-md border border-primary bg-primary/10 px-3 py-2 text-xs text-primary">
               {error}
             </div>
           )}

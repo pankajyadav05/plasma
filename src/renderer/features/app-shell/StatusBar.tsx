@@ -1,14 +1,10 @@
 import { AlertCircle, Loader2 } from "lucide-react";
-import type { AppMeta } from "@shared/protocol";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
+import { formatDuration } from "@/lib/format";
 import { useActiveTab, useSession } from "@/stores/session";
 
-interface StatusBarProps {
-  meta: AppMeta | null;
-}
-
-export function StatusBar({ meta }: StatusBarProps) {
+export function StatusBar() {
   const tab = useActiveTab();
   const activeConfig = useSession((s) => s.activeConfig);
   const connectionState = useSession((s) => s.connectionState);
@@ -29,20 +25,17 @@ export function StatusBar({ meta }: StatusBarProps) {
 
   const dotClass =
     connectionState === "connected"
-      ? "bg-accent"
+      ? "bg-primary"
       : connectionState === "connecting"
-        ? "bg-type-json animate-pulse"
+        ? "bg-primary animate-pulse"
         : connectionState === "error"
-          ? "bg-accent"
-          : "bg-ink-disabled";
+          ? "bg-destructive"
+          : "bg-muted-foreground";
 
   return (
-    <footer
-      className="flex h-7 shrink-0 items-center gap-0 border-t-2 border-border-strong bg-paper px-5 font-mono text-sm text-ink-2"
-      style={{ letterSpacing: "0.02em" }}
-    >
+    <footer className="flex h-7 shrink-0 items-center gap-0 border-t bg-background px-4 text-xs text-muted-foreground">
       <Seg first>
-        <span className={`inline-block h-2 w-2 rounded-none ${dotClass}`} />
+        <span className={`inline-block h-2 w-2 rounded-full ${dotClass}`} />
         {stateLabel}
       </Seg>
       {activeConfig && (
@@ -58,15 +51,15 @@ export function StatusBar({ meta }: StatusBarProps) {
           <Sep />
           <Seg>{tab.queryResult.rowCount.toLocaleString()} rows</Seg>
           <Sep />
-          <Seg>{tab.queryResult.durationMs} ms</Seg>
+          <Seg>{formatDuration(tab.queryResult.durationMs)}</Seg>
         </>
       )}
       {tab?.queryError && (
         <>
           <Sep />
           <Seg>
-            <AlertCircle className="h-3 w-3 text-accent" />
-            <span className="text-accent">query error</span>
+            <AlertCircle className="h-3 w-3 text-destructive" />
+            <span className="text-destructive">query error</span>
           </Seg>
         </>
       )}
@@ -74,8 +67,8 @@ export function StatusBar({ meta }: StatusBarProps) {
         <>
           <Sep />
           <Seg>
-            <Loader2 className="h-3 w-3 animate-spin text-accent" />
-            <span className="text-accent">running…</span>
+            <Loader2 className="h-3 w-3 animate-spin text-primary" />
+            <span className="text-primary">running…</span>
           </Seg>
         </>
       )}
@@ -85,7 +78,7 @@ export function StatusBar({ meta }: StatusBarProps) {
           <Sep />
           {txnState === "active" ? (
             <Seg>
-              <span className="text-accent">txn active</span>
+              <span className="text-primary">txn active</span>
               <Button variant="ghost" size="xs" onClick={() => void commitTxn()} className="ml-1.5 h-5">
                 commit
               </Button>
@@ -99,7 +92,7 @@ export function StatusBar({ meta }: StatusBarProps) {
                 variant="ghost"
                 size="xs"
                 onClick={() => void beginTxn()}
-                className="h-5 text-ink-muted"
+                className="h-5 text-muted-foreground"
                 title="Begin transaction"
               >
                 txn idle

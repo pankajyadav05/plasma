@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Separator } from "@/components/ui/separator";
 import { exportResult } from "@/lib/export";
+import { formatDuration } from "@/lib/format";
 import { useActiveTab, useSession } from "@/stores/session";
 import { FilterPopover } from "./FilterPopover";
 import { ColumnsPopover } from "./ColumnsPopover";
@@ -62,30 +63,28 @@ export function ResultToolbar() {
   if (!isTable && !hasResult && !canRefresh) return null;
 
   return (
-    <div className="flex h-9 shrink-0 items-center gap-2 border-b border-border-soft bg-paper px-3">
-      {/* ── Left cluster: Filter + Columns + Sort (table tabs only) ── */}
-      {isTable && (
-        <div className="flex items-center gap-1">
-          <FilterPopover />
-          <ColumnsPopover />
-          <SortPopover />
-          {editMode && (
-            <>
-              <Separator orientation="vertical" className="mx-1 h-4" />
-              <Button
-                variant="outline"
-                size="xs"
-                className="border-accent text-accent"
-                onClick={() => setInsertOpen(true)}
-                title="Insert a new row"
-              >
-                <Plus />
-                Add row
-              </Button>
-            </>
-          )}
-        </div>
-      )}
+    <div className="flex h-10 shrink-0 items-center gap-2 border-b bg-background px-3">
+      {/* ── Left cluster: Filter (table only) + Columns + Sort ── */}
+      <div className="flex items-center gap-1">
+        {isTable && <FilterPopover />}
+        {(isTable || hasResult) && <ColumnsPopover />}
+        {(isTable || hasResult) && <SortPopover />}
+        {isTable && editMode && (
+          <>
+            <Separator orientation="vertical" className="mx-1 h-4" />
+            <Button
+              variant="outline"
+              size="xs"
+              className="border-primary text-primary"
+              onClick={() => setInsertOpen(true)}
+              title="Insert a new row"
+            >
+              <Plus />
+              Add row
+            </Button>
+          </>
+        )}
+      </div>
 
       <InsertRowDialog open={insertOpen} onOpenChange={setInsertOpen} />
 
@@ -102,19 +101,19 @@ export function ResultToolbar() {
           </PopoverTrigger>
           <PopoverContent align="end" sideOffset={4} className="w-[180px] p-1">
             <ExportMenuItem
-              icon={<FileText className="h-3.5 w-3.5 text-ink-muted" />}
+              icon={<FileText className="h-3.5 w-3.5 text-muted-foreground" />}
               label="CSV"
               hint=".csv"
               onClick={() => doExport("csv")}
             />
             <ExportMenuItem
-              icon={<FileJson className="h-3.5 w-3.5 text-ink-muted" />}
+              icon={<FileJson className="h-3.5 w-3.5 text-muted-foreground" />}
               label="JSON"
               hint=".json"
               onClick={() => doExport("json")}
             />
             <ExportMenuItem
-              icon={<FileType2 className="h-3.5 w-3.5 text-ink-muted" />}
+              icon={<FileType2 className="h-3.5 w-3.5 text-muted-foreground" />}
               label="SQL INSERT"
               hint=".sql"
               onClick={() => doExport("sql")}
@@ -139,8 +138,8 @@ export function ResultToolbar() {
       {hasResult && tab.queryResult && (
         <>
           <Separator orientation="vertical" className="h-4" />
-          <span className="font-mono tabular-nums text-sm text-ink-muted" title="Query duration">
-            {tab.queryResult.durationMs.toLocaleString()} ms
+          <span className="tabular-nums text-xs text-muted-foreground" title={`Query duration · ${tab.queryResult.durationMs.toLocaleString()} ms`}>
+            {formatDuration(tab.queryResult.durationMs)}
           </span>
         </>
       )}
@@ -163,11 +162,11 @@ function ExportMenuItem({
     <button
       type="button"
       onClick={onClick}
-      className="flex w-full cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 text-left font-mono text-xs text-ink transition-colors hover:bg-[var(--bg-hover)]"
+      className="flex w-full cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm text-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
     >
       {icon}
       <span className="flex-1">{label}</span>
-      <span className="text-xs text-ink-muted">{hint}</span>
+      <span className="text-xs text-muted-foreground">{hint}</span>
     </button>
   );
 }

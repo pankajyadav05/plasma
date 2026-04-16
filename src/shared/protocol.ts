@@ -92,6 +92,23 @@ export const SchemaInfo = z.object({
       hasDefault: z.boolean().default(false),
     }),
   ),
+  /**
+   * Foreign keys declared on introspected tables. One row per FK column
+   * (a composite FK with two columns yields two rows sharing a constraint
+   * name). Populated best-effort — old drivers may omit this field.
+   */
+  foreignKeys: z
+    .array(
+      z.object({
+        schema: z.string(),
+        table: z.string(),
+        column: z.string(),
+        refSchema: z.string(),
+        refTable: z.string(),
+        refColumn: z.string(),
+      }),
+    )
+    .default([]),
 });
 export type SchemaInfo = z.infer<typeof SchemaInfo>;
 
@@ -153,7 +170,12 @@ export type WorkerResponse = z.infer<typeof WorkerResponse>;
 // ─── Settings (keyed values in SQLite) ───────────────────────────────
 
 export const SettingsShape = z.object({
-  theme: z.enum(['paper', 'midnight']).default('paper'),
+  theme: z
+    .preprocess(
+      (v) => (v === 'paper' ? 'light' : v === 'midnight' ? 'dark' : v),
+      z.enum(['light', 'dark']),
+    )
+    .default('light'),
   sidebarCollapsed: z.boolean().default(false),
   sidebarWidth: z.number().int().min(200).max(520).default(264),
   editorExpanded: z.boolean().default(false),
@@ -175,6 +197,22 @@ export const SettingsShape = z.object({
    * their schema in the sidebar.
    */
   favoriteTables: z.record(z.string(), z.array(z.string())).default({}),
+  /**
+   * Per-table column state (widths / hidden / pinned), keyed by
+   * `"connectionId:schema.table"`. Widths are column-name keyed so they
+   * survive schema changes that add/remove columns. Restored when the
+   * user reopens a table tab for the same table.
+   */
+  tableColumnState: z
+    .record(
+      z.string(),
+      z.object({
+        widths: z.record(z.string(), z.number()).default({}),
+        hidden: z.array(z.string()).default([]),
+        sticky: z.array(z.string()).default([]),
+      }),
+    )
+    .default({}),
   windowBounds: z
     .object({
       x: z.number().optional(),

@@ -1,3 +1,4 @@
+import { useMemo, useState } from "react";
 import {
   ChevronDown,
   ChevronRight,
@@ -7,31 +8,16 @@ import {
   Layers,
   Pencil,
   Plus,
+  Search,
   Star,
   Table2,
   Trash2,
+  X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/cn";
 import { useSession } from "@/stores/session";
 
-/**
- * Sidebar — two independent regions:
- *   - Connections (top, sticky — does not scroll)
- *   - Schema     (bottom, scrollable, takes remaining space)
- *
- * Interaction pattern:
- *   The leftmost icon slot (database / table) IS the favorite toggle.
- *   Default state:  icon visible, name + count visible
- *   On hover:       icon crossfades to Star (100ms), row bg highlights
- *   Favorited:      Star is permanently visible in accent color
- *
- *   Clicking the icon slot → toggles favorite
- *   Clicking the body     → expands schema / opens table
- *
- * This keeps the row layout clean (no right-side hover-reveal
- * buttons) and the row count sits flush right where it belongs.
- */
 export function Sidebar() {
   const activeConfig = useSession((s) => s.activeConfig);
   const connectionState = useSession((s) => s.connectionState);
@@ -51,24 +37,40 @@ export function Sidebar() {
   const toggleFavoriteSchema = useSession((s) => s.toggleFavoriteSchema);
   const toggleFavoriteTable = useSession((s) => s.toggleFavoriteTable);
 
+  const [searchQuery, setSearchQuery] = useState("");
+
   const inactiveSaved = savedConnections.filter((c) => c.id !== activeConfig?.id);
 
   const favoriteSchemaSet = new Set(activeConfig ? (favoriteSchemas?.[activeConfig.id] ?? []) : []);
   const favoriteTableSet = new Set(activeConfig ? (favoriteTables?.[activeConfig.id] ?? []) : []);
 
-  const sortedSchemas = schema
-    ? [...schema.schemas].sort((a, b) => {
-        const aFav = favoriteSchemaSet.has(a.name) ? 0 : 1;
-        const bFav = favoriteSchemaSet.has(b.name) ? 0 : 1;
-        if (aFav !== bFav) return aFav - bFav;
-        return a.name.localeCompare(b.name);
-      })
-    : [];
+  // When searching, we filter tables by name (case-insensitive substring)
+  // and drop any schema that has zero matches so the tree stays tight.
+  // Matching schemas are force-expanded regardless of the user's manual
+  // expand/collapse state, so results are visible immediately.
+  const search = searchQuery.trim().toLowerCase();
+  const isSearching = search.length > 0;
+
+  const sortedSchemas = useMemo(() => {
+    if (!schema) return [];
+    const base = [...schema.schemas].sort((a, b) => {
+      const aFav = favoriteSchemaSet.has(a.name) ? 0 : 1;
+      const bFav = favoriteSchemaSet.has(b.name) ? 0 : 1;
+      if (aFav !== bFav) return aFav - bFav;
+      return a.name.localeCompare(b.name);
+    });
+    if (!isSearching) return base;
+    return base.filter((s) =>
+      schema.tables.some(
+        (t) => t.schema === s.name && t.name.toLowerCase().includes(search),
+      ),
+    );
+    // biome-ignore lint/correctness/useExhaustiveDependencies: favoriteSchemaSet derived per-render, ref identity doesn't matter
+  }, [schema, isSearching, search]);
 
   return (
     <div className="flex h-full flex-col">
-      {/* ── Connections — sticky ── */}
-      <div className="shrink-0 border-b-2 border-border-strong">
+      <div className="shrink-0 border-b border-sidebar-border">
         <Section title="Connections" onAdd={() => openDialog()}>
           {activeConfig && <ActiveRow name={activeConfig.name} onEdit={() => void editConnection(activeConfig.id)} />}
 
@@ -88,7 +90,7 @@ export function Sidebar() {
             <button
               type="button"
               onClick={() => openDialog()}
-              className="mx-5 my-2 flex items-center justify-center gap-2 border border-dashed border-rule py-3 font-display text-sm italic text-ink-muted transition-colors duration-instant hover:border-accent hover:text-accent"
+              className="mx-3 my-2 flex items-center justify-center gap-2 rounded-md border border-dashed border-sidebar-border py-3 font-display text-sm italic text-muted-foreground transition-colors hover:border-primary hover:text-primary"
             >
               <Plus className="h-3.5 w-3.5" />
               {connectionState === "connecting" ? "connecting…" : "add a connection"}
@@ -97,21 +99,57 @@ export function Sidebar() {
         </Section>
       </div>
 
-      {/* ── Schema — scrollable ── */}
       <div className="min-h-0 flex-1 overflow-y-auto">
         <Section title={schemaLoading ? "Schema — loading" : "Schema"}>
+          {activeConfig && schema && (
+            <div className="sticky top-0 z-10 border-b border-sidebar-border bg-sidebar px-3 pb-2 pt-1">
+              <div className="relative">
+                <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="Search tables…"
+                  className="h-8 w-full rounded-md border border-sidebar-border bg-background pl-8 pr-7 text-sm text-foreground outline-none transition-colors placeholder:text-muted-foreground focus:border-primary"
+                  aria-label="Search tables"
+                />
+                {isSearching && (
+                  <button
+                    type="button"
+                    onClick={() => setSearchQuery("")}
+                    className="absolute right-1.5 top-1/2 grid h-5 w-5 -translate-y-1/2 place-items-center rounded-sm text-muted-foreground hover:text-foreground"
+                    aria-label="Clear search"
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+
           {!activeConfig && (
-            <div className="px-5 py-3 font-display text-sm italic text-ink-muted">connect to browse the schema</div>
+            <div className="px-4 py-3 font-display text-sm italic text-muted-foreground">connect to browse the schema</div>
           )}
 
           {activeConfig && !schema && !schemaLoading && (
-            <div className="px-5 py-3 font-display text-sm italic text-ink-muted">no schema loaded</div>
+            <div className="px-4 py-3 font-display text-sm italic text-muted-foreground">no schema loaded</div>
+          )}
+
+          {activeConfig && schema && sortedSchemas.length === 0 && isSearching && (
+            <div className="px-4 py-3 font-display text-sm italic text-muted-foreground">
+              no tables match "{searchQuery}"
+            </div>
           )}
 
           {sortedSchemas.map((s) => {
-            const expanded = expandedSchemas.has(s.name);
-            const tables = schema?.tables.filter((t) => t.schema === s.name) ?? [];
-            const sortedTables = [...tables].sort((a, b) => {
+            const manuallyExpanded = expandedSchemas.has(s.name);
+            // Auto-expand while searching so matches are visible without clicks.
+            const expanded = manuallyExpanded || isSearching;
+            const allTables = schema?.tables.filter((t) => t.schema === s.name) ?? [];
+            const matchingTables = isSearching
+              ? allTables.filter((t) => t.name.toLowerCase().includes(search))
+              : allTables;
+            const sortedTables = [...matchingTables].sort((a, b) => {
               const aFav = favoriteTableSet.has(`${s.name}.${a.name}`) ? 0 : 1;
               const bFav = favoriteTableSet.has(`${s.name}.${b.name}`) ? 0 : 1;
               if (aFav !== bFav) return aFav - bFav;
@@ -122,7 +160,7 @@ export function Sidebar() {
               <div key={s.name}>
                 <SchemaRow
                   name={s.name}
-                  tableCount={tables.length}
+                  tableCount={isSearching ? sortedTables.length : allTables.length}
                   expanded={expanded}
                   favorite={isSchemaFav}
                   onToggleExpand={() => toggleSchema(s.name)}
@@ -162,13 +200,11 @@ export function Sidebar() {
   );
 }
 
-// ─── Primitives ──────────────────────────────────────────────────────
-
 function Section({ title, onAdd, children }: { title: string; onAdd?: () => void; children: React.ReactNode }) {
   return (
-    <section className="py-3">
-      <header className="flex items-center justify-between px-5 pb-2">
-        <h2 className="font-mono text-xs uppercase text-ink-muted" style={{ letterSpacing: "0.10em" }}>
+    <section className="py-2">
+      <header className="flex items-center justify-between px-4 pb-2 pt-1">
+        <h2 className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
           {title}
         </h2>
         {onAdd && (
@@ -182,21 +218,12 @@ function Section({ title, onAdd, children }: { title: string; onAdd?: () => void
   );
 }
 
-/**
- * IconStar — an icon slot that crossfades between a "resting" icon
- * (table / database) and a Star. The Star takes over when either:
- *   - the parent `.group` is hovered, OR
- *   - the row is favorited (permanent state)
- *
- * Both icons are absolutely positioned and stacked; opacity handles
- * the swap. 100ms ease-out crossfade keeps it feeling instantaneous.
- */
 function IconStar({ resting, favorited }: { resting: React.ReactNode; favorited: boolean }) {
   return (
     <span className="relative grid h-4 w-4 shrink-0 place-items-center">
       <span
         className={cn(
-          "absolute inset-0 grid place-items-center text-ink-muted transition-opacity duration-instant ease-out",
+          "absolute inset-0 grid place-items-center text-muted-foreground transition-opacity",
           favorited ? "opacity-0" : "opacity-100 group-hover/row:opacity-0",
         )}
       >
@@ -204,36 +231,34 @@ function IconStar({ resting, favorited }: { resting: React.ReactNode; favorited:
       </span>
       <span
         className={cn(
-          "absolute inset-0 grid place-items-center transition-opacity duration-instant ease-out",
+          "absolute inset-0 grid place-items-center transition-opacity",
           favorited
-            ? "text-accent opacity-100"
-            : "text-ink-muted opacity-0 group-hover/row:text-accent group-hover/row:opacity-100",
+            ? "text-primary opacity-100"
+            : "text-muted-foreground opacity-0 group-hover/row:text-primary group-hover/row:opacity-100",
         )}
       >
-        <Star className={cn("h-3.5 w-3.5", favorited && "fill-accent")} />
+        <Star className={cn("h-3.5 w-3.5", favorited && "fill-primary")} />
       </span>
     </span>
   );
 }
 
-// ─── Connection rows ────────────────────────────────────────────────
-
 function ActiveRow({ name, onEdit }: { name: string; onEdit: () => void }) {
   return (
-    <div className="group/row relative flex h-8 w-full items-stretch border-l-[2px] border-accent bg-paper-selected transition-colors duration-instant">
+    <div className="group/row relative mx-2 flex h-8 items-stretch rounded-md bg-sidebar-accent text-sidebar-accent-foreground">
       <button
         type="button"
         onClick={onEdit}
         title="Edit this connection"
-        className="flex min-w-0 flex-1 items-center gap-2 pl-[16px] pr-3 text-left font-mono text-sm font-medium text-ink"
+        className="flex min-w-0 flex-1 items-center gap-2 px-3 text-left text-sm font-medium"
       >
-        <Circle className="h-2 w-2 shrink-0 fill-accent text-accent" />
+        <Circle className="h-2 w-2 shrink-0 fill-primary text-primary" />
         <span className="truncate">{name}</span>
-        <span className="ml-auto shrink-0 font-display text-xs italic text-ink-muted opacity-100 transition-opacity duration-instant group-hover/row:opacity-0">
+        <span className="ml-auto shrink-0 text-xs text-muted-foreground opacity-100 transition-opacity group-hover/row:opacity-0">
           active
         </span>
       </button>
-      <div className="absolute right-2 top-1/2 -translate-y-1/2 opacity-0 transition-opacity duration-instant group-hover/row:opacity-100">
+      <div className="absolute right-1 top-1/2 -translate-y-1/2 opacity-0 transition-opacity group-hover/row:opacity-100">
         <Button
           variant="ghost"
           size="icon-xs"
@@ -243,7 +268,7 @@ function ActiveRow({ name, onEdit }: { name: string; onEdit: () => void }) {
           }}
           aria-label={`Edit ${name}`}
           title="Edit"
-          className="h-5 w-5"
+          className="h-6 w-6"
         >
           <Pencil />
         </Button>
@@ -268,21 +293,21 @@ function SavedRow({
   onDelete: () => void;
 }) {
   return (
-    <div className="group/row relative flex h-8 w-full items-stretch border-l-[2px] border-transparent transition-colors duration-instant hover:bg-[var(--bg-hover)]">
+    <div className="group/row relative mx-2 flex h-8 items-stretch rounded-md transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground">
       <button
         type="button"
         onClick={onConnect}
         disabled={disabled}
         title={`Connect to ${hostLabel}`}
         className={cn(
-          "flex min-w-0 flex-1 items-center gap-2 pl-[16px] pr-3 text-left font-mono text-sm text-ink-2 transition-colors duration-instant",
-          disabled ? "cursor-not-allowed opacity-60" : "cursor-pointer group-hover/row:text-ink",
+          "flex min-w-0 flex-1 items-center gap-2 px-3 text-left text-sm text-muted-foreground transition-colors",
+          disabled ? "cursor-not-allowed opacity-60" : "cursor-pointer group-hover/row:text-sidebar-accent-foreground",
         )}
       >
-        <Circle className="h-2 w-2 shrink-0 text-ink-muted" />
+        <Circle className="h-2 w-2 shrink-0 text-muted-foreground" />
         <span className="truncate">{name}</span>
       </button>
-      <div className="absolute right-2 top-1/2 flex -translate-y-1/2 items-center gap-0.5 opacity-0 transition-opacity duration-instant group-hover/row:opacity-100">
+      <div className="absolute right-1 top-1/2 flex -translate-y-1/2 items-center gap-0.5 opacity-0 transition-opacity group-hover/row:opacity-100">
         <Button
           variant="ghost"
           size="icon-xs"
@@ -292,7 +317,7 @@ function SavedRow({
           }}
           aria-label={`Edit ${name}`}
           title="Edit"
-          className="h-5 w-5"
+          className="h-6 w-6"
         >
           <Pencil />
         </Button>
@@ -305,7 +330,7 @@ function SavedRow({
           }}
           aria-label={`Delete ${name}`}
           title="Delete"
-          className="h-5 w-5"
+          className="h-6 w-6"
         >
           <Trash2 />
         </Button>
@@ -313,8 +338,6 @@ function SavedRow({
     </div>
   );
 }
-
-// ─── Schema tree rows ───────────────────────────────────────────────
 
 function SchemaRow({
   name,
@@ -332,18 +355,16 @@ function SchemaRow({
   onToggleFavorite: () => void;
 }) {
   return (
-    <div className="group/row relative flex h-8 w-full items-stretch transition-colors duration-instant hover:bg-[var(--bg-hover)]">
-      {/* Chevron — clickable, toggles expand/collapse */}
+    <div className="group/row relative mx-2 flex h-8 items-stretch rounded-md transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground">
       <button
         type="button"
         onClick={onToggleExpand}
         aria-label={expanded ? "Collapse" : "Expand"}
-        className="flex h-full w-5 shrink-0 items-center justify-center pl-2 text-ink-muted transition-colors duration-instant group-hover/row:text-ink-2"
+        className="flex h-full w-5 shrink-0 items-center justify-center pl-2 text-muted-foreground"
       >
         {expanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
       </button>
 
-      {/* Icon slot — Database ↔ Star crossfade, click toggles favorite */}
       <button
         type="button"
         onClick={(e) => {
@@ -357,15 +378,13 @@ function SchemaRow({
         <IconStar favorited={favorite} resting={<Database className="h-3.5 w-3.5" />} />
       </button>
 
-      {/* Body — click toggles expand. Schema names always render in
-          semibold so they visibly sit "above" the table rows. */}
       <button
         type="button"
         onClick={onToggleExpand}
-        className="flex min-w-0 flex-1 items-center gap-2 pl-1 pr-3 text-left font-mono text-[13px] font-semibold text-ink transition-colors duration-instant"
+        className="flex min-w-0 flex-1 items-center gap-2 pl-1 pr-3 text-left text-sm font-semibold text-foreground"
       >
         <span className="truncate">{name}</span>
-        <span className="ml-auto shrink-0 font-display text-xs italic font-normal text-ink-muted">{tableCount}</span>
+        <span className="ml-auto shrink-0 text-xs font-normal text-muted-foreground">{tableCount}</span>
       </button>
     </div>
   );
@@ -388,8 +407,6 @@ function TableRow({
   onClick: () => void;
   onToggleFavorite: () => void;
 }) {
-  // Icon varies by kind — tables use the default grid, views use Eye,
-  // materialized views use Layers (suggesting cached layers).
   const restingIcon =
     kind === "view" ? (
       <Eye className="h-3.5 w-3.5" />
@@ -402,19 +419,14 @@ function TableRow({
   return (
     <div
       className={cn(
-        "group/row relative flex h-7 w-full items-stretch transition-colors duration-instant hover:bg-[var(--bg-hover)]",
-        // The currently-open table gets a persistent bg so the user
-        // always knows "this is the row I'm looking at right now".
-        active && "bg-paper-selected",
+        "group/row relative mx-2 flex h-7 items-stretch rounded-md transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
+        active && "bg-sidebar-accent text-sidebar-accent-foreground",
       )}
     >
-      {/* Active indicator — 2px oxblood bar at the left edge */}
-      {active && <div className="absolute left-0 top-0 h-full w-[2px] bg-accent" aria-hidden />}
+      {active && <div className="absolute left-0 top-1/2 h-4 w-[2px] -translate-y-1/2 rounded-full bg-primary" aria-hidden />}
 
-      {/* Indent to match schema content column */}
       <div className="w-5 shrink-0" aria-hidden />
 
-      {/* Icon slot — resting icon ↔ Star crossfade */}
       <button
         type="button"
         onClick={(e) => {
@@ -428,20 +440,18 @@ function TableRow({
         <IconStar favorited={favorite} resting={restingIcon} />
       </button>
 
-      {/* Body — click opens the table. Table names are lighter weight
-          than schema names so the tree hierarchy reads clearly. */}
       <button
         type="button"
         onClick={onClick}
         title={`SELECT * FROM "${name}"`}
         className={cn(
-          "flex min-w-0 flex-1 items-center gap-2 pl-1 pr-3 text-left font-mono text-[12.5px] transition-colors duration-instant",
-          active ? "font-medium text-ink" : "font-normal text-ink-2 group-hover/row:text-ink",
+          "flex min-w-0 flex-1 items-center gap-2 pl-1 pr-3 text-left text-sm transition-colors",
+          active ? "font-medium text-foreground" : "font-normal text-muted-foreground group-hover/row:text-sidebar-accent-foreground",
         )}
       >
         <span className="truncate">{name}</span>
         {rowCountEstimate !== null && rowCountEstimate >= 0 && (
-          <span className="ml-auto shrink-0 font-display text-xs italic font-normal text-ink-muted">
+          <span className="ml-auto shrink-0 text-xs font-normal text-muted-foreground">
             {formatEstimate(rowCountEstimate)}
           </span>
         )}

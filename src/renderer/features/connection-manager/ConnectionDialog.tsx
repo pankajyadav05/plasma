@@ -100,7 +100,7 @@ export function ConnectionDialog() {
             </DialogDescription>
           </DialogHeader>
 
-          <div className="grid gap-5 px-8 py-6">
+          <div className="grid gap-4 py-4">
             <Field label="Name" htmlFor="conn-name">
               <Input
                 id="conn-name"
@@ -165,60 +165,55 @@ export function ConnectionDialog() {
                 checked={form.ssl}
                 onCheckedChange={(v) => update('ssl', Boolean(v))}
               />
-              <label
-                htmlFor="conn-ssl"
-                className="cursor-pointer font-display text-base italic text-ink"
-              >
+              <label htmlFor="conn-ssl" className="cursor-pointer text-sm font-medium text-foreground">
                 Use SSL
               </label>
-              <span className="font-display text-sm italic text-ink-muted">
+              <span className="font-display text-xs italic text-muted-foreground">
                 — rejectUnauthorized: false, for dev
               </span>
             </div>
 
             {test.kind === 'ok' && (
-              <div className="border-l-[3px] border-type-str bg-[var(--bg-hover)] px-4 py-2 font-mono text-sm text-ink">
+              <div className="rounded-md border-l-4 border-type-str bg-muted px-4 py-2 text-sm text-foreground">
                 ✓ {test.message}
               </div>
             )}
             {test.kind === 'fail' && (
-              <div className="border-l-[3px] border-accent bg-[var(--bg-hover)] px-4 py-2 font-mono text-sm text-ink">
+              <div className="rounded-md border-l-4 border-destructive bg-muted px-4 py-2 text-sm text-foreground">
                 ✗ {test.message}
               </div>
             )}
             {connectionError && connectionState === 'error' && (
-              <div className="border-l-[3px] border-accent bg-[var(--bg-hover)] px-4 py-2 font-mono text-sm text-ink">
+              <div className="rounded-md border-l-4 border-destructive bg-muted px-4 py-2 text-sm text-foreground">
                 ✗ {connectionError}
               </div>
             )}
           </div>
 
-          <DialogFooter>
+          <DialogFooter className="gap-2">
             {showDisconnect && (
               <Button
                 type="button"
                 variant="link"
-                size="default"
                 onClick={() => void disconnect()}
                 className="mr-auto"
               >
-                disconnect
+                Disconnect
               </Button>
             )}
-            <Button type="button" variant="secondary" size="default" onClick={closeDialog}>
+            <Button type="button" variant="outline" onClick={closeDialog}>
               Cancel
             </Button>
             <Button
               type="button"
-              variant="secondary"
-              size="default"
+              variant="outline"
               onClick={() => void handleTest()}
               disabled={test.kind === 'testing' || connecting}
             >
               {test.kind === 'testing' ? 'Testing…' : 'Test'}
             </Button>
-            <Button type="submit" variant="primary" size="lg" disabled={connecting}>
-              <Play className="fill-accent text-accent" />
+            <Button type="submit" variant="primary" disabled={connecting}>
+              <Play />
               {connecting ? 'Connecting…' : 'Connect'}
             </Button>
           </DialogFooter>

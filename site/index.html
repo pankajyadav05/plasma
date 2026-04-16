@@ -1,0 +1,1373 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Plasma — A quiet place for queries.</title>
+    <meta
+      name="description"
+      content="A modern Postgres client that reads like a book and works like a knife. Schema-aware autocomplete, editorial typography, and state that sticks."
+    />
+
+    <!-- Open Graph -->
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Plasma" />
+    <meta property="og:description" content="A quiet place for queries." />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Plasma — a quiet place for queries" />
+
+    <!-- Favicon (same as the app, relative to site/) -->
+    <link rel="icon" type="image/svg+xml" href="../logo/favicon.svg" />
+    <link rel="mask-icon" href="../logo/favicon.svg" color="#EB5E4E" />
+
+    <!-- Fonts — same pairing as the app itself -->
+    <link rel="preconnect" href="https://fonts.bunny.net" />
+    <link
+      href="https://fonts.bunny.net/css?family=newsreader:400,400i,500,500i,600,600i|dm-sans:400,500,600|jetbrains-mono:400,500&display=swap"
+      rel="stylesheet"
+    />
+
+    <!-- Tailwind CDN (Play mode) — zero build step, ships as static HTML. -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        darkMode: "class",
+        theme: {
+          extend: {
+            colors: {
+              background: "var(--background)",
+              foreground: "var(--foreground)",
+              muted: "var(--muted)",
+              "muted-foreground": "var(--muted-foreground)",
+              primary: "var(--primary)",
+              "primary-foreground": "var(--primary-foreground)",
+              border: "var(--border)",
+              card: "var(--card)",
+              accent: "var(--accent)",
+            },
+            fontFamily: {
+              display: ["Newsreader", "Georgia", "serif"],
+              sans: ["DM Sans", "system-ui", "sans-serif"],
+              mono: ["JetBrains Mono", "ui-monospace", "monospace"],
+            },
+          },
+        },
+      };
+    </script>
+
+    <style>
+      /* ─── Tokens — mirrored from the app's globals.css ─────────────── */
+      :root {
+        --background: #ffffff;
+        --foreground: #252525;
+        --muted: #f7f7f7;
+        --muted-foreground: #8d8d8d;
+        --primary: #eb5e4e;
+        --primary-foreground: #ffffff;
+        --border: #ebebeb;
+        --card: #ffffff;
+        --accent: #f4f4f4;
+      }
+      .dark {
+        --background: #1a1a1a;
+        --foreground: #fbfbfb;
+        --muted: #262626;
+        --muted-foreground: #b5b5b5;
+        --primary: #eb5e4e;
+        --primary-foreground: #ffffff;
+        --border: #2e2e2e;
+        --card: #1a1a1a;
+        --accent: #2e2e2e;
+      }
+
+      html {
+        scroll-behavior: smooth;
+      }
+      body {
+        background: var(--background);
+        color: var(--foreground);
+        font-family: "DM Sans", system-ui, sans-serif;
+        letter-spacing: -0.01em;
+        -webkit-font-smoothing: antialiased;
+        overflow-x: hidden;
+      }
+      .font-display {
+        font-family: "Newsreader", Georgia, serif;
+        font-feature-settings: "lnum", "kern";
+        letter-spacing: -0.015em;
+      }
+      .font-mono {
+        font-family: "JetBrains Mono", ui-monospace, monospace;
+      }
+
+      /* ─── Oxblood signature stroke — reusable class ────────────────── */
+      /* `inline-block` is load-bearing here: it makes the ::after
+         underline match the actual text box width regardless of which
+         font metrics rendered the glyphs. Never goes wider or narrower
+         than the word. */
+      .brand-stroke {
+        position: relative;
+        display: inline-block;
+      }
+      .brand-stroke::after {
+        content: "";
+        position: absolute;
+        left: 0;
+        right: 0;
+        bottom: 0.08em;
+        height: 0.035em;
+        background: var(--primary);
+        transform: scaleX(0);
+        transform-origin: left center;
+        animation: draw-stroke 1.6s cubic-bezier(0.65, 0, 0.35, 1) 0.35s forwards;
+      }
+      @keyframes draw-stroke {
+        to {
+          transform: scaleX(1);
+        }
+      }
+      /* Smaller, thinner variant for the nav monogram */
+      .brand-stroke.is-mono::after {
+        bottom: 0.1em;
+        height: 0.08em;
+        animation: none;
+        transform: scaleX(1);
+      }
+
+      /* ─── Scroll reveal (JS adds `is-visible` via IntersectionObserver) ── */
+      .reveal {
+        opacity: 0;
+        transform: translateY(24px);
+        transition:
+          opacity 0.9s cubic-bezier(0.16, 1, 0.3, 1),
+          transform 0.9s cubic-bezier(0.16, 1, 0.3, 1);
+        will-change: opacity, transform;
+      }
+      .reveal.is-visible {
+        opacity: 1;
+        transform: translateY(0);
+      }
+      .reveal.delay-1 {
+        transition-delay: 0.08s;
+      }
+      .reveal.delay-2 {
+        transition-delay: 0.16s;
+      }
+      .reveal.delay-3 {
+        transition-delay: 0.24s;
+      }
+      .reveal.delay-4 {
+        transition-delay: 0.32s;
+      }
+
+      /* ─── Cursor glow — subtle red bloom following the pointer ─────── */
+      .cursor-glow {
+        pointer-events: none;
+        position: fixed;
+        width: 520px;
+        height: 520px;
+        border-radius: 50%;
+        background: radial-gradient(
+          circle,
+          color-mix(in srgb, var(--primary) 12%, transparent) 0%,
+          transparent 60%
+        );
+        transform: translate(-50%, -50%);
+        z-index: 0;
+        mix-blend-mode: multiply;
+        opacity: 0;
+        transition: opacity 0.4s;
+      }
+      .dark .cursor-glow {
+        mix-blend-mode: screen;
+      }
+      body:hover .cursor-glow {
+        opacity: 1;
+      }
+
+      /* ─── Custom SQL-themed cursor — desktop only ─────────────────── */
+      /* Two elements: an instant dot (primary fill) and a lagged ring
+         (outlined) that interpolates toward the dot via requestAnimationFrame.
+         On hover over interactive elements the ring grows and the dot
+         becomes a blinking `|` — a nod to the SQL prompt cursor. */
+      @media (hover: hover) and (pointer: fine) {
+        html.cursor-ready,
+        html.cursor-ready body,
+        html.cursor-ready a,
+        html.cursor-ready button,
+        html.cursor-ready input,
+        html.cursor-ready [role="button"] {
+          cursor: none !important;
+        }
+      }
+      .sql-cursor {
+        pointer-events: none;
+        position: fixed;
+        top: 0;
+        left: 0;
+        z-index: 9999;
+        display: none;
+        mix-blend-mode: normal;
+      }
+      @media (hover: hover) and (pointer: fine) {
+        html.cursor-ready .sql-cursor {
+          display: block;
+        }
+      }
+      .sql-cursor-dot {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: var(--primary);
+        transform: translate(-50%, -50%);
+        transition:
+          width 0.25s cubic-bezier(0.16, 1, 0.3, 1),
+          height 0.25s cubic-bezier(0.16, 1, 0.3, 1),
+          opacity 0.2s;
+        will-change: transform;
+      }
+      .sql-cursor-ring {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 36px;
+        height: 36px;
+        border-radius: 50%;
+        border: 1px solid color-mix(in srgb, var(--primary) 60%, transparent);
+        transform: translate(-50%, -50%);
+        transition:
+          width 0.3s cubic-bezier(0.16, 1, 0.3, 1),
+          height 0.3s cubic-bezier(0.16, 1, 0.3, 1),
+          border-color 0.3s;
+        will-change: transform;
+      }
+      .sql-cursor-label {
+        position: fixed;
+        top: 0;
+        left: 0;
+        padding: 3px 8px;
+        margin-left: 22px;
+        margin-top: 6px;
+        background: var(--primary);
+        color: var(--primary-foreground);
+        font-family: "JetBrains Mono", ui-monospace, monospace;
+        font-size: 10px;
+        line-height: 1;
+        border-radius: 3px;
+        letter-spacing: 0.02em;
+        opacity: 0;
+        transform: translate(0, 0) scale(0.8);
+        transform-origin: left top;
+        transition:
+          opacity 0.2s,
+          transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+        pointer-events: none;
+        white-space: nowrap;
+        will-change: transform, opacity;
+      }
+      .sql-cursor.is-interactive .sql-cursor-ring {
+        width: 52px;
+        height: 52px;
+        border-color: var(--primary);
+      }
+      .sql-cursor.is-interactive .sql-cursor-dot {
+        width: 3px;
+        height: 14px;
+        border-radius: 1px;
+        animation: cursor-blink 1s steps(2) infinite;
+      }
+      .sql-cursor.is-interactive .sql-cursor-label {
+        opacity: 1;
+        transform: translate(0, 0) scale(1);
+      }
+      @keyframes cursor-blink {
+        50% {
+          opacity: 0.25;
+        }
+      }
+
+      /* ─── Scroll progress bar — thin primary line at top ──────────── */
+      .scroll-progress {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        height: 2px;
+        background: var(--primary);
+        transform: scaleX(0);
+        transform-origin: left center;
+        z-index: 100;
+        will-change: transform;
+      }
+
+      /* ─── Magnetic button — JS nudges translate() on pointermove ──── */
+      .magnetic {
+        transition: transform 0.45s cubic-bezier(0.16, 1, 0.3, 1);
+        will-change: transform;
+      }
+
+      /* ─── Tilt — perspective rotate keyed to mouse position ───────── */
+      .tilt {
+        transform-style: preserve-3d;
+        transition: transform 0.45s cubic-bezier(0.16, 1, 0.3, 1);
+        will-change: transform;
+      }
+
+      /* ─── Nav link — bottom bar draws on hover ────────────────────── */
+      .nav-link {
+        position: relative;
+        padding-block: 2px;
+      }
+      .nav-link::after {
+        content: "";
+        position: absolute;
+        left: 0;
+        right: 0;
+        bottom: -2px;
+        height: 1px;
+        background: var(--primary);
+        transform: scaleX(0);
+        transform-origin: right center;
+        transition: transform 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+      }
+      .nav-link:hover::after {
+        transform: scaleX(1);
+        transform-origin: left center;
+      }
+
+      /* ─── Paper grain (subtle texture on the hero) ─────────────────── */
+      .paper-grain::before {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background-image: radial-gradient(
+          color-mix(in srgb, var(--foreground) 5%, transparent) 1px,
+          transparent 1px
+        );
+        background-size: 4px 4px;
+        pointer-events: none;
+        z-index: 0;
+      }
+
+      /* ─── Feature card — the JS `tilt` handler drives transform ────── */
+      .feature-card {
+        transition:
+          border-color 0.35s,
+          background 0.35s,
+          box-shadow 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+      }
+      .feature-card:hover {
+        border-color: color-mix(in srgb, var(--primary) 40%, var(--border));
+        box-shadow: 0 24px 60px -30px color-mix(in srgb, var(--primary) 30%, transparent);
+      }
+      .feature-card:hover .feature-rule {
+        width: 48px;
+      }
+      .feature-rule {
+        width: 24px;
+        height: 2px;
+        background: var(--primary);
+        transition: width 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+      }
+
+      /* ─── Animated SVG loader used in the hero "proof" block ───────── */
+      @keyframes pulse-ink {
+        0%,
+        100% {
+          opacity: 0.82;
+        }
+        50% {
+          opacity: 1;
+        }
+      }
+      .pulse-ink {
+        animation: pulse-ink 2.2s ease-in-out infinite;
+      }
+
+      /* ─── Signature stroke on section headings (drawn on reveal) ───── */
+      .section-heading {
+        position: relative;
+        display: inline-block;
+      }
+      .section-heading::after {
+        content: "";
+        position: absolute;
+        left: 0;
+        bottom: -10px;
+        height: 2px;
+        width: 80px;
+        background: var(--primary);
+        transform: scaleX(0);
+        transform-origin: left center;
+        transition: transform 0.9s cubic-bezier(0.16, 1, 0.3, 1) 0.2s;
+      }
+      .reveal.is-visible .section-heading::after {
+        transform: scaleX(1);
+      }
+
+      /* ─── Code block glow (download section highlight) ─────────────── */
+      .glow-frame {
+        box-shadow:
+          0 0 0 1px var(--border),
+          0 24px 60px -30px color-mix(in srgb, var(--primary) 40%, transparent),
+          0 8px 24px -12px color-mix(in srgb, var(--foreground) 10%, transparent);
+      }
+
+      /* ─── Scroll hint arrow ────────────────────────────────────────── */
+      @keyframes scroll-nudge {
+        0%,
+        100% {
+          transform: translateY(0);
+          opacity: 0.5;
+        }
+        50% {
+          transform: translateY(8px);
+          opacity: 1;
+        }
+      }
+      .scroll-nudge {
+        animation: scroll-nudge 2.4s ease-in-out infinite;
+      }
+
+      /* Utility: keycap chip */
+      .kbd {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 22px;
+        height: 22px;
+        padding: 0 6px;
+        border: 1px solid var(--border);
+        border-radius: 4px;
+        background: var(--muted);
+        font-family: "JetBrains Mono", ui-monospace, monospace;
+        font-size: 11px;
+        color: var(--muted-foreground);
+      }
+
+      /* Editor mock — colours match paperTheme.ts */
+      .mock-editor {
+        font-family: "JetBrains Mono", ui-monospace, monospace;
+        font-size: 13px;
+        line-height: 1.7;
+      }
+      .mock-editor .kw {
+        color: var(--primary);
+        font-weight: 600;
+      }
+      .mock-editor .str {
+        color: #4a6b2e;
+      }
+      .dark .mock-editor .str {
+        color: #a3d977;
+      }
+      .mock-editor .num {
+        color: #2b4e7a;
+        font-weight: 500;
+      }
+      .dark .mock-editor .num {
+        color: #7fb8ff;
+      }
+      .mock-editor .com {
+        color: var(--muted-foreground);
+        font-style: italic;
+      }
+      .mock-editor .id {
+        color: var(--foreground);
+      }
+
+      .mock-suggest {
+        position: absolute;
+        top: 38px;
+        left: 95px;
+        width: 280px;
+        border: 1px solid var(--border);
+        background: var(--background);
+        border-radius: 6px;
+        box-shadow:
+          0 18px 40px -20px color-mix(in srgb, var(--foreground) 30%, transparent),
+          0 8px 16px -8px color-mix(in srgb, var(--foreground) 10%, transparent);
+        overflow: hidden;
+        font-size: 12px;
+      }
+      .mock-suggest-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 6px 10px;
+        color: var(--foreground);
+      }
+      .mock-suggest-row.active {
+        background: var(--muted);
+      }
+      .mock-suggest-row .match {
+        color: var(--primary);
+        font-weight: 600;
+      }
+      .mock-suggest-row .meta {
+        margin-left: auto;
+        font-size: 10px;
+        color: var(--muted-foreground);
+      }
+
+      /* Reduced motion — respect */
+      @media (prefers-reduced-motion: reduce) {
+        * {
+          animation-duration: 1ms !important;
+          transition-duration: 60ms !important;
+        }
+        .reveal {
+          opacity: 1;
+          transform: none;
+        }
+      }
+    </style>
+  </head>
+  <body class="relative">
+    <!-- Scroll progress (primary line at top) -->
+    <div class="scroll-progress" id="scrollProgress"></div>
+
+    <!-- Ambient cursor glow -->
+    <div id="cursorGlow" class="cursor-glow"></div>
+
+    <!-- SQL-themed custom cursor (desktop only; hidden if reduced motion) -->
+    <div class="sql-cursor" id="sqlCursor" aria-hidden>
+      <div class="sql-cursor-ring" id="cursorRing"></div>
+      <div class="sql-cursor-dot" id="cursorDot"></div>
+      <div class="sql-cursor-label" id="cursorLabel">SELECT</div>
+    </div>
+
+    <!-- ─── Top nav ────────────────────────────────────────────────── -->
+    <header
+      class="fixed inset-x-0 top-0 z-50 border-b border-border bg-background/75 backdrop-blur-md"
+    >
+      <div
+        class="mx-auto flex max-w-6xl items-center justify-between px-6 py-4"
+      >
+        <a href="#" aria-label="Plasma" class="inline-flex items-center">
+          <!-- Logomark — the exact favicon.svg inlined so it renders
+               identically to the browser tab icon (rounded card with
+               italic serif P and the oxblood signature bar). Inlined
+               rather than `<img src>` so it stays sharp at any size. -->
+          <svg
+            class="h-9 w-9"
+            viewBox="0 0 64 64"
+            xmlns="http://www.w3.org/2000/svg"
+            role="img"
+            aria-label="Plasma"
+          >
+            <rect x="3" y="3" width="58" height="58" rx="10" fill="#FAF7F0" />
+            <rect
+              x="3"
+              y="3"
+              width="58"
+              height="58"
+              rx="10"
+              fill="none"
+              stroke="#1C1A14"
+              stroke-width="2.5"
+            />
+            <text
+              x="32"
+              y="44"
+              text-anchor="middle"
+              fill="#1C1A14"
+              style="
+                font-family: Newsreader, Georgia, serif;
+                font-style: italic;
+                font-weight: 600;
+                font-size: 48px;
+              "
+            >
+              P
+            </text>
+            <rect x="18" y="48" width="28" height="3" fill="#EB5E4E" />
+          </svg>
+        </a>
+
+        <nav class="hidden items-center gap-8 text-sm md:flex">
+          <a href="#pillars" class="nav-link text-muted-foreground transition-colors hover:text-foreground">Philosophy</a>
+          <a href="#features" class="nav-link text-muted-foreground transition-colors hover:text-foreground">Features</a>
+          <a href="#download" class="nav-link text-muted-foreground transition-colors hover:text-foreground">Download</a>
+          <a href="https://github.com/" class="nav-link text-muted-foreground transition-colors hover:text-foreground">GitHub</a>
+        </nav>
+
+        <div class="flex items-center gap-2">
+          <button
+            id="themeToggle"
+            aria-label="Toggle theme"
+            class="grid h-9 w-9 place-items-center rounded-md border border-border text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          >
+            <svg
+              class="hidden h-4 w-4 dark:block"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              aria-hidden
+            >
+              <circle cx="12" cy="12" r="5" />
+              <path
+                d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"
+              />
+            </svg>
+            <svg
+              class="h-4 w-4 dark:hidden"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              aria-hidden
+            >
+              <path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z" />
+            </svg>
+          </button>
+          <a
+            href="#download"
+            class="hidden rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-opacity hover:opacity-90 sm:inline-flex"
+            >Download</a
+          >
+        </div>
+      </div>
+    </header>
+
+    <!-- ─── Hero ────────────────────────────────────────────────────── -->
+    <section
+      class="paper-grain relative flex min-h-screen items-center justify-center overflow-hidden px-6 pt-24"
+    >
+      <div class="relative z-10 mx-auto max-w-4xl text-center">
+        <!-- Hero heading — HTML text with a pseudo-element underline.
+             Using real text (not SVG) means the signature stroke always
+             matches the font's rendered width, regardless of metrics. -->
+        <h1
+          class="reveal delay-1 mb-10 font-display italic text-foreground leading-[0.92]"
+          style="font-weight: 500; letter-spacing: -0.03em"
+        >
+          <span
+            class="brand-stroke inline-block text-[88px] md:text-[128px] lg:text-[168px]"
+          >
+            Plasma
+          </span>
+        </h1>
+
+        <p
+          class="reveal delay-2 mb-4 font-display text-2xl italic text-muted-foreground md:text-3xl"
+        >
+          A quiet place for queries.
+        </p>
+
+        <p
+          class="reveal delay-3 mx-auto mb-14 max-w-xl text-base text-muted-foreground md:text-lg"
+        >
+          A Postgres client that reads like a book and works like a knife.
+          Schema-aware autocomplete, editorial typography, and state that
+          remembers you.
+        </p>
+
+        <div class="reveal delay-4 flex flex-wrap items-center justify-center gap-3">
+          <a
+            href="#download"
+            class="magnetic group inline-flex items-center gap-2.5 rounded-md bg-primary px-6 py-3 font-medium text-primary-foreground shadow-[0_0_0_0_rgba(235,94,78,0.4)] transition-shadow hover:shadow-[0_0_0_6px_rgba(235,94,78,0.12)]"
+            data-cursor-label="DOWNLOAD"
+          >
+            <svg class="h-4 w-4 transition-transform group-hover:translate-y-0.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 3v12m0 0l-4-4m4 4l4-4M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2" />
+            </svg>
+            Download for Windows
+          </a>
+          <a
+            href="#features"
+            class="magnetic inline-flex items-center gap-2.5 rounded-md border border-border px-6 py-3 font-medium text-foreground transition-colors hover:bg-accent"
+            data-cursor-label="EXPLORE"
+          >
+            See what's inside
+            <svg class="h-3.5 w-3.5 transition-transform group-hover:translate-x-1" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M5 12h14m-6-6l6 6-6 6" />
+            </svg>
+          </a>
+        </div>
+
+        <p class="reveal delay-4 mt-8 text-xs text-muted-foreground">
+          Free · Apache 2.0 · ~91 MB
+        </p>
+      </div>
+
+      <!-- Scroll nudge -->
+      <div
+        class="scroll-nudge absolute bottom-8 left-1/2 -translate-x-1/2 text-muted-foreground"
+        aria-hidden
+      >
+        <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <path d="M12 5v14m0 0l-6-6m6 6l6-6" />
+        </svg>
+      </div>
+    </section>
+
+    <!-- ─── Pillars — the three non-negotiables ─────────────────────── -->
+    <section id="pillars" class="relative py-32 px-6">
+      <div class="mx-auto max-w-6xl">
+        <div class="reveal mb-20 max-w-2xl">
+          <p class="mb-4 text-xs font-medium uppercase tracking-[0.18em] text-primary">
+            The short pitch
+          </p>
+          <h2 class="section-heading font-display text-4xl italic md:text-5xl">
+            Three things we won't compromise on.
+          </h2>
+        </div>
+
+        <div class="grid gap-12 md:grid-cols-3">
+          <div class="reveal delay-1">
+            <div class="mb-5 h-[2px] w-10 bg-primary"></div>
+            <h3 class="mb-3 font-display text-2xl italic">Editorial typography.</h3>
+            <p class="text-muted-foreground">
+              Newsreader italic where you pause. JetBrains Mono where you work.
+              Serifs for meaning, monospace for intent — never confused, never mixed.
+            </p>
+          </div>
+
+          <div class="reveal delay-2">
+            <div class="mb-5 h-[2px] w-10 bg-primary"></div>
+            <h3 class="mb-3 font-display text-2xl italic">Schema-aware by default.</h3>
+            <p class="text-muted-foreground">
+              The editor knows your tables and columns the moment you connect.
+              Autocomplete that understands <span class="font-mono text-sm">FROM users u WHERE u.</span> without
+              plugins or setup files.
+            </p>
+          </div>
+
+          <div class="reveal delay-3">
+            <div class="mb-5 h-[2px] w-10 bg-primary"></div>
+            <h3 class="mb-3 font-display text-2xl italic">State that sticks.</h3>
+            <p class="text-muted-foreground">
+              Column widths, filters, pins, history — all remembered per table,
+              per connection. Reopen a table six weeks later and it looks exactly
+              like you left it.
+            </p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ─── Editor showcase — mock SQL with autocomplete ─────────────── -->
+    <section class="relative px-6 py-24">
+      <div class="mx-auto max-w-5xl">
+        <div class="reveal mb-10 text-center">
+          <p class="mb-4 text-xs font-medium uppercase tracking-[0.18em] text-primary">
+            Autocomplete
+          </p>
+          <h2 class="section-heading font-display text-4xl italic md:text-5xl">
+            Type. Tab. Ship.
+          </h2>
+        </div>
+
+        <div class="reveal relative overflow-hidden rounded-xl border border-border bg-card glow-frame">
+          <!-- Editor chrome — tab strip -->
+          <div class="flex items-center gap-0 border-b border-border bg-card">
+            <div class="flex items-center gap-2 border-r border-border bg-background px-4 py-2.5">
+              <svg class="h-3.5 w-3.5 text-primary" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z M14 2v6h6" />
+              </svg>
+              <span class="font-mono text-sm">query-1.sql</span>
+            </div>
+            <div class="flex-1"></div>
+            <div class="flex items-center gap-2 px-4 py-2.5 text-xs text-muted-foreground">
+              <span class="kbd">⌘</span>
+              <span class="kbd">⏎</span>
+              <span>Run</span>
+            </div>
+          </div>
+
+          <!-- Mock code body + floating suggest popup -->
+          <div class="mock-editor relative px-6 py-6">
+            <div class="flex gap-4">
+              <div class="select-none text-right text-muted-foreground" style="min-width: 24px;">
+                <div>1</div>
+                <div>2</div>
+                <div>3</div>
+                <div>4</div>
+                <div>5</div>
+                <div>6</div>
+              </div>
+              <div class="flex-1">
+                <div><span class="kw">select</span> *</div>
+                <div><span class="kw">from</span> <span class="id">hotel_m</span><span class="inline-block h-4 w-[1px] bg-foreground align-middle" style="animation: pulse-ink 1s steps(2) infinite;"></span></div>
+                <div class="com">-- schema-aware suggestions appear in-line</div>
+                <div><span class="kw">where</span> <span class="id">u.created_at</span> &gt; <span class="str">'2026-01-01'</span></div>
+                <div><span class="kw">order by</span> <span class="id">u.id</span> <span class="kw">desc</span></div>
+                <div><span class="kw">limit</span> <span class="num">50</span>;</div>
+              </div>
+            </div>
+
+            <!-- Floating suggest popover — matches Monaco suggest widget -->
+            <div class="mock-suggest" aria-hidden>
+              <div class="mock-suggest-row active">
+                <svg class="h-3 w-3 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <rect x="3" y="3" width="18" height="18" rx="2" />
+                  <path d="M3 9h18M9 3v18" />
+                </svg>
+                <span><span class="match">hotel_m</span>aster</span>
+                <span class="meta">table · 4.4m rows</span>
+              </div>
+              <div class="mock-suggest-row">
+                <svg class="h-3 w-3 shrink-0 opacity-60" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <rect x="3" y="3" width="18" height="18" rx="2" />
+                  <path d="M3 9h18M9 3v18" />
+                </svg>
+                <span><span class="match">hotel_m</span>atch_candidate</span>
+                <span class="meta">table</span>
+              </div>
+              <div class="mock-suggest-row">
+                <svg class="h-3 w-3 shrink-0 opacity-60" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <rect x="3" y="3" width="18" height="18" rx="2" />
+                  <path d="M3 9h18M9 3v18" />
+                </svg>
+                <span><span class="match">hotel_m</span>atch_details</span>
+                <span class="meta">table</span>
+              </div>
+              <div class="mock-suggest-row">
+                <svg class="h-3 w-3 shrink-0 opacity-60" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <rect x="3" y="3" width="18" height="18" rx="2" />
+                  <path d="M3 9h18M9 3v18" />
+                </svg>
+                <span><span class="match">hotel_m</span>atch_run</span>
+                <span class="meta">table</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <p class="reveal mt-6 text-center text-sm text-muted-foreground">
+          Reads your schema on connect. No config files, no plugin store, no language servers.
+        </p>
+      </div>
+    </section>
+
+    <!-- ─── Features grid ───────────────────────────────────────────── -->
+    <section id="features" class="relative px-6 py-32">
+      <div class="mx-auto max-w-6xl">
+        <div class="reveal mb-16 max-w-2xl">
+          <p class="mb-4 text-xs font-medium uppercase tracking-[0.18em] text-primary">
+            The long pitch
+          </p>
+          <h2 class="section-heading font-display text-4xl italic md:text-5xl">
+            Everything a daily driver should do.
+          </h2>
+          <p class="mt-5 text-lg text-muted-foreground">
+            Built out of impatience with every other client. Every feature earned its place by fixing something that annoyed someone real.
+          </p>
+        </div>
+
+        <div class="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
+          <!-- Feature 1 -->
+          <div class="feature-card tilt rounded-xl border border-border bg-card p-7">
+            <div class="feature-rule mb-5"></div>
+            <div class="mb-4 inline-flex h-10 w-10 items-center justify-center rounded-md bg-muted text-primary">
+              <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="3" y="4" width="18" height="16" rx="2" />
+                <path d="M7 8h10M7 12h10M7 16h6" />
+              </svg>
+            </div>
+            <h3 class="mb-2 font-display text-xl italic">Schema-aware autocomplete</h3>
+            <p class="text-sm text-muted-foreground">
+              Monaco reads your tables and columns on connect. Suggestions filter by the word under your cursor, with pk and not-null annotations.
+            </p>
+          </div>
+
+          <!-- Feature 2 -->
+          <div class="feature-card tilt rounded-xl border border-border bg-card p-7">
+            <div class="feature-rule mb-5"></div>
+            <div class="mb-4 inline-flex h-10 w-10 items-center justify-center rounded-md bg-muted text-primary">
+              <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M6 4v16M18 4v16M6 8h12M6 16h12" />
+              </svg>
+            </div>
+            <h3 class="mb-2 font-display text-xl italic">Sticky &amp; resizable columns</h3>
+            <p class="text-sm text-muted-foreground">
+              Pin the IDs you care about. Drag any column edge to resize. Every layout is remembered per table, per connection.
+            </p>
+          </div>
+
+          <!-- Feature 3 -->
+          <div class="feature-card tilt rounded-xl border border-border bg-card p-7">
+            <div class="feature-rule mb-5"></div>
+            <div class="mb-4 inline-flex h-10 w-10 items-center justify-center rounded-md bg-muted text-primary">
+              <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M4 6h16M4 12h16M4 18h16" />
+                <circle cx="20" cy="6" r="1.5" fill="currentColor" />
+              </svg>
+            </div>
+            <h3 class="mb-2 font-display text-xl italic">Row &amp; cell inspector</h3>
+            <p class="text-sm text-muted-foreground">
+              Hit Enter on any row for a full vertical layout. Space on any cell for a formatted viewer. JSON pretty-printed, long text scrolled.
+            </p>
+          </div>
+
+          <!-- Feature 4 -->
+          <div class="feature-card tilt rounded-xl border border-border bg-card p-7">
+            <div class="feature-rule mb-5"></div>
+            <div class="mb-4 inline-flex h-10 w-10 items-center justify-center rounded-md bg-muted text-primary">
+              <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M7 17L17 7m0 0H9m8 0v8" />
+              </svg>
+            </div>
+            <h3 class="mb-2 font-display text-xl italic">Foreign key navigation</h3>
+            <p class="text-sm text-muted-foreground">
+              Every FK column gets a small arrow. Click it to open the referenced row in a new tab, pre-filtered on the referencing value.
+            </p>
+          </div>
+
+          <!-- Feature 5 -->
+          <div class="feature-card tilt rounded-xl border border-border bg-card p-7">
+            <div class="feature-rule mb-5"></div>
+            <div class="mb-4 inline-flex h-10 w-10 items-center justify-center rounded-md bg-muted text-primary">
+              <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="11" cy="11" r="8" />
+                <path d="M21 21l-4.35-4.35" />
+              </svg>
+            </div>
+            <h3 class="mb-2 font-display text-xl italic">Search everywhere</h3>
+            <p class="text-sm text-muted-foreground">
+              <span class="kbd">⌘</span> <span class="kbd">F</span> finds inside the result grid. <span class="kbd">⌘</span> <span class="kbd">K</span> opens a palette over the whole app. Typing filters the sidebar tree live.
+            </p>
+          </div>
+
+          <!-- Feature 6 -->
+          <div class="feature-card tilt rounded-xl border border-border bg-card p-7">
+            <div class="feature-rule mb-5"></div>
+            <div class="mb-4 inline-flex h-10 w-10 items-center justify-center rounded-md bg-muted text-primary">
+              <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M12 8v4l3 2" />
+                <circle cx="12" cy="12" r="9" />
+              </svg>
+            </div>
+            <h3 class="mb-2 font-display text-xl italic">A home for empty tabs</h3>
+            <p class="text-sm text-muted-foreground">
+              A blank editor shows your most recent and most frequently-run queries. Click one, you're back where you left off.
+            </p>
+          </div>
+
+          <!-- Feature 7 -->
+          <div class="feature-card tilt rounded-xl border border-border bg-card p-7">
+            <div class="feature-rule mb-5"></div>
+            <div class="mb-4 inline-flex h-10 w-10 items-center justify-center rounded-md bg-muted text-primary">
+              <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="3" y="11" width="18" height="11" rx="2" />
+                <path d="M7 11V7a5 5 0 0110 0v4" />
+              </svg>
+            </div>
+            <h3 class="mb-2 font-display text-xl italic">Safe by default</h3>
+            <p class="text-sm text-muted-foreground">
+              Read-only mode on every new tab. Explicit toggle to enable writes. DDL auto-refreshes the schema. Passwords live in the OS keychain.
+            </p>
+          </div>
+
+          <!-- Feature 8 -->
+          <div class="feature-card tilt rounded-xl border border-border bg-card p-7">
+            <div class="feature-rule mb-5"></div>
+            <div class="mb-4 inline-flex h-10 w-10 items-center justify-center rounded-md bg-muted text-primary">
+              <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="9" />
+                <path d="M12 3a9 9 0 000 18M3 12h18" />
+              </svg>
+            </div>
+            <h3 class="mb-2 font-display text-xl italic">Dark &amp; light</h3>
+            <p class="text-sm text-muted-foreground">
+              Both themes crafted from the same oklch palette. No half-dark compromises, no readability regressions — each mode is its own first-class design.
+            </p>
+          </div>
+
+          <!-- Feature 9 -->
+          <div class="feature-card tilt rounded-xl border border-border bg-card p-7">
+            <div class="feature-rule mb-5"></div>
+            <div class="mb-4 inline-flex h-10 w-10 items-center justify-center rounded-md bg-muted text-primary">
+              <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M12 2l2.39 5.5L20 8.27l-4.5 4 1.1 6.23L12 15.5 7.4 18.5 8.5 12.27 4 8.27l5.61-.77z" />
+              </svg>
+            </div>
+            <h3 class="mb-2 font-display text-xl italic">Claude in the editor</h3>
+            <p class="text-sm text-muted-foreground">
+              Bring your own API key. Ask Claude to write, explain, or repair SQL — schema-aware prompts that know the tables you're actually working with.
+            </p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ─── Keyboard cheat sheet — spec-sheet style block ───────────── -->
+    <section class="relative px-6 py-20">
+      <div class="mx-auto max-w-4xl">
+        <div class="reveal mb-10 text-center">
+          <p class="mb-4 text-xs font-medium uppercase tracking-[0.18em] text-primary">
+            Keyboard first
+          </p>
+          <h2 class="section-heading font-display text-3xl italic md:text-4xl">
+            The whole app, ten keys.
+          </h2>
+        </div>
+        <div class="reveal grid gap-x-12 gap-y-4 text-sm md:grid-cols-2">
+          <div class="flex items-center justify-between border-b border-border py-2">
+            <span class="text-muted-foreground">Command palette</span>
+            <span class="flex gap-1"><span class="kbd">⌘</span><span class="kbd">K</span></span>
+          </div>
+          <div class="flex items-center justify-between border-b border-border py-2">
+            <span class="text-muted-foreground">Run query</span>
+            <span class="flex gap-1"><span class="kbd">⌘</span><span class="kbd">⏎</span></span>
+          </div>
+          <div class="flex items-center justify-between border-b border-border py-2">
+            <span class="text-muted-foreground">New tab</span>
+            <span class="flex gap-1"><span class="kbd">⌘</span><span class="kbd">T</span></span>
+          </div>
+          <div class="flex items-center justify-between border-b border-border py-2">
+            <span class="text-muted-foreground">Toggle editor</span>
+            <span class="flex gap-1"><span class="kbd">⌘</span><span class="kbd">J</span></span>
+          </div>
+          <div class="flex items-center justify-between border-b border-border py-2">
+            <span class="text-muted-foreground">Toggle sidebar</span>
+            <span class="flex gap-1"><span class="kbd">⌘</span><span class="kbd">B</span></span>
+          </div>
+          <div class="flex items-center justify-between border-b border-border py-2">
+            <span class="text-muted-foreground">Query history</span>
+            <span class="flex gap-1"><span class="kbd">⌘</span><span class="kbd">H</span></span>
+          </div>
+          <div class="flex items-center justify-between border-b border-border py-2">
+            <span class="text-muted-foreground">Find in results</span>
+            <span class="flex gap-1"><span class="kbd">⌘</span><span class="kbd">F</span></span>
+          </div>
+          <div class="flex items-center justify-between border-b border-border py-2">
+            <span class="text-muted-foreground">Cancel running query</span>
+            <span class="flex gap-1"><span class="kbd">⌘</span><span class="kbd">.</span></span>
+          </div>
+          <div class="flex items-center justify-between border-b border-border py-2">
+            <span class="text-muted-foreground">Row detail</span>
+            <span class="flex gap-1"><span class="kbd">⏎</span></span>
+          </div>
+          <div class="flex items-center justify-between border-b border-border py-2">
+            <span class="text-muted-foreground">Cell detail</span>
+            <span class="flex gap-1"><span class="kbd">Space</span></span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ─── Download ────────────────────────────────────────────────── -->
+    <section
+      id="download"
+      class="relative overflow-hidden border-y border-border bg-muted/40 px-6 py-32"
+    >
+      <div class="relative mx-auto max-w-4xl text-center">
+        <p
+          class="reveal mb-4 text-xs font-medium uppercase tracking-[0.18em] text-primary"
+        >
+          Download
+        </p>
+        <h2 class="reveal mb-6 font-display text-5xl italic md:text-6xl">
+          Take it for a
+          <span class="brand-stroke">walk</span>.
+        </h2>
+        <p
+          class="reveal mx-auto mb-14 max-w-xl text-lg text-muted-foreground"
+        >
+          Free forever. Apache 2.0. No account, no telemetry by default, no vendor lock-in.
+        </p>
+
+        <div class="reveal grid gap-4 sm:grid-cols-2">
+          <!-- Primary: Windows installer -->
+          <a
+            href="#"
+            data-download="Plasma-Setup-0.0.1-x64.exe"
+            data-cursor-label="INSTALL"
+            class="magnetic group flex items-center gap-5 rounded-xl border border-primary bg-primary p-6 text-left text-primary-foreground transition-opacity hover:opacity-90"
+          >
+            <div class="flex h-12 w-12 shrink-0 items-center justify-center rounded-md bg-white/10">
+              <svg class="h-6 w-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+                <path d="M3 5.5L10 4.5v7.5H3V5.5zM11 4.5L21 3v9h-10V4.5zM3 13h7v6.5L3 18.5V13zM11 13h10v8l-10-1.5V13z" />
+              </svg>
+            </div>
+            <div class="min-w-0 flex-1">
+              <div class="mb-0.5 text-xs uppercase tracking-wider text-white/70">
+                Recommended
+              </div>
+              <div class="font-display text-xl italic">Windows Installer</div>
+              <div class="mt-1 font-mono text-xs text-white/70">
+                Plasma-Setup-0.0.1-x64.exe · 91 MB
+              </div>
+            </div>
+            <svg class="h-5 w-5 shrink-0 transition-transform group-hover:translate-x-1" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M5 12h14m-6-6l6 6-6 6" />
+            </svg>
+          </a>
+
+          <!-- Secondary: Portable -->
+          <a
+            href="#"
+            data-download="Plasma-Portable-0.0.1-x64.exe"
+            data-cursor-label="PORTABLE"
+            class="magnetic group flex items-center gap-5 rounded-xl border border-border bg-background p-6 text-left transition-colors hover:border-primary"
+          >
+            <div class="flex h-12 w-12 shrink-0 items-center justify-center rounded-md bg-muted text-primary">
+              <svg class="h-6 w-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+                <path d="M20 7h-3V5a2 2 0 00-2-2H9a2 2 0 00-2 2v2H4a1 1 0 00-1 1v11a1 1 0 001 1h16a1 1 0 001-1V8a1 1 0 00-1-1zM9 5h6v2H9V5z" />
+              </svg>
+            </div>
+            <div class="min-w-0 flex-1">
+              <div class="mb-0.5 text-xs uppercase tracking-wider text-muted-foreground">
+                No install
+              </div>
+              <div class="font-display text-xl italic">Portable build</div>
+              <div class="mt-1 font-mono text-xs text-muted-foreground">
+                Plasma-Portable-0.0.1-x64.exe · 91 MB
+              </div>
+            </div>
+            <svg class="h-5 w-5 shrink-0 text-muted-foreground transition-all group-hover:translate-x-1 group-hover:text-primary" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M5 12h14m-6-6l6 6-6 6" />
+            </svg>
+          </a>
+        </div>
+
+        <!-- Platform placeholders -->
+        <div class="reveal mt-10 flex flex-wrap items-center justify-center gap-3 text-sm text-muted-foreground">
+          <span class="font-display italic">Mac and Linux soon —</span>
+          <a href="https://github.com/" class="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 transition-colors hover:border-primary hover:text-foreground">
+            <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M12 0C5.37 0 0 5.37 0 12c0 5.3 3.44 9.8 8.2 11.39.6.1.82-.26.82-.58v-2.03c-3.34.72-4.04-1.61-4.04-1.61-.54-1.38-1.33-1.75-1.33-1.75-1.09-.74.08-.73.08-.73 1.2.08 1.84 1.24 1.84 1.24 1.07 1.83 2.8 1.3 3.48.99.11-.77.42-1.3.76-1.6-2.66-.3-5.47-1.33-5.47-5.93 0-1.31.47-2.38 1.23-3.22-.12-.3-.53-1.52.12-3.17 0 0 1.01-.32 3.3 1.23a11.5 11.5 0 016 0c2.3-1.55 3.3-1.23 3.3-1.23.65 1.65.24 2.87.12 3.17.77.84 1.23 1.91 1.23 3.22 0 4.6-2.81 5.62-5.48 5.92.43.37.82 1.1.82 2.22v3.29c0 .32.22.7.83.58C20.57 21.8 24 17.3 24 12c0-6.63-5.37-12-12-12z" />
+            </svg>
+            Star on GitHub to get notified
+          </a>
+        </div>
+
+        <p class="reveal mt-8 text-xs text-muted-foreground">
+          Note: unsigned builds. Windows SmartScreen may warn on first launch.
+          Click "More info → Run anyway" — or build from source if you prefer.
+        </p>
+      </div>
+    </section>
+
+    <!-- ─── Footer ──────────────────────────────────────────────────── -->
+    <footer class="relative px-6 py-16">
+      <div class="mx-auto max-w-6xl">
+        <div class="flex flex-col gap-12 md:flex-row md:items-start md:justify-between">
+          <div class="max-w-sm">
+            <div
+              class="mb-4 font-display italic"
+              style="font-weight: 500; letter-spacing: -0.03em"
+            >
+              <span class="brand-stroke inline-block text-5xl">Plasma</span>
+            </div>
+            <p class="font-display text-base italic text-muted-foreground">
+              Built by people who read their code. Free software, forever.
+            </p>
+          </div>
+
+          <div class="grid grid-cols-2 gap-x-12 gap-y-2 text-sm sm:grid-cols-3">
+            <div class="col-span-2 mb-2 text-xs font-medium uppercase tracking-wider text-muted-foreground sm:col-auto sm:mb-0">
+              Product
+            </div>
+            <a href="#features" class="text-foreground transition-opacity hover:opacity-70">Features</a>
+            <a href="#download" class="text-foreground transition-opacity hover:opacity-70">Download</a>
+            <a href="#" class="text-foreground transition-opacity hover:opacity-70">Release notes</a>
+
+            <div class="col-span-2 mb-2 mt-6 text-xs font-medium uppercase tracking-wider text-muted-foreground sm:col-auto sm:mb-0 sm:mt-0">
+              Resources
+            </div>
+            <a href="https://github.com/" class="text-foreground transition-opacity hover:opacity-70">GitHub</a>
+            <a href="https://github.com/" class="text-foreground transition-opacity hover:opacity-70">Issues</a>
+            <a href="https://github.com/" class="text-foreground transition-opacity hover:opacity-70">License</a>
+          </div>
+        </div>
+
+        <div class="mt-16 flex flex-col items-start justify-between gap-4 border-t border-border pt-8 text-xs text-muted-foreground sm:flex-row sm:items-center">
+          <div>© 2026 · Apache 2.0 · Not affiliated with PostgreSQL.</div>
+          <div class="font-display italic">
+            "A quiet place for queries."
+          </div>
+        </div>
+      </div>
+    </footer>
+
+    <!-- ─── Scripts ─────────────────────────────────────────────────── -->
+    <script>
+      (function () {
+        const root = document.documentElement;
+        const reducedMotion =
+          window.matchMedia &&
+          window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+        const isFinePointer =
+          window.matchMedia &&
+          window.matchMedia("(hover: hover) and (pointer: fine)").matches;
+
+        // ─── Theme — persist per-visitor, respect system preference ───
+        const stored = localStorage.getItem("plasma-site-theme");
+        const prefersDark =
+          window.matchMedia &&
+          window.matchMedia("(prefers-color-scheme: dark)").matches;
+        if (stored === "dark" || (!stored && prefersDark)) {
+          root.classList.add("dark");
+        }
+        const themeBtn = document.getElementById("themeToggle");
+        themeBtn.addEventListener("click", () => {
+          root.classList.toggle("dark");
+          localStorage.setItem(
+            "plasma-site-theme",
+            root.classList.contains("dark") ? "dark" : "light",
+          );
+          // Tiny rotate feedback on the toggle itself
+          themeBtn.animate(
+            [
+              { transform: "rotate(0deg)" },
+              { transform: "rotate(180deg)" },
+            ],
+            { duration: 360, easing: "cubic-bezier(0.16, 1, 0.3, 1)" },
+          );
+        });
+
+        // ─── Scroll reveal — single IntersectionObserver ──────────────
+        const observer = new IntersectionObserver(
+          (entries) => {
+            for (const entry of entries) {
+              if (entry.isIntersecting) {
+                entry.target.classList.add("is-visible");
+                observer.unobserve(entry.target);
+              }
+            }
+          },
+          { threshold: 0.1, rootMargin: "0px 0px -80px 0px" },
+        );
+        for (const el of document.querySelectorAll(".reveal")) {
+          observer.observe(el);
+        }
+
+        // ─── Scroll progress bar ──────────────────────────────────────
+        const progress = document.getElementById("scrollProgress");
+        const updateProgress = () => {
+          const h = document.documentElement;
+          const pct =
+            (h.scrollTop || document.body.scrollTop) /
+            ((h.scrollHeight || document.body.scrollHeight) - h.clientHeight);
+          progress.style.transform = `scaleX(${Math.max(0, Math.min(1, pct))})`;
+        };
+        window.addEventListener("scroll", updateProgress, { passive: true });
+        updateProgress();
+
+        // ─── Ambient glow — rAF'd to avoid style thrashing ────────────
+        const glow = document.getElementById("cursorGlow");
+        let glowX = 0;
+        let glowY = 0;
+        let glowRaf = false;
+        const paintGlow = () => {
+          glow.style.transform = `translate(${glowX - 260}px, ${glowY - 260}px)`;
+          glowRaf = false;
+        };
+
+        // ─── Custom SQL cursor ────────────────────────────────────────
+        // Dot follows instantly, ring lerps behind with a smooth lag.
+        // Interactive elements (a, button, [role=button]) expand the
+        // ring and show a small SQL-prompt label next to the cursor.
+        const sqlCursor = document.getElementById("sqlCursor");
+        const cursorDot = document.getElementById("cursorDot");
+        const cursorRing = document.getElementById("cursorRing");
+        const cursorLabel = document.getElementById("cursorLabel");
+
+        if (isFinePointer && !reducedMotion) {
+          root.classList.add("cursor-ready");
+        }
+
+        let mouseX = -100;
+        let mouseY = -100;
+        let ringX = -100;
+        let ringY = -100;
+
+        window.addEventListener("mousemove", (e) => {
+          mouseX = e.clientX;
+          mouseY = e.clientY;
+          glowX = e.clientX;
+          glowY = e.clientY;
+          if (!glowRaf) {
+            glowRaf = true;
+            requestAnimationFrame(paintGlow);
+          }
+        });
+
+        const tick = () => {
+          // Dot snaps
+          cursorDot.style.transform = `translate(${mouseX}px, ${mouseY}px)`;
+          // Ring lerps for the signature trailing effect
+          ringX += (mouseX - ringX) * 0.18;
+          ringY += (mouseY - ringY) * 0.18;
+          cursorRing.style.transform = `translate(${ringX}px, ${ringY}px)`;
+          cursorLabel.style.transform = `translate(${mouseX}px, ${mouseY}px)`;
+          requestAnimationFrame(tick);
+        };
+        if (isFinePointer && !reducedMotion) tick();
+
+        // Interactive hover detection — event delegation on body.
+        const isInteractive = (el) => {
+          if (!el || !el.closest) return false;
+          return el.closest(
+            'a, button, input, [role="button"], .feature-card',
+          );
+        };
+        document.addEventListener("mouseover", (e) => {
+          const target = isInteractive(e.target);
+          if (target) {
+            sqlCursor.classList.add("is-interactive");
+            const label = target.getAttribute("data-cursor-label");
+            cursorLabel.textContent = label || "CLICK";
+          }
+        });
+        document.addEventListener("mouseout", (e) => {
+          if (!isInteractive(e.relatedTarget)) {
+            sqlCursor.classList.remove("is-interactive");
+          }
+        });
+
+        // ─── Magnetic buttons — pointer nudges translate() ────────────
+        if (!reducedMotion && isFinePointer) {
+          for (const el of document.querySelectorAll(".magnetic")) {
+            el.addEventListener("mousemove", (e) => {
+              const rect = el.getBoundingClientRect();
+              const x = e.clientX - rect.left - rect.width / 2;
+              const y = e.clientY - rect.top - rect.height / 2;
+              el.style.transform = `translate(${x * 0.18}px, ${y * 0.28}px)`;
+            });
+            el.addEventListener("mouseleave", () => {
+              el.style.transform = "";
+            });
+          }
+        }
+
+        // ─── Feature card mouse-tilt ──────────────────────────────────
+        // Rotate along x/y based on the cursor's position within the card.
+        // Capped at 6deg so it reads as a breath, not a gimmick.
+        if (!reducedMotion && isFinePointer) {
+          for (const el of document.querySelectorAll(".tilt")) {
+            el.addEventListener("mousemove", (e) => {
+              const rect = el.getBoundingClientRect();
+              const nx = (e.clientX - rect.left) / rect.width - 0.5;
+              const ny = (e.clientY - rect.top) / rect.height - 0.5;
+              el.style.transform = `perspective(900px) rotateY(${nx * 6}deg) rotateX(${-ny * 6}deg) translateY(-4px)`;
+            });
+            el.addEventListener("mouseleave", () => {
+              el.style.transform = "";
+            });
+          }
+        }
+
+        // ─── Download click-through placeholder ───────────────────────
+        for (const a of document.querySelectorAll("[data-download]")) {
+          a.addEventListener("click", (e) => {
+            if (a.getAttribute("href") === "#") {
+              e.preventDefault();
+              const file = a.getAttribute("data-download");
+              alert(
+                `Download placeholder: ${file}\n\nReplace the href in site/index.html with the real release URL.`,
+              );
+            }
+          });
+        }
+      })();
+    </script>
+  </body>
+</html>

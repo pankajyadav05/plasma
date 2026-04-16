@@ -81,7 +81,7 @@ export function SidebarResizer() {
       }}
       className="group/resizer relative z-20 -ml-[3px] flex h-full w-[6px] shrink-0 cursor-col-resize items-stretch justify-center"
     >
-      <div className="h-full w-px bg-rule transition-all duration-instant group-hover/resizer:w-0.5 group-hover/resizer:bg-accent group-active/resizer:bg-accent" />
+      <div className="h-full w-px bg-border transition-all duration-instant group-hover/resizer:w-0.5 group-hover/resizer:bg-primary group-active/resizer:bg-primary" />
     </div>
   );
 }

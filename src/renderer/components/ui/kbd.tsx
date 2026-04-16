@@ -10,7 +10,7 @@ export const Kbd = React.forwardRef<HTMLElement, React.HTMLAttributes<HTMLElemen
     <kbd
       ref={ref}
       className={cn(
-        "inline-flex h-5 min-w-[20px] items-center justify-center rounded-sm border border-border-soft bg-paper-canvas px-1.5 font-mono text-xs text-ink-muted",
+        "inline-flex h-5 min-w-[20px] items-center justify-center rounded-sm border border-border bg-card px-1.5 font-mono text-xs text-muted-foreground",
         className,
       )}
       {...props}

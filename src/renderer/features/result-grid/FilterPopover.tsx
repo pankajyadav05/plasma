@@ -3,6 +3,13 @@ import { Filter as FilterIcon, Plus, Trash2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { useActiveTab, useSession } from "@/stores/session";
 import type { Filter, FilterOp } from "@/lib/table-query";
 
@@ -58,29 +65,29 @@ export function FilterPopover() {
         <Button
           variant={filters.length > 0 ? "outline" : "ghost"}
           size="xs"
-          className={filters.length > 0 ? "border-accent text-accent" : ""}
+          className={filters.length > 0 ? "border-primary text-primary" : ""}
         >
           <FilterIcon />
           Filter
           {filters.length > 0 && (
-            <span className="rounded-sm bg-accent px-1 text-xs leading-none py-0.5 text-paper">{filters.length}</span>
+            <span className="rounded-sm bg-primary px-1 text-xs leading-none py-0.5 text-background">{filters.length}</span>
           )}
         </Button>
       </PopoverTrigger>
       <PopoverContent align="start" side="bottom" className="w-96 p-0">
-        <div className="border-b border-border-soft px-4 py-2.5">
-          <h3 className="font-mono text-xs uppercase text-ink-muted" style={{ letterSpacing: "0.10em" }}>
+        <div className="border-b border-border px-4 py-2.5">
+          <h3 className="text-xs text-muted-foreground">
             Filters
           </h3>
         </div>
 
         {/* Active filters — compact rows */}
         {filters.length > 0 && (
-          <div className="max-h-[200px] overflow-y-auto border-b border-border-soft">
+          <div className="max-h-[200px] overflow-y-auto border-b border-border">
             {filters.map((f) => (
-              <div key={f.id} className="flex items-center gap-2 px-4 py-1.5 font-mono text-xs">
-                <span className="truncate font-medium text-ink">{f.column}</span>
-                <span className="shrink-0 text-ink-muted">{f.op}</span>
+              <div key={f.id} className="flex items-center gap-2 px-4 py-1.5 text-xs">
+                <span className="truncate font-medium text-foreground">{f.column}</span>
+                <span className="shrink-0 text-muted-foreground">{f.op}</span>
                 {f.op !== "IS NULL" && f.op !== "IS NOT NULL" && (
                   <span className="truncate text-type-str">{f.value}</span>
                 )}
@@ -96,7 +103,7 @@ export function FilterPopover() {
               </div>
             ))}
             <div className="flex justify-end px-4 py-1.5">
-              <Button variant="ghost" size="xs" onClick={() => void clearFilters()} className="text-ink-muted">
+              <Button variant="ghost" size="xs" onClick={() => void clearFilters()} className="text-muted-foreground">
                 <Trash2 />
                 Clear all
               </Button>
@@ -107,29 +114,30 @@ export function FilterPopover() {
         {/* Add filter form */}
         <div className="flex flex-col gap-2 px-4 py-3">
           <div className="flex items-center gap-2">
-            <select
-              value={column}
-              onChange={(e) => setColumn(e.target.value)}
-              className="h-8 flex-1 min-w-0 border border-border-soft bg-paper-canvas px-2 font-mono text-xs text-ink outline-none focus:border-accent"
-            >
-              <option value="">column…</option>
-              {columns.map((c) => (
-                <option key={c.name} value={c.name}>
-                  {c.name}
-                </option>
-              ))}
-            </select>
-            <select
-              value={op}
-              onChange={(e) => setOp(e.target.value as FilterOp)}
-              className="h-8 w-[100px] shrink-0 border border-border-soft bg-paper-canvas px-2 font-mono text-xs text-ink outline-none focus:border-accent"
-            >
-              {OPERATORS.map((o) => (
-                <option key={o.value} value={o.value}>
-                  {o.label}
-                </option>
-              ))}
-            </select>
+            <Select value={column || undefined} onValueChange={setColumn}>
+              <SelectTrigger className="h-8 flex-1 text-xs">
+                <SelectValue placeholder="column…" />
+              </SelectTrigger>
+              <SelectContent>
+                {columns.map((c) => (
+                  <SelectItem key={c.name} value={c.name}>
+                    {c.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Select value={op} onValueChange={(v) => setOp(v as FilterOp)}>
+              <SelectTrigger className="h-8 w-[120px] shrink-0 text-xs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {OPERATORS.map((o) => (
+                  <SelectItem key={o.value} value={o.value}>
+                    {o.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
           {needsValue && (
             <Input

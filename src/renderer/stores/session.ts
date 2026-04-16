@@ -38,6 +38,42 @@ export type ConnectionState = 'idle' | 'connecting' | 'connected' | 'error';
 export type QueryRunState = 'idle' | 'running';
 export type TabKind = 'sql' | 'table';
 
+/**
+ * Cheap heuristic for DDL detection. We strip leading comments/whitespace
+ * and look for a top-level keyword that implies the schema graph has
+ * changed. Not a parser — false positives on DML containing the word
+ * `create` inside a string literal are acceptable (worst case is one
+ * extra introspect call).
+ */
+function looksLikeDdl(sql: string): boolean {
+  const stripped = sql
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/^\s*--.*$/gm, '')
+    .trim()
+    .toLowerCase();
+  return /^(create|alter|drop|rename|truncate|comment|grant|revoke|vacuum|reindex|cluster)\b/.test(
+    stripped,
+  );
+}
+
+/**
+ * Build a stable key for per-table column state persistence. We prefix
+ * with the connection id so two tables with the same schema.name across
+ * different databases don't collide.
+ */
+function columnStateKey(
+  connectionId: string | null | undefined,
+  schemaName: string,
+  tableName: string,
+): string {
+  return `${connectionId ?? '_'}:${schemaName}.${tableName}`;
+}
+
+// Debounce handle for column-width drag persistence. During a drag we
+// rewrite the tab's columnWidths on every pointermove — we only want
+// to hit IPC + disk once, when the user actually lets go.
+let columnWidthPersistTimer: ReturnType<typeof setTimeout> | null = null;
+
 export interface QueryTab {
   id: string;
   title: string;
@@ -69,12 +105,13 @@ export interface QueryTab {
   tableSort: TableSort[];
   filters: Filter[];
   hiddenColumns: Set<string>;
+  stickyColumns: Set<string>;
   totalRowCount: number | null;
   countLoading: boolean;
 }
 
 const DEFAULT_SETTINGS: Settings = {
-  theme: 'paper',
+  theme: 'light',
   sidebarCollapsed: false,
   sidebarWidth: 264,
   editorExpanded: false,
@@ -86,6 +123,7 @@ const DEFAULT_SETTINGS: Settings = {
   transactionMode: false,
   favoriteSchemas: {},
   favoriteTables: {},
+  tableColumnState: {},
   windowBounds: null,
 };
 
@@ -114,6 +152,7 @@ function createEmptyTab(pageSize: number, title = 'query-1.sql'): QueryTab {
     tableSort: [],
     filters: [],
     hiddenColumns: new Set(),
+    stickyColumns: new Set(),
     totalRowCount: null,
     countLoading: false,
   };
@@ -144,6 +183,7 @@ function createTableTab(
     tableSort: [],
     filters: [],
     hiddenColumns: new Set(),
+    stickyColumns: new Set(),
     totalRowCount: null,
     countLoading: false,
   };
@@ -264,6 +304,7 @@ interface SessionState {
   runQuery(): Promise<void>;
   cancelQuery(): Promise<void>;
   openTable(schema: string, table: string): void;
+  openForeignRow(refSchema: string, refTable: string, refColumn: string, value: unknown): void;
   setPage(page: number): void;
   setPageSize(pageSize: number): void;
   setSort(index: number): void;
@@ -278,6 +319,8 @@ interface SessionState {
   setHiddenColumns(hidden: Set<string>): Promise<void>;
   toggleColumnHidden(column: string): Promise<void>;
   showAllColumns(): Promise<void>;
+  toggleStickyColumn(column: string): void;
+  clearStickyColumns(): void;
   refreshTable(): Promise<void>;
 
   // Row editing (table tabs, edit mode only)
@@ -524,6 +567,14 @@ export const useSession = create<SessionState>((set, get) => ({
         sortColumn: null,
         selectedCell: null,
       });
+      // DDL auto-refresh: if the user just ran CREATE / ALTER / DROP /
+      // RENAME / TRUNCATE / COMMENT, the introspected schema is now
+      // stale — re-fetch so the sidebar reflects the change without
+      // forcing a manual reconnect. We fire-and-forget so the grid
+      // updates immediately.
+      if (looksLikeDdl(sql)) {
+        void get().refreshSchema();
+      }
     } catch (err) {
       patchActiveTab(set, get, {
         queryError: err instanceof Error ? err.message : String(err),
@@ -557,12 +608,41 @@ export const useSession = create<SessionState>((set, get) => ({
       });
       return;
     }
-    // Create a fresh table tab and kick off data + count in parallel
-    const tab = createTableTab(state.settings.defaultPageSize, schemaName, tableName);
+    // Create a fresh table tab, then layer any persisted column state
+    // (widths / hidden / sticky) ON TOP before kicking off the query —
+    // hiddenColumns in particular has to be set before the SELECT is
+    // compiled so the server doesn't return columns we're about to hide.
+    const baseTab = createTableTab(state.settings.defaultPageSize, schemaName, tableName);
+    const persistedPatch = loadTableColumnStateInto(state, schemaName, tableName);
+    const tab: QueryTab = { ...baseTab, ...persistedPatch };
     set({
       tabs: [...state.tabs, tab],
       activeTabId: tab.id,
       activeTable: { schema: schemaName, name: tableName },
+    });
+    void runTableDataQuery(set, get, tab.id);
+    void runTableCountQuery(set, get, tab.id);
+  },
+
+  openForeignRow(refSchema, refTable, refColumn, value) {
+    // FK click-through: open the referenced table as a fresh table tab
+    // with an equality filter on the referenced column pre-applied. We
+    // always create a new tab so prior FK navigations stay inspectable.
+    if (value === null || value === undefined) return;
+    const state = get();
+    const baseTab = createTableTab(state.settings.defaultPageSize, refSchema, refTable);
+    const persistedPatch = loadTableColumnStateInto(state, refSchema, refTable);
+    const filter: Filter = {
+      id: `fk-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+      column: refColumn,
+      op: '=',
+      value: String(value),
+    };
+    const tab: QueryTab = { ...baseTab, ...persistedPatch, filters: [filter] };
+    set({
+      tabs: [...state.tabs, tab],
+      activeTabId: tab.id,
+      activeTable: { schema: refSchema, name: refTable },
     });
     void runTableDataQuery(set, get, tab.id);
     void runTableCountQuery(set, get, tab.id);
@@ -638,6 +718,15 @@ export const useSession = create<SessionState>((set, get) => ({
     patchActiveTab(set, get, {
       columnWidths: { ...tab.columnWidths, [index]: width },
     });
+    // Drag fires this on every pointermove — debounce the IPC write so
+    // we only persist once the user lets go of the handle.
+    if (tab.kind === 'table') {
+      if (columnWidthPersistTimer) clearTimeout(columnWidthPersistTimer);
+      columnWidthPersistTimer = setTimeout(() => {
+        persistTableColumnState(set, get);
+        columnWidthPersistTimer = null;
+      }, 300);
+    }
   },
 
   // ── Table-tab specific actions ──
@@ -690,19 +779,42 @@ export const useSession = create<SessionState>((set, get) => ({
 
   async toggleColumnHidden(column) {
     const tab = activeTab(get());
-    if (!tab || tab.kind !== 'table') return;
+    if (!tab) return;
     const next = new Set(tab.hiddenColumns);
     if (next.has(column)) next.delete(column);
     else next.add(column);
     patchActiveTab(set, get, { hiddenColumns: next });
-    await runTableDataQuery(set, get, tab.id);
+    if (tab.kind === 'table') {
+      await runTableDataQuery(set, get, tab.id);
+      persistTableColumnState(set, get);
+    }
   },
 
   async showAllColumns() {
     const tab = activeTab(get());
-    if (!tab || tab.kind !== 'table') return;
+    if (!tab) return;
     patchActiveTab(set, get, { hiddenColumns: new Set() });
-    await runTableDataQuery(set, get, tab.id);
+    if (tab.kind === 'table') {
+      await runTableDataQuery(set, get, tab.id);
+      persistTableColumnState(set, get);
+    }
+  },
+
+  toggleStickyColumn(column) {
+    const tab = activeTab(get());
+    if (!tab) return;
+    const next = new Set(tab.stickyColumns);
+    if (next.has(column)) next.delete(column);
+    else next.add(column);
+    patchActiveTab(set, get, { stickyColumns: next });
+    persistTableColumnState(set, get);
+  },
+
+  clearStickyColumns() {
+    const tab = activeTab(get());
+    if (!tab) return;
+    patchActiveTab(set, get, { stickyColumns: new Set() });
+    persistTableColumnState(set, get);
   },
 
   async refreshTable() {
@@ -868,7 +980,7 @@ export const useSession = create<SessionState>((set, get) => ({
       const settings = await ipc.settings.get();
       set({ settings });
       // Apply theme immediately on boot
-      document.documentElement.dataset.theme = settings.theme;
+      document.documentElement.classList.toggle('dark', settings.theme === 'dark');
     } catch (err) {
       console.error('[plasma] settings.get failed', err);
     }
@@ -878,7 +990,7 @@ export const useSession = create<SessionState>((set, get) => ({
     try {
       const next = await ipc.settings.set(patch);
       set({ settings: next });
-      document.documentElement.dataset.theme = next.theme;
+      document.documentElement.classList.toggle('dark', next.theme === 'dark');
     } catch (err) {
       console.error('[plasma] settings.set failed', err);
     }
@@ -899,9 +1011,9 @@ export const useSession = create<SessionState>((set, get) => ({
 
   async toggleTheme() {
     // Optimistic theme flip — apply CSS immediately, persist in background.
-    const next = get().settings.theme === 'paper' ? 'midnight' : 'paper';
+    const next = get().settings.theme === 'light' ? 'dark' : 'light';
     set({ settings: { ...get().settings, theme: next } });
-    document.documentElement.dataset.theme = next;
+    document.documentElement.classList.toggle('dark', next === 'dark');
     try {
       await ipc.settings.set({ theme: next });
     } catch (err) {
@@ -1024,6 +1136,93 @@ function patchActiveTab(
   set((state) => ({
     tabs: state.tabs.map((t) => (t.id === activeId ? { ...t, ...patch } : t)),
   }));
+}
+
+/**
+ * Persist the active table tab's column state (widths / hidden / sticky)
+ * to settings. Widths stored in the tab are index-keyed; we translate to
+ * name-keyed for persistence so schema reorderings don't misalign the
+ * restored widths.
+ *
+ * Fire-and-forget — failures are logged but don't surface to the user.
+ * Called after any column-level mutation on a table tab.
+ */
+function persistTableColumnState(
+  set: (fn: (s: SessionState) => Partial<SessionState>) => void,
+  get: () => SessionState,
+) {
+  const state = get();
+  const tab = activeTab(state);
+  if (!tab || tab.kind !== 'table' || !tab.tableSchema || !tab.tableName) return;
+  const connId = state.activeConfig?.id;
+  if (!connId) return;
+
+  const resultCols = tab.queryResult?.columns ?? [];
+  const widthsByName: Record<string, number> = {};
+  for (const [idxStr, w] of Object.entries(tab.columnWidths)) {
+    const idx = Number(idxStr);
+    const name = resultCols[idx]?.name;
+    if (name) widthsByName[name] = w;
+  }
+
+  const key = columnStateKey(connId, tab.tableSchema, tab.tableName);
+  const entry = {
+    widths: widthsByName,
+    hidden: [...tab.hiddenColumns],
+    sticky: [...tab.stickyColumns],
+  };
+  const hasAny =
+    Object.keys(widthsByName).length > 0 ||
+    entry.hidden.length > 0 ||
+    entry.sticky.length > 0;
+
+  const current = state.settings.tableColumnState ?? {};
+  const next = { ...current };
+  if (hasAny) {
+    next[key] = entry;
+  } else {
+    delete next[key];
+  }
+  if (JSON.stringify(current) === JSON.stringify(next)) return;
+
+  set((s) => ({ settings: { ...s.settings, tableColumnState: next } }));
+  ipc.settings
+    .set({ tableColumnState: next })
+    .catch((err) => console.error('[plasma] persist tableColumnState failed', err));
+}
+
+/**
+ * Apply persisted column state to a freshly created table tab BEFORE the
+ * first data query runs. Widths get re-index-keyed against the real
+ * table schema so the tab's in-memory shape matches what the query
+ * will return. Returns a patch suitable for merging into a QueryTab.
+ */
+function loadTableColumnStateInto(
+  state: SessionState,
+  schemaName: string,
+  tableName: string,
+): Partial<QueryTab> {
+  const connId = state.activeConfig?.id;
+  if (!connId) return {};
+  const key = columnStateKey(connId, schemaName, tableName);
+  const entry = state.settings.tableColumnState?.[key];
+  if (!entry) return {};
+
+  // Walk the introspected columns to rebuild the index-keyed widths.
+  const cols = state.schema
+    ? columnsForTable(state.schema, schemaName, tableName)
+    : [];
+  const widthsByIdx: Record<number, number> = {};
+  cols.forEach((name, i) => {
+    const w = entry.widths[name];
+    if (typeof w === 'number') widthsByIdx[i] = w;
+  });
+
+  return {
+    columnWidths: widthsByIdx,
+    hiddenColumns: new Set(entry.hidden),
+    stickyColumns: new Set(entry.sticky),
+  };
 }
 
 function patchTabById(

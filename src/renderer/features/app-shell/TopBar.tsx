@@ -4,6 +4,7 @@ import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/cn";
 import { kbd } from "@/lib/platform";
 import { useSession } from "@/stores/session";
+import { BrandWordmark } from "./BrandWordmark";
 import { WindowControls } from "./WindowControls";
 
 const isMac = window.plasma?.platform === "darwin";
@@ -19,39 +20,33 @@ export function TopBar() {
   const editMode = useSession((s) => s.editMode);
   const toggleEditMode = useSession((s) => s.toggleEditMode);
 
-  // Any overlay (dialog, sheet, palette, confirm prompt) that should
-  // cover the TopBar. When one is open we drop `.drag` so the
-  // `-webkit-app-region` compositor layer doesn't float above modal
-  // overlays, and disable pointer events so the topbar can't be
-  // interacted with while a modal is up.
   const overlayOpen = useSession(
     (s) => s.dialogOpen || s.paletteOpen || s.settingsOpen || s.historyOpen || s.deleteConfirmConnectionId !== null,
   );
 
   const dotClass =
     connectionState === "connected"
-      ? "bg-accent"
+      ? "bg-primary"
       : connectionState === "connecting"
-        ? "bg-type-json animate-pulse"
+        ? "bg-primary animate-pulse"
         : connectionState === "error"
-          ? "bg-accent"
-          : "bg-ink-disabled";
+          ? "bg-destructive"
+          : "bg-muted-foreground";
 
   return (
     <header
       className={cn(
-        "topbar-pad relative z-20 flex h-12 items-center gap-3 bg-paper",
+        "topbar-pad relative z-20 flex h-12 items-center gap-3 border-b bg-background",
         overlayOpen ? "pointer-events-none" : "drag",
       )}
     >
       <div className="no-drag flex items-center">
         <Button
           variant="ghost"
-          size="icon"
+          size="icon-sm"
           onClick={() => void toggleSidebar()}
           aria-label={sidebarCollapsed ? `Show sidebar (${kbd("B")})` : `Hide sidebar (${kbd("B")})`}
           title={sidebarCollapsed ? `Show sidebar (${kbd("B")})` : `Hide sidebar (${kbd("B")})`}
-          className="[&_svg]:h-5 [&_svg]:w-5"
         >
           {sidebarCollapsed ? <PanelLeft /> : <PanelLeftClose />}
         </Button>
@@ -59,26 +54,7 @@ export function TopBar() {
 
       <Separator orientation="vertical" className="h-5" />
 
-      {/*
-        Wordmark — rendered as live HTML text (not SVG img) so the
-        Newsreader font loaded by the app handles the kerning. The
-        oxblood signature stroke is drawn as a pseudo-element exactly
-        matching the text box width, so it's always flush with "Plasma"
-        regardless of which font (Newsreader / Georgia fallback) is
-        actually rendering.
-      */}
-      <h1 className="flex items-baseline gap-3 leading-none" aria-label="Plasma">
-        <span
-          className={
-            "relative font-display text-[22px] italic text-ink pb-[3px] " +
-            "after:absolute after:inset-x-0 after:bottom-0 after:h-[2px] after:bg-accent after:content-['']"
-          }
-          style={{ fontWeight: 500 }}
-        >
-          Plasma
-        </span>
-        <span className="hidden font-display text-sm italic text-ink-muted md:inline">— a quiet place for queries</span>
-      </h1>
+      <BrandWordmark className="h-8" />
 
       <Separator orientation="vertical" className="h-5" />
 
@@ -88,11 +64,11 @@ export function TopBar() {
           size="sm"
           onClick={() => void editConnection(activeConfig.id)}
           title="Edit this connection"
-          className="no-drag -ml-1 h-8 gap-2.5 px-2 font-mono text-sm normal-case tracking-normal text-ink-2 hover:bg-transparent hover:text-ink"
+          className="no-drag h-8 gap-2 px-2 text-sm font-normal text-muted-foreground"
         >
-          <span aria-label={connectionState} className={`inline-block h-2 w-2 rounded-none ${dotClass}`} />
-          <span className="max-w-[180px] truncate">{activeConfig.name}</span>
-          <span className="text-ink-disabled">/</span>
+          <span aria-label={connectionState} className={cn("inline-block h-2 w-2 rounded-full", dotClass)} />
+          <span className="max-w-[180px] truncate text-foreground">{activeConfig.name}</span>
+          <span className="text-muted-foreground/60">/</span>
           <span className="max-w-[140px] truncate">{activeConfig.database}</span>
         </Button>
       ) : (
@@ -100,39 +76,35 @@ export function TopBar() {
           variant="ghost"
           size="sm"
           onClick={() => openDialog()}
-          className="no-drag -ml-1 h-8 gap-2 px-2 font-display text-sm italic normal-case tracking-normal text-ink-muted hover:bg-transparent hover:text-accent"
+          className="no-drag h-8 gap-2 px-2 text-sm font-normal text-muted-foreground"
         >
-          <span className="inline-block h-2 w-2 rounded-none bg-ink-disabled" />
-          click to connect…
+          <span className="inline-block h-2 w-2 rounded-full bg-muted-foreground" />
+          Connect to a database
         </Button>
       )}
 
       <div className="flex-1" />
 
       {activeConfig && (
-        <button
-          type="button"
+        <Button
+          variant={editMode ? "primary" : "outline"}
+          size="xs"
           onClick={toggleEditMode}
           title={editMode ? "Writes enabled — click to lock" : "Read-only — click to enable writes"}
-          className={cn(
-            "no-drag flex h-7 items-center gap-1.5 rounded-sm border px-2.5 font-mono text-xs uppercase tracking-[0.08em] transition-colors",
-            editMode
-              ? "border-accent bg-accent text-paper hover:bg-accent-hover"
-              : "border-border-soft text-ink-muted hover:border-accent hover:text-accent",
-          )}
+          className="no-drag"
         >
-          {editMode ? <Pencil className="h-3 w-3" /> : <Lock className="h-3 w-3" />}
-          {editMode ? "edit mode" : "read only"}
-        </button>
+          {editMode ? <Pencil /> : <Lock />}
+          {editMode ? "Edit mode" : "Read only"}
+        </Button>
       )}
 
       <div className="no-drag flex items-center">
         <Button
-          variant="secondary"
+          variant="outline"
           size="sm"
           onClick={togglePalette}
           title={`Command palette (${kbd("K")}) — history, theme, settings`}
-          className="ml-2 h-7 gap-1.5 px-2.5 font-mono text-xs normal-case tracking-[0.04em] text-ink"
+          className="ml-2 h-8 gap-1.5 px-2.5 text-xs"
         >
           {isMac ? (
             <>
@@ -140,7 +112,10 @@ export function TopBar() {
               <span>K</span>
             </>
           ) : (
-            <span>Ctrl K</span>
+            <>
+              <span className="text-muted-foreground">Ctrl</span>
+              <span>K</span>
+            </>
           )}
         </Button>
       </div>

@@ -27,6 +27,7 @@ export function EditorPane() {
   const toggle = useSession((s) => s.toggleEditor);
   const theme = useSession((s) => s.settings.theme);
   const fontSize = useSession((s) => s.settings.editorFontSize);
+  const claudeApiKey = useSession((s) => s.settings.claudeApiKey);
 
   if (!tab) return null;
 
@@ -46,14 +47,14 @@ export function EditorPane() {
 
   return (
     <section
-      className="flex shrink-0 flex-col overflow-hidden border-l-2 border-border-strong bg-paper transition-[width] duration-base ease-out"
+      className="flex shrink-0 flex-col overflow-hidden border-l bg-background transition-[width] duration-base ease-out"
       style={{ width: expanded ? EXPANDED_WIDTH : COLLAPSED_WIDTH }}
       aria-label="Query editor"
     >
       {expanded ? (
         <>
           {/* ── Header bar ── */}
-          <div className="flex h-11 shrink-0 items-center gap-2 border-b border-border-soft bg-paper pl-2 pr-3">
+          <div className="flex h-11 shrink-0 items-center gap-2 border-b border-border bg-background pl-2 pr-3">
             <Button
               variant="ghost"
               size="icon-sm"
@@ -64,24 +65,24 @@ export function EditorPane() {
               <ChevronRight />
             </Button>
 
-            <span className="font-mono text-sm text-ink">{tab.title}</span>
+            <span className="text-sm font-medium text-foreground">{tab.title}</span>
             {isTable && (
-              <span className="rounded-sm bg-paper-selected px-1.5 py-0.5 font-mono text-xs uppercase text-ink-muted">
+              <span className="rounded-md bg-muted px-1.5 py-0.5 text-xs uppercase text-muted-foreground">
                 table
               </span>
             )}
 
             <div className="flex-1" />
 
-            {/* Ask AI pill — only for SQL tabs */}
-            {!isTable && (
+            {/* Ask AI pill — only for SQL tabs, and only once a Claude key is set */}
+            {!isTable && claudeApiKey.trim().length > 0 && (
               <Button
-                variant="secondary"
+                variant="ghost"
                 size="sm"
-                className="h-7 gap-1.5 px-2.5 font-display text-sm italic normal-case tracking-normal text-ink-muted"
-                title="AI integration — wiring pending"
+                className="font-display italic text-muted-foreground"
+                title="Ask Claude to write or explain SQL"
               >
-                <Sparkles className="h-3 w-3 text-accent" />
+                <Sparkles className="h-3.5 w-3.5 text-primary" />
                 ask
               </Button>
             )}
@@ -89,9 +90,9 @@ export function EditorPane() {
             {/* Action button — Run / Cancel / Refresh */}
             {running ? (
               <Button variant="destructive" size="sm" onClick={handleAction}>
-                <Square />
+                <Square className="fill-current" />
                 Cancel
-                <Kbd>{kbd(".")}</Kbd>
+                <Kbd className="border-0 bg-transparent text-destructive-foreground/80">{kbd(".")}</Kbd>
               </Button>
             ) : isTable ? (
               <Button variant="secondary" size="sm" onClick={handleAction} disabled={!canRun}>
@@ -100,9 +101,9 @@ export function EditorPane() {
               </Button>
             ) : (
               <Button variant="primary" size="sm" onClick={handleAction} disabled={!canRun}>
-                <Play className="fill-accent text-accent" />
+                <Play className="fill-current" />
                 Run
-                <Kbd className="border-0 bg-transparent text-paper/70">{kbd("⏎")}</Kbd>
+                <Kbd className="border-0 bg-transparent text-primary-foreground/80">{kbd("⏎")}</Kbd>
               </Button>
             )}
           </div>
@@ -110,7 +111,7 @@ export function EditorPane() {
           {/* ── Monaco editor body ── */}
           <div className="relative min-h-0 flex-1 pt-4 overflow-hidden">
             {isTable && (
-              <div className="absolute left-4 top-2 z-10 font-display text-xs italic text-ink-muted">
+              <div className="absolute left-4 top-2 z-10 font-display text-xs italic text-muted-foreground">
                 compiled from table browser — read-only
               </div>
             )}
@@ -135,12 +136,12 @@ export function EditorPane() {
           onClick={toggle}
           aria-label="Expand editor"
           title={`Expand editor (${kbd("J")}) — ${tab.title}`}
-          className="group flex h-full w-full cursor-pointer flex-col items-center gap-4 border-0 bg-paper pb-4 pt-4 text-ink-muted transition-colors hover:bg-[var(--bg-hover)] hover:text-accent"
+          className="group flex h-full w-full cursor-pointer flex-col items-center gap-4 border-0 bg-background pb-4 pt-4 text-muted-foreground transition-colors hover:bg-[var(--bg-hover)] hover:text-primary"
         >
           <ChevronLeft className="h-4 w-4 shrink-0" />
-          {running && <span className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-none bg-accent" />}
+          {running && <span className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-none bg-primary" />}
           <span
-            className="flex-1 font-mono text-sm text-ink-muted group-hover:text-ink"
+            className="flex-1 font-mono text-sm text-muted-foreground group-hover:text-foreground"
             style={{
               writingMode: "vertical-rl",
               transform: "rotate(180deg)",
@@ -150,7 +151,7 @@ export function EditorPane() {
             {tab.title}
           </span>
           <span
-            className="shrink-0 font-mono text-xs text-ink-muted"
+            className="shrink-0 font-mono text-xs text-muted-foreground"
             style={{ writingMode: "vertical-rl", letterSpacing: "0.08em" }}
           >
             {kbd("J")}

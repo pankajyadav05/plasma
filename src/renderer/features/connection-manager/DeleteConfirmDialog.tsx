@@ -30,14 +30,14 @@ export function DeleteConfirmDialog() {
           <DialogDescription>
             {entry && (
               <>
-                <span className="font-mono text-sm not-italic text-ink">{entry.name}</span>
+                <span className="font-medium text-foreground">{entry.name}</span>
                 {' — '}
                 {entry.host}:{entry.port}/{entry.database}
               </>
             )}
           </DialogDescription>
         </DialogHeader>
-        <div className="px-6 py-4 font-display text-sm italic text-ink-2">
+        <div className="text-sm text-muted-foreground">
           The encrypted password will be removed from the local vault. This cannot be undone.
         </div>
         <DialogFooter>

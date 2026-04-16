@@ -57,44 +57,35 @@ export class ErrorBoundary extends Component<Props, State> {
     if (!this.state.error) return this.props.children;
 
     return (
-      <div
-        className="fixed inset-0 z-[9999] flex items-center justify-center bg-paper p-8"
-        style={{ fontFamily: '"DM Sans", system-ui, sans-serif' }}
-      >
-        <div className="w-full max-w-2xl border-2 border-border-strong bg-paper-canvas shadow-offset-lg">
-          <header className="border-b-2 border-border-strong px-8 py-6">
-            <h1
-              className="font-display text-2xl italic leading-tight text-accent"
-              style={{ fontWeight: 500 }}
-            >
-              Something broke.
-            </h1>
-            <p className="font-display text-base italic text-ink-muted">
-              Plasma hit an unhandled error. Nothing is lost — your saved
-              connections and query history are on disk.
+      <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-background p-8">
+        <div className="w-full max-w-2xl rounded-lg border bg-card text-card-foreground shadow-lg">
+          <header className="border-b px-8 py-6">
+            <h1 className="font-display text-3xl italic leading-tight text-destructive">Something broke.</h1>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Plasma hit an unhandled error. Nothing is lost — your saved connections and query history are on disk.
             </p>
           </header>
 
           <div className="grid gap-4 px-8 py-6">
-            <div className="border-l-[3px] border-accent bg-[var(--bg-hover)] px-4 py-2 font-mono text-sm text-ink">
+            <div className="rounded-md border-l-4 border-destructive bg-muted px-4 py-3 font-mono text-sm text-foreground">
               {this.state.error.message}
             </div>
-            <details className="font-mono text-xs text-ink-2">
-              <summary className="cursor-pointer">stack trace</summary>
+            <details className="font-mono text-xs text-muted-foreground">
+              <summary className="cursor-pointer">Stack trace</summary>
               <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words">
                 {this.state.error.stack ?? '(no stack)'}
               </pre>
             </details>
           </div>
 
-          <footer className="flex items-center justify-end gap-3 border-t-2 border-border-strong px-8 py-5">
-            <Button variant="secondary" onClick={this.copyError}>
+          <footer className="flex items-center justify-end gap-2 border-t px-8 py-4">
+            <Button variant="outline" onClick={this.copyError}>
               Copy report
             </Button>
-            <Button variant="secondary" onClick={this.reset}>
+            <Button variant="outline" onClick={this.reset}>
               Try again
             </Button>
-            <Button variant="primary" size="lg" onClick={this.reload}>
+            <Button variant="primary" onClick={this.reload}>
               <RotateCw />
               Reload
             </Button>

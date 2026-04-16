@@ -31,16 +31,16 @@ export function PaginationBar() {
     : Math.min(totalRows, (safePage + 1) * tab.pageSize);
 
   return (
-    <div className="flex h-9 shrink-0 items-center gap-4 border-t border-border-soft bg-paper px-4 text-sm text-ink-2">
+    <div className="flex h-9 shrink-0 items-center gap-4 border-t border-border bg-background px-4 text-sm text-muted-foreground">
       {/* Row range */}
-      <div className="flex items-center gap-1.5 font-mono tabular-nums">
-        <span className="text-ink">
+      <div className="flex items-center gap-1.5 tabular-nums">
+        <span className="text-foreground">
           {start.toLocaleString()}
-          <span className="px-[3px] text-ink-disabled">–</span>
+          <span className="px-[3px] text-muted-foreground">–</span>
           {end.toLocaleString()}
         </span>
-        <span className="text-ink-muted">of</span>
-        <span className="text-ink">{tab.countLoading ? "…" : totalRows.toLocaleString()}</span>
+        <span className="text-muted-foreground">of</span>
+        <span className="text-foreground">{tab.countLoading ? "…" : totalRows.toLocaleString()}</span>
       </div>
 
       <Separator orientation="vertical" className="h-4" />
@@ -67,10 +67,10 @@ export function PaginationBar() {
         >
           <ChevronLeft />
         </Button>
-        <div className="flex items-center gap-1 px-2 font-mono tabular-nums text-ink-2">
-          <span className="text-ink">{safePage + 1}</span>
-          <span className="text-ink-disabled">/</span>
-          <span className="text-ink-muted">{tab.countLoading ? "…" : totalPages.toLocaleString()}</span>
+        <div className="flex items-center gap-1 px-2 tabular-nums text-muted-foreground">
+          <span className="text-foreground">{safePage + 1}</span>
+          <span className="text-muted-foreground">/</span>
+          <span className="text-muted-foreground">{tab.countLoading ? "…" : totalPages.toLocaleString()}</span>
         </div>
         <Button
           variant="ghost"
@@ -98,7 +98,7 @@ export function PaginationBar() {
 
       {/* Rows per page */}
       <div className="flex items-center gap-2">
-        <span className="font-display italic text-ink-muted">rows</span>
+        <span className="text-muted-foreground">rows</span>
         <Select value={String(tab.pageSize)} onValueChange={(v) => setPageSize(Number(v))}>
           <SelectTrigger className="h-6 w-[72px] px-2 text-xs">
             <SelectValue />

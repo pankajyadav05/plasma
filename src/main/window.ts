@@ -47,7 +47,7 @@ interface WindowBounds {
   height: number;
 }
 
-type Theme = 'paper' | 'midnight';
+type Theme = 'light' | 'dark';
 
 /**
  * Read the persisted theme and compute the native window background
@@ -55,10 +55,10 @@ type Theme = 'paper' | 'midnight';
  * whenever the renderer flips theme in settings.
  */
 export function themeColors(theme: Theme) {
-  if (theme === 'midnight') {
-    return { background: '#1B1812' };
+  if (theme === 'dark') {
+    return { background: '#000000' };
   }
-  return { background: '#FAF7F0' };
+  return { background: '#FFFFFF' };
 }
 
 export function applyThemeToWindow(win: BrowserWindow, theme: Theme): void {
@@ -69,7 +69,7 @@ export function applyThemeToWindow(win: BrowserWindow, theme: Theme): void {
 export function createMainWindow(): BrowserWindow {
   const isMac = process.platform === 'darwin';
   const saved = getSetting<WindowBounds | null>('windowBounds', null);
-  const theme = getSetting<Theme>('theme', 'paper');
+  const theme = getSetting<Theme>('theme', 'light');
   const colors = themeColors(theme);
 
   const iconPath = resolveIconPath();

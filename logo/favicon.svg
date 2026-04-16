@@ -13,7 +13,7 @@
     <style>
       .bg    { fill: #FAF7F0; }
       .ink   { fill: #1C1A14; }
-      .accent { fill: #7B2D26; }
+      .accent { fill: #EB5E4E; }
       .frame { fill: none; stroke: #1C1A14; stroke-width: 2.5; }
       .p-glyph {
         font-family: 'Newsreader', 'Georgia', 'Times New Roman', serif;

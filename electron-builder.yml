@@ -1,0 +1,53 @@
+appId: sh.plasma.app
+productName: Plasma
+copyright: Copyright © 2026
+artifactName: ${productName}-${version}-${arch}.${ext}
+
+directories:
+  output: release
+  buildResources: resources
+
+# Ship the built main/preload/renderer plus the native pg + better-sqlite3.
+# Exclude source, tests, configs, and anything else that shouldn't ride along.
+files:
+  - out/**/*
+  - package.json
+  - "!**/*.map"
+  - "!**/node_modules/**/{CHANGELOG.md,README.md,readme.md,readme}"
+  - "!**/node_modules/**/{test,tests,__tests__,__mocks__,example,examples,docs,.github}/**"
+  - "!**/{.eslintrc,.eslintignore,.prettierrc,.editorconfig,tsconfig*.json,tslint.json,rollup.config*}"
+
+# better-sqlite3 ships a prebuilt .node binary — it must NOT live inside the
+# asar archive because Node's native loader can't dlopen from inside asar.
+asarUnpack:
+  - "**/node_modules/better-sqlite3/**"
+
+# Rebuild native modules against Electron's ABI on package. Required for
+# better-sqlite3; already handled at install time by the postinstall hook,
+# but doing it again here keeps CI packaging honest.
+nodeGypRebuild: false
+buildDependenciesFromSource: false
+npmRebuild: false
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+    - target: portable
+      arch:
+        - x64
+  icon: resources/icon.png
+  artifactName: ${productName}-${version}-${arch}.${ext}
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Plasma
+  artifactName: ${productName}-Setup-${version}-${arch}.${ext}
+
+portable:
+  artifactName: ${productName}-Portable-${version}-${arch}.${ext}
