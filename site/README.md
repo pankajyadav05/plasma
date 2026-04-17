@@ -20,6 +20,30 @@ Drop `site/index.html` onto any static host:
 - **GitHub Pages** — push the repo, set Pages source to `/site`
 - **S3 + CloudFront** — upload `index.html` as the root object
 
+## Version sync
+
+The version shown in download URLs / filenames is pulled from the root
+`package.json`. Don't hand-edit versions in `index.html` — bump via:
+
+```bash
+pnpm run release:patch   # 0.0.2 → 0.0.3
+pnpm run release:minor   # 0.0.2 → 0.1.0
+pnpm run release:major   # 0.0.2 → 1.0.0
+```
+
+This bumps `package.json`, patches `site/index.html`, and stages both
+files. You still write the commit and tag:
+
+```bash
+git commit -m "v0.0.3"
+git tag v0.0.3
+```
+
+To re-sync the site without bumping: `pnpm run version:sync`.
+
+(`pnpm version` / `npm version` are avoided — they shell out in a way
+that fails on Windows with `spawn EINVAL` under recent Node patches.)
+
 ## Before you ship
 
 1. **Replace download `href`s.** Search for `data-download` in `index.html`. Each link currently points to `#` and triggers an alert. Swap in real release URLs — e.g. GitHub Releases:

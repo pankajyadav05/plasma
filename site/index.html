@@ -16,9 +16,14 @@
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:title" content="Plasma — a quiet place for queries" />
 
-    <!-- Favicon (same as the app, relative to site/) -->
-    <link rel="icon" type="image/svg+xml" href="../logo/favicon.svg" />
-    <link rel="mask-icon" href="../logo/favicon.svg" color="#EB5E4E" />
+    <!-- Favicon — inlined as a data URI so the site stays self-contained
+         at any deploy root (Vercel, GitHub Pages, S3…). Mirrors
+         logo/favicon.svg verbatim; keep the two in sync if either changes. -->
+    <link
+      rel="icon"
+      type="image/svg+xml"
+      href="data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2064%2064%22%3E%3Crect%20x%3D%223%22%20y%3D%223%22%20width%3D%2258%22%20height%3D%2258%22%20rx%3D%2210%22%20fill%3D%22%23FAF7F0%22%2F%3E%3Crect%20x%3D%223%22%20y%3D%223%22%20width%3D%2258%22%20height%3D%2258%22%20rx%3D%2210%22%20fill%3D%22none%22%20stroke%3D%22%231C1A14%22%20stroke-width%3D%222.5%22%2F%3E%3Ctext%20x%3D%2232%22%20y%3D%2244%22%20text-anchor%3D%22middle%22%20fill%3D%22%231C1A14%22%20style%3D%22font%3Aitalic%20600%2048px%20'Newsreader'%2CGeorgia%2Cserif%22%3EP%3C%2Ftext%3E%3Crect%20x%3D%2218%22%20y%3D%2248%22%20width%3D%2228%22%20height%3D%223%22%20fill%3D%22%23EB5E4E%22%2F%3E%3C%2Fsvg%3E"
+    />
 
     <!-- Fonts — same pairing as the app itself -->
     <link rel="preconnect" href="https://fonts.bunny.net" />
@@ -1076,8 +1081,8 @@
         <div class="reveal grid gap-4 sm:grid-cols-2">
           <!-- Primary: Windows installer -->
           <a
-            href="https://ci1uagtcki1vvf8z.public.blob.vercel-storage.com/Plasma-Setup-0.0.2-x64.exe"
-            data-download="Plasma-Setup-0.0.2-x64.exe"
+            href="https://ci1uagtcki1vvf8z.public.blob.vercel-storage.com/Plasma-Setup-0.0.3-x64.exe"
+            data-download="Plasma-Setup-0.0.3-x64.exe"
             data-cursor-label="INSTALL"
             class="magnetic group flex items-center gap-5 rounded-xl border border-primary bg-primary p-6 text-left text-primary-foreground transition-opacity hover:opacity-90"
           >
@@ -1092,7 +1097,7 @@
               </div>
               <div class="font-display text-xl italic">Windows Installer</div>
               <div class="mt-1 font-mono text-xs text-white/70">
-                Plasma-Setup-0.0.2-x64.exe · 91 MB
+                Plasma-Setup-0.0.3-x64.exe · 91 MB
               </div>
             </div>
             <svg class="h-5 w-5 shrink-0 transition-transform group-hover:translate-x-1" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -1102,8 +1107,8 @@
 
           <!-- Secondary: Portable -->
           <a
-            href="https://ci1uagtcki1vvf8z.public.blob.vercel-storage.com/Plasma-Portable-0.0.2-x64.exe"
-            data-download="Plasma-Portable-0.0.2-x64.exe"
+            href="https://ci1uagtcki1vvf8z.public.blob.vercel-storage.com/Plasma-Portable-0.0.3-x64.exe"
+            data-download="Plasma-Portable-0.0.3-x64.exe"
             data-cursor-label="PORTABLE"
             class="magnetic group flex items-center gap-5 rounded-xl border border-border bg-background p-6 text-left transition-colors hover:border-primary"
           >
@@ -1118,7 +1123,7 @@
               </div>
               <div class="font-display text-xl italic">Portable build</div>
               <div class="mt-1 font-mono text-xs text-muted-foreground">
-                Plasma-Portable-0.0.2-x64.exe · 91 MB
+                Plasma-Portable-0.0.3-x64.exe · 91 MB
               </div>
             </div>
             <svg class="h-5 w-5 shrink-0 text-muted-foreground transition-all group-hover:translate-x-1 group-hover:text-primary" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
