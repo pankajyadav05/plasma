@@ -67,7 +67,7 @@ function ControlButton({
       className={
         "flex h-full w-[46px] items-center justify-center text-muted-foreground transition-colors " +
         (danger
-          ? "hover:bg-[#e81123] hover:text-white"
+          ? "hover:bg-win-close hover:text-white"
           : "hover:bg-[var(--bg-hover)] hover:text-foreground")
       }
     >

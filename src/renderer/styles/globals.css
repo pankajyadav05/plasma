@@ -191,6 +191,20 @@
   --duration-instant: 80ms;
   --duration-fast: 140ms;
   --duration-base: 220ms;
+
+  --color-win-close: #e81123;
+}
+
+/* Off-screen row skipping — browser skips paint/layout of rows outside the
+   viewport. contain-intrinsic-size reserves height so the scrollbar stays
+   accurate. Heights match the fixed row heights used in the grid/sidebar. */
+@utility cv-row-34 {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 34px;
+}
+@utility cv-row-28 {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 28px;
 }
 
 @layer base {

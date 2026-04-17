@@ -4,7 +4,12 @@
       "Bash(pnpm run:*)",
       "Bash(pnpm add:*)",
       "Bash(pnpm remove:*)",
-      "Bash(node:*)"
+      "Bash(node:*)",
+      "Bash(sort -t: -k2 -rn)",
+      "Bash(xargs wc *)",
+      "Bash(cat)",
+      "Read(//tmp/**)",
+      "Bash(pnpm exec *)"
     ]
   }
 }

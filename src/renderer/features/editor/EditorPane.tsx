@@ -8,6 +8,8 @@ import { MonacoEditor } from "./MonacoEditor";
 const COLLAPSED_WIDTH = 40;
 const EXPANDED_WIDTH = 520;
 
+const NOOP = () => {};
+
 /**
  * Right-side editor panel. Two modes:
  *
@@ -117,11 +119,8 @@ export function EditorPane() {
             )}
             <MonacoEditor
               value={tab.sql}
-              onChange={isTable ? () => {} : setSql}
-              onRun={() => {
-                if (isTable) void refreshTable();
-                else void runQuery();
-              }}
+              onChange={isTable ? NOOP : setSql}
+              onRun={handleAction}
               onToggle={toggle}
               theme={theme}
               fontSize={fontSize}

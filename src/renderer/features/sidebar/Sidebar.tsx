@@ -419,7 +419,7 @@ function TableRow({
   return (
     <div
       className={cn(
-        "group/row relative mx-2 flex h-7 items-stretch rounded-md transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
+        "group/row cv-row-28 relative mx-2 flex h-7 items-stretch rounded-md transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
         active && "bg-sidebar-accent text-sidebar-accent-foreground",
       )}
     >

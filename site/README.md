@@ -24,7 +24,7 @@ Drop `site/index.html` onto any static host:
 
 1. **Replace download `href`s.** Search for `data-download` in `index.html`. Each link currently points to `#` and triggers an alert. Swap in real release URLs — e.g. GitHub Releases:
    ```
-   https://github.com/<you>/plasma/releases/download/v0.0.1/Plasma-Setup-0.0.1-x64.exe
+   https://github.com/<you>/plasma/releases/download/v0.0.2/Plasma-Setup-0.0.2-x64.exe
    ```
 2. **Replace the `https://github.com/` placeholders** in the nav, download section, and footer with the real repo URL.
 3. **Update Open Graph `og:image`** — add one before launching. 1200×630 with the wordmark + oxblood stroke works well.

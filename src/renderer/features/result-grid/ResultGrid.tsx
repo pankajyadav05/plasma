@@ -618,7 +618,7 @@ export function ResultGrid() {
                 // biome-ignore lint/suspicious/noArrayIndexKey: stable per-query
                 key={`row-${visibleRow}-${entry.originalIndex}`}
                 className={cn(
-                  "group/row transition-colors",
+                  "group/row cv-row-34 transition-colors",
                   rowSelected ? "bg-primary/15" : "hover:bg-accent hover:text-accent-foreground",
                 )}
               >

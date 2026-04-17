@@ -67,6 +67,25 @@ export default defineConfig({
     build: {
       rollupOptions: {
         input: resolve(__dirname, 'src/renderer/index.html'),
+        output: {
+          // Split heavy vendor code into stable chunks so cached chunks survive
+          // app-code updates. Monaco is the big one (~3MB) and deserves its own
+          // chunk since it's lazy-loaded behind a Suspense boundary.
+          manualChunks: {
+            'vendor-monaco': ['@monaco-editor/react', 'monaco-editor'],
+            'vendor-radix': [
+              '@radix-ui/react-checkbox',
+              '@radix-ui/react-dialog',
+              '@radix-ui/react-label',
+              '@radix-ui/react-popover',
+              '@radix-ui/react-select',
+              '@radix-ui/react-separator',
+              '@radix-ui/react-slot',
+              '@radix-ui/react-tooltip',
+            ],
+            'vendor-react': ['react', 'react-dom'],
+          },
+        },
       },
     },
     server: {
