@@ -110,8 +110,20 @@ export interface QueryTab {
   countLoading: boolean;
 }
 
+const THEME_NAMES = ['default', 'caffeine', 'sage-garden', 'supabase', 'violet-bloom', 'vercel'] as const;
+
+function applyTheme(mode: 'light' | 'dark', name: string) {
+  const root = document.documentElement;
+  root.classList.toggle('dark', mode === 'dark');
+  for (const n of THEME_NAMES) root.classList.remove(`theme-${n}`);
+  if (name && name !== 'default') root.classList.add(`theme-${name}`);
+  // Notify non-CSS consumers (Monaco, future canvases) that live vars changed.
+  window.dispatchEvent(new CustomEvent('plasma:theme-changed', { detail: { mode, name } }));
+}
+
 const DEFAULT_SETTINGS: Settings = {
   theme: 'light',
+  themeName: 'default',
   sidebarCollapsed: false,
   sidebarWidth: 264,
   editorExpanded: false,
@@ -980,7 +992,7 @@ export const useSession = create<SessionState>((set, get) => ({
       const settings = await ipc.settings.get();
       set({ settings });
       // Apply theme immediately on boot
-      document.documentElement.classList.toggle('dark', settings.theme === 'dark');
+      applyTheme(settings.theme, settings.themeName);
     } catch (err) {
       console.error('[plasma] settings.get failed', err);
     }
@@ -990,7 +1002,7 @@ export const useSession = create<SessionState>((set, get) => ({
     try {
       const next = await ipc.settings.set(patch);
       set({ settings: next });
-      document.documentElement.classList.toggle('dark', next.theme === 'dark');
+      applyTheme(next.theme, next.themeName);
     } catch (err) {
       console.error('[plasma] settings.set failed', err);
     }
@@ -1013,7 +1025,7 @@ export const useSession = create<SessionState>((set, get) => ({
     // Optimistic theme flip — apply CSS immediately, persist in background.
     const next = get().settings.theme === 'light' ? 'dark' : 'light';
     set({ settings: { ...get().settings, theme: next } });
-    document.documentElement.classList.toggle('dark', next === 'dark');
+    applyTheme(next, get().settings.themeName);
     try {
       await ipc.settings.set({ theme: next });
     } catch (err) {

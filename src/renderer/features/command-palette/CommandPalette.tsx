@@ -77,20 +77,22 @@ export function CommandPalette() {
               <Command.Input
                 autoFocus
                 placeholder="Search tables, connections, actions…"
-                className="h-8 flex-1 border-0 bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground"
+                className="h-8 flex-1 border-0 bg-transparent text-sm text-foreground outline-none focus:outline-none focus-visible:outline-none focus-visible:ring-0 placeholder:text-muted-foreground"
               />
             </div>
 
             <Command.List className="max-h-[50vh] overflow-y-auto p-2">
-              <Command.Empty className="px-4 py-8 text-center text-sm text-muted-foreground">
-                No matches.
-              </Command.Empty>
+              <Command.Empty className="px-4 py-8 text-center text-sm text-muted-foreground">No matches.</Command.Empty>
 
               <Command.Group
                 heading="Actions"
                 className="[&_[cmdk-group-heading]]:px-3 [&_[cmdk-group-heading]]:py-2 [&_[cmdk-group-heading]]:text-xs [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:text-muted-foreground"
               >
-                <PaletteItem icon={<Play className="h-3.5 w-3.5" />} onSelect={() => runAction(runQuery)} keys={kbd("⏎")}>
+                <PaletteItem
+                  icon={<Play className="h-3.5 w-3.5" />}
+                  onSelect={() => runAction(runQuery)}
+                  keys={kbd("⏎")}
+                >
                   Run query
                 </PaletteItem>
                 <PaletteItem icon={<Plus className="h-3.5 w-3.5" />} onSelect={() => runAction(addTab)} keys={kbd("T")}>
@@ -153,9 +155,9 @@ export function CommandPalette() {
                         icon={<Plug className="h-3.5 w-3.5" />}
                         onSelect={() => runAction(() => (active ? Promise.resolve() : connectSaved(c.id)))}
                       >
-                        {c.name}
+                        {c.name} -
                         <span className="ml-auto text-xs text-muted-foreground">
-                          {c.host}:{c.port}/{c.database}
+                          &nbsp;{c.host}:{c.port}/{c.database}
                         </span>
                       </PaletteItem>
                     );

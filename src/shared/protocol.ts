@@ -176,6 +176,10 @@ export const SettingsShape = z.object({
       z.enum(['light', 'dark']),
     )
     .default('light'),
+  themeName: z
+    .enum(['default', 'caffeine', 'sage-garden', 'supabase', 'violet-bloom', 'vercel'])
+    .catch('default')
+    .default('default'),
   sidebarCollapsed: z.boolean().default(false),
   sidebarWidth: z.number().int().min(200).max(520).default(264),
   editorExpanded: z.boolean().default(false),

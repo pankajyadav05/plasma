@@ -1,6 +1,7 @@
-import { lazy, Suspense, useCallback } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useRef } from 'react';
 import type { OnMount, OnChange } from '@monaco-editor/react';
-import { DARK_THEME_ID, LIGHT_THEME_ID, registerMonacoThemes } from './paperTheme';
+import type * as MonacoType from 'monaco-editor';
+import { PLASMA_THEME_ID, applyMonacoTheme } from './paperTheme';
 import { registerSqlCompletions } from './sqlCompletions';
 
 // Lazy-load Monaco to keep the initial renderer bundle small. The
@@ -25,11 +26,13 @@ interface Props {
  * scale (JetBrains Mono at configurable size).
  */
 export function MonacoEditor({ value, onChange, onRun, onToggle, theme, fontSize, readOnly = false }: Props) {
+  const monacoRef = useRef<typeof MonacoType | null>(null);
+
   const handleMount = useCallback<OnMount>(
     (editor, monaco) => {
-      registerMonacoThemes(monaco);
+      monacoRef.current = monaco;
+      applyMonacoTheme(monaco, theme);
       registerSqlCompletions(monaco);
-      monaco.editor.setTheme(theme === 'dark' ? DARK_THEME_ID : LIGHT_THEME_ID);
 
       // ⌘⏎ / Ctrl+Enter — run query
       editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => {
@@ -46,6 +49,25 @@ export function MonacoEditor({ value, onChange, onRun, onToggle, theme, fontSize
     },
     [onRun, onToggle, theme],
   );
+
+  // Re-apply Monaco theme whenever the app theme or palette changes.
+  // `theme` prop covers light/dark flips; the window event covers palette
+  // swaps (themeName) without a prop plumbing round-trip.
+  useEffect(() => {
+    const monaco = monacoRef.current;
+    if (monaco) applyMonacoTheme(monaco, theme);
+  }, [theme]);
+
+  useEffect(() => {
+    const onChanged = () => {
+      const monaco = monacoRef.current;
+      if (!monaco) return;
+      const mode = document.documentElement.classList.contains('dark') ? 'dark' : 'light';
+      applyMonacoTheme(monaco, mode);
+    };
+    window.addEventListener('plasma:theme-changed', onChanged);
+    return () => window.removeEventListener('plasma:theme-changed', onChanged);
+  }, []);
 
   const handleChange = useCallback<OnChange>(
     (v) => {
@@ -67,7 +89,7 @@ export function MonacoEditor({ value, onChange, onRun, onToggle, theme, fontSize
         value={value}
         onChange={handleChange}
         onMount={handleMount}
-        theme={theme === 'dark' ? DARK_THEME_ID : LIGHT_THEME_ID}
+        theme={PLASMA_THEME_ID}
         loading={
           <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
             Loading editor…

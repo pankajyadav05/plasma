@@ -11,7 +11,8 @@
       "Read(//tmp/**)",
       "Bash(pnpm exec *)",
       "Bash(sed -i 's/\"version\": \"0.0.2\"/\"version\": \"9.9.9\"/' package.json)",
-      "Bash(sed -i 's/\"version\": \"9.9.9\"/\"version\": \"0.0.2\"/' package.json)"
+      "Bash(sed -i 's/\"version\": \"9.9.9\"/\"version\": \"0.0.2\"/' package.json)",
+      "WebFetch(domain:tweakcn.com)"
     ]
   }
 }
