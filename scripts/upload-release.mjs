@@ -14,10 +14,10 @@
  * matching the hrefs baked into site/index.html.
  */
 
-import { put } from '@vercel/blob';
-import { readFileSync, statSync, existsSync } from 'node:fs';
-import { resolve, dirname } from 'node:path';
+import { existsSync, readFileSync, statSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { put } from '@vercel/blob';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = resolve(__dirname, '..');
@@ -48,22 +48,33 @@ const pkg = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8'));
 const version = pkg.version;
 
 const artifacts = [
-  `Plasma-Setup-${version}-x64.exe`,
-  `Plasma-Portable-${version}-x64.exe`,
+  // The installer + its blockmap (delta updates) and the manifest
+  // electron-updater polls. The portable EXE has no blockmap and is
+  // not auto-updatable but still ships for direct download.
+  {
+    name: `Plasma-Setup-${version}-x64.exe`,
+    contentType: 'application/vnd.microsoft.portable-executable',
+  },
+  { name: `Plasma-Setup-${version}-x64.exe.blockmap`, contentType: 'application/octet-stream' },
+  {
+    name: `Plasma-Portable-${version}-x64.exe`,
+    contentType: 'application/vnd.microsoft.portable-executable',
+  },
+  { name: 'latest.yml', contentType: 'text/yaml' },
 ];
 
 // Fail fast if anything's missing — better to know before uploading half.
-const missing = artifacts.filter((name) => !existsSync(resolve(root, 'release', name)));
+const missing = artifacts.filter((a) => !existsSync(resolve(root, 'release', a.name)));
 if (missing.length > 0) {
   console.error(`[upload] missing artifacts in release/:`);
-  for (const m of missing) console.error(`  - ${m}`);
+  for (const m of missing) console.error(`  - ${m.name}`);
   console.error('[upload] run `pnpm run dist:win` first');
   process.exit(1);
 }
 
 const fmtMB = (bytes) => `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 
-for (const name of artifacts) {
+for (const { name, contentType } of artifacts) {
   const filePath = resolve(root, 'release', name);
   const size = statSync(filePath).size;
   console.log(`[upload] ${name} (${fmtMB(size)}) …`);
@@ -73,7 +84,7 @@ for (const name of artifacts) {
     access: 'public',
     addRandomSuffix: false,
     allowOverwrite: true,
-    contentType: 'application/vnd.microsoft.portable-executable',
+    contentType,
   });
   console.log(`[upload] ↪ ${result.url}`);
 }
@@ -82,3 +93,4 @@ console.log('');
 console.log('[upload] done. verify the site download links match:');
 console.log(`  https://<your-blob-host>/Plasma-Setup-${version}-x64.exe`);
 console.log(`  https://<your-blob-host>/Plasma-Portable-${version}-x64.exe`);
+console.log(`  https://<your-blob-host>/latest.yml          ← auto-update manifest`);

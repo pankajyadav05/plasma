@@ -1,8 +1,8 @@
-import { FileCode, Plus, Table2, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/cn';
 import { kbd } from '@/lib/platform';
 import { useSession } from '@/stores/session';
+import { FileCode, PanelLeft, PanelLeftClose, Plus, Table2, X } from 'lucide-react';
 
 export function TabStrip() {
   const tabs = useSession((s) => s.tabs);
@@ -10,11 +10,27 @@ export function TabStrip() {
   const setActiveTab = useSession((s) => s.setActiveTab);
   const closeTab = useSession((s) => s.closeTab);
   const addTab = useSession((s) => s.addTab);
+  const sidebarCollapsed = useSession((s) => s.settings.sidebarCollapsed);
+  const toggleSidebar = useSession((s) => s.toggleSidebar);
 
   return (
     <div className="flex h-10 shrink-0 items-stretch border-b border-border bg-background">
+      <div className="flex shrink-0 items-center border-r border-border">
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          onClick={() => void toggleSidebar()}
+          aria-label={
+            sidebarCollapsed ? `Show sidebar (${kbd('B')})` : `Hide sidebar (${kbd('B')})`
+          }
+          title={sidebarCollapsed ? `Show sidebar (${kbd('B')})` : `Hide sidebar (${kbd('B')})`}
+          className="mx-1"
+        >
+          {sidebarCollapsed ? <PanelLeft /> : <PanelLeftClose />}
+        </Button>
+      </div>
       <div
-        className="scrollbar-none flex min-w-0 flex-1 items-stretch overflow-x-auto overflow-y-hidden"
+        className="scrollbar-none relative flex min-w-0 flex-1 items-stretch overflow-x-auto overflow-y-hidden [mask-image:linear-gradient(to_right,transparent,black_16px,black_calc(100%-16px),transparent)]"
         style={{ scrollbarWidth: 'none' }}
       >
         {tabs.map((t) => {
@@ -37,22 +53,23 @@ export function TabStrip() {
                 if (e.key === 'Enter') setActiveTab(t.id);
               }}
             >
-              {active && (
-                <span className="absolute inset-x-0 bottom-[-1px] h-0.5 bg-primary" />
-              )}
-              <Icon className={cn('h-3.5 w-3.5 shrink-0', active ? 'text-primary' : 'text-muted-foreground')} />
+              {active && <span className="absolute inset-x-0 bottom-[-1px] h-0.5 bg-primary" />}
+              <Icon
+                className={cn(
+                  'h-3.5 w-3.5 shrink-0',
+                  active ? 'text-primary' : 'text-muted-foreground',
+                )}
+              />
               {t.queryRunState === 'running' && (
                 <span className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-none bg-primary" />
               )}
-              {t.queryError && (
-                <span className="shrink-0 text-xs text-primary">!</span>
-              )}
+              {t.queryError && <span className="shrink-0 text-xs text-primary">!</span>}
               <span className="max-w-[180px] truncate text-sm">{t.title}</span>
               {tabs.length > 1 && (
                 <Button
                   variant="ghost"
                   size="icon-xs"
-                  className="h-5 w-5 shrink-0 opacity-0 transition-opacity group-hover:opacity-100"
+                  className="h-6 w-6 shrink-0 opacity-0 transition-opacity duration-150 group-hover:opacity-100 focus-visible:opacity-100"
                   onClick={(e) => {
                     e.stopPropagation();
                     closeTab(t.id);
@@ -72,7 +89,7 @@ export function TabStrip() {
           size="icon-sm"
           onClick={addTab}
           aria-label="New SQL tab"
-          title={`New SQL tab (${kbd("T")})`}
+          title={`New SQL tab (${kbd('T')})`}
           className="mx-1"
         >
           <Plus />

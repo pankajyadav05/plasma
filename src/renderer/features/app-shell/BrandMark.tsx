@@ -1,5 +1,5 @@
-import markSvg from "@logo/plasma-mark.svg?raw";
-import { cn } from "@/lib/cn";
+import markSvg from '@logo/plasma-mark.svg?raw';
+import { cn } from '@/lib/cn';
 
 /**
  * Plasma monogram (italic serif P + oxblood stroke). Inlined via Vite
@@ -11,7 +11,10 @@ import { cn } from "@/lib/cn";
 export function BrandMark({ className }: { className?: string }) {
   return (
     <span
-      className={cn("inline-block leading-none [&>svg]:h-full [&>svg]:w-full [&>svg]:block", className)}
+      className={cn(
+        'inline-block leading-none [&>svg]:h-full [&>svg]:w-full [&>svg]:block',
+        className,
+      )}
       aria-hidden
       // biome-ignore lint/security/noDangerouslySetInnerHtml: trusted local asset
       dangerouslySetInnerHTML={{ __html: markSvg }}

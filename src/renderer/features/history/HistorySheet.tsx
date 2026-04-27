@@ -1,8 +1,16 @@
-import { Trash2 } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
-import { formatDuration } from "@/lib/format";
-import { useSession } from "@/stores/session";
+import { Button } from '@/components/ui/button';
+import { ConfirmDialog } from '@/components/ui/confirm-dialog';
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from '@/components/ui/sheet';
+import { formatDuration } from '@/lib/format';
+import { useSession } from '@/stores/session';
+import { Trash2 } from 'lucide-react';
+import { useState } from 'react';
 
 export function HistorySheet() {
   const open = useSession((s) => s.historyOpen);
@@ -10,6 +18,7 @@ export function HistorySheet() {
   const history = useSession((s) => s.history);
   const clearHistory = useSession((s) => s.clearHistory);
   const reuseHistoryQuery = useSession((s) => s.reuseHistoryQuery);
+  const [confirmClear, setConfirmClear] = useState(false);
 
   return (
     <Sheet open={open} onOpenChange={setOpen}>
@@ -17,21 +26,28 @@ export function HistorySheet() {
         <SheetHeader className="flex flex-row items-start justify-between gap-3 pr-10">
           <div>
             <SheetTitle>Query history</SheetTitle>
-            <SheetDescription>Last {history.length.toLocaleString()} queries — click to reuse.</SheetDescription>
+            <SheetDescription>
+              Last {history.length.toLocaleString()} queries — click to reuse.
+            </SheetDescription>
           </div>
           <Button
             variant="outline"
             size="sm"
-            onClick={() => {
-              if (window.confirm("Clear all query history?")) {
-                void clearHistory();
-              }
-            }}
+            onClick={() => setConfirmClear(true)}
+            disabled={history.length === 0}
           >
             <Trash2 />
             Clear
           </Button>
         </SheetHeader>
+        <ConfirmDialog
+          open={confirmClear}
+          onOpenChange={setConfirmClear}
+          title="Clear all query history?"
+          description={`${history.length.toLocaleString()} ${history.length === 1 ? 'entry' : 'entries'} will be removed from the local store. This cannot be undone.`}
+          confirmLabel="Clear history"
+          onConfirm={() => void clearHistory()}
+        />
 
         <div className="-mx-6 min-h-0 flex-1 overflow-y-auto">
           {history.length === 0 && (
@@ -59,9 +75,11 @@ export function HistorySheet() {
               </div>
               <pre className="mt-1 max-h-24 overflow-hidden whitespace-pre-wrap break-words font-mono text-xs text-foreground">
                 {entry.sql.slice(0, 400)}
-                {entry.sql.length > 400 ? "…" : ""}
+                {entry.sql.length > 400 ? '…' : ''}
               </pre>
-              {entry.error && <div className="mt-1 font-mono text-xs text-destructive">{entry.error}</div>}
+              {entry.error && (
+                <div className="mt-1 font-mono text-xs text-destructive">{entry.error}</div>
+              )}
             </button>
           ))}
         </div>

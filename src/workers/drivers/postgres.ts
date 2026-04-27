@@ -172,7 +172,7 @@ export class PostgresDriver {
     const tables = await this.primary.query<{
       schema: string;
       name: string;
-      kind: 'r' | 'v' | 'm';
+      kind: 'r' | 'v' | 'm' | 'f' | 'p';
       row_count: string | null;
     }>(
       `SELECT n.nspname AS schema,
@@ -181,7 +181,7 @@ export class PostgresDriver {
               NULLIF(c.reltuples, -1)::bigint::text AS row_count
        FROM pg_class c
        JOIN pg_namespace n ON n.oid = c.relnamespace
-       WHERE c.relkind IN ('r', 'v', 'm')
+       WHERE c.relkind IN ('r', 'v', 'm', 'f', 'p')
          AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
          AND n.nspname NOT LIKE 'pg_temp_%'
        ORDER BY n.nspname, c.relname`,
@@ -217,7 +217,7 @@ export class PostgresDriver {
        ) pk ON true
        WHERE a.attnum > 0
          AND NOT a.attisdropped
-         AND c.relkind IN ('r', 'v', 'm')
+         AND c.relkind IN ('r', 'v', 'm', 'f', 'p')
          AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
          AND n.nspname NOT LIKE 'pg_temp_%'
        ORDER BY n.nspname, c.relname, a.attnum`,
@@ -256,7 +256,13 @@ export class PostgresDriver {
        ORDER BY n.nspname, c.relname, a.attnum`,
     );
 
-    const kindMap = { r: 'table', v: 'view', m: 'matview' } as const;
+    const kindMap = {
+      r: 'table',
+      v: 'view',
+      m: 'matview',
+      f: 'foreign',
+      p: 'partitioned',
+    } as const;
 
     return {
       schemas: schemas.rows.map((r) => ({ name: r.schema_name })),

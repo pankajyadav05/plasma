@@ -57,10 +57,7 @@ export function quoteIdent(name: string): string {
   return `"${name.replace(/"/g, '""')}"`;
 }
 
-function buildFilterClauses(
-  filters: Filter[],
-  addParam: (value: unknown) => string,
-): string[] {
+function buildFilterClauses(filters: Filter[], addParam: (value: unknown) => string): string[] {
   const clauses: string[] = [];
   for (const f of filters) {
     // Skip filters with empty values unless the op is IS NULL / IS NOT NULL
@@ -127,9 +124,7 @@ export function buildDataSql(input: BuildInput): BuiltSql {
     return `$${params.length}`;
   };
 
-  const visibleColumns = input.allColumns.filter(
-    (c) => !input.hiddenColumns.has(c),
-  );
+  const visibleColumns = input.allColumns.filter((c) => !input.hiddenColumns.has(c));
   const selectClause =
     input.hiddenColumns.size === 0 || visibleColumns.length === input.allColumns.length
       ? '*'
@@ -189,9 +184,7 @@ export function buildUpdateSql(input: {
     return `$${params.length}`;
   };
 
-  const setClause = setCols
-    .map((c) => `${quoteIdent(c)} = ${addParam(input.set[c])}`)
-    .join(', ');
+  const setClause = setCols.map((c) => `${quoteIdent(c)} = ${addParam(input.set[c])}`).join(', ');
   const whereClause = pkCols
     .map((c) => `${quoteIdent(c)} = ${addParam(input.pkValues[c])}`)
     .join(' AND ');
@@ -254,13 +247,106 @@ export function buildDeleteSql(input: {
 }
 
 /**
+ * Estimated count from `pg_class.reltuples` — no scan, returns instantly.
+ * Only valid when there are zero filters (it counts the whole relation).
+ * Caller is responsible for that check.
+ */
+export function buildEstimatedCountSql(schema: string, table: string): BuiltSql {
+  return {
+    sql: `SELECT reltuples::bigint AS estimate
+          FROM pg_class
+          WHERE oid = $1::regclass`,
+    params: [`${quoteIdent(schema)}.${quoteIdent(table)}`],
+  };
+}
+
+/**
+ * Build the SQL bundle for a table's "Definition" view: column shape,
+ * constraints, and indexes. The renderer composes the DDL from these.
+ */
+export function buildDefinitionQuerySql(schema: string, table: string): BuiltSql {
+  // Single round-trip: three result sets via a UNION over a tagged shape.
+  // Cheaper than three separate IPC calls; all columns coerced to text.
+  const sql = `
+    SELECT 'col' AS kind, a.attnum AS ord,
+           a.attname AS c1,
+           pg_catalog.format_type(a.atttypid, a.atttypmod) AS c2,
+           CASE WHEN a.attnotnull THEN 'NOT NULL' ELSE '' END AS c3,
+           COALESCE(pg_get_expr(d.adbin, d.adrelid), '') AS c4
+    FROM pg_attribute a
+    LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
+    WHERE a.attrelid = $1::regclass
+      AND a.attnum > 0 AND NOT a.attisdropped
+    UNION ALL
+    SELECT 'con' AS kind, 1000 + ROW_NUMBER() OVER (ORDER BY conname) AS ord,
+           conname AS c1,
+           pg_get_constraintdef(oid) AS c2,
+           '' AS c3,
+           '' AS c4
+    FROM pg_constraint
+    WHERE conrelid = $1::regclass
+    UNION ALL
+    SELECT 'idx' AS kind, 2000 + ROW_NUMBER() OVER (ORDER BY indexname) AS ord,
+           indexname AS c1,
+           indexdef AS c2,
+           '' AS c3,
+           '' AS c4
+    FROM pg_indexes
+    WHERE schemaname || '.' || tablename = $2
+    ORDER BY ord
+  `;
+  return {
+    sql,
+    params: [`${quoteIdent(schema)}.${quoteIdent(table)}`, `${schema}.${table}`],
+  };
+}
+
+/**
+ * Count active RLS policies on a table. Returns 0 for tables without RLS.
+ */
+export function buildRlsCountSql(schema: string, table: string): BuiltSql {
+  return {
+    sql: `SELECT COUNT(*)::int AS n
+          FROM pg_policies
+          WHERE schemaname = $1 AND tablename = $2`,
+    params: [schema, table],
+  };
+}
+
+/**
+ * List all RLS policies on a table — surfaced in the RLS badge popover.
+ */
+export function buildRlsPoliciesSql(schema: string, table: string): BuiltSql {
+  return {
+    sql: `SELECT policyname,
+                 cmd,
+                 COALESCE(array_to_string(roles, ', '), 'public') AS roles,
+                 COALESCE(qual::text, '') AS qual,
+                 COALESCE(with_check::text, '') AS with_check,
+                 permissive
+          FROM pg_policies
+          WHERE schemaname = $1 AND tablename = $2
+          ORDER BY policyname`,
+    params: [schema, table],
+  };
+}
+
+/** List role names (excluding pg_* internals), ordered. */
+export function buildRolesSql(): BuiltSql {
+  return {
+    sql: `SELECT rolname FROM pg_roles
+          WHERE rolname NOT LIKE 'pg\\_%' ESCAPE '\\'
+          ORDER BY rolname`,
+    params: [],
+  };
+}
+
+/**
  * Build the count query. Shares the same WHERE clause as the data query
  * so filtered totals are accurate. No SELECT/ORDER BY/LIMIT — just the
  * row count.
  */
-export function buildCountSql(
-  input: Pick<BuildInput, 'schema' | 'table' | 'filters'>,
-): BuiltSql {
+export function buildCountSql(input: Pick<BuildInput, 'schema' | 'table' | 'filters'>): BuiltSql {
   const params: unknown[] = [];
   const addParam = (value: unknown) => {
     params.push(value);
@@ -271,8 +357,6 @@ export function buildCountSql(
   const whereClauses = buildFilterClauses(input.filters, addParam);
   const whereClause = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
 
-  const sql = [`SELECT COUNT(*) FROM ${fromClause}`, whereClause]
-    .filter(Boolean)
-    .join('\n');
+  const sql = [`SELECT COUNT(*) FROM ${fromClause}`, whereClause].filter(Boolean).join('\n');
   return { sql, params };
 }

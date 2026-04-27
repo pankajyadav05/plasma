@@ -1,15 +1,15 @@
-import { useState } from "react";
-import { Check, Copy } from "lucide-react";
-import type { ColumnMeta } from "@shared/protocol";
-import { Button } from "@/components/ui/button";
+import { Button } from '@/components/ui/button';
 import {
   Sheet,
   SheetContent,
   SheetDescription,
   SheetHeader,
   SheetTitle,
-} from "@/components/ui/sheet";
-import { cn } from "@/lib/cn";
+} from '@/components/ui/sheet';
+import { cn } from '@/lib/cn';
+import type { ColumnMeta } from '@shared/protocol';
+import { Check, Copy } from 'lucide-react';
+import { useState } from 'react';
 
 export interface RowDetail {
   tabTitle: string;
@@ -41,7 +41,7 @@ export function RowDetailSheet({
     <Sheet open={!!detail} onOpenChange={onOpenChange}>
       <SheetContent side="right" className="w-full sm:max-w-lg">
         <SheetHeader>
-          <SheetTitle>Row {detail?.rowNumber.toLocaleString() ?? ""}</SheetTitle>
+          <SheetTitle>Row {detail?.rowNumber.toLocaleString() ?? ''}</SheetTitle>
           <SheetDescription>{detail?.tabTitle}</SheetDescription>
         </SheetHeader>
 
@@ -59,15 +59,16 @@ function FieldRow({ col, value }: { col: ColumnMeta; value: unknown }) {
   const [copied, setCopied] = useState(false);
 
   const formatted = formatFieldValue(value);
-  const isMultiline = typeof formatted === "string" && (formatted.includes("\n") || formatted.length > 120);
+  const isMultiline =
+    typeof formatted === 'string' && (formatted.includes('\n') || formatted.length > 120);
   const isNullish = value === null || value === undefined;
-  const isEmpty = typeof value === "string" && value === "";
+  const isEmpty = typeof value === 'string' && value === '';
 
   const handleCopy = () => {
     const text =
       value === null || value === undefined
-        ? ""
-        : typeof value === "object"
+        ? ''
+        : typeof value === 'object'
           ? JSON.stringify(value)
           : String(value);
     void navigator.clipboard?.writeText(text).then(() => {
@@ -87,7 +88,7 @@ function FieldRow({ col, value }: { col: ColumnMeta; value: unknown }) {
           variant="ghost"
           size="icon-xs"
           onClick={handleCopy}
-          className="opacity-0 transition-opacity group-hover/field:opacity-100"
+          className="opacity-0 transition-opacity duration-150 group-hover/field:opacity-100 focus-visible:opacity-100"
           aria-label={`Copy ${col.name}`}
           title="Copy value"
         >
@@ -96,15 +97,17 @@ function FieldRow({ col, value }: { col: ColumnMeta; value: unknown }) {
       </div>
       {isNullish ? (
         <div className="font-display text-sm italic text-muted-foreground">
-          {value === null ? "null" : "undefined"}
+          {value === null ? 'null' : 'undefined'}
         </div>
       ) : isEmpty ? (
         <div className="font-display text-sm italic text-muted-foreground">(empty string)</div>
       ) : (
         <pre
           className={cn(
-            "font-mono text-xs text-foreground",
-            isMultiline ? "max-h-48 overflow-auto whitespace-pre rounded-md border bg-muted p-2" : "whitespace-pre-wrap break-words",
+            'font-mono text-xs text-foreground',
+            isMultiline
+              ? 'max-h-48 overflow-auto whitespace-pre rounded-md border bg-muted p-2'
+              : 'whitespace-pre-wrap break-words',
           )}
         >
           {formatted}
@@ -115,8 +118,8 @@ function FieldRow({ col, value }: { col: ColumnMeta; value: unknown }) {
 }
 
 function formatFieldValue(value: unknown): string {
-  if (value === null || value === undefined) return "";
-  if (typeof value === "object") {
+  if (value === null || value === undefined) return '';
+  if (typeof value === 'object') {
     try {
       return JSON.stringify(value, null, 2);
     } catch {

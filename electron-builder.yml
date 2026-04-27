@@ -51,3 +51,16 @@ nsis:
 
 portable:
   artifactName: ${productName}-Portable-${version}-${arch}.${ext}
+
+# ── Auto-update (electron-updater) ────────────────────────────────────
+# Generic provider — `latest.yml` + the installer + its .blockmap live
+# at the same URL space (Vercel Blob, addRandomSuffix:false). Builder
+# emits these manifest files alongside the artifacts; the upload
+# script ships them. Only the NSIS installer can self-update; the
+# portable EXE will surface the available-update event but the user
+# has to re-download manually.
+publish:
+  - provider: generic
+    url: https://ci1uagtcki1vvf8z.public.blob.vercel-storage.com
+    channel: latest
+    useMultipleRangeRequest: false

@@ -51,9 +51,7 @@ interface ConnectionRow {
 
 export function listConnections(): SavedConnection[] {
   const rows = getDb()
-    .prepare<[], ConnectionRow>(
-      'SELECT * FROM connections ORDER BY updated_at DESC',
-    )
+    .prepare<[], ConnectionRow>('SELECT * FROM connections ORDER BY updated_at DESC')
     .all();
   return rows.map((r) => ({
     id: r.id,

@@ -8,30 +8,54 @@ import type { ColumnMeta, QueryResult } from '@shared/protocol';
 
 export type ExportFormat = 'csv' | 'json' | 'sql';
 
-export function exportResult(result: QueryResult, format: ExportFormat, filename = 'plasma') {
-  let content: string;
-  let mime: string;
-  let extension: string;
+interface FormatSpec {
+  content: string;
+  mime: string;
+  extension: string;
+}
 
+function formatResult(result: QueryResult, format: ExportFormat): FormatSpec {
   switch (format) {
     case 'csv':
-      content = toCsv(result);
-      mime = 'text/csv;charset=utf-8';
-      extension = 'csv';
-      break;
+      return { content: toCsv(result), mime: 'text/csv;charset=utf-8', extension: 'csv' };
     case 'json':
-      content = toJson(result);
-      mime = 'application/json;charset=utf-8';
-      extension = 'json';
-      break;
+      return {
+        content: toJson(result),
+        mime: 'application/json;charset=utf-8',
+        extension: 'json',
+      };
     case 'sql':
-      content = toSqlInserts(result);
-      mime = 'text/plain;charset=utf-8';
-      extension = 'sql';
-      break;
+      return { content: toSqlInserts(result), mime: 'text/plain;charset=utf-8', extension: 'sql' };
   }
+}
 
+export function exportResult(result: QueryResult, format: ExportFormat, filename = 'plasma') {
+  const { content, mime, extension } = formatResult(result, format);
   download(content, `${filename}.${extension}`, mime);
+}
+
+/**
+ * Serialize the result set to the chosen format and write it to the
+ * clipboard. Used by the toolbar Export menu's Copy column.
+ */
+export async function copyResultToClipboard(
+  result: QueryResult,
+  format: ExportFormat,
+): Promise<void> {
+  const { content } = formatResult(result, format);
+  await navigator.clipboard.writeText(content);
+}
+
+/**
+ * Return a new QueryResult containing only the rows whose original
+ * index is in `indices`. Order follows the iteration order of the
+ * input set so callers can pre-sort. Columns and metadata are
+ * preserved verbatim.
+ */
+export function pickRows(result: QueryResult, indices: Iterable<number>): QueryResult {
+  const ordered = Array.from(indices).sort((a, b) => a - b);
+  const rows = ordered.filter((i) => i >= 0 && i < result.rows.length).map((i) => result.rows[i]);
+  return { ...result, rows, rowCount: rows.length };
 }
 
 function toCsv(result: QueryResult): string {

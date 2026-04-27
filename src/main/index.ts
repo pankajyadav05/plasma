@@ -1,39 +1,40 @@
-import { app, BrowserWindow, ipcMain, nativeImage } from 'electron';
-import { fileURLToPath } from 'node:url';
-import { dirname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
-  IpcChannel,
-  ConnectionConfig,
-  SettingsShape,
   type AppMeta,
+  ConnectionConfig,
   type ConnectionConfig as ConnectionConfigType,
   type ConnectionInfo,
   type ConnectionTestResult,
   type HistoryEntry,
+  IpcChannel,
   type PingRequest,
   type PingResponse,
   type QueryResult,
   type SavedConnection,
   type SchemaInfo,
   type Settings,
+  SettingsShape,
   type TxnState,
   type WorkerRequest,
   type WorkerResponse,
 } from '@shared/protocol';
-import { applyThemeToWindow, createMainWindow, resolveIconPath } from './window';
-import { WorkerSupervisor } from './worker-supervisor';
+import { BrowserWindow, app, ipcMain, nativeImage } from 'electron';
+import { closeDb, getDb } from './db';
+import { clearHistory, listHistory, recordHistory } from './history';
+import { initLogger, logger } from './logger';
+import { buildAppMenu } from './menu';
+import { getAllSettings, setSetting } from './settings';
+import { disposeUpdater, initUpdater } from './updater';
 import {
   deleteConnection as vaultDelete,
   getFullConnection as vaultGetFull,
   listConnections as vaultList,
   saveConnection as vaultSave,
 } from './vault';
-import { listHistory, recordHistory, clearHistory } from './history';
-import { getAllSettings, setSetting } from './settings';
-import { getDb, closeDb } from './db';
-import { initLogger, logger } from './logger';
-import { buildAppMenu } from './menu';
+import { applyThemeToWindow, createMainWindow, resolveIconPath } from './window';
+import { WorkerSupervisor } from './worker-supervisor';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -73,7 +74,9 @@ app.whenReady().then(async () => {
         logger.error('[plasma] dock icon failed:', err);
       }
     } else {
-      logger.warn('[plasma] dock icon not set — resources/icon.png missing. Run `pnpm build:icons`.');
+      logger.warn(
+        '[plasma] dock icon not set — resources/icon.png missing. Run `pnpm build:icons`.',
+      );
     }
   }
 
@@ -85,6 +88,7 @@ app.whenReady().then(async () => {
   mainWindow = createMainWindow();
   buildAppMenu();
   registerIpcHandlers();
+  initUpdater(mainWindow);
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
@@ -95,6 +99,7 @@ app.whenReady().then(async () => {
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
+    disposeUpdater();
     workerSupervisor.stop();
     closeDb();
     app.quit();
@@ -126,13 +131,16 @@ async function callWorker<K extends WorkerResponse['kind']>(
 // ─── IPC handlers ─────────────────────────────────────────────────────
 
 function registerIpcHandlers() {
-  ipcMain.handle(IpcChannel.AppMeta, (): AppMeta => ({
-    name: 'plasma',
-    version: app.getVersion(),
-    platform: process.platform as 'darwin' | 'win32' | 'linux',
-    electron: process.versions.electron ?? 'unknown',
-    node: process.versions.node,
-  }));
+  ipcMain.handle(
+    IpcChannel.AppMeta,
+    (): AppMeta => ({
+      name: 'plasma',
+      version: app.getVersion(),
+      platform: process.platform as 'darwin' | 'win32' | 'linux',
+      electron: process.versions.electron ?? 'unknown',
+      node: process.versions.node,
+    }),
+  );
 
   // ── Connection lifecycle ──
 
@@ -202,63 +210,67 @@ function registerIpcHandlers() {
     },
   );
 
-  ipcMain.handle(
-    IpcChannel.VaultGetConfig,
-    (_e, id: unknown): ConnectionConfigType | null => {
-      if (typeof id !== 'string') throw new Error('id must be a string');
-      // Returns the decrypted config including password — used only by
-      // the renderer's Edit flow so users don't need to re-type passwords.
-      return vaultGetFull(id);
-    },
-  );
+  ipcMain.handle(IpcChannel.VaultGetConfig, (_e, id: unknown): ConnectionConfigType | null => {
+    if (typeof id !== 'string') throw new Error('id must be a string');
+    // Returns the decrypted config including password — used only by
+    // the renderer's Edit flow so users don't need to re-type passwords.
+    return vaultGetFull(id);
+  });
 
   // ── Query execution + history ──
 
-  ipcMain.handle(
-    IpcChannel.QueryRun,
-    async (_e, payload: unknown): Promise<QueryResult> => {
-      // Accept either a legacy string-only payload or { sql, params }.
-      let sql: string;
-      let params: unknown[] | undefined;
-      if (typeof payload === 'string') {
-        sql = payload;
-      } else if (payload && typeof payload === 'object' && 'sql' in payload) {
-        const p = payload as { sql: unknown; params?: unknown };
-        if (typeof p.sql !== 'string') throw new Error('sql must be a string');
-        sql = p.sql;
-        params = Array.isArray(p.params) ? p.params : undefined;
-      } else {
-        throw new Error('invalid query payload');
-      }
+  ipcMain.handle(IpcChannel.QueryRun, async (_e, payload: unknown): Promise<QueryResult> => {
+    // Accept either a legacy string-only payload or { sql, params, internal }.
+    // `internal: true` skips history recording — used for Plasma's own
+    // plumbing queries (introspection, RLS lookup, count, table data,
+    // etc.) so the user-facing history list stays clean.
+    let sql: string;
+    let params: unknown[] | undefined;
+    let internal = false;
+    if (typeof payload === 'string') {
+      sql = payload;
+    } else if (payload && typeof payload === 'object' && 'sql' in payload) {
+      const p = payload as { sql: unknown; params?: unknown; internal?: unknown };
+      if (typeof p.sql !== 'string') throw new Error('sql must be a string');
+      sql = p.sql;
+      params = Array.isArray(p.params) ? p.params : undefined;
+      internal = p.internal === true;
+    } else {
+      throw new Error('invalid query payload');
+    }
     const executedAt = Date.now();
     try {
       const res = await callWorker({ kind: 'query', sql, params }, 'queryResult');
-      try {
-        recordHistory({
-          connectionId: activeConnectionId,
-          sql,
-          rowCount: res.result.rowCount,
-          durationMs: res.result.durationMs,
-          error: null,
-          executedAt,
-        });
-      } catch (err) {
-        logger.error('[plasma] history write failed (non-fatal):', err);
+      if (!internal) {
+        try {
+          recordHistory({
+            connectionId: activeConnectionId,
+            sql,
+            rowCount: res.result.rowCount,
+            durationMs: res.result.durationMs,
+            error: null,
+            executedAt,
+          });
+        } catch (err) {
+          logger.error('[plasma] history write failed (non-fatal):', err);
+        }
       }
       return res.result;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      try {
-        recordHistory({
-          connectionId: activeConnectionId,
-          sql,
-          rowCount: null,
-          durationMs: null,
-          error: message,
-          executedAt,
-        });
-      } catch (histErr) {
-        logger.error('[plasma] history write failed (non-fatal):', histErr);
+      if (!internal) {
+        try {
+          recordHistory({
+            connectionId: activeConnectionId,
+            sql,
+            rowCount: null,
+            durationMs: null,
+            error: message,
+            executedAt,
+          });
+        } catch (histErr) {
+          logger.error('[plasma] history write failed (non-fatal):', histErr);
+        }
       }
       throw err;
     }
@@ -270,13 +282,10 @@ function registerIpcHandlers() {
 
   // ── Query history ──
 
-  ipcMain.handle(
-    IpcChannel.HistoryList,
-    async (_e, opts: unknown): Promise<HistoryEntry[]> => {
-      const safe = (opts ?? {}) as { limit?: number; connectionId?: string };
-      return listHistory(safe);
-    },
-  );
+  ipcMain.handle(IpcChannel.HistoryList, async (_e, opts: unknown): Promise<HistoryEntry[]> => {
+    const safe = (opts ?? {}) as { limit?: number; connectionId?: string };
+    return listHistory(safe);
+  });
 
   ipcMain.handle(IpcChannel.HistoryClear, async (): Promise<void> => {
     clearHistory();

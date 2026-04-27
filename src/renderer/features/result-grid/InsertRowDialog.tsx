@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { Button } from '@/components/ui/button';
 import {
   Dialog,
   DialogContent,
@@ -6,9 +6,10 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from "@/components/ui/dialog";
-import { Button } from "@/components/ui/button";
-import { useActiveTab, useSession } from "@/stores/session";
+} from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
+import { useActiveTab, useSession } from '@/stores/session';
+import { useEffect, useState } from 'react';
 
 /**
  * Modal form for inserting a new row into the active table tab. Pulls
@@ -30,7 +31,7 @@ export function InsertRowDialog({
   const insertRow = useSession((s) => s.insertRow);
 
   const columns =
-    tab && tab.kind === "table" && tab.tableSchema && tab.tableName
+    tab && tab.kind === 'table' && tab.tableSchema && tab.tableName
       ? (schema?.columns ?? [])
           .filter((c) => c.schema === tab.tableSchema && c.table === tab.tableName)
           .sort((a, b) => a.ordinal - b.ordinal)
@@ -61,7 +62,7 @@ export function InsertRowDialog({
     }
   };
 
-  if (!tab || tab.kind !== "table") return null;
+  if (!tab || tab.kind !== 'table') return null;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -83,29 +84,18 @@ export function InsertRowDialog({
                 >
                   <span className="font-semibold text-foreground">{col.name}</span>
                   <span>{col.dataType}</span>
-                  {col.isPrimaryKey && (
-                    <span className="text-primary">pk</span>
-                  )}
+                  {col.isPrimaryKey && <span className="text-primary">pk</span>}
                   {!col.isNullable && !col.hasDefault && (
                     <span className="text-primary">required</span>
                   )}
                   {col.hasDefault && <span>default</span>}
                 </label>
-                <input
+                <Input
                   id={`insert-${col.name}`}
                   type="text"
-                  value={values[col.name] ?? ""}
-                  onChange={(e) =>
-                    setValues((v) => ({ ...v, [col.name]: e.target.value }))
-                  }
-                  placeholder={
-                    col.hasDefault
-                      ? "(default)"
-                      : col.isNullable
-                        ? "(null)"
-                        : ""
-                  }
-                  className="h-9 rounded-sm border border-border bg-card px-3 text-sm text-foreground outline-none focus:border-primary"
+                  value={values[col.name] ?? ''}
+                  onChange={(e) => setValues((v) => ({ ...v, [col.name]: e.target.value }))}
+                  placeholder={col.hasDefault ? '(default)' : col.isNullable ? '(null)' : ''}
                 />
               </div>
             ))}
@@ -122,13 +112,8 @@ export function InsertRowDialog({
           <Button variant="ghost" size="sm" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
-          <Button
-            variant="primary"
-            size="sm"
-            onClick={handleSubmit}
-            disabled={submitting}
-          >
-            {submitting ? "Inserting…" : "Insert row"}
+          <Button variant="primary" size="sm" onClick={handleSubmit} disabled={submitting}>
+            {submitting ? 'Inserting…' : 'Insert row'}
           </Button>
         </DialogFooter>
       </DialogContent>

@@ -44,10 +44,7 @@ export function DeleteConfirmDialog() {
           <Button variant="secondary" onClick={() => requestDelete(null)}>
             Cancel
           </Button>
-          <Button
-            variant="destructive"
-            onClick={() => id && void deleteSaved(id)}
-          >
+          <Button variant="destructive" onClick={() => id && void deleteSaved(id)}>
             <Trash2 />
             Delete
           </Button>

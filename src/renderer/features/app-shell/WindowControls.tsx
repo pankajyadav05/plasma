@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState } from 'react';
 
 /**
  * Custom Windows/Linux titlebar buttons (minimize / maximize / close).
@@ -16,7 +16,7 @@ export function WindowControls() {
 
   useEffect(() => {
     void window.plasma.window.isMaximized().then(setMaximized);
-    const off = window.plasmaEvents.on("plasma:window:maximizedChanged", (value) => {
+    const off = window.plasmaEvents.on('plasma:window:maximizedChanged', (value) => {
       setMaximized(Boolean(value));
     });
     return off;
@@ -24,23 +24,16 @@ export function WindowControls() {
 
   return (
     <div className="no-drag flex h-12 items-stretch self-stretch">
-      <ControlButton
-        onClick={() => void window.plasma.window.minimize()}
-        ariaLabel="Minimize"
-      >
+      <ControlButton onClick={() => void window.plasma.window.minimize()} ariaLabel="Minimize">
         <MinimizeGlyph />
       </ControlButton>
       <ControlButton
         onClick={() => void window.plasma.window.maximizeToggle()}
-        ariaLabel={maximized ? "Restore" : "Maximize"}
+        ariaLabel={maximized ? 'Restore' : 'Maximize'}
       >
         {maximized ? <RestoreGlyph /> : <MaximizeGlyph />}
       </ControlButton>
-      <ControlButton
-        onClick={() => void window.plasma.window.close()}
-        ariaLabel="Close"
-        danger
-      >
+      <ControlButton onClick={() => void window.plasma.window.close()} ariaLabel="Close" danger>
         <CloseGlyph />
       </ControlButton>
     </div>
@@ -65,10 +58,10 @@ function ControlButton({
       aria-label={ariaLabel}
       title={ariaLabel}
       className={
-        "flex h-full w-[46px] items-center justify-center text-muted-foreground transition-colors " +
+        'flex h-full w-[46px] items-center justify-center text-muted-foreground transition-colors ' +
         (danger
-          ? "hover:bg-win-close hover:text-white"
-          : "hover:bg-[var(--bg-hover)] hover:text-foreground")
+          ? 'hover:bg-win-close hover:text-white'
+          : 'hover:bg-[var(--bg-hover)] hover:text-foreground')
       }
     >
       {children}
@@ -90,7 +83,15 @@ function MinimizeGlyph() {
 function MaximizeGlyph() {
   return (
     <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden>
-      <rect x="0.5" y="0.5" width="9" height="9" fill="none" stroke="currentColor" strokeWidth="1" />
+      <rect
+        x="0.5"
+        y="0.5"
+        width="9"
+        height="9"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1"
+      />
     </svg>
   );
 }
@@ -98,7 +99,15 @@ function MaximizeGlyph() {
 function RestoreGlyph() {
   return (
     <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden>
-      <rect x="0.5" y="2.5" width="7" height="7" fill="none" stroke="currentColor" strokeWidth="1" />
+      <rect
+        x="0.5"
+        y="2.5"
+        width="7"
+        height="7"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1"
+      />
       <path d="M2.5 2.5 V0.5 H9.5 V7.5 H7.5" fill="none" stroke="currentColor" strokeWidth="1" />
     </svg>
   );

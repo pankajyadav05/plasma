@@ -76,7 +76,7 @@ export const SchemaInfo = z.object({
     z.object({
       schema: z.string(),
       name: z.string(),
-      kind: z.enum(['table', 'view', 'matview']),
+      kind: z.enum(['table', 'view', 'matview', 'foreign', 'partitioned']),
       rowCountEstimate: z.number().nullable(),
     }),
   ),
@@ -177,7 +177,15 @@ export const SettingsShape = z.object({
     )
     .default('light'),
   themeName: z
-    .enum(['default', 'caffeine', 'sage-garden', 'supabase', 'violet-bloom', 'vercel'])
+    .enum([
+      'default',
+      'catppuccin',
+      'claude',
+      'claymorphism',
+      'neo-brutalism',
+      'quantum-rose',
+      'forest-canopy',
+    ])
     .catch('default')
     .default('default'),
   sidebarCollapsed: z.boolean().default(false),
@@ -255,10 +263,31 @@ export const IpcChannel = {
   WindowMaximizeToggle: 'plasma:window:maximizeToggle',
   WindowClose: 'plasma:window:close',
   WindowIsMaximized: 'plasma:window:isMaximized',
+  // Auto-update (electron-updater)
+  UpdateCheck: 'plasma:update:check',
+  UpdateInstall: 'plasma:update:install',
+  UpdateStatus: 'plasma:update:status',
   // Dev sanity checks
   PingMain: 'plasma:ping:main',
   PingWorker: 'plasma:ping:worker',
 } as const;
+
+// ─── Auto-update ─────────────────────────────────────────────────────
+
+export type UpdateStatus =
+  | { kind: 'idle' }
+  | { kind: 'checking' }
+  | { kind: 'not-available'; version: string }
+  | { kind: 'available'; version: string; releaseNotes?: string | null }
+  | {
+      kind: 'downloading';
+      percent: number;
+      bytesPerSecond: number;
+      transferred: number;
+      total: number;
+    }
+  | { kind: 'downloaded'; version: string; releaseNotes?: string | null }
+  | { kind: 'error'; message: string };
 
 // ─── Ping (dev sanity check) ─────────────────────────────────────────
 
@@ -288,9 +317,7 @@ export interface PlasmaAPI {
   vault: {
     list(): Promise<SavedConnection[]>;
     delete(id: string): Promise<void>;
-    connectById(
-      id: string,
-    ): Promise<{ info: ConnectionInfo; config: SavedConnection }>;
+    connectById(id: string): Promise<{ info: ConnectionInfo; config: SavedConnection }>;
     /**
      * Read a saved connection with its decrypted password. Used for the
      * Edit flow so the user doesn't have to re-type their password.
@@ -299,7 +326,14 @@ export interface PlasmaAPI {
     getConfig(id: string): Promise<ConnectionConfig | null>;
   };
   query: {
-    run(sql: string, params?: unknown[]): Promise<QueryResult>;
+    /**
+     * Execute a SQL statement.
+     * @param opts.internal — when true, the query is NOT recorded in
+     *   history. Use for Plasma's own plumbing (introspection, RLS
+     *   lookup, count queries, table-tab data, role list, SET ROLE,
+     *   table definition). User-written queries should leave this off.
+     */
+    run(sql: string, params?: unknown[], opts?: { internal?: boolean }): Promise<QueryResult>;
     cancel(): Promise<void>;
   };
   history: {
@@ -324,5 +358,13 @@ export interface PlasmaAPI {
     maximizeToggle(): Promise<void>;
     close(): Promise<void>;
     isMaximized(): Promise<boolean>;
+  };
+  update: {
+    /** Trigger an explicit check now. Returns the status post-check. */
+    check(): Promise<UpdateStatus>;
+    /** Install the downloaded update + restart. No-op unless status is `downloaded`. */
+    install(): Promise<void>;
+    /** Read the most recent status snapshot (no network). */
+    status(): Promise<UpdateStatus>;
   };
 }

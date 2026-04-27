@@ -88,9 +88,7 @@ export class WorkerSupervisor {
 
   private scheduleRestart(): void {
     this.restartDelayMs = Math.min(
-      this.restartDelayMs === 0
-        ? WorkerSupervisor.BASE_BACKOFF_MS
-        : this.restartDelayMs * 2,
+      this.restartDelayMs === 0 ? WorkerSupervisor.BASE_BACKOFF_MS : this.restartDelayMs * 2,
       WorkerSupervisor.MAX_BACKOFF_MS,
     );
     logger.info('[plasma] restarting worker in', this.restartDelayMs, 'ms');

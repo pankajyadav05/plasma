@@ -12,7 +12,13 @@
       "Bash(pnpm exec *)",
       "Bash(sed -i 's/\"version\": \"0.0.2\"/\"version\": \"9.9.9\"/' package.json)",
       "Bash(sed -i 's/\"version\": \"9.9.9\"/\"version\": \"0.0.2\"/' package.json)",
-      "WebFetch(domain:tweakcn.com)"
+      "WebFetch(domain:tweakcn.com)",
+      "Bash(pnpm typecheck *)",
+      "Bash(pnpm typecheck:web)",
+      "Bash(git stash *)",
+      "Bash(pnpm typecheck:node)",
+      "Bash(python *)",
+      "Bash(npx biome *)"
     ]
   }
 }

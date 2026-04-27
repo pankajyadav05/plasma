@@ -1,6 +1,3 @@
-import { useState } from 'react';
-import { Play } from 'lucide-react';
-import type { ConnectionConfig } from '@shared/protocol';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import {
@@ -14,6 +11,9 @@ import {
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useSession } from '@/stores/session';
+import type { ConnectionConfig } from '@shared/protocol';
+import { Loader2, Play, Trash2 } from 'lucide-react';
+import { useState } from 'react';
 
 type TestState =
   | { kind: 'idle' }
@@ -51,21 +51,22 @@ export function ConnectionDialog() {
   const disconnect = useSession((s) => s.disconnect);
   const activeConfig = useSession((s) => s.activeConfig);
   const dialogPrefill = useSession((s) => s.dialogPrefill);
+  const requestDelete = useSession((s) => s.requestDeleteConnection);
 
   // The form is seeded from `dialogPrefill` only. When the user clicks
   // "+" in the sidebar, `openDialog()` is called with no args → prefill
   // is null → form starts fresh (even if a connection is already active).
   // Edit mode is entered exclusively via `editConnection(id)` which
   // fetches the full decrypted config and passes it as the prefill.
-  const [form, setForm] = useState<ConnectionConfig>(
-    () => dialogPrefill ?? freshConfig(),
-  );
+  const [form, setForm] = useState<ConnectionConfig>(() => dialogPrefill ?? freshConfig());
   const [test, setTest] = useState<TestState>({ kind: 'idle' });
 
   const isEditing = Boolean(dialogPrefill);
   // `activeConfig` drives whether the "disconnect" link is visible,
   // separately from edit/new mode.
-  const showDisconnect = Boolean(activeConfig && isEditing && activeConfig.id === dialogPrefill?.id);
+  const showDisconnect = Boolean(
+    activeConfig && isEditing && activeConfig.id === dialogPrefill?.id,
+  );
 
   const update = <K extends keyof ConnectionConfig>(key: K, value: ConnectionConfig[K]) => {
     setForm({ ...form, [key]: value });
@@ -75,9 +76,7 @@ export function ConnectionDialog() {
   const handleTest = async () => {
     setTest({ kind: 'testing' });
     const res = await testConnection(form);
-    setTest(
-      res.ok ? { kind: 'ok', message: res.message } : { kind: 'fail', message: res.message },
-    );
+    setTest(res.ok ? { kind: 'ok', message: res.message } : { kind: 'fail', message: res.message });
   };
 
   const handleConnect = async (e: React.FormEvent) => {
@@ -165,7 +164,10 @@ export function ConnectionDialog() {
                 checked={form.ssl}
                 onCheckedChange={(v) => update('ssl', Boolean(v))}
               />
-              <label htmlFor="conn-ssl" className="cursor-pointer text-sm font-medium text-foreground">
+              <label
+                htmlFor="conn-ssl"
+                className="cursor-pointer text-sm font-medium text-foreground"
+              >
                 Use SSL
               </label>
               <span className="font-display text-xs italic text-muted-foreground">
@@ -191,13 +193,24 @@ export function ConnectionDialog() {
           </div>
 
           <DialogFooter className="gap-2">
-            {showDisconnect && (
+            {isEditing && (
               <Button
                 type="button"
-                variant="link"
-                onClick={() => void disconnect()}
-                className="mr-auto"
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  requestDelete(form.id);
+                  closeDialog();
+                }}
+                className="mr-auto text-destructive hover:bg-destructive/10 hover:text-destructive"
+                title="Delete this saved connection"
               >
+                <Trash2 />
+                Delete
+              </Button>
+            )}
+            {showDisconnect && (
+              <Button type="button" variant="link" onClick={() => void disconnect()}>
                 Disconnect
               </Button>
             )}
@@ -210,10 +223,11 @@ export function ConnectionDialog() {
               onClick={() => void handleTest()}
               disabled={test.kind === 'testing' || connecting}
             >
+              {test.kind === 'testing' && <Loader2 className="animate-spin" />}
               {test.kind === 'testing' ? 'Testing…' : 'Test'}
             </Button>
             <Button type="submit" variant="primary" disabled={connecting}>
-              <Play />
+              {connecting ? <Loader2 className="animate-spin" /> : <Play />}
               {connecting ? 'Connecting…' : 'Connect'}
             </Button>
           </DialogFooter>

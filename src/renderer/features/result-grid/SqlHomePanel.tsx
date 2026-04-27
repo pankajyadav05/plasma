@@ -1,9 +1,9 @@
-import { useEffect, useMemo } from "react";
-import { Clock, Flame, Play } from "lucide-react";
-import type { HistoryEntry } from "@shared/protocol";
-import { BrandMark } from "@/features/app-shell/BrandMark";
-import { formatDuration } from "@/lib/format";
-import { useSession } from "@/stores/session";
+import { useEffect, useMemo } from 'react';
+import { Clock, Flame, Play } from 'lucide-react';
+import type { HistoryEntry } from '@shared/protocol';
+import { BrandMark } from '@/features/app-shell/BrandMark';
+import { formatDuration } from '@/lib/format';
+import { useSession } from '@/stores/session';
 
 /**
  * Home panel for empty SQL tabs. Instead of a blank editor, we show the
@@ -125,7 +125,7 @@ function HistoryItem({
       <div className="min-w-0 flex-1">
         <div className="truncate font-mono text-xs text-foreground">
           {snippet}
-          {entry.sql.length > 80 ? "…" : ""}
+          {entry.sql.length > 80 ? '…' : ''}
         </div>
         <div className="mt-0.5 flex items-center gap-2 text-[11px] text-muted-foreground">
           <span>{relativeTime(entry.executedAt)}</span>
@@ -139,13 +139,13 @@ function HistoryItem({
 }
 
 function singleLine(sql: string): string {
-  return sql.replace(/\s+/g, " ").trim();
+  return sql.replace(/\s+/g, ' ').trim();
 }
 
 function relativeTime(ms: number): string {
   const diff = Date.now() - ms;
   const sec = Math.floor(diff / 1000);
-  if (sec < 60) return "just now";
+  if (sec < 60) return 'just now';
   const min = Math.floor(sec / 60);
   if (min < 60) return `${min}m ago`;
   const hr = Math.floor(min / 60);
@@ -166,7 +166,7 @@ function topFrequent(
   entries: HistoryEntry[],
   n: number,
 ): Array<{ entry: HistoryEntry; count: number }> {
-  const norm = (sql: string) => sql.replace(/\s+/g, " ").trim().toLowerCase();
+  const norm = (sql: string) => sql.replace(/\s+/g, ' ').trim().toLowerCase();
   const groups = new Map<string, { entry: HistoryEntry; count: number }>();
   for (const entry of entries) {
     const key = norm(entry.sql);

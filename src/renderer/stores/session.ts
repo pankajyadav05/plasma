@@ -1,4 +1,16 @@
-import { create } from 'zustand';
+import { ipc } from '@/lib/ipc';
+import {
+  type Filter,
+  type TableSort,
+  buildCountSql,
+  buildDataSql,
+  buildDeleteSql,
+  buildEstimatedCountSql,
+  buildInsertSql,
+  buildRlsCountSql,
+  buildRolesSql,
+  buildUpdateSql,
+} from '@/lib/table-query';
 import type {
   ConnectionConfig,
   HistoryEntry,
@@ -8,16 +20,15 @@ import type {
   Settings,
   TxnState,
 } from '@shared/protocol';
-import { ipc } from '@/lib/ipc';
-import {
-  buildCountSql,
-  buildDataSql,
-  buildDeleteSql,
-  buildInsertSql,
-  buildUpdateSql,
-  type Filter,
-  type TableSort,
-} from '@/lib/table-query';
+import { create } from 'zustand';
+
+/**
+ * When a table is unfiltered AND the introspected estimate is above this
+ * threshold, we use pg_class.reltuples instead of COUNT(*). For small
+ * tables COUNT(*) is cheap and accurate; for huge tables it can take
+ * minutes.
+ */
+const ESTIMATED_COUNT_THRESHOLD = 1_000_000;
 
 /**
  * Session store — the single source of truth for all renderer state.
@@ -37,6 +48,12 @@ import {
 export type ConnectionState = 'idle' | 'connecting' | 'connected' | 'error';
 export type QueryRunState = 'idle' | 'running';
 export type TabKind = 'sql' | 'table';
+export type TableViewMode = 'data' | 'definition';
+export type EntityKind = 'table' | 'view' | 'matview' | 'foreign' | 'partitioned';
+/** Drives what the main right-side canvas renders. Switched from IconRail. */
+export type CanvasMode = 'database' | 'sql' | 'history' | 'settings';
+/** Which slot of the right rail is currently expanded. null = collapsed. */
+export type RightPanelMode = 'query' | 'role' | 'rls' | null;
 
 /**
  * Cheap heuristic for DDL detection. We strip leading comments/whitespace
@@ -94,6 +111,12 @@ export interface QueryTab {
   page: number;
   pageSize: number;
   selectedCell: { row: number; col: number } | null;
+  /**
+   * Page-scoped row selection — indices into the currently rendered
+   * `displayRows` array. Used for "export selected" / "copy selected".
+   * Cleared whenever the visible rows change (page / sort / re-run).
+   */
+  selectedRows: Set<number>;
   columnWidths: Record<number, number>;
 
   // ── SQL tab fields (client-side sort) ──
@@ -107,10 +130,24 @@ export interface QueryTab {
   hiddenColumns: Set<string>;
   stickyColumns: Set<string>;
   totalRowCount: number | null;
+  /** True when totalRowCount comes from pg_class.reltuples, not COUNT(*). */
+  totalRowCountIsEstimate: boolean;
   countLoading: boolean;
+  /** Table tabs: 'data' = grid, 'definition' = DDL. SQL tabs ignore. */
+  viewMode: TableViewMode;
+  /** RLS policy count for the table backing this tab. null = not yet loaded. */
+  rlsPolicyCount: number | null;
 }
 
-const THEME_NAMES = ['default', 'caffeine', 'sage-garden', 'supabase', 'violet-bloom', 'vercel'] as const;
+const THEME_NAMES = [
+  'default',
+  'catppuccin',
+  'claude',
+  'claymorphism',
+  'neo-brutalism',
+  'quantum-rose',
+  'forest-canopy',
+] as const;
 
 function applyTheme(mode: 'light' | 'dark', name: string) {
   const root = document.documentElement;
@@ -160,21 +197,21 @@ function createEmptyTab(pageSize: number, title = 'query-1.sql'): QueryTab {
     pageSize,
     sortColumn: null,
     selectedCell: null,
+    selectedRows: new Set(),
     columnWidths: {},
     tableSort: [],
     filters: [],
     hiddenColumns: new Set(),
     stickyColumns: new Set(),
     totalRowCount: null,
+    totalRowCountIsEstimate: false,
     countLoading: false,
+    viewMode: 'data',
+    rlsPolicyCount: null,
   };
 }
 
-function createTableTab(
-  pageSize: number,
-  schemaName: string,
-  tableName: string,
-): QueryTab {
+function createTableTab(pageSize: number, schemaName: string, tableName: string): QueryTab {
   const title = schemaName === 'public' ? tableName : `${schemaName}.${tableName}`;
   return {
     id: freshId(),
@@ -189,6 +226,7 @@ function createTableTab(
     pageSize,
     sortColumn: null,
     selectedCell: null,
+    selectedRows: new Set(),
     columnWidths: {},
     tableSchema: schemaName,
     tableName,
@@ -197,7 +235,10 @@ function createTableTab(
     hiddenColumns: new Set(),
     stickyColumns: new Set(),
     totalRowCount: null,
+    totalRowCountIsEstimate: false,
     countLoading: false,
+    viewMode: 'data',
+    rlsPolicyCount: null,
   };
 }
 
@@ -240,9 +281,7 @@ function pkValuesForRow(
     (c) => c.schema === tab.tableSchema && c.table === tab.tableName && c.isPrimaryKey,
   );
   if (pkCols.length === 0) return null;
-  const nameToIndex = new Map(
-    tab.queryResult.columns.map((c, i) => [c.name, i] as const),
-  );
+  const nameToIndex = new Map(tab.queryResult.columns.map((c, i) => [c.name, i] as const));
   const out: Record<string, unknown> = {};
   for (const pk of pkCols) {
     const idx = nameToIndex.get(pk.name);
@@ -271,8 +310,21 @@ interface SessionState {
   tabs: QueryTab[];
   activeTabId: string;
 
-  // ── editor drawer ──
-  editorExpanded: boolean;
+  /** Drives what the main right-side canvas renders. */
+  canvasMode: CanvasMode;
+  /** Current schema selection for the entity list. */
+  currentSchema: string | null;
+  /** Entity-kind filter for the entity list. */
+  entityFilter: Set<EntityKind>;
+
+  // ── role + RLS ──
+  /** The role currently SET on the worker connection. null = backend default. */
+  activeRole: string | null;
+  availableRoles: string[];
+
+  // ── right rail panel ──
+  /** Which panel is open in the right-side rail. null = collapsed. */
+  rightPanelMode: RightPanelMode;
 
   // ── edit mode ──
   /** Global safety gate for writes. When false, all mutation UI is hidden. */
@@ -320,6 +372,10 @@ interface SessionState {
   setPage(page: number): void;
   setPageSize(pageSize: number): void;
   setSort(index: number): void;
+
+  toggleRowSelected(idx: number): void;
+  setSelectedRows(rows: Set<number>): void;
+  clearSelectedRows(): void;
   setSelectedCell(cell: { row: number; col: number } | null): void;
   setColumnWidth(index: number, width: number): void;
 
@@ -345,9 +401,22 @@ interface SessionState {
   closeTab(id: string): void;
   setActiveTab(id: string): void;
   renameActiveTab(title: string): void;
+  setTabViewMode(mode: TableViewMode): void;
+
+  // Canvas mode + entity filtering
+  setCanvasMode(mode: CanvasMode): void;
+  setCurrentSchema(name: string | null): void;
+  setEntityFilter(kinds: Set<EntityKind>): void;
+  toggleEntityFilter(kind: EntityKind): void;
+
+  // Role + RLS
+  loadAvailableRoles(): Promise<void>;
+  setActiveRole(role: string | null): Promise<void>;
+  loadRlsForActiveTab(): Promise<void>;
 
   toggleEditor(): void;
   setEditorExpanded(expanded: boolean): void;
+  setRightPanelMode(mode: RightPanelMode): void;
 
   // Vault
   loadSavedConnections(): Promise<void>;
@@ -360,11 +429,7 @@ interface SessionState {
   toggleSidebar(): Promise<void>;
   toggleTheme(): Promise<void>;
   toggleFavoriteSchema(connectionId: string, schemaName: string): Promise<void>;
-  toggleFavoriteTable(
-    connectionId: string,
-    schemaName: string,
-    tableName: string,
-  ): Promise<void>;
+  toggleFavoriteTable(connectionId: string, schemaName: string, tableName: string): Promise<void>;
   /** Load a saved connection's full config (with password) and open the dialog in edit mode. */
   editConnection(id: string): Promise<void>;
   /** Update sidebar width (optimistic). Persistence is caller's responsibility. */
@@ -398,7 +463,14 @@ export const useSession = create<SessionState>((set, get) => ({
   tabs: [initialTab],
   activeTabId: initialTab.id,
 
-  editorExpanded: false,
+  canvasMode: 'database',
+  currentSchema: null,
+  entityFilter: new Set<EntityKind>(['table', 'view', 'matview', 'foreign', 'partitioned']),
+
+  activeRole: null,
+  availableRoles: [],
+
+  rightPanelMode: null,
 
   editMode: false,
 
@@ -461,8 +533,9 @@ export const useSession = create<SessionState>((set, get) => ({
       const schema = get().schema;
       if (schema && schema.schemas.length > 0) {
         const first = schema.schemas.find((s) => s.name === 'public') ?? schema.schemas[0];
-        set({ expandedSchemas: new Set([first.name]) });
+        set({ expandedSchemas: new Set([first.name]), currentSchema: first.name });
       }
+      void get().loadAvailableRoles();
     } catch (err) {
       set({
         connectionState: 'error',
@@ -488,8 +561,9 @@ export const useSession = create<SessionState>((set, get) => ({
       const schema = get().schema;
       if (schema && schema.schemas.length > 0) {
         const first = schema.schemas.find((s) => s.name === 'public') ?? schema.schemas[0];
-        set({ expandedSchemas: new Set([first.name]) });
+        set({ expandedSchemas: new Set([first.name]), currentSchema: first.name });
       }
+      void get().loadAvailableRoles();
     } catch (err) {
       set({
         connectionState: 'error',
@@ -510,6 +584,9 @@ export const useSession = create<SessionState>((set, get) => ({
         expandedSchemas: new Set(),
         activeTable: null,
         txnState: 'none',
+        currentSchema: null,
+        availableRoles: [],
+        activeRole: null,
       });
       // Clear all tabs' results since they reference a now-dead connection
       set((state) => ({
@@ -520,6 +597,7 @@ export const useSession = create<SessionState>((set, get) => ({
           page: 0,
           sortColumn: null,
           selectedCell: null,
+          selectedRows: new Set(),
         })),
       }));
     }
@@ -578,6 +656,7 @@ export const useSession = create<SessionState>((set, get) => ({
         page: 0,
         sortColumn: null,
         selectedCell: null,
+        selectedRows: new Set(),
       });
       // DDL auto-refresh: if the user just ran CREATE / ALTER / DROP /
       // RENAME / TRUNCATE / COMMENT, the introspected schema is now
@@ -608,10 +687,7 @@ export const useSession = create<SessionState>((set, get) => ({
     const state = get();
     // Reuse an existing table tab for the same schema+table
     const existing = state.tabs.find(
-      (t) =>
-        t.kind === 'table' &&
-        t.tableSchema === schemaName &&
-        t.tableName === tableName,
+      (t) => t.kind === 'table' && t.tableSchema === schemaName && t.tableName === tableName,
     );
     if (existing) {
       set({
@@ -634,6 +710,7 @@ export const useSession = create<SessionState>((set, get) => ({
     });
     void runTableDataQuery(set, get, tab.id);
     void runTableCountQuery(set, get, tab.id);
+    void runRlsCountForTab(set, get, tab.id);
   },
 
   openForeignRow(refSchema, refTable, refColumn, value) {
@@ -658,6 +735,7 @@ export const useSession = create<SessionState>((set, get) => ({
     });
     void runTableDataQuery(set, get, tab.id);
     void runTableCountQuery(set, get, tab.id);
+    void runRlsCountForTab(set, get, tab.id);
   },
 
   setSidebarWidth(width) {
@@ -670,7 +748,7 @@ export const useSession = create<SessionState>((set, get) => ({
     const tab = activeTab(get());
     if (!tab) return;
     const next = Math.max(0, page);
-    patchActiveTab(set, get, { page: next });
+    patchActiveTab(set, get, { page: next, selectedRows: new Set() });
     if (tab.kind === 'table') {
       void runTableDataQuery(set, get, tab.id);
     }
@@ -679,7 +757,7 @@ export const useSession = create<SessionState>((set, get) => ({
   setPageSize(pageSize) {
     const tab = activeTab(get());
     if (!tab) return;
-    patchActiveTab(set, get, { pageSize, page: 0 });
+    patchActiveTab(set, get, { pageSize, page: 0, selectedRows: new Set() });
     void get().updateSettings({ defaultPageSize: pageSize });
     if (tab.kind === 'table') {
       void runTableDataQuery(set, get, tab.id);
@@ -722,6 +800,23 @@ export const useSession = create<SessionState>((set, get) => ({
 
   setSelectedCell(cell) {
     patchActiveTab(set, get, { selectedCell: cell });
+  },
+
+  toggleRowSelected(idx) {
+    const tab = activeTab(get());
+    if (!tab) return;
+    const next = new Set(tab.selectedRows);
+    if (next.has(idx)) next.delete(idx);
+    else next.add(idx);
+    patchActiveTab(set, get, { selectedRows: next });
+  },
+
+  setSelectedRows(rows) {
+    patchActiveTab(set, get, { selectedRows: rows });
+  },
+
+  clearSelectedRows() {
+    patchActiveTab(set, get, { selectedRows: new Set() });
   },
 
   setColumnWidth(index, width) {
@@ -861,7 +956,7 @@ export const useSession = create<SessionState>((set, get) => ({
       set: { [col.name]: newValue },
       pkValues,
     });
-    await ipc.query.run(sql, params);
+    await ipc.query.run(sql, params, { internal: true });
     await runTableDataQuery(set, get, tab.id);
   },
 
@@ -889,7 +984,7 @@ export const useSession = create<SessionState>((set, get) => ({
       table: tab.tableName,
       values: toInsert,
     });
-    await ipc.query.run(sql, params);
+    await ipc.query.run(sql, params, { internal: true });
     await runTableDataQuery(set, get, tab.id);
     void runTableCountQuery(set, get, tab.id);
   },
@@ -914,7 +1009,7 @@ export const useSession = create<SessionState>((set, get) => ({
       table: tab.tableName,
       pkValues,
     });
-    await ipc.query.run(sql, params);
+    await ipc.query.run(sql, params, { internal: true });
     await runTableDataQuery(set, get, tab.id);
     void runTableCountQuery(set, get, tab.id);
   },
@@ -955,14 +1050,101 @@ export const useSession = create<SessionState>((set, get) => ({
     patchActiveTab(set, get, { title });
   },
 
-  // ── editor drawer ──
+  // ── canvas mode + entity filtering ──
+
+  setCanvasMode(mode) {
+    set({ canvasMode: mode });
+  },
+
+  setCurrentSchema(name) {
+    set({ currentSchema: name });
+  },
+
+  setEntityFilter(kinds) {
+    set({ entityFilter: new Set(kinds) });
+  },
+
+  toggleEntityFilter(kind) {
+    const next = new Set(get().entityFilter);
+    if (next.has(kind)) next.delete(kind);
+    else next.add(kind);
+    set({ entityFilter: next });
+  },
+
+  setTabViewMode(mode) {
+    patchActiveTab(set, get, { viewMode: mode });
+  },
+
+  // ── role + RLS ──
+
+  async loadAvailableRoles() {
+    try {
+      const { sql, params } = buildRolesSql();
+      const res = await ipc.query.run(sql, params, { internal: true });
+      const roles = res.rows.map((r) => (r[0] as string | null) ?? '').filter((s) => s.length > 0);
+      set({ availableRoles: roles });
+    } catch (err) {
+      console.error('[plasma] loadAvailableRoles failed', err);
+    }
+  },
+
+  async setActiveRole(role) {
+    try {
+      if (role === null) {
+        await ipc.query.run('RESET ROLE', undefined, { internal: true });
+      } else {
+        // Identifier interpolation is unavoidable for SET ROLE; we
+        // cross-check against the loaded role list so an unfamiliar name
+        // gets rejected client-side first.
+        const allowed = get().availableRoles.includes(role);
+        if (!allowed) throw new Error(`unknown role: ${role}`);
+        const safe = role.replace(/"/g, '""');
+        await ipc.query.run(`SET ROLE "${safe}"`, undefined, { internal: true });
+      }
+      set({ activeRole: role });
+      // Re-run the active table tab so the new role's RLS policies apply.
+      const tab = activeTab(get());
+      if (tab?.kind === 'table') {
+        void runTableDataQuery(set, get, tab.id);
+        void runTableCountQuery(set, get, tab.id);
+      }
+    } catch (err) {
+      console.error('[plasma] setActiveRole failed', err);
+    }
+  },
+
+  async loadRlsForActiveTab() {
+    const state = get();
+    const tab = activeTab(state);
+    if (!tab || tab.kind !== 'table' || !tab.tableSchema || !tab.tableName) return;
+    try {
+      const { sql, params } = buildRlsCountSql(tab.tableSchema, tab.tableName);
+      const res = await ipc.query.run(sql, params, { internal: true });
+      const raw = res.rows[0]?.[0];
+      const count = typeof raw === 'string' ? Number.parseInt(raw, 10) : Number(raw);
+      patchTabById(set, tab.id, {
+        rlsPolicyCount: Number.isFinite(count) ? count : 0,
+      });
+    } catch (err) {
+      console.error('[plasma] loadRlsForActiveTab failed', err);
+    }
+  },
+
+  // ── right rail panel ──
 
   toggleEditor() {
-    set({ editorExpanded: !get().editorExpanded });
+    // Backward-compat: cycles the query slot of the right rail.
+    set({ rightPanelMode: get().rightPanelMode === 'query' ? null : 'query' });
   },
 
   setEditorExpanded(expanded) {
-    set({ editorExpanded: expanded });
+    // Backward-compat: callers that want to "open the editor" still
+    // map cleanly to opening the query panel.
+    set({ rightPanelMode: expanded ? 'query' : null });
+  },
+
+  setRightPanelMode(mode) {
+    set({ rightPanelMode: mode });
   },
 
   // ── vault ──
@@ -1100,7 +1282,7 @@ export const useSession = create<SessionState>((set, get) => ({
 
   reuseHistoryQuery(sql) {
     patchActiveTab(set, get, { sql });
-    set({ historyOpen: false, editorExpanded: true });
+    set({ historyOpen: false, rightPanelMode: 'query' });
   },
 
   // ── transactions ──
@@ -1184,9 +1366,7 @@ function persistTableColumnState(
     sticky: [...tab.stickyColumns],
   };
   const hasAny =
-    Object.keys(widthsByName).length > 0 ||
-    entry.hidden.length > 0 ||
-    entry.sticky.length > 0;
+    Object.keys(widthsByName).length > 0 || entry.hidden.length > 0 || entry.sticky.length > 0;
 
   const current = state.settings.tableColumnState ?? {};
   const next = { ...current };
@@ -1221,9 +1401,7 @@ function loadTableColumnStateInto(
   if (!entry) return {};
 
   // Walk the introspected columns to rebuild the index-keyed widths.
-  const cols = state.schema
-    ? columnsForTable(state.schema, schemaName, tableName)
-    : [];
+  const cols = state.schema ? columnsForTable(state.schema, schemaName, tableName) : [];
   const widthsByIdx: Record<number, number> = {};
   cols.forEach((name, i) => {
     const w = entry.widths[name];
@@ -1280,11 +1458,12 @@ async function runTableDataQuery(
   });
 
   try {
-    const result = await ipc.query.run(sql, params);
+    const result = await ipc.query.run(sql, params, { internal: true });
     patchTabById(set, tabId, {
       queryResult: result,
       queryRunState: 'idle',
       selectedCell: null,
+      selectedRows: new Set(),
     });
   } catch (err) {
     patchTabById(set, tabId, {
@@ -1309,23 +1488,59 @@ async function runTableCountQuery(
   const tab = state.tabs.find((t) => t.id === tabId);
   if (!tab || tab.kind !== 'table' || !tab.tableSchema || !tab.tableName) return;
 
+  // Estimate path: no filters AND introspected reltuples is large. Skips
+  // the seqscan that COUNT(*) would otherwise do on huge tables.
+  const tableMeta = state.schema?.tables.find(
+    (t) => t.schema === tab.tableSchema && t.name === tab.tableName,
+  );
+  const useEstimate =
+    tab.filters.length === 0 &&
+    tableMeta?.kind === 'table' &&
+    typeof tableMeta.rowCountEstimate === 'number' &&
+    tableMeta.rowCountEstimate >= ESTIMATED_COUNT_THRESHOLD;
+
   patchTabById(set, tabId, { countLoading: true });
-  const { sql, params } = buildCountSql({
-    schema: tab.tableSchema,
-    table: tab.tableName,
-    filters: tab.filters,
-  });
+
+  const { sql, params } = useEstimate
+    ? buildEstimatedCountSql(tab.tableSchema, tab.tableName)
+    : buildCountSql({
+        schema: tab.tableSchema,
+        table: tab.tableName,
+        filters: tab.filters,
+      });
 
   try {
-    const result = await ipc.query.run(sql, params);
+    const result = await ipc.query.run(sql, params, { internal: true });
     const raw = result.rows[0]?.[0];
     const count = typeof raw === 'string' ? Number.parseInt(raw, 10) : Number(raw);
     patchTabById(set, tabId, {
       totalRowCount: Number.isFinite(count) ? count : null,
+      totalRowCountIsEstimate: useEstimate,
       countLoading: false,
     });
   } catch {
     patchTabById(set, tabId, { countLoading: false });
+  }
+}
+
+async function runRlsCountForTab(
+  set: (fn: (s: SessionState) => Partial<SessionState>) => void,
+  get: () => SessionState,
+  tabId: string,
+) {
+  const tab = get().tabs.find((t) => t.id === tabId);
+  if (!tab || tab.kind !== 'table' || !tab.tableSchema || !tab.tableName) return;
+  try {
+    const { sql, params } = buildRlsCountSql(tab.tableSchema, tab.tableName);
+    const res = await ipc.query.run(sql, params, { internal: true });
+    const raw = res.rows[0]?.[0];
+    const count = typeof raw === 'string' ? Number.parseInt(raw, 10) : Number(raw);
+    patchTabById(set, tabId, {
+      rlsPolicyCount: Number.isFinite(count) ? count : 0,
+    });
+  } catch {
+    // pg_policies may be unreadable for unprivileged roles — silently
+    // leave rlsPolicyCount null. The badge will be hidden.
   }
 }
 

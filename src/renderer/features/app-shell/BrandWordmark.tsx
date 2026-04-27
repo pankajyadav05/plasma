@@ -1,5 +1,5 @@
-import wordmarkSvg from "@logo/plasma-mono-accent.svg?raw";
-import { cn } from "@/lib/cn";
+import wordmarkSvg from '@logo/plasma-mono-accent.svg?raw';
+import { cn } from '@/lib/cn';
 
 /**
  * Plasma brand wordmark — imports the SVG file as raw text via Vite's
@@ -15,7 +15,10 @@ import { cn } from "@/lib/cn";
 export function BrandWordmark({ className }: { className?: string }) {
   return (
     <span
-      className={cn("inline-block leading-none [&>svg]:h-full [&>svg]:w-auto [&>svg]:block", className)}
+      className={cn(
+        'inline-block leading-none [&>svg]:h-full [&>svg]:w-auto [&>svg]:block',
+        className,
+      )}
       aria-label="Plasma"
       role="img"
       // biome-ignore lint/security/noDangerouslySetInnerHtml: trusted local asset

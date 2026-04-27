@@ -1,15 +1,28 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowUpRight, ChevronDown, ChevronUp, Code2, Search, Table2, Trash2, X } from "lucide-react";
-import type { ColumnMeta } from "@shared/protocol";
-import { Button } from "@/components/ui/button";
-import { cn } from "@/lib/cn";
-import { copyCellToClipboard } from "@/lib/export";
-import { formatDuration } from "@/lib/format";
-import { BrandMark } from "@/features/app-shell/BrandMark";
-import { CellDetailDialog, type CellDetail } from "./CellDetailDialog";
-import { RowDetailSheet, type RowDetail } from "./RowDetailSheet";
-import { SqlHomePanel } from "./SqlHomePanel";
-import { useActiveTab, useSession } from "@/stores/session";
+import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
+import { ConfirmDialog } from '@/components/ui/confirm-dialog';
+import { BrandMark } from '@/features/app-shell/BrandMark';
+import { cn } from '@/lib/cn';
+import { copyCellToClipboard } from '@/lib/export';
+import { formatDuration } from '@/lib/format';
+import { useActiveTab, useSession } from '@/stores/session';
+import type { ColumnMeta } from '@shared/protocol';
+import {
+  ArrowUpRight,
+  ChevronDown,
+  ChevronUp,
+  Code2,
+  Search,
+  Table2,
+  Trash2,
+  X,
+} from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { type CellDetail, CellDetailDialog } from './CellDetailDialog';
+import { ColumnHeaderMenu } from './ColumnHeaderMenu';
+import { type RowDetail, RowDetailSheet } from './RowDetailSheet';
+import { SqlHomePanel } from './SqlHomePanel';
+import { TableDefinitionView } from './TableDefinitionView';
 
 // Stable empty Set used as a fallback when the active tab is null. Using
 // a module-level singleton keeps the useEffect dependency reference-stable
@@ -28,18 +41,50 @@ const EMPTY_STICKY_SET: ReadonlySet<string> = new Set();
  */
 export function ResultGrid() {
   const tab = useActiveTab();
-  const connectionState = useSession((s) => s.connectionState);
   const setSort = useSession((s) => s.setSort);
   const setSelectedCell = useSession((s) => s.setSelectedCell);
+  const toggleRowSelected = useSession((s) => s.toggleRowSelected);
+  const setSelectedRows = useSession((s) => s.setSelectedRows);
   const setColumnWidth = useSession((s) => s.setColumnWidth);
   const editMode = useSession((s) => s.editMode);
   const updateCell = useSession((s) => s.updateCell);
   const deleteRow = useSession((s) => s.deleteRow);
   const schema = useSession((s) => s.schema);
   const openForeignRow = useSession((s) => s.openForeignRow);
+  const toggleColumnHidden = useSession((s) => s.toggleColumnHidden);
+  const toggleStickyColumn = useSession((s) => s.toggleStickyColumn);
+
+  // Header-menu sort actions. The existing setSort cycles asc → desc →
+  // none; the menu wants explicit values, so we write directly through
+  // the store. Table tabs trigger a server re-query; SQL tabs just
+  // re-render (sorting happens client-side from the cached result).
+  const setExplicitTableSort = (columnName: string, direction: 'asc' | 'desc' | null) => {
+    if (!tab || tab.kind !== 'table') return;
+    useSession.setState((s) => {
+      const next = direction === null ? [] : [{ column: columnName, direction }];
+      return {
+        tabs: s.tabs.map((t) => (t.id === tab.id ? { ...t, tableSort: next, page: 0 } : t)),
+      };
+    });
+    void useSession.getState().refreshTable();
+  };
+
+  const setExplicitSqlSort = (index: number, direction: 'asc' | 'desc' | null) => {
+    if (!tab || tab.kind !== 'sql') return;
+    useSession.setState((s) => {
+      const sortColumn = direction === null ? null : { index, direction };
+      return {
+        tabs: s.tabs.map((t) => (t.id === tab.id ? { ...t, sortColumn, page: 0 } : t)),
+      };
+    });
+  };
 
   // Inline cell edit state — local to the grid, only one cell at a time.
-  const [editingCell, setEditingCell] = useState<{ row: number; col: number; value: string } | null>(null);
+  const [editingCell, setEditingCell] = useState<{
+    row: number;
+    col: number;
+    value: string;
+  } | null>(null);
   const [editError, setEditError] = useState<string | null>(null);
 
   // Cell detail viewer — opens on double-click (read-only contexts) or
@@ -50,21 +95,26 @@ export function ResultGrid() {
   // click of the row-number column. Lays the whole row out vertically.
   const [rowDetail, setRowDetail] = useState<RowDetail | null>(null);
 
+  // Pending row index for the destructive-delete confirm dialog.
+  const [pendingDeleteRow, setPendingDeleteRow] = useState<number | null>(null);
+
   // In-grid search — Ctrl+F / ⌘F toggles the floating bar. Matches are
   // computed from displayRows (case-insensitive substring). Enter /
   // Shift+Enter cycles through matches and jumps the selected cell.
   const [searchOpen, setSearchOpen] = useState(false);
-  const [searchQuery, setSearchQuery] = useState("");
+  const [searchQuery, setSearchQuery] = useState('');
   const [activeMatchIdx, setActiveMatchIdx] = useState(0);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
-  const isTableTab = tab?.kind === "table";
+  const isTableTab = tab?.kind === 'table';
   const writable = Boolean(
     isTableTab &&
-    editMode &&
-    tab?.tableSchema &&
-    tab?.tableName &&
-    schema?.columns.some((c) => c.schema === tab.tableSchema && c.table === tab.tableName && c.isPrimaryKey),
+      editMode &&
+      tab?.tableSchema &&
+      tab?.tableName &&
+      schema?.columns.some(
+        (c) => c.schema === tab.tableSchema && c.table === tab.tableName && c.isPrimaryKey,
+      ),
   );
 
   const commitEdit = async () => {
@@ -79,8 +129,10 @@ export function ResultGrid() {
     }
   };
 
-  const handleDeleteRow = async (rowIndex: number) => {
-    if (!window.confirm("Delete this row? This cannot be undone.")) return;
+  const confirmDeleteRow = async () => {
+    if (pendingDeleteRow === null) return;
+    const rowIndex = pendingDeleteRow;
+    setPendingDeleteRow(null);
     setEditError(null);
     try {
       await deleteRow(rowIndex);
@@ -98,7 +150,7 @@ export function ResultGrid() {
   // sort on top of the raw result set.
   const displayRows = useMemo(() => {
     if (!tab?.queryResult) return [] as { row: unknown[]; originalIndex: number }[];
-    if (tab.kind === "table") {
+    if (tab.kind === 'table') {
       return tab.queryResult.rows.map((row, i) => ({ row, originalIndex: i }));
     }
     const withIdx = tab.queryResult.rows.map((row, i) => ({ row, originalIndex: i }));
@@ -119,12 +171,7 @@ export function ResultGrid() {
   // which isn't possible without a SQL parser — skip entirely.
   const fkByColumn = useMemo(() => {
     const m = new Map<string, { refSchema: string; refTable: string; refColumn: string }>();
-    if (
-      tab?.kind === "table" &&
-      tab.tableSchema &&
-      tab.tableName &&
-      schema?.foreignKeys
-    ) {
+    if (tab?.kind === 'table' && tab.tableSchema && tab.tableName && schema?.foreignKeys) {
       for (const fk of schema.foreignKeys) {
         if (fk.schema === tab.tableSchema && fk.table === tab.tableName) {
           m.set(fk.column, {
@@ -148,8 +195,7 @@ export function ResultGrid() {
     displayRows.forEach((entry, visibleRow) => {
       entry.row.forEach((cell, col) => {
         if (cell === null || cell === undefined) return;
-        const str =
-          typeof cell === "object" ? JSON.stringify(cell) : String(cell);
+        const str = typeof cell === 'object' ? JSON.stringify(cell) : String(cell);
         if (str.toLowerCase().includes(q)) {
           out.push({ row: visibleRow, col });
         }
@@ -174,22 +220,22 @@ export function ResultGrid() {
   useEffect(() => {
     if (!tab?.queryResult) return;
     const handler = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "f") {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'f') {
         const active = document.activeElement;
         const tag = active?.tagName?.toLowerCase();
-        if (tag === "textarea" || (tag === "input" && active !== searchInputRef.current)) {
+        if (tag === 'textarea' || (tag === 'input' && active !== searchInputRef.current)) {
           return; // let text inputs / Monaco handle their own find
         }
         e.preventDefault();
         setSearchOpen(true);
         setTimeout(() => searchInputRef.current?.focus(), 0);
-      } else if (e.key === "Escape" && searchOpen) {
+      } else if (e.key === 'Escape' && searchOpen) {
         setSearchOpen(false);
-        setSearchQuery("");
+        setSearchQuery('');
       }
     };
-    document.addEventListener("keydown", handler);
-    return () => document.removeEventListener("keydown", handler);
+    document.addEventListener('keydown', handler);
+    return () => document.removeEventListener('keydown', handler);
   }, [tab?.queryResult, searchOpen]);
 
   // Sticky columns — hooks live up here (before any early return) so
@@ -221,10 +267,10 @@ export function ResultGrid() {
   const stickyStyle = (colIndex: number, colName: string, baseZ: number): React.CSSProperties =>
     stickySet.has(colName)
       ? {
-          position: "sticky",
+          position: 'sticky',
           left: stickyLefts[colIndex] ?? 0,
           zIndex: baseZ,
-          boxShadow: "1px 0 0 0 var(--border)",
+          boxShadow: '1px 0 0 0 var(--border)',
         }
       : {};
 
@@ -239,21 +285,21 @@ export function ResultGrid() {
     const startWidth = th?.offsetWidth ?? 120;
     const handle = e.currentTarget;
     handle.setPointerCapture(e.pointerId);
-    document.body.style.cursor = "col-resize";
-    document.body.style.userSelect = "none";
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
 
     const onMove = (ev: PointerEvent) => {
       const next = Math.max(60, startWidth + (ev.clientX - startX));
       setColumnWidth(colIndex, next);
     };
     const onUp = () => {
-      document.removeEventListener("pointermove", onMove);
-      document.removeEventListener("pointerup", onUp);
-      document.body.style.cursor = "";
-      document.body.style.userSelect = "";
+      document.removeEventListener('pointermove', onMove);
+      document.removeEventListener('pointerup', onUp);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
     };
-    document.addEventListener("pointermove", onMove);
-    document.addEventListener("pointerup", onUp);
+    document.addEventListener('pointermove', onMove);
+    document.addEventListener('pointerup', onUp);
   };
 
   // Keyboard navigation — arrows move the selected cell, Ctrl+C copies
@@ -264,14 +310,14 @@ export function ResultGrid() {
       const active = document.activeElement;
       const tag = active?.tagName?.toLowerCase();
       if (
-        tag === "input" ||
-        tag === "textarea" ||
-        (active && "isContentEditable" in active && (active as HTMLElement).isContentEditable)
+        tag === 'input' ||
+        tag === 'textarea' ||
+        (active && 'isContentEditable' in active && (active as HTMLElement).isContentEditable)
       ) {
         return;
       }
       // Copy
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "c") {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'c') {
         if (!tab.selectedCell) return;
         const pagedRow = displayRows[tab.selectedCell.row];
         if (!pagedRow) return;
@@ -285,7 +331,7 @@ export function ResultGrid() {
       const maxRow = displayRows.length - 1;
       const maxCol = tab.queryResult ? tab.queryResult.columns.length - 1 : 0;
       // Space opens the cell detail viewer for the current selection.
-      if (e.key === " ") {
+      if (e.key === ' ') {
         const pagedRow = displayRows[row];
         const colMeta = tab.queryResult?.columns[col];
         if (pagedRow && colMeta) {
@@ -306,7 +352,7 @@ export function ResultGrid() {
         return;
       }
       // Enter opens the row detail drawer for the selected row.
-      if (e.key === "Enter" && !e.metaKey && !e.ctrlKey && !e.shiftKey) {
+      if (e.key === 'Enter' && !e.metaKey && !e.ctrlKey && !e.shiftKey) {
         const pagedRow = displayRows[row];
         if (pagedRow && tab.queryResult) {
           setRowDetail({
@@ -319,25 +365,30 @@ export function ResultGrid() {
         }
         return;
       }
-      if (e.key === "ArrowDown") {
+      if (e.key === 'ArrowDown') {
         setSelectedCell({ row: Math.min(maxRow, row + 1), col });
         e.preventDefault();
-      } else if (e.key === "ArrowUp") {
+      } else if (e.key === 'ArrowUp') {
         setSelectedCell({ row: Math.max(0, row - 1), col });
         e.preventDefault();
-      } else if (e.key === "ArrowRight") {
+      } else if (e.key === 'ArrowRight') {
         setSelectedCell({ row, col: Math.min(maxCol, col + 1) });
         e.preventDefault();
-      } else if (e.key === "ArrowLeft") {
+      } else if (e.key === 'ArrowLeft') {
         setSelectedCell({ row, col: Math.max(0, col - 1) });
         e.preventDefault();
-      } else if (e.key === "Escape") {
+      } else if (e.key === 'Escape') {
         setSelectedCell(null);
       }
     };
-    document.addEventListener("keydown", handler);
-    return () => document.removeEventListener("keydown", handler);
+    document.addEventListener('keydown', handler);
+    return () => document.removeEventListener('keydown', handler);
   }, [tab?.selectedCell, tab?.queryResult, displayRows, setSelectedCell]);
+
+  // ── Definition view (table tabs only) — short-circuits the grid ──
+  if (tab?.kind === 'table' && tab.viewMode === 'definition') {
+    return <TableDefinitionView />;
+  }
 
   // ── Error state ──
   if (tab?.queryError) {
@@ -345,7 +396,9 @@ export function ResultGrid() {
       <div className="min-h-0 flex-1 overflow-auto bg-card">
         <div className="max-w-4xl p-8">
           <div className="mb-3 font-display text-3xl italic text-destructive">Query error</div>
-          <pre className="whitespace-pre-wrap break-words text-base text-foreground">{tab.queryError}</pre>
+          <pre className="whitespace-pre-wrap break-words text-base text-foreground">
+            {tab.queryError}
+          </pre>
           {tab.queryErrorSql && (
             <>
               <div className="mt-6 mb-2 text-xs text-muted-foreground">sql sent to server</div>
@@ -365,7 +418,7 @@ export function ResultGrid() {
   // `rect.accent` inside the SVG) animates directly — draws left→right,
   // holds, then erases right→left. No secondary line underneath. The
   // mark glyph itself breathes subtly to confirm the query is alive.
-  if (tab?.queryRunState === "running") {
+  if (tab?.queryRunState === 'running') {
     return (
       <div className="flex min-h-0 flex-1 items-center justify-center bg-card">
         <div className="flex flex-col items-center gap-5 text-center">
@@ -403,29 +456,23 @@ export function ResultGrid() {
     );
   }
 
-  // ── Empty state ──
+  // ── Empty state — connected only (AppShell handles disconnected) ──
   if (!tab?.queryResult) {
-    const connected = connectionState === "connected";
-    const isSqlTab = tab?.kind === "sql";
-    // For connected SQL tabs with an empty editor, show the home panel
-    // instead of a blank pitch — lets the user relaunch a recent query
-    // without retyping it or opening the history sheet.
-    if (connected && isSqlTab && (tab?.sql.trim() ?? "") === "") {
+    const isSqlTab = tab?.kind === 'sql';
+    // For SQL tabs with an empty editor, show the home panel instead
+    // of a blank pitch — lets the user relaunch a recent query without
+    // retyping it or opening the history sheet.
+    if (isSqlTab && (tab?.sql.trim() ?? '') === '') {
       return <SqlHomePanel />;
     }
     return (
       <div className="flex min-h-0 flex-1 items-center justify-center bg-card">
         <div className="flex flex-col items-center gap-6 text-center">
-          <BrandMark className="h-24 w-24 text-foreground/70" />
-          <div className="font-display text-3xl italic text-muted-foreground">
-            {connected
-              ? isSqlTab
-                ? "Select a table, or write a query."
-                : "Click a table in the sidebar to preview it."
-              : "Connect to a database to get started."}
+          <BrandMark className="h-20 w-20 text-foreground/70" />
+          <div className="font-display text-2xl italic text-muted-foreground">
+            {isSqlTab ? 'Select a table, or write a query.' : 'Click a table in the sidebar.'}
           </div>
-
-          {connected && isSqlTab && <EmptySqlActions />}
+          {isSqlTab && <EmptySqlActions />}
         </div>
       </div>
     );
@@ -436,9 +483,12 @@ export function ResultGrid() {
     return (
       <div className="flex min-h-0 flex-1 items-center justify-center bg-card">
         <div className="text-center">
-          <div className="mb-2 font-display text-3xl italic text-foreground">{tab.queryResult.command ?? "OK"}</div>
+          <div className="mb-2 font-display text-3xl italic text-foreground">
+            {tab.queryResult.command ?? 'OK'}
+          </div>
           <div className="text-sm text-muted-foreground">
-            {tab.queryResult.rowCount.toLocaleString()} rows affected · {formatDuration(tab.queryResult.durationMs)}
+            {tab.queryResult.rowCount.toLocaleString()} rows affected ·{' '}
+            {formatDuration(tab.queryResult.durationMs)}
           </div>
         </div>
       </div>
@@ -447,25 +497,44 @@ export function ResultGrid() {
 
   const allColumns = tab.queryResult.columns;
 
-  // For SQL tabs the server returns every column the user SELECTed, so
-  // hidden-column state is a pure display concern — we filter them out
-  // at render time and keep a mapping back to the original column index
-  // (used by sticky offsets, sort indicators, cell selection, etc.).
-  //
-  // For table tabs the hidden list already rewrote the server query, so
-  // allColumns only contains visible columns; the map is the identity.
+  // SQL tabs always need client-side hidden filtering since the server
+  // returns every projected column. Table tabs already rewrite the
+  // SELECT to skip hidden columns — but when *all* are hidden the
+  // SQL builder falls back to `SELECT *`, so we still filter client-side
+  // here. That gives a single empty-state branch below regardless of
+  // tab kind.
   const visibleColumns: Array<{ col: (typeof allColumns)[number]; originalIndex: number }> =
-    tab.kind === "sql"
-      ? allColumns
-          .map((col, i) => ({ col, originalIndex: i }))
-          .filter(({ col }) => !tab.hiddenColumns.has(col.name))
-      : allColumns.map((col, i) => ({ col, originalIndex: i }));
+    allColumns
+      .map((col, i) => ({ col, originalIndex: i }))
+      .filter(({ col }) => !tab.hiddenColumns.has(col.name));
+
+  // Every column is hidden — render a friendly empty state with an
+  // explicit "show all" CTA (more discoverable than digging into the
+  // Columns popover).
+  if (visibleColumns.length === 0) {
+    return (
+      <div className="flex min-h-0 flex-1 items-center justify-center bg-card">
+        <div className="flex flex-col items-center gap-4 text-center">
+          <div className="font-display text-2xl italic text-muted-foreground">
+            All columns hidden
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => void useSession.getState().showAllColumns()}
+          >
+            Show all columns
+          </Button>
+        </div>
+      </div>
+    );
+  }
 
   // Unified "sort indicator" — reads from the correct sort source for
   // the current tab kind so the header arrows work in both modes. The
   // index passed in is the *original* column index in the result set.
-  const getSortIndicator = (colIndex: number): "asc" | "desc" | null => {
-    if (tab.kind === "table") {
+  const getSortIndicator = (colIndex: number): 'asc' | 'desc' | null => {
+    if (tab.kind === 'table') {
       const col = allColumns[colIndex];
       if (!col) return null;
       const match = tab.tableSort.find((s) => s.column === col.name);
@@ -487,7 +556,7 @@ export function ResultGrid() {
     <div ref={containerRef} className="relative min-h-0 flex-1 overflow-auto bg-card">
       {editError && (
         <div className="sticky top-0 z-20 border-b border-primary bg-primary/10 px-4 py-2 text-xs text-primary">
-          {editError}{" "}
+          {editError}{' '}
           <button type="button" onClick={() => setEditError(null)} className="ml-2 underline">
             dismiss
           </button>
@@ -505,14 +574,14 @@ export function ResultGrid() {
               placeholder="Find in results…"
               className="h-5 w-48 border-0 bg-transparent text-xs text-foreground outline-none placeholder:text-muted-foreground"
               onKeyDown={(e) => {
-                if (e.key === "Enter") {
+                if (e.key === 'Enter') {
                   e.preventDefault();
                   if (e.shiftKey) jumpToMatch(activeMatchIdx - 1);
                   else jumpToMatch(activeMatchIdx + 1);
-                } else if (e.key === "Escape") {
+                } else if (e.key === 'Escape') {
                   e.preventDefault();
                   setSearchOpen(false);
-                  setSearchQuery("");
+                  setSearchQuery('');
                 }
               }}
             />
@@ -520,8 +589,8 @@ export function ResultGrid() {
               {searchQuery
                 ? searchMatches.length > 0
                   ? `${activeMatchIdx + 1}/${searchMatches.length}`
-                  : "0"
-                : ""}
+                  : '0'
+                : ''}
             </span>
             <button
               type="button"
@@ -547,7 +616,7 @@ export function ResultGrid() {
               type="button"
               onClick={() => {
                 setSearchOpen(false);
-                setSearchQuery("");
+                setSearchQuery('');
               }}
               className="grid h-5 w-5 place-items-center rounded-sm text-muted-foreground hover:text-foreground"
               aria-label="Close search"
@@ -561,6 +630,25 @@ export function ResultGrid() {
       <table className="min-w-full border-collapse font-mono text-xs tabular-nums">
         <thead className="sticky top-0 z-10 bg-card">
           <tr>
+            <th
+              className="sticky left-0 z-30 w-9 border-b bg-card px-2 py-2 text-center align-middle"
+              style={{ minWidth: 36 }}
+            >
+              <SelectAllCheckbox
+                total={displayRows.length}
+                selectedCount={
+                  displayRows.filter((e) => tab.selectedRows.has(e.originalIndex)).length
+                }
+                onToggle={() => {
+                  const allOnPage = displayRows.every((e) => tab.selectedRows.has(e.originalIndex));
+                  if (allOnPage) {
+                    setSelectedRows(new Set());
+                  } else {
+                    setSelectedRows(new Set(displayRows.map((e) => e.originalIndex)));
+                  }
+                }}
+              />
+            </th>
             {visibleColumns.map(({ col, originalIndex: origIdx }) => {
               const sortDir = getSortIndicator(origIdx);
               const isSticky = stickySet.has(col.name);
@@ -573,8 +661,8 @@ export function ResultGrid() {
                   }}
                   onClick={() => setSort(origIdx)}
                   className={cn(
-                    "relative cursor-pointer select-none whitespace-nowrap border-b px-[14px] py-2 text-left transition-colors hover:bg-accent hover:text-accent-foreground",
-                    isSticky && "bg-muted",
+                    'group/header relative cursor-pointer select-none whitespace-nowrap border-b px-[14px] py-2 text-left transition-colors hover:bg-accent hover:text-accent-foreground',
+                    isSticky && 'bg-muted',
                   )}
                   style={{
                     fontWeight: 400,
@@ -583,17 +671,48 @@ export function ResultGrid() {
                     ...stickyStyle(origIdx, col.name, 20),
                     ...(isSticky ? { top: 0 } : {}),
                   }}
-                  title={`${col.dataTypeName} — click to sort${isSticky ? " · pinned" : ""}`}
+                  title={`${col.name} — ${col.dataTypeName}${isSticky ? ' · pinned' : ''}`}
                 >
-                  <div className="flex items-baseline gap-2">
-                    <span className="text-xs text-muted-foreground">{col.dataTypeName}</span>
+                  <div className="flex items-center gap-2">
                     <span className="text-sm text-foreground" style={{ fontWeight: 500 }}>
                       {col.name || <span className="text-muted-foreground">?column?</span>}
                     </span>
-                    {sortDir && <span className="text-xs text-primary">{sortDir === "asc" ? "↑" : "↓"}</span>}
+                    <span className="text-xs text-muted-foreground">{col.dataTypeName}</span>
+                    {sortDir && (
+                      <span className="text-xs text-primary">{sortDir === 'asc' ? '↑' : '↓'}</span>
+                    )}
+                    <div className="ml-auto flex items-center">
+                      <ColumnHeaderMenu
+                        column={col}
+                        sortDir={sortDir}
+                        pinned={isSticky}
+                        tableMode={tab?.kind === 'table'}
+                        onSortAsc={() => {
+                          if (tab?.kind === 'table') {
+                            setExplicitTableSort(col.name, 'asc');
+                          } else {
+                            setExplicitSqlSort(origIdx, 'asc');
+                          }
+                        }}
+                        onSortDesc={() => {
+                          if (tab?.kind === 'table') {
+                            setExplicitTableSort(col.name, 'desc');
+                          } else {
+                            setExplicitSqlSort(origIdx, 'desc');
+                          }
+                        }}
+                        onClearSort={() => {
+                          if (tab?.kind === 'table') {
+                            setExplicitTableSort(col.name, null);
+                          } else {
+                            setExplicitSqlSort(origIdx, null);
+                          }
+                        }}
+                        onTogglePin={() => toggleStickyColumn(col.name)}
+                        onHide={() => void toggleColumnHidden(col.name)}
+                      />
+                    </div>
                   </div>
-                  {/* Resize handle — thin strip at the right edge. Wide
-                      hit target, narrow visual; turns primary on hover. */}
                   <div
                     role="separator"
                     aria-orientation="vertical"
@@ -607,30 +726,54 @@ export function ResultGrid() {
                 </th>
               );
             })}
-            {writable && <th className="sticky right-0 w-10 border-b bg-card" aria-label="row actions" />}
+            {writable && (
+              <th className="sticky right-0 w-10 border-b bg-card" aria-label="row actions" />
+            )}
           </tr>
         </thead>
         <tbody>
           {displayRows.map((entry, visibleRow) => {
             const rowSelected = tab.selectedCell?.row === visibleRow;
+            const rowChecked = tab.selectedRows.has(entry.originalIndex);
             return (
               <tr
                 // biome-ignore lint/suspicious/noArrayIndexKey: stable per-query
                 key={`row-${visibleRow}-${entry.originalIndex}`}
                 className={cn(
-                  "group/row cv-row-34 transition-colors",
-                  rowSelected ? "bg-primary/15" : "hover:bg-accent hover:text-accent-foreground",
+                  'group/row cv-row-34 transition-colors',
+                  rowChecked
+                    ? 'bg-primary/10 hover:bg-primary/15'
+                    : rowSelected
+                      ? 'bg-primary/15'
+                      : 'hover:bg-accent hover:text-accent-foreground',
                 )}
               >
+                <td
+                  className={cn(
+                    'sticky left-0 z-[2] w-9 border-b border-border px-2 text-center align-middle',
+                    rowChecked
+                      ? 'bg-primary/10 group-hover/row:bg-primary/15'
+                      : 'bg-card group-hover/row:bg-accent',
+                  )}
+                  style={{ minWidth: 36 }}
+                >
+                  <Checkbox
+                    checked={rowChecked}
+                    onCheckedChange={() => toggleRowSelected(entry.originalIndex)}
+                    aria-label={`Select row ${visibleRow + 1}`}
+                  />
+                </td>
                 {visibleColumns.map(({ col, originalIndex: origIdx }) => {
                   const cell = entry.row[origIdx];
-                  const cellSelected = tab.selectedCell?.row === visibleRow && tab.selectedCell?.col === origIdx;
+                  const cellSelected =
+                    tab.selectedCell?.row === visibleRow && tab.selectedCell?.col === origIdx;
                   const isEditing = editingCell?.row === visibleRow && editingCell?.col === origIdx;
                   const colName = col.name;
                   const isSticky = stickySet.has(colName);
                   const isMatch = matchSet.has(`${visibleRow}:${origIdx}`);
                   const activeMatch = searchMatches[activeMatchIdx];
-                  const isActiveMatch = isMatch && activeMatch?.row === visibleRow && activeMatch?.col === origIdx;
+                  const isActiveMatch =
+                    isMatch && activeMatch?.row === visibleRow && activeMatch?.col === origIdx;
                   const fk = fkByColumn.get(colName);
                   const hasFk = fk && cell !== null && cell !== undefined;
                   return (
@@ -645,7 +788,7 @@ export function ResultGrid() {
                           setEditingCell({
                             row: visibleRow,
                             col: origIdx,
-                            value: cell === null || cell === undefined ? "" : String(cell),
+                            value: cell === null || cell === undefined ? '' : String(cell),
                           });
                         } else {
                           setCellDetail({
@@ -657,23 +800,27 @@ export function ResultGrid() {
                         }
                       }}
                       className={cn(
-                        "group/cell relative h-[34px] max-w-[480px] whitespace-nowrap border-b border-border px-[18px] text-foreground",
-                        !isEditing && "cursor-cell truncate",
+                        'group/cell relative h-[34px] max-w-[480px] whitespace-nowrap border-b border-border px-[18px] text-foreground',
+                        !isEditing && 'cursor-cell truncate',
                         cellClass(col),
-                        cellSelected && !isEditing && "outline outline-2 -outline-offset-2 outline-accent",
-                        isEditing && "bg-card p-0 outline outline-2 -outline-offset-2 outline-accent",
+                        cellSelected &&
+                          !isEditing &&
+                          'outline outline-2 -outline-offset-2 outline-accent',
+                        isEditing &&
+                          'bg-card p-0 outline outline-2 -outline-offset-2 outline-accent',
                         isSticky &&
                           (rowSelected
-                            ? "bg-primary/15"
-                            : "bg-muted group-hover/row:bg-accent group-hover/row:text-accent-foreground"),
+                            ? 'bg-primary/15'
+                            : 'bg-muted group-hover/row:bg-accent group-hover/row:text-accent-foreground'),
                         // Search match highlights — passive matches get a
                         // primary tint, the "current" match gets a stronger
                         // tint so the user can see where the jump landed.
-                        isMatch && !isActiveMatch && "bg-primary/10",
-                        isActiveMatch && "bg-primary/30 outline outline-1 -outline-offset-1 outline-primary",
+                        isMatch && !isActiveMatch && 'bg-primary/10',
+                        isActiveMatch &&
+                          'bg-primary/30 outline outline-1 -outline-offset-1 outline-primary',
                         // Make room for the FK arrow so long values don't
                         // slide underneath the button.
-                        hasFk && !isEditing && "pr-7",
+                        hasFk && !isEditing && 'pr-7',
                       )}
                       style={stickyStyle(origIdx, colName, 3)}
                       title={!isEditing ? cellTitle(cell) : undefined}
@@ -685,7 +832,7 @@ export function ResultGrid() {
                             e.stopPropagation();
                             if (fk) openForeignRow(fk.refSchema, fk.refTable, fk.refColumn, cell);
                           }}
-                          className="absolute right-1 top-1/2 grid h-5 w-5 -translate-y-1/2 place-items-center rounded-sm text-muted-foreground opacity-0 transition-all hover:bg-primary hover:text-primary-foreground group-hover/cell:opacity-100"
+                          className="absolute right-1 top-1/2 grid h-5 w-5 -translate-y-1/2 cursor-pointer place-items-center rounded-sm text-muted-foreground opacity-0 transition-all duration-150 hover:bg-primary hover:text-primary-foreground focus-visible:opacity-100 group-hover/cell:opacity-100"
                           aria-label={`Open ${fk?.refSchema}.${fk?.refTable}`}
                           title={`Open ${fk?.refSchema}.${fk?.refTable} where ${fk?.refColumn} = ${formatFkTitle(cell)}`}
                         >
@@ -708,10 +855,10 @@ export function ResultGrid() {
                             void commitEdit();
                           }}
                           onKeyDown={(e) => {
-                            if (e.key === "Enter") {
+                            if (e.key === 'Enter') {
                               e.preventDefault();
                               void commitEdit();
-                            } else if (e.key === "Escape") {
+                            } else if (e.key === 'Escape') {
                               e.preventDefault();
                               setEditingCell(null);
                             }
@@ -729,8 +876,8 @@ export function ResultGrid() {
                     <Button
                       variant="ghost"
                       size="icon-xs"
-                      className="opacity-0 transition-opacity group-hover/row:opacity-100"
-                      onClick={() => void handleDeleteRow(visibleRow)}
+                      className="opacity-0 transition-opacity duration-150 group-hover/row:opacity-100 focus-visible:opacity-100"
+                      onClick={() => setPendingDeleteRow(visibleRow)}
                       aria-label="Delete row"
                       title="Delete this row"
                     >
@@ -745,21 +892,55 @@ export function ResultGrid() {
       </table>
       <CellDetailDialog detail={cellDetail} onOpenChange={(o) => !o && setCellDetail(null)} />
       <RowDetailSheet detail={rowDetail} onOpenChange={(o) => !o && setRowDetail(null)} />
+      <ConfirmDialog
+        open={pendingDeleteRow !== null}
+        onOpenChange={(o) => !o && setPendingDeleteRow(null)}
+        title="Delete this row?"
+        description="This cannot be undone."
+        confirmLabel="Delete row"
+        onConfirm={() => void confirmDeleteRow()}
+      />
     </div>
   );
 }
 
 // ─── Sorting ─────────────────────────────────────────────────────────
 
-function compareCells(a: unknown, b: unknown, direction: "asc" | "desc"): number {
-  const mul = direction === "asc" ? 1 : -1;
+/**
+ * Header-row checkbox that reflects all-visible / partial / none
+ * states. Uses Radix's `'indeterminate'` value for the partial
+ * state so the box renders the dash glyph.
+ */
+function SelectAllCheckbox({
+  total,
+  selectedCount,
+  onToggle,
+}: {
+  total: number;
+  selectedCount: number;
+  onToggle: () => void;
+}) {
+  const state =
+    selectedCount === 0 ? false : selectedCount === total ? true : ('indeterminate' as const);
+  return (
+    <Checkbox
+      checked={state}
+      onCheckedChange={onToggle}
+      aria-label={selectedCount === total ? 'Deselect all rows' : 'Select all rows'}
+      title={selectedCount === total ? 'Deselect all visible' : 'Select all visible'}
+    />
+  );
+}
+
+function compareCells(a: unknown, b: unknown, direction: 'asc' | 'desc'): number {
+  const mul = direction === 'asc' ? 1 : -1;
   const na = a === null || a === undefined;
   const nb = b === null || b === undefined;
   if (na && nb) return 0;
   if (na) return 1; // nulls sort last regardless of direction
   if (nb) return -1;
   // Numeric fast path
-  if (typeof a === "number" && typeof b === "number") return (a - b) * mul;
+  if (typeof a === 'number' && typeof b === 'number') return (a - b) * mul;
   // Compare as strings for everything else (matches pg's display order
   // well enough for most types; M3 can use type-aware comparators).
   const sa = String(a);
@@ -774,9 +955,9 @@ function compareCells(a: unknown, b: unknown, direction: "asc" | "desc"): number
 function formatCell(value: unknown): React.ReactNode {
   if (value === null) return <span className="text-muted-foreground">␀</span>;
   if (value === undefined) return <span className="text-muted-foreground">undef</span>;
-  if (typeof value === "boolean") return value ? "true" : "false";
+  if (typeof value === 'boolean') return value ? 'true' : 'false';
   if (value instanceof Date) return value.toISOString();
-  if (typeof value === "object") {
+  if (typeof value === 'object') {
     try {
       return JSON.stringify(value);
     } catch {
@@ -784,13 +965,13 @@ function formatCell(value: unknown): React.ReactNode {
     }
   }
   const str = String(value);
-  if (str === "") return <span className="text-muted-foreground">''</span>;
+  if (str === '') return <span className="text-muted-foreground">''</span>;
   return str;
 }
 
 function cellTitle(value: unknown): string {
-  if (value === null || value === undefined) return "";
-  if (typeof value === "object") {
+  if (value === null || value === undefined) return '';
+  if (typeof value === 'object') {
     try {
       return JSON.stringify(value);
     } catch {
@@ -837,15 +1018,28 @@ function EmptySqlActions() {
 }
 
 function cellClass(col: ColumnMeta | undefined): string {
-  if (!col) return "";
+  if (!col) return '';
   const t = col.dataTypeName;
-  if (t === "int2" || t === "int4" || t === "int8" || t === "float4" || t === "float8" || t === "numeric") {
-    return "font-medium text-type-num text-right";
+  if (
+    t === 'int2' ||
+    t === 'int4' ||
+    t === 'int8' ||
+    t === 'float4' ||
+    t === 'float8' ||
+    t === 'numeric'
+  ) {
+    return 'font-medium text-type-num text-right';
   }
-  if (t === "date" || t === "timestamp" || t === "timestamptz" || t === "time" || t === "interval") {
-    return "text-muted-foreground";
+  if (
+    t === 'date' ||
+    t === 'timestamp' ||
+    t === 'timestamptz' ||
+    t === 'time' ||
+    t === 'interval'
+  ) {
+    return 'text-muted-foreground';
   }
-  if (t === "bool") return "text-type-bool";
-  if (t === "json" || t === "jsonb") return "text-type-json";
-  return "";
+  if (t === 'bool') return 'text-type-bool';
+  if (t === 'json' || t === 'jsonb') return 'text-type-json';
+  return '';
 }

@@ -1,5 +1,5 @@
-import { contextBridge, ipcRenderer } from 'electron';
 import { IpcChannel, type PlasmaAPI, type Platform } from '@shared/protocol';
+import { contextBridge, ipcRenderer } from 'electron';
 
 /**
  * Preload — the ONLY place contextBridge is called.
@@ -27,9 +27,13 @@ const api: PlasmaAPI = {
     getConfig: (id) => ipcRenderer.invoke(IpcChannel.VaultGetConfig, id),
   },
   query: {
-    run: (sql, params) =>
-      params
-        ? ipcRenderer.invoke(IpcChannel.QueryRun, { sql, params })
+    run: (sql, params, opts) =>
+      params || opts
+        ? ipcRenderer.invoke(IpcChannel.QueryRun, {
+            sql,
+            params,
+            internal: opts?.internal === true,
+          })
         : ipcRenderer.invoke(IpcChannel.QueryRun, sql),
     cancel: () => ipcRenderer.invoke(IpcChannel.QueryCancel),
   },
@@ -56,6 +60,11 @@ const api: PlasmaAPI = {
     close: () => ipcRenderer.invoke(IpcChannel.WindowClose),
     isMaximized: () => ipcRenderer.invoke(IpcChannel.WindowIsMaximized),
   },
+  update: {
+    check: () => ipcRenderer.invoke(IpcChannel.UpdateCheck),
+    install: () => ipcRenderer.invoke(IpcChannel.UpdateInstall),
+    status: () => ipcRenderer.invoke(IpcChannel.UpdateStatus),
+  },
 };
 
 contextBridge.exposeInMainWorld('plasma', api);
@@ -75,6 +84,7 @@ const eventChannels = [
   'plasma:menu:cancelQuery',
   'plasma:menu:history',
   'plasma:window:maximizedChanged',
+  'plasma:update:status',
 ] as const;
 type EventChannel = (typeof eventChannels)[number];
 

@@ -21,10 +21,8 @@ export function initLogger(): typeof log {
 
   // Per-file size limit; electron-log rotates to .old automatically
   log.transports.file.maxSize = 5 * 1024 * 1024;
-  log.transports.file.format =
-    '[{y}-{m}-{d} {h}:{i}:{s}.{ms}] [{level}] {text}';
-  log.transports.console.format =
-    '[{h}:{i}:{s}.{ms}] [{level}] {text}';
+  log.transports.file.format = '[{y}-{m}-{d} {h}:{i}:{s}.{ms}] [{level}] {text}';
+  log.transports.console.format = '[{h}:{i}:{s}.{ms}] [{level}] {text}';
 
   log.transports.file.resolvePathFn = () => join(app.getPath('userData'), 'logs', 'main.log');
 

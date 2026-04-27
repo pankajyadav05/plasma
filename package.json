@@ -1,6 +1,6 @@
 {
   "name": "plasma",
-  "version": "0.0.4",
+  "version": "0.0.5",
   "description": "A quiet place for queries. A modern Electron-based Postgres client.",
   "private": true,
   "type": "module",
@@ -46,6 +46,7 @@
     "clsx": "^2.1.1",
     "cmdk": "^1.0.4",
     "electron-log": "^5.2.3",
+    "electron-updater": "^6.8.3",
     "lucide-react": "^0.460.0",
     "monaco-editor": "^0.52.0",
     "pg": "^8.13.1",
