@@ -1906,40 +1906,44 @@
           }
         }
 
-        // ─── Theme cycler — drives the hero `.app-mock` ───────────────
-        // Auto-rotates every 5s through the THEMES list. First user
-        // interaction (chip click) freezes auto-rotation — the visitor
-        // is now driving. Pauses on hero hover so people can read.
+        // ─── Theme cycler — drives every `.app-mock` on the page ──────
+        // Themes apply to ALL mockups (hero + the three supporting
+        // shots in "See it") so users see the swap regardless of which
+        // section they're looking at when they click. Auto-rotates
+        // every 5s; first chip click freezes auto-rotation.
         const cycler = document.getElementById("themeCycler");
-        const heroMock = document.getElementById("heroMock");
-        if (cycler && heroMock) {
+        const allMocks = document.querySelectorAll(".app-mock");
+        if (cycler && allMocks.length > 0) {
           const THEMES = [
             "default", "catppuccin", "claude", "claymorphism",
             "neo-brutalism", "quantum-rose", "forest-canopy",
             "cyberpunk", "arctic",
           ];
+          const chips = cycler.querySelectorAll(".theme-chip");
           let idx = 0;
           let userTook = false;
           let paused = false;
 
           const setTheme = (name) => {
-            heroMock.setAttribute("data-theme", name);
-            for (const chip of cycler.querySelectorAll(".theme-chip")) {
+            for (const m of allMocks) m.setAttribute("data-theme", name);
+            for (const chip of chips) {
               chip.classList.toggle("active", chip.dataset.theme === name);
             }
           };
 
-          for (const chip of cycler.querySelectorAll(".theme-chip")) {
+          for (const chip of chips) {
             chip.addEventListener("click", () => {
               userTook = true;
               setTheme(chip.dataset.theme);
             });
           }
 
-          // Pause auto-rotate while pointer is anywhere on the hero
-          // mockup — assume the visitor is reading the table.
-          heroMock.addEventListener("mouseenter", () => { paused = true; });
-          heroMock.addEventListener("mouseleave", () => { paused = false; });
+          // Pause auto-rotate while pointer is over any mockup so
+          // visitors get to actually read what's on screen.
+          for (const m of allMocks) {
+            m.addEventListener("mouseenter", () => { paused = true; });
+            m.addEventListener("mouseleave", () => { paused = false; });
+          }
 
           if (!reducedMotion) {
             setInterval(() => {
