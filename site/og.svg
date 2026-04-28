@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" width="1200" height="630">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#FAF7F0"/>
+      <stop offset="100%" stop-color="#F4ECD8"/>
+    </linearGradient>
+    <pattern id="grain" width="6" height="6" patternUnits="userSpaceOnUse">
+      <circle cx="3" cy="3" r="0.6" fill="#1C1A14" opacity="0.05"/>
+    </pattern>
+  </defs>
+
+  <rect width="1200" height="630" fill="url(#bg)"/>
+  <rect width="1200" height="630" fill="url(#grain)"/>
+
+  <!-- Logomark, top-left -->
+  <g transform="translate(80, 80)">
+    <rect x="0" y="0" width="84" height="84" rx="14" fill="#FAF7F0" stroke="#1C1A14" stroke-width="3"/>
+    <text x="42" y="60" text-anchor="middle" fill="#1C1A14"
+          style="font-family:'Newsreader',Georgia,serif;font-style:italic;font-weight:600;font-size:64px">P</text>
+    <rect x="22" y="64" width="40" height="4" fill="#EB5E4E"/>
+  </g>
+
+  <!-- Wordmark "Plasma" with signature bar -->
+  <g transform="translate(80, 280)">
+    <text x="0" y="0" fill="#1C1A14"
+          style="font-family:'Newsreader',Georgia,serif;font-style:italic;font-weight:500;font-size:200px;letter-spacing:-6px">Plasma</text>
+    <rect x="0" y="14" width="540" height="6" fill="#EB5E4E"/>
+  </g>
+
+  <!-- Tagline -->
+  <text x="80" y="400" fill="#5C5C5C"
+        style="font-family:'Newsreader',Georgia,serif;font-style:italic;font-size:48px">
+    A quiet place for queries.
+  </text>
+
+  <!-- Subline / spec -->
+  <text x="80" y="470" fill="#5C5C5C"
+        style="font-family:'DM Sans','Inter',system-ui,sans-serif;font-size:26px">
+    Modern Postgres client · Schema-aware autocomplete · Nine themes
+  </text>
+
+  <!-- Footer band -->
+  <rect x="0" y="570" width="1200" height="60" fill="#1C1A14"/>
+  <text x="80" y="608" fill="#FAF7F0"
+        style="font-family:'JetBrains Mono',ui-monospace,monospace;font-size:18px;letter-spacing:0.05em">
+    plasma.sh  ·  free · apache 2.0 · windows · macOS+linux soon
+  </text>
+
+  <!-- Decorative SQL keywords, faint, right side -->
+  <g transform="translate(720, 80)" opacity="0.18">
+    <text x="0" y="0" fill="#1C1A14"
+          style="font-family:'JetBrains Mono',ui-monospace,monospace;font-size:22px;font-weight:500">
+      <tspan x="0" dy="0">select id, email, status</tspan>
+      <tspan x="0" dy="36">from users</tspan>
+      <tspan x="0" dy="36">where created_at &gt; '2026-01-01'</tspan>
+      <tspan x="0" dy="36">order by id desc</tspan>
+      <tspan x="0" dy="36">limit 50;</tspan>
+    </text>
+  </g>
+</svg>

@@ -11,10 +11,39 @@
 
     <!-- Open Graph -->
     <meta property="og:type" content="website" />
-    <meta property="og:title" content="Plasma" />
-    <meta property="og:description" content="A quiet place for queries." />
+    <meta property="og:title" content="Plasma — A quiet place for queries." />
+    <meta property="og:description" content="A modern Postgres client. Schema-aware autocomplete, editorial typography, nine themes, state that sticks." />
+    <meta property="og:image" content="og.svg" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:url" content="https://plasma.sh" />
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:title" content="Plasma — a quiet place for queries" />
+    <meta name="twitter:description" content="A modern Postgres client. Schema-aware autocomplete, nine themes, state that sticks." />
+    <meta name="twitter:image" content="og.svg" />
+    <meta name="theme-color" content="#FAF7F0" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#1a1a1a" media="(prefers-color-scheme: dark)" />
+    <link rel="canonical" href="https://plasma.sh" />
+
+    <!-- Structured data — Schema.org SoftwareApplication for Google rich results.
+         Versioned so updates flow through `release.mjs` (sync-version step). -->
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "SoftwareApplication",
+        "name": "Plasma",
+        "applicationCategory": "DeveloperApplication",
+        "applicationSubCategory": "Database Client",
+        "operatingSystem": "Windows 10, Windows 11",
+        "softwareVersion": "0.0.6",
+        "description": "A modern Postgres client with schema-aware autocomplete, editorial typography, nine themes, and state that persists per table per connection.",
+        "url": "https://plasma.sh",
+        "downloadUrl": "https://ci1uagtcki1vvf8z.public.blob.vercel-storage.com/Plasma-Setup-0.0.6-x64.exe",
+        "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+        "license": "https://www.apache.org/licenses/LICENSE-2.0",
+        "author": { "@type": "Person", "name": "Pankaj Yadav" }
+      }
+    </script>
 
     <!-- Favicon — inlined as a data URI so the site stays self-contained
          at any deploy root (Vercel, GitHub Pages, S3…). Mirrors
@@ -190,110 +219,6 @@
         opacity: 1;
       }
 
-      /* ─── Custom SQL-themed cursor — desktop only ─────────────────── */
-      /* Two elements: an instant dot (primary fill) and a lagged ring
-         (outlined) that interpolates toward the dot via requestAnimationFrame.
-         On hover over interactive elements the ring grows and the dot
-         becomes a blinking `|` — a nod to the SQL prompt cursor. */
-      @media (hover: hover) and (pointer: fine) {
-        html.cursor-ready,
-        html.cursor-ready body,
-        html.cursor-ready a,
-        html.cursor-ready button,
-        html.cursor-ready input,
-        html.cursor-ready [role="button"] {
-          cursor: none !important;
-        }
-      }
-      .sql-cursor {
-        pointer-events: none;
-        position: fixed;
-        top: 0;
-        left: 0;
-        z-index: 9999;
-        display: none;
-        mix-blend-mode: normal;
-      }
-      @media (hover: hover) and (pointer: fine) {
-        html.cursor-ready .sql-cursor {
-          display: block;
-        }
-      }
-      .sql-cursor-dot {
-        position: fixed;
-        top: 0;
-        left: 0;
-        width: 6px;
-        height: 6px;
-        border-radius: 50%;
-        background: var(--primary);
-        transform: translate(-50%, -50%);
-        transition:
-          width 0.25s cubic-bezier(0.16, 1, 0.3, 1),
-          height 0.25s cubic-bezier(0.16, 1, 0.3, 1),
-          opacity 0.2s;
-        will-change: transform;
-      }
-      .sql-cursor-ring {
-        position: fixed;
-        top: 0;
-        left: 0;
-        width: 36px;
-        height: 36px;
-        border-radius: 50%;
-        border: 1px solid color-mix(in srgb, var(--primary) 60%, transparent);
-        transform: translate(-50%, -50%);
-        transition:
-          width 0.3s cubic-bezier(0.16, 1, 0.3, 1),
-          height 0.3s cubic-bezier(0.16, 1, 0.3, 1),
-          border-color 0.3s;
-        will-change: transform;
-      }
-      .sql-cursor-label {
-        position: fixed;
-        top: 0;
-        left: 0;
-        padding: 3px 8px;
-        margin-left: 22px;
-        margin-top: 6px;
-        background: var(--primary);
-        color: var(--primary-foreground);
-        font-family: "JetBrains Mono", ui-monospace, monospace;
-        font-size: 10px;
-        line-height: 1;
-        border-radius: 3px;
-        letter-spacing: 0.02em;
-        opacity: 0;
-        transform: translate(0, 0) scale(0.8);
-        transform-origin: left top;
-        transition:
-          opacity 0.2s,
-          transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
-        pointer-events: none;
-        white-space: nowrap;
-        will-change: transform, opacity;
-      }
-      .sql-cursor.is-interactive .sql-cursor-ring {
-        width: 52px;
-        height: 52px;
-        border-color: var(--primary);
-      }
-      .sql-cursor.is-interactive .sql-cursor-dot {
-        width: 3px;
-        height: 14px;
-        border-radius: 1px;
-        animation: cursor-blink 1s steps(2) infinite;
-      }
-      .sql-cursor.is-interactive .sql-cursor-label {
-        opacity: 1;
-        transform: translate(0, 0) scale(1);
-      }
-      @keyframes cursor-blink {
-        50% {
-          opacity: 0.25;
-        }
-      }
-
       /* ─── Scroll progress bar — thin primary line at top ──────────── */
       .scroll-progress {
         position: fixed;
@@ -310,13 +235,6 @@
 
       /* ─── Magnetic button — JS nudges translate() on pointermove ──── */
       .magnetic {
-        transition: transform 0.45s cubic-bezier(0.16, 1, 0.3, 1);
-        will-change: transform;
-      }
-
-      /* ─── Tilt — perspective rotate keyed to mouse position ───────── */
-      .tilt {
-        transform-style: preserve-3d;
         transition: transform 0.45s cubic-bezier(0.16, 1, 0.3, 1);
         will-change: transform;
       }
@@ -518,6 +436,311 @@
         color: var(--muted-foreground);
       }
 
+      /* ─── App mockup — themed via [data-theme] on the wrapper ─────────
+         Each `.app-mock` carries its own `--m-*` variables so the
+         theme-cycler swaps look-and-feel without touching the surrounding
+         marketing page. Defaults match Plasma's signature oxblood. */
+      .app-mock {
+        --m-bg: #ffffff;
+        --m-fg: #1a1a1a;
+        --m-card: #ffffff;
+        --m-sidebar: #fafafa;
+        --m-sidebar-active: rgba(235, 94, 78, 0.10);
+        --m-muted: #f4f4f4;
+        --m-muted-fg: #707070;
+        --m-border: #e9e9e9;
+        --m-primary: #eb5e4e;
+        --m-primary-fg: #ffffff;
+        --m-accent: #f0e9d6;
+        --m-radius: 6px;
+        --m-radius-sm: 3px;
+        --m-font: "DM Sans", system-ui, sans-serif;
+        --m-mono: "JetBrains Mono", ui-monospace, monospace;
+        --m-num: #2b4e7a;
+        --m-str: #4a6b2e;
+        --m-shadow: 0 24px 60px -30px rgba(28, 26, 20, 0.25), 0 8px 24px -12px rgba(28, 26, 20, 0.10);
+        position: relative;
+        font-family: var(--m-font);
+        background: var(--m-bg);
+        color: var(--m-fg);
+        border: 1px solid var(--m-border);
+        border-radius: calc(var(--m-radius) * 2);
+        overflow: hidden;
+        box-shadow: var(--m-shadow);
+        transition:
+          background 0.6s cubic-bezier(0.4, 0, 0.2, 1),
+          border-color 0.6s,
+          box-shadow 0.6s,
+          color 0.6s;
+        font-size: 12px;
+      }
+      .dark .app-mock {
+        --m-bg: #1c1c1c;
+        --m-fg: #ededed;
+        --m-card: #1c1c1c;
+        --m-sidebar: #161616;
+        --m-sidebar-active: rgba(235, 94, 78, 0.18);
+        --m-muted: #262626;
+        --m-muted-fg: #a8a8a8;
+        --m-border: #2e2e2e;
+        --m-accent: #332c1c;
+        --m-num: #7fb8ff;
+        --m-str: #a3d977;
+        --m-shadow: 0 24px 60px -20px rgba(0, 0, 0, 0.6), 0 8px 24px -8px rgba(0, 0, 0, 0.3);
+      }
+
+      /* Theme variants — same axes as the real app: hue, radius, font.
+         Light-mode tokens; dark variant inherits the .dark adjustments. */
+      .app-mock[data-theme="catppuccin"] {
+        --m-bg: #f4eed6; --m-fg: #4a3a55;
+        --m-card: #faf3dd; --m-sidebar: #ede4c5;
+        --m-muted: #e8dfbf; --m-muted-fg: #847070;
+        --m-border: #d8c89e; --m-primary: #5b3aa3;
+        --m-primary-fg: #faf3dd; --m-accent: #e6a567;
+        --m-sidebar-active: rgba(91, 58, 163, 0.12);
+        --m-radius: 8px; --m-font: "Geist", sans-serif;
+      }
+      .app-mock[data-theme="claude"] {
+        --m-bg: #f3ebd9; --m-fg: #3a2618;
+        --m-card: #f8f1df; --m-sidebar: #e8dec3;
+        --m-muted: #ebe0c5; --m-muted-fg: #7a6248;
+        --m-border: #d4c298; --m-primary: #c66e3d;
+        --m-primary-fg: #f8f1df; --m-accent: #e0d2a8;
+        --m-sidebar-active: rgba(198, 110, 61, 0.14);
+        --m-radius: 10px; --m-font: "Outfit", sans-serif;
+      }
+      .app-mock[data-theme="claymorphism"] {
+        --m-bg: #ebe2f3; --m-fg: #3d2e5a;
+        --m-card: #f4eef9; --m-sidebar: #ddd0ec;
+        --m-muted: #e2d6ed; --m-muted-fg: #6e5a85;
+        --m-border: #c4b3d6; --m-primary: #7a4cc4;
+        --m-primary-fg: #f4eef9; --m-accent: #ecb1d8;
+        --m-sidebar-active: rgba(122, 76, 196, 0.14);
+        --m-radius: 20px; --m-radius-sm: 12px;
+        --m-font: "Plus Jakarta Sans", sans-serif;
+        --m-shadow: 0 18px 38px -8px rgba(122, 76, 196, 0.30), inset 0 2px 0 rgba(255, 255, 255, 0.6);
+      }
+      .app-mock[data-theme="neo-brutalism"] {
+        --m-bg: #ffffff; --m-fg: #000000;
+        --m-card: #ffffff; --m-sidebar: #ffffff;
+        --m-muted: #f0f0f0; --m-muted-fg: #404040;
+        --m-border: #000000; --m-primary: #000000;
+        --m-primary-fg: #f5d800; --m-accent: #f5d800;
+        --m-sidebar-active: #f5d800;
+        --m-radius: 0px; --m-radius-sm: 0px;
+        --m-font: "IBM Plex Sans", sans-serif;
+        --m-shadow: 6px 6px 0 0 #000000;
+      }
+      .app-mock[data-theme="quantum-rose"] {
+        --m-bg: #f5e0e3; --m-fg: #44162a;
+        --m-card: #faecee; --m-sidebar: #ecccd2;
+        --m-muted: #efd4d8; --m-muted-fg: #82516a;
+        --m-border: #d8a2af; --m-primary: #b13556;
+        --m-primary-fg: #faecee; --m-accent: #e6a87c;
+        --m-sidebar-active: rgba(177, 53, 86, 0.14);
+        --m-radius: 4px;
+        --m-font: "Outfit", sans-serif;
+        --m-shadow: 0 18px 32px -12px rgba(177, 53, 86, 0.30);
+      }
+      .app-mock[data-theme="forest-canopy"] {
+        --m-bg: #ede4c5; --m-fg: #2c3a1c;
+        --m-card: #f3ecd0; --m-sidebar: #e1d6ad;
+        --m-muted: #e6dcb6; --m-muted-fg: #5a6a44;
+        --m-border: #c5b886; --m-primary: #5a7a3b;
+        --m-primary-fg: #f3ecd0; --m-accent: #c79a4a;
+        --m-sidebar-active: rgba(90, 122, 59, 0.14);
+        --m-radius: 8px;
+        --m-font: "Plus Jakarta Sans", sans-serif;
+      }
+      .app-mock[data-theme="cyberpunk"] {
+        --m-bg: #0d0a1a; --m-fg: #c8f0ff;
+        --m-card: #14102a; --m-sidebar: #0a0820;
+        --m-muted: #1a1535; --m-muted-fg: #8aa8c4;
+        --m-border: #5b1c84; --m-primary: #d822c4;
+        --m-primary-fg: #0d0a1a; --m-accent: #22d8c4;
+        --m-sidebar-active: rgba(216, 34, 196, 0.18);
+        --m-num: #22d8c4; --m-str: #f5d800;
+        --m-radius: 2px;
+        --m-font: "Orbitron", "JetBrains Mono", sans-serif;
+        --m-shadow: 0 0 32px 0 rgba(216, 34, 196, 0.45), 0 0 8px 0 rgba(34, 216, 196, 0.45);
+      }
+      .app-mock[data-theme="arctic"] {
+        --m-bg: #eef3f8; --m-fg: #1a2a4a;
+        --m-card: #f6f9fc; --m-sidebar: #e1e9f3;
+        --m-muted: #e6edf5; --m-muted-fg: #5a6a85;
+        --m-border: #c8d6e8; --m-primary: #3a5fcc;
+        --m-primary-fg: #f6f9fc; --m-accent: #88b8d8;
+        --m-sidebar-active: rgba(58, 95, 204, 0.12);
+        --m-radius: 14px;
+        --m-font: "Inter", sans-serif;
+        --m-shadow: 0 24px 60px -30px rgba(58, 95, 204, 0.30);
+      }
+
+      /* Mockup chrome */
+      .mock-topbar {
+        display: flex;
+        align-items: center;
+        height: 36px;
+        background: var(--m-sidebar);
+        border-bottom: 1px solid var(--m-border);
+        padding: 0 12px;
+        gap: 8px;
+      }
+      .mock-traffic { display: flex; gap: 6px; margin-right: 8px; }
+      .mock-traffic span {
+        width: 10px; height: 10px; border-radius: 50%;
+        background: var(--m-muted-fg); opacity: 0.45;
+      }
+      .mock-tabs {
+        display: flex; gap: 2px; flex: 1; min-width: 0;
+        align-items: center; height: 100%;
+      }
+      .mock-tab {
+        padding: 6px 12px; font-size: 11px; color: var(--m-muted-fg);
+        border-radius: var(--m-radius-sm) var(--m-radius-sm) 0 0;
+        white-space: nowrap; display: inline-flex;
+        align-items: center; gap: 5px;
+      }
+      .mock-tab.active {
+        background: var(--m-bg); color: var(--m-fg);
+        border: 1px solid var(--m-border); border-bottom-color: var(--m-bg);
+        margin-bottom: -1px;
+      }
+      .mock-tab .dot {
+        width: 6px; height: 6px; border-radius: 50%;
+        background: var(--m-primary);
+      }
+      .mock-body { display: flex; height: 360px; }
+      .mock-sidebar {
+        width: 200px; background: var(--m-sidebar);
+        border-right: 1px solid var(--m-border);
+        padding: 10px 0; font-size: 11px; overflow: hidden;
+      }
+      .mock-sidebar-header {
+        padding: 0 12px 8px; font-size: 9px;
+        text-transform: uppercase; letter-spacing: 0.12em;
+        color: var(--m-muted-fg); font-weight: 600;
+      }
+      .mock-sb-row {
+        padding: 4px 12px; display: flex; align-items: center;
+        gap: 6px; color: var(--m-fg); cursor: default;
+      }
+      .mock-sb-row.indent { padding-left: 24px; }
+      .mock-sb-row.active {
+        background: var(--m-sidebar-active);
+        color: var(--m-primary); font-weight: 500;
+      }
+      .mock-sb-row .ico {
+        width: 12px; height: 12px; opacity: 0.55; flex-shrink: 0;
+      }
+      .mock-sb-row.active .ico { opacity: 1; color: var(--m-primary); }
+      .mock-main {
+        flex: 1; background: var(--m-bg);
+        display: flex; flex-direction: column; min-width: 0;
+      }
+      .mock-toolbar {
+        height: 32px; border-bottom: 1px solid var(--m-border);
+        display: flex; align-items: center; gap: 6px;
+        padding: 0 12px; font-size: 10px; color: var(--m-muted-fg);
+      }
+      .mock-chip {
+        padding: 2px 7px; border: 1px solid var(--m-border);
+        border-radius: var(--m-radius-sm); font-size: 10px;
+        background: var(--m-muted); color: var(--m-fg);
+        display: inline-flex; align-items: center; gap: 4px;
+      }
+      .mock-chip.primary {
+        background: var(--m-primary); color: var(--m-primary-fg);
+        border-color: var(--m-primary);
+      }
+      .mock-grid { flex: 1; overflow: hidden; font-family: var(--m-mono); font-size: 11px; line-height: 24px; }
+      .mock-grid table { width: 100%; border-collapse: collapse; }
+      .mock-grid th {
+        text-align: left; font-weight: 500; padding: 6px 10px;
+        color: var(--m-muted-fg); background: var(--m-muted);
+        border-bottom: 1px solid var(--m-border); font-size: 10px;
+        white-space: nowrap; position: sticky; top: 0;
+      }
+      .mock-grid th .pk { color: var(--m-primary); margin-left: 4px; font-weight: 700; }
+      .mock-grid td {
+        padding: 4px 10px; border-bottom: 1px solid var(--m-border);
+        color: var(--m-fg); white-space: nowrap;
+      }
+      .mock-grid tr.selected td { background: var(--m-sidebar-active); }
+      .mock-grid td.num { color: var(--m-num); }
+      .mock-grid td.str { color: var(--m-str); }
+      .mock-grid td.muted { color: var(--m-muted-fg); }
+      .mock-grid td .fk {
+        color: var(--m-primary); margin-left: 6px;
+        opacity: 0.85; cursor: pointer;
+      }
+      .mock-statusbar {
+        height: 26px; border-top: 1px solid var(--m-border);
+        background: var(--m-sidebar); display: flex;
+        align-items: center; gap: 12px; padding: 0 12px;
+        font-size: 10px; color: var(--m-muted-fg);
+      }
+      .mock-statusbar .status-dot {
+        width: 7px; height: 7px; border-radius: 50%;
+        background: var(--m-primary);
+      }
+      .mock-rail {
+        width: 36px; background: var(--m-sidebar);
+        border-left: 1px solid var(--m-border);
+        display: flex; flex-direction: column;
+        align-items: center; gap: 4px; padding-top: 8px;
+      }
+      .mock-rail-icon {
+        width: 28px; height: 28px; display: grid; place-items: center;
+        color: var(--m-muted-fg); border-radius: var(--m-radius-sm);
+      }
+      .mock-rail-icon.active {
+        background: var(--m-sidebar-active); color: var(--m-primary);
+      }
+
+      /* Theme chip swatch (in the cycler control row) */
+      .theme-chip {
+        display: inline-flex; align-items: center; gap: 8px;
+        padding: 8px 14px; border: 1px solid var(--border);
+        border-radius: 999px; background: var(--background);
+        font-size: 12px; color: var(--muted-foreground);
+        cursor: pointer; white-space: nowrap;
+        transition: border-color 0.25s, background 0.25s, color 0.25s;
+      }
+      .theme-chip:hover { border-color: var(--primary); color: var(--foreground); }
+      .theme-chip.active {
+        border-color: var(--primary); background: var(--primary);
+        color: var(--primary-foreground);
+      }
+      .theme-chip .swatch { display: inline-flex; gap: 2px; }
+      .theme-chip .swatch span {
+        width: 10px; height: 10px; border-radius: 50%;
+        border: 1px solid rgba(0,0,0,0.10);
+      }
+
+      /* Comparison table */
+      .compare {
+        width: 100%; border-collapse: separate; border-spacing: 0;
+        font-size: 14px;
+      }
+      .compare th, .compare td {
+        text-align: left; padding: 14px 18px;
+        border-bottom: 1px solid var(--border); vertical-align: top;
+      }
+      .compare th {
+        font-family: "Newsreader", Georgia, serif; font-style: italic;
+        font-weight: 500; font-size: 18px; color: var(--foreground);
+      }
+      .compare th.us { color: var(--primary); }
+      .compare td.us {
+        background: color-mix(in srgb, var(--primary) 6%, transparent);
+        color: var(--foreground); font-weight: 500;
+      }
+      .compare .row-label { font-weight: 500; color: var(--foreground); }
+      .compare .yes { color: var(--primary); font-weight: 600; }
+      .compare .no  { color: var(--muted-foreground); }
+      .compare .partial { color: var(--muted-foreground); }
+
       /* Reduced motion — respect */
       @media (prefers-reduced-motion: reduce) {
         * {
@@ -528,6 +751,7 @@
           opacity: 1;
           transform: none;
         }
+        .app-mock { transition: none !important; }
       }
     </style>
   </head>
@@ -537,13 +761,6 @@
 
     <!-- Ambient cursor glow -->
     <div id="cursorGlow" class="cursor-glow"></div>
-
-    <!-- SQL-themed custom cursor (desktop only; hidden if reduced motion) -->
-    <div class="sql-cursor" id="sqlCursor" aria-hidden>
-      <div class="sql-cursor-ring" id="cursorRing"></div>
-      <div class="sql-cursor-dot" id="cursorDot"></div>
-      <div class="sql-cursor-label" id="cursorLabel">SELECT</div>
-    </div>
 
     <!-- ─── Top nav ────────────────────────────────────────────────── -->
     <header
@@ -639,75 +856,198 @@
       </div>
     </header>
 
-    <!-- ─── Hero ────────────────────────────────────────────────────── -->
+    <!-- ─── Hero — text + live app mockup ───────────────────────────── -->
     <section
-      class="paper-grain relative flex min-h-screen items-center justify-center overflow-hidden px-6 pt-24"
+      class="paper-grain relative flex min-h-[100vh] items-center overflow-hidden px-6 pt-24 pb-16"
     >
-      <div class="relative z-10 mx-auto max-w-4xl text-center">
-        <!-- Hero heading — HTML text with a pseudo-element underline.
-             Using real text (not SVG) means the signature stroke always
-             matches the font's rendered width, regardless of metrics. -->
-        <h1
-          class="reveal delay-1 mb-10 font-display italic text-foreground leading-[0.92]"
-          style="font-weight: 500; letter-spacing: -0.03em"
-        >
-          <span
-            class="brand-stroke inline-block text-[88px] md:text-[128px] lg:text-[168px]"
-          >
-            Plasma
-          </span>
-        </h1>
+      <div class="relative z-10 mx-auto grid w-full max-w-7xl items-center gap-12 lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)]">
 
-        <p
-          class="reveal delay-2 mb-4 font-display text-2xl italic text-muted-foreground md:text-3xl"
-        >
-          A quiet place for queries.
-        </p>
-
-        <p
-          class="reveal delay-3 mx-auto mb-14 max-w-xl text-base text-muted-foreground md:text-lg"
-        >
-          A Postgres client that reads like a book and works like a knife.
-          Schema-aware autocomplete, editorial typography, and state that
-          remembers you.
-        </p>
-
-        <div class="reveal delay-4 flex flex-wrap items-center justify-center gap-3">
-          <a
-            href="#download"
-            class="magnetic group inline-flex items-center gap-2.5 rounded-md bg-primary px-6 py-3 font-medium text-primary-foreground shadow-[0_0_0_0_rgba(235,94,78,0.4)] transition-shadow hover:shadow-[0_0_0_6px_rgba(235,94,78,0.12)]"
-            data-cursor-label="DOWNLOAD"
+        <!-- Left: copy -->
+        <div class="text-left">
+          <p class="reveal mb-5 inline-flex items-center gap-2 text-xs font-medium uppercase tracking-[0.18em] text-primary">
+            <span class="inline-block h-1.5 w-1.5 rounded-full bg-primary"></span>
+            Postgres client · v0.0.6
+          </p>
+          <h1
+            class="reveal delay-1 mb-6 font-display italic text-foreground leading-[0.92]"
+            style="font-weight: 500; letter-spacing: -0.03em"
           >
-            <svg class="h-4 w-4 transition-transform group-hover:translate-y-0.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M12 3v12m0 0l-4-4m4 4l4-4M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2" />
-            </svg>
-            Download for Windows
-          </a>
-          <a
-            href="#features"
-            class="magnetic inline-flex items-center gap-2.5 rounded-md border border-border px-6 py-3 font-medium text-foreground transition-colors hover:bg-accent"
-            data-cursor-label="EXPLORE"
-          >
-            See what's inside
-            <svg class="h-3.5 w-3.5 transition-transform group-hover:translate-x-1" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M5 12h14m-6-6l6 6-6 6" />
-            </svg>
-          </a>
+            <span class="brand-stroke inline-block text-[72px] md:text-[88px] lg:text-[108px]">
+              Plasma
+            </span>
+          </h1>
+          <p class="reveal delay-2 mb-4 font-display text-2xl italic text-muted-foreground md:text-3xl">
+            A quiet place for queries.
+          </p>
+          <p class="reveal delay-3 mb-10 max-w-xl text-base text-muted-foreground md:text-lg">
+            Reads like a book, works like a knife. Schema-aware autocomplete,
+            nine themes worth keeping, and state that remembers every column
+            width on every table.
+          </p>
+
+          <div class="reveal delay-4 flex flex-wrap items-center gap-3">
+            <a
+              href="#download"
+              class="magnetic group inline-flex items-center gap-2.5 rounded-md bg-primary px-6 py-3 font-medium text-primary-foreground shadow-[0_0_0_0_rgba(235,94,78,0.4)] transition-shadow hover:shadow-[0_0_0_6px_rgba(235,94,78,0.12)]"
+            >
+              <svg class="h-4 w-4 transition-transform group-hover:translate-y-0.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M12 3v12m0 0l-4-4m4 4l4-4M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2" />
+              </svg>
+              Download for Windows
+            </a>
+            <a
+              href="https://github.com/pankajyadav05/plasma"
+              class="magnetic inline-flex items-center gap-2.5 rounded-md border border-border px-6 py-3 font-medium text-foreground transition-colors hover:bg-accent"
+            >
+              <svg class="h-4 w-4" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
+                <path d="M12 0C5.37 0 0 5.37 0 12c0 5.3 3.44 9.8 8.2 11.39.6.1.82-.26.82-.58v-2.03c-3.34.72-4.04-1.61-4.04-1.61-.54-1.38-1.33-1.75-1.33-1.75-1.09-.74.08-.73.08-.73 1.2.08 1.84 1.24 1.84 1.24 1.07 1.83 2.8 1.3 3.48.99.11-.77.42-1.3.76-1.6-2.66-.3-5.47-1.33-5.47-5.93 0-1.31.47-2.38 1.23-3.22-.12-.3-.53-1.52.12-3.17 0 0 1.01-.32 3.3 1.23a11.5 11.5 0 016 0c2.3-1.55 3.3-1.23 3.3-1.23.65 1.65.24 2.87.12 3.17.77.84 1.23 1.91 1.23 3.22 0 4.6-2.81 5.62-5.48 5.92.43.37.82 1.1.82 2.22v3.29c0 .32.22.7.83.58C20.57 21.8 24 17.3 24 12c0-6.63-5.37-12-12-12z" />
+              </svg>
+              View on GitHub
+              <img
+                src="https://img.shields.io/github/stars/pankajyadav05/plasma?style=flat&label=&color=eb5e4e&labelColor=transparent"
+                alt=""
+                aria-hidden
+                class="h-4 ml-1"
+              />
+            </a>
+          </div>
+
+          <p class="reveal delay-4 mt-8 flex items-center gap-3 text-xs text-muted-foreground">
+            <span>Free · Apache 2.0 · 91 MB</span>
+            <span aria-hidden>·</span>
+            <span class="font-mono">no account · no telemetry by default</span>
+          </p>
         </div>
 
-        <p class="reveal delay-4 mt-8 text-xs text-muted-foreground">
-          Free · Apache 2.0 · ~91 MB
-        </p>
-      </div>
-
-      <!-- Scroll nudge -->
-      <div
-        class="scroll-nudge absolute bottom-8 left-1/2 -translate-x-1/2 text-muted-foreground"
-        aria-hidden
-      >
-        <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-          <path d="M12 5v14m0 0l-6-6m6 6l6-6" />
-        </svg>
+        <!-- Right: live app mockup, themed (cyclable below) -->
+        <div class="reveal delay-2 relative">
+          <div class="app-mock" id="heroMock" data-theme="default">
+            <div class="mock-topbar">
+              <div class="mock-traffic" aria-hidden><span></span><span></span><span></span></div>
+              <div class="mock-tabs">
+                <div class="mock-tab active">
+                  <span class="dot"></span>users.sql
+                </div>
+                <div class="mock-tab">orders</div>
+                <div class="mock-tab">organizations</div>
+              </div>
+            </div>
+            <div class="mock-body">
+              <div class="mock-sidebar">
+                <div class="mock-sidebar-header">prod_db</div>
+                <div class="mock-sb-row"><span class="ico">▾</span> public</div>
+                <div class="mock-sb-row indent active"><span class="ico">▦</span> users</div>
+                <div class="mock-sb-row indent"><span class="ico">▦</span> orders</div>
+                <div class="mock-sb-row indent"><span class="ico">▦</span> organizations</div>
+                <div class="mock-sb-row indent"><span class="ico">▦</span> sessions</div>
+                <div class="mock-sb-row indent"><span class="ico">▦</span> audit_log</div>
+                <div class="mock-sb-row indent"><span class="ico">▦</span> feature_flags</div>
+                <div class="mock-sb-row"><span class="ico">▸</span> auth</div>
+                <div class="mock-sb-row"><span class="ico">▸</span> billing</div>
+              </div>
+              <div class="mock-main">
+                <div class="mock-toolbar">
+                  <span class="mock-chip primary">⏵ Run</span>
+                  <span class="mock-chip">filter: status = 'active'</span>
+                  <span class="mock-chip">↑ created_at</span>
+                  <span style="margin-left:auto">1,247 rows · 12ms</span>
+                </div>
+                <div class="mock-grid">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>id<span class="pk">pk</span></th>
+                        <th>email</th>
+                        <th>status</th>
+                        <th>org_id ↗</th>
+                        <th>created_at</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr class="selected">
+                        <td class="num">1042</td>
+                        <td class="str">ada@example.com</td>
+                        <td>active</td>
+                        <td class="num">42<span class="fk">↗</span></td>
+                        <td class="muted">2026-01-04</td>
+                      </tr>
+                      <tr>
+                        <td class="num">1043</td>
+                        <td class="str">grace@example.com</td>
+                        <td>active</td>
+                        <td class="num">42<span class="fk">↗</span></td>
+                        <td class="muted">2026-01-08</td>
+                      </tr>
+                      <tr>
+                        <td class="num">1044</td>
+                        <td class="str">linus@kernel.org</td>
+                        <td>active</td>
+                        <td class="num">7<span class="fk">↗</span></td>
+                        <td class="muted">2026-01-12</td>
+                      </tr>
+                      <tr>
+                        <td class="num">1045</td>
+                        <td class="str">guido@python.org</td>
+                        <td>paused</td>
+                        <td class="num">7<span class="fk">↗</span></td>
+                        <td class="muted">2026-01-15</td>
+                      </tr>
+                      <tr>
+                        <td class="num">1046</td>
+                        <td class="str">brendan@mozilla.org</td>
+                        <td>active</td>
+                        <td class="num">11<span class="fk">↗</span></td>
+                        <td class="muted">2026-02-02</td>
+                      </tr>
+                      <tr>
+                        <td class="num">1047</td>
+                        <td class="str">ken@bell-labs.com</td>
+                        <td class="muted">archived</td>
+                        <td class="num">3<span class="fk">↗</span></td>
+                        <td class="muted">2026-02-09</td>
+                      </tr>
+                      <tr>
+                        <td class="num">1048</td>
+                        <td class="str">dennis@bell-labs.com</td>
+                        <td class="muted">archived</td>
+                        <td class="num">3<span class="fk">↗</span></td>
+                        <td class="muted">2026-02-11</td>
+                      </tr>
+                      <tr>
+                        <td class="num">1049</td>
+                        <td class="str">rob@unix.org</td>
+                        <td>active</td>
+                        <td class="num">3<span class="fk">↗</span></td>
+                        <td class="muted">2026-02-18</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+                <div class="mock-statusbar">
+                  <span class="status-dot"></span> connected
+                  <span aria-hidden>·</span>
+                  <span>prod_db</span>
+                  <span aria-hidden>·</span>
+                  <span>1,247 rows</span>
+                  <span aria-hidden>·</span>
+                  <span>12 ms</span>
+                  <span style="margin-left:auto">PostgreSQL 16.1</span>
+                </div>
+              </div>
+              <div class="mock-rail">
+                <div class="mock-rail-icon active" aria-label="Query editor">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 18l6-6-6-6M8 6l-6 6 6 6"/></svg>
+                </div>
+                <div class="mock-rail-icon" aria-label="Session role">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0116 0"/></svg>
+                </div>
+                <div class="mock-rail-icon" aria-label="Row-level security">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l8 4v6c0 5-3.5 9-8 10-4.5-1-8-5-8-10V6l8-4z"/></svg>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
     </section>
 
@@ -756,97 +1096,248 @@
       </div>
     </section>
 
-    <!-- ─── Editor showcase — mock SQL with autocomplete ─────────────── -->
+    <!-- ─── Theme cycler — controls the hero mockup above ─────────────── -->
+    <section class="relative px-6 pt-2 pb-20">
+      <div class="mx-auto max-w-7xl">
+        <div class="reveal mb-6 flex flex-wrap items-baseline justify-between gap-4">
+          <div>
+            <p class="mb-2 text-xs font-medium uppercase tracking-[0.18em] text-primary">
+              Nine themes
+            </p>
+            <h2 class="font-display text-2xl italic md:text-3xl">
+              Pick one. The hero updates live.
+            </h2>
+          </div>
+          <p class="max-w-md text-sm text-muted-foreground">
+            Every theme varies on every axis — radius, font, shadow, tracking, hue —
+            so switching feels like changing IDE, not just swapping a colour.
+          </p>
+        </div>
+
+        <div id="themeCycler" class="reveal flex flex-wrap gap-2.5" role="tablist" aria-label="App theme">
+          <button class="theme-chip active" data-theme="default" type="button" role="tab">
+            <span class="swatch"><span style="background:#eb5e4e"></span><span style="background:#ebebeb"></span><span style="background:#fafafa"></span></span>
+            Plasma
+          </button>
+          <button class="theme-chip" data-theme="catppuccin" type="button" role="tab">
+            <span class="swatch"><span style="background:#5b3aa3"></span><span style="background:#e6a567"></span><span style="background:#f4eed6"></span></span>
+            Catppuccin
+          </button>
+          <button class="theme-chip" data-theme="claude" type="button" role="tab">
+            <span class="swatch"><span style="background:#c66e3d"></span><span style="background:#e0d2a8"></span><span style="background:#f3ebd9"></span></span>
+            Claude
+          </button>
+          <button class="theme-chip" data-theme="claymorphism" type="button" role="tab">
+            <span class="swatch"><span style="background:#7a4cc4"></span><span style="background:#ecb1d8"></span><span style="background:#ebe2f3"></span></span>
+            Claymorphism
+          </button>
+          <button class="theme-chip" data-theme="neo-brutalism" type="button" role="tab">
+            <span class="swatch"><span style="background:#000"></span><span style="background:#f5d800"></span><span style="background:#fff;border:1px solid #000"></span></span>
+            Neo Brutalism
+          </button>
+          <button class="theme-chip" data-theme="quantum-rose" type="button" role="tab">
+            <span class="swatch"><span style="background:#b13556"></span><span style="background:#e6a87c"></span><span style="background:#f5e0e3"></span></span>
+            Quantum Rose
+          </button>
+          <button class="theme-chip" data-theme="forest-canopy" type="button" role="tab">
+            <span class="swatch"><span style="background:#5a7a3b"></span><span style="background:#c79a4a"></span><span style="background:#ede4c5"></span></span>
+            Forest Canopy
+          </button>
+          <button class="theme-chip" data-theme="cyberpunk" type="button" role="tab">
+            <span class="swatch"><span style="background:#d822c4"></span><span style="background:#22d8c4"></span><span style="background:#0d0a1a"></span></span>
+            Cyberpunk
+          </button>
+          <button class="theme-chip" data-theme="arctic" type="button" role="tab">
+            <span class="swatch"><span style="background:#3a5fcc"></span><span style="background:#88b8d8"></span><span style="background:#eef3f8"></span></span>
+            Arctic
+          </button>
+        </div>
+
+        <p class="mt-4 text-xs text-muted-foreground">
+          Auto-cycles every 5 seconds. Click any chip to take over.
+        </p>
+      </div>
+    </section>
+
+    <!-- ─── Three supporting mockups — autocomplete, FK, palette ──────── -->
     <section class="relative px-6 py-24">
-      <div class="mx-auto max-w-5xl">
-        <div class="reveal mb-10 text-center">
+      <div class="mx-auto max-w-7xl">
+        <div class="reveal mb-12 max-w-2xl">
           <p class="mb-4 text-xs font-medium uppercase tracking-[0.18em] text-primary">
-            Autocomplete
+            See it
           </p>
           <h2 class="section-heading font-display text-4xl italic md:text-5xl">
-            Type. Tab. Ship.
+            Three things you'll do every day.
           </h2>
         </div>
 
-        <div class="reveal relative overflow-hidden rounded-xl border border-border bg-card glow-frame">
-          <!-- Editor chrome — tab strip -->
-          <div class="flex items-center gap-0 border-b border-border bg-card">
-            <div class="flex items-center gap-2 border-r border-border bg-background px-4 py-2.5">
-              <svg class="h-3.5 w-3.5 text-primary" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z M14 2v6h6" />
-              </svg>
-              <span class="font-mono text-sm">query-1.sql</span>
+        <div class="grid gap-8 lg:grid-cols-3">
+          <!-- Autocomplete -->
+          <div class="reveal delay-1">
+            <div class="app-mock" data-theme="default" style="height:340px">
+              <div class="mock-topbar">
+                <div class="mock-traffic" aria-hidden><span></span><span></span><span></span></div>
+                <div class="mock-tabs">
+                  <div class="mock-tab active"><span class="dot"></span>query-1.sql</div>
+                </div>
+              </div>
+              <div style="position:relative;padding:16px 16px;font-family:var(--m-mono);font-size:12px;line-height:1.7;color:var(--m-fg);background:var(--m-bg);height:100%">
+                <div style="display:flex;gap:14px">
+                  <div style="color:var(--m-muted-fg);min-width:14px;text-align:right">
+                    <div>1</div><div>2</div><div>3</div><div>4</div><div>5</div>
+                  </div>
+                  <div style="flex:1">
+                    <div><span style="color:var(--m-primary);font-weight:600">select</span> id, email, status</div>
+                    <div><span style="color:var(--m-primary);font-weight:600">from</span> us<span style="display:inline-block;width:1px;height:14px;background:var(--m-fg);vertical-align:middle;animation:pulse-ink 1s steps(2) infinite"></span></div>
+                    <div><span style="color:var(--m-primary);font-weight:600">where</span> created_at &gt; <span style="color:var(--m-str)">'2026-01-01'</span></div>
+                    <div><span style="color:var(--m-primary);font-weight:600">order by</span> id <span style="color:var(--m-primary);font-weight:600">desc</span></div>
+                    <div><span style="color:var(--m-primary);font-weight:600">limit</span> <span style="color:var(--m-num)">50</span>;</div>
+                  </div>
+                </div>
+                <!-- Suggest popover -->
+                <div style="position:absolute;top:46px;left:60px;width:240px;background:var(--m-card);border:1px solid var(--m-border);border-radius:var(--m-radius-sm);box-shadow:0 12px 30px -10px rgba(0,0,0,0.30);overflow:hidden;font-size:11px;z-index:2">
+                  <div style="display:flex;align-items:center;gap:8px;padding:6px 10px;background:var(--m-sidebar-active);color:var(--m-fg)">
+                    <span style="display:inline-block;width:14px;height:14px;border:1px solid var(--m-primary);border-radius:2px"></span>
+                    <span><span style="color:var(--m-primary);font-weight:600">us</span>ers</span>
+                    <span style="margin-left:auto;font-size:9px;color:var(--m-muted-fg)">table · 4.4M</span>
+                  </div>
+                  <div style="display:flex;align-items:center;gap:8px;padding:6px 10px;color:var(--m-fg)">
+                    <span style="display:inline-block;width:14px;height:14px;border:1px solid var(--m-muted-fg);border-radius:2px;opacity:0.5"></span>
+                    <span><span style="color:var(--m-primary);font-weight:600">us</span>er_sessions</span>
+                    <span style="margin-left:auto;font-size:9px;color:var(--m-muted-fg)">table</span>
+                  </div>
+                  <div style="display:flex;align-items:center;gap:8px;padding:6px 10px;color:var(--m-fg)">
+                    <span style="display:inline-block;width:14px;height:14px;border:1px solid var(--m-muted-fg);border-radius:2px;opacity:0.5"></span>
+                    <span><span style="color:var(--m-primary);font-weight:600">us</span>er_preferences</span>
+                    <span style="margin-left:auto;font-size:9px;color:var(--m-muted-fg)">table</span>
+                  </div>
+                  <div style="display:flex;align-items:center;gap:8px;padding:6px 10px;color:var(--m-fg)">
+                    <span style="display:inline-block;width:14px;height:14px;border:1px solid var(--m-muted-fg);border-radius:2px;opacity:0.5"></span>
+                    <span><span style="color:var(--m-primary);font-weight:600">us</span>er_audit_log</span>
+                    <span style="margin-left:auto;font-size:9px;color:var(--m-muted-fg)">view</span>
+                  </div>
+                </div>
+              </div>
             </div>
-            <div class="flex-1"></div>
-            <div class="flex items-center gap-2 px-4 py-2.5 text-xs text-muted-foreground">
-              <span class="kbd">⌘</span>
-              <span class="kbd">⏎</span>
-              <span>Run</span>
+            <div class="mt-5">
+              <div class="mb-2 h-[2px] w-10 bg-primary"></div>
+              <h3 class="mb-2 font-display text-xl italic">Schema-aware autocomplete</h3>
+              <p class="text-sm text-muted-foreground">
+                Monaco reads your tables and columns on connect. Every suggestion
+                is annotated with row count, kind, and PK status. No config files.
+              </p>
             </div>
           </div>
 
-          <!-- Mock code body + floating suggest popup -->
-          <div class="mock-editor relative px-6 py-6">
-            <div class="flex gap-4">
-              <div class="select-none text-right text-muted-foreground" style="min-width: 24px;">
-                <div>1</div>
-                <div>2</div>
-                <div>3</div>
-                <div>4</div>
-                <div>5</div>
-                <div>6</div>
+          <!-- Command palette -->
+          <div class="reveal delay-2">
+            <div class="app-mock" data-theme="default" style="height:340px">
+              <div class="mock-topbar">
+                <div class="mock-traffic" aria-hidden><span></span><span></span><span></span></div>
+                <div class="mock-tabs">
+                  <div class="mock-tab active"><span class="dot"></span>users</div>
+                </div>
               </div>
-              <div class="flex-1">
-                <div><span class="kw">select</span> *</div>
-                <div><span class="kw">from</span> <span class="id">hotel_m</span><span class="inline-block h-4 w-[1px] bg-foreground align-middle" style="animation: pulse-ink 1s steps(2) infinite;"></span></div>
-                <div class="com">-- schema-aware suggestions appear in-line</div>
-                <div><span class="kw">where</span> <span class="id">u.created_at</span> &gt; <span class="str">'2026-01-01'</span></div>
-                <div><span class="kw">order by</span> <span class="id">u.id</span> <span class="kw">desc</span></div>
-                <div><span class="kw">limit</span> <span class="num">50</span>;</div>
+              <div style="position:relative;height:100%;background:rgba(0,0,0,0.20);backdrop-filter:blur(2px)">
+                <div style="position:absolute;top:36px;left:50%;transform:translateX(-50%);width:88%;background:var(--m-card);border:1px solid var(--m-border);border-radius:var(--m-radius);box-shadow:0 24px 60px -20px rgba(0,0,0,0.45);overflow:hidden">
+                  <div style="display:flex;align-items:center;gap:10px;padding:14px 16px;border-bottom:1px solid var(--m-border)">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--m-muted-fg)" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
+                    <span style="font-family:var(--m-font);font-size:13px;color:var(--m-fg)">orgs</span><span style="display:inline-block;width:1px;height:14px;background:var(--m-fg);animation:pulse-ink 1s steps(2) infinite"></span>
+                  </div>
+                  <div style="padding:6px 0;font-family:var(--m-font);font-size:12px">
+                    <div style="display:flex;align-items:center;gap:10px;padding:8px 16px;background:var(--m-sidebar-active);color:var(--m-fg)">
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/></svg>
+                      Open table · <span style="color:var(--m-primary);font-weight:600">org</span>anization<span style="color:var(--m-primary);font-weight:600">s</span>
+                      <span style="margin-left:auto;font-size:10px;color:var(--m-muted-fg)">table</span>
+                    </div>
+                    <div style="display:flex;align-items:center;gap:10px;padding:8px 16px;color:var(--m-fg)">
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/></svg>
+                      Recent · <span style="color:var(--m-primary);font-weight:600">org</span>-cleanup.sql
+                      <span style="margin-left:auto;font-size:10px;color:var(--m-muted-fg)">2h ago</span>
+                    </div>
+                    <div style="display:flex;align-items:center;gap:10px;padding:8px 16px;color:var(--m-fg)">
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
+                      Schema · public.<span style="color:var(--m-primary);font-weight:600">org</span>_audit
+                      <span style="margin-left:auto;font-size:10px;color:var(--m-muted-fg)">view</span>
+                    </div>
+                    <div style="display:flex;align-items:center;gap:10px;padding:8px 16px;color:var(--m-fg)">
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 11.5a8.38 8.38 0 01-.9 3.8 8.5 8.5 0 01-7.6 4.7A8.38 8.38 0 018.7 19L3 21l2-5.7a8.38 8.38 0 01-.9-3.8 8.5 8.5 0 014.7-7.6 8.38 8.38 0 013.8-.9h.5"/></svg>
+                      Ask Claude · "explain <span style="color:var(--m-primary);font-weight:600">org</span> billing schema"
+                      <span style="margin-left:auto;font-size:10px;color:var(--m-muted-fg)">AI</span>
+                    </div>
+                  </div>
+                  <div style="display:flex;justify-content:space-between;padding:8px 16px;border-top:1px solid var(--m-border);background:var(--m-muted);font-size:10px;color:var(--m-muted-fg);font-family:var(--m-mono)">
+                    <span>↑↓ navigate · ⏎ open</span>
+                    <span>esc close</span>
+                  </div>
+                </div>
               </div>
             </div>
+            <div class="mt-5">
+              <div class="mb-2 h-[2px] w-10 bg-primary"></div>
+              <h3 class="mb-2 font-display text-xl italic">⌘K palette, everything in it</h3>
+              <p class="text-sm text-muted-foreground">
+                Tables, recent queries, schema search, AI prompts — one keystroke
+                away. The fastest path between a thought and a result.
+              </p>
+            </div>
+          </div>
 
-            <!-- Floating suggest popover — matches Monaco suggest widget -->
-            <div class="mock-suggest" aria-hidden>
-              <div class="mock-suggest-row active">
-                <svg class="h-3 w-3 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <rect x="3" y="3" width="18" height="18" rx="2" />
-                  <path d="M3 9h18M9 3v18" />
-                </svg>
-                <span><span class="match">hotel_m</span>aster</span>
-                <span class="meta">table · 4.4m rows</span>
+          <!-- Row inspector -->
+          <div class="reveal delay-3">
+            <div class="app-mock" data-theme="default" style="height:340px">
+              <div class="mock-topbar">
+                <div class="mock-traffic" aria-hidden><span></span><span></span><span></span></div>
+                <div class="mock-tabs">
+                  <div class="mock-tab active"><span class="dot"></span>users</div>
+                </div>
               </div>
-              <div class="mock-suggest-row">
-                <svg class="h-3 w-3 shrink-0 opacity-60" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <rect x="3" y="3" width="18" height="18" rx="2" />
-                  <path d="M3 9h18M9 3v18" />
-                </svg>
-                <span><span class="match">hotel_m</span>atch_candidate</span>
-                <span class="meta">table</span>
+              <div style="display:flex;height:100%;background:var(--m-bg)">
+                <!-- Mini grid -->
+                <div style="flex:1;font-family:var(--m-mono);font-size:11px;border-right:1px solid var(--m-border)">
+                  <div style="display:flex;background:var(--m-muted);border-bottom:1px solid var(--m-border);color:var(--m-muted-fg);padding:6px 10px;font-size:10px">
+                    <span style="flex:1">id</span><span style="flex:2">email</span><span style="flex:1">status</span>
+                  </div>
+                  <div style="display:flex;padding:5px 10px;color:var(--m-fg);border-bottom:1px solid var(--m-border)">
+                    <span style="flex:1;color:var(--m-num)">1042</span><span style="flex:2;color:var(--m-str)">ada@…</span><span style="flex:1">active</span>
+                  </div>
+                  <div style="display:flex;padding:5px 10px;color:var(--m-fg);background:var(--m-sidebar-active);border-bottom:1px solid var(--m-border)">
+                    <span style="flex:1;color:var(--m-num)">1043</span><span style="flex:2;color:var(--m-str)">grace@…</span><span style="flex:1">active</span>
+                  </div>
+                  <div style="display:flex;padding:5px 10px;color:var(--m-fg);border-bottom:1px solid var(--m-border)">
+                    <span style="flex:1;color:var(--m-num)">1044</span><span style="flex:2;color:var(--m-str)">linus@…</span><span style="flex:1">active</span>
+                  </div>
+                  <div style="display:flex;padding:5px 10px;color:var(--m-fg);border-bottom:1px solid var(--m-border)">
+                    <span style="flex:1;color:var(--m-num)">1045</span><span style="flex:2;color:var(--m-str)">guido@…</span><span style="flex:1">paused</span>
+                  </div>
+                </div>
+                <!-- Inspector pane -->
+                <div style="width:55%;padding:14px 18px;background:var(--m-card)">
+                  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+                    <span style="font-family:var(--m-font);font-size:11px;color:var(--m-muted-fg)">Row 1043 of 1,247</span>
+                    <span style="display:flex;gap:4px"><span class="mock-chip" style="font-size:9px;padding:2px 6px">←</span><span class="mock-chip" style="font-size:9px;padding:2px 6px">→</span></span>
+                  </div>
+                  <div style="font-family:var(--m-font);font-size:11px;display:grid;grid-template-columns:auto 1fr;gap:8px 14px">
+                    <span style="color:var(--m-muted-fg)">id</span><span style="font-family:var(--m-mono);color:var(--m-num)">1043</span>
+                    <span style="color:var(--m-muted-fg)">email</span><span style="font-family:var(--m-mono);color:var(--m-str)">grace@example.com</span>
+                    <span style="color:var(--m-muted-fg)">status</span><span style="font-family:var(--m-mono)">active</span>
+                    <span style="color:var(--m-muted-fg)">org_id</span><span style="font-family:var(--m-mono);color:var(--m-num)">42 <span style="color:var(--m-primary);cursor:pointer">↗</span></span>
+                    <span style="color:var(--m-muted-fg)">created_at</span><span style="font-family:var(--m-mono);color:var(--m-muted-fg)">2026-01-08</span>
+                    <span style="color:var(--m-muted-fg)">prefs</span><span style="font-family:var(--m-mono);color:var(--m-muted-fg);font-size:10px">{ "tz": "UTC", "dark": true }</span>
+                  </div>
+                </div>
               </div>
-              <div class="mock-suggest-row">
-                <svg class="h-3 w-3 shrink-0 opacity-60" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <rect x="3" y="3" width="18" height="18" rx="2" />
-                  <path d="M3 9h18M9 3v18" />
-                </svg>
-                <span><span class="match">hotel_m</span>atch_details</span>
-                <span class="meta">table</span>
-              </div>
-              <div class="mock-suggest-row">
-                <svg class="h-3 w-3 shrink-0 opacity-60" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <rect x="3" y="3" width="18" height="18" rx="2" />
-                  <path d="M3 9h18M9 3v18" />
-                </svg>
-                <span><span class="match">hotel_m</span>atch_run</span>
-                <span class="meta">table</span>
-              </div>
+            </div>
+            <div class="mt-5">
+              <div class="mb-2 h-[2px] w-10 bg-primary"></div>
+              <h3 class="mb-2 font-display text-xl italic">Row + cell inspector</h3>
+              <p class="text-sm text-muted-foreground">
+                Hit Enter on any row for vertical key-value layout. Space on any
+                cell pretty-prints JSON, decodes binary, scrolls long text.
+              </p>
             </div>
           </div>
         </div>
-
-        <p class="reveal mt-6 text-center text-sm text-muted-foreground">
-          Reads your schema on connect. No config files, no plugin store, no language servers.
-        </p>
       </div>
     </section>
 
@@ -867,7 +1358,7 @@
 
         <div class="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
           <!-- Feature 1 -->
-          <div class="feature-card tilt rounded-xl border border-border bg-card p-7">
+          <div class="feature-card rounded-xl border border-border bg-card p-7">
             <div class="feature-rule mb-5"></div>
             <div class="mb-4 inline-flex h-10 w-10 items-center justify-center rounded-md bg-muted text-primary">
               <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -882,7 +1373,7 @@
           </div>
 
           <!-- Feature 2 -->
-          <div class="feature-card tilt rounded-xl border border-border bg-card p-7">
+          <div class="feature-card rounded-xl border border-border bg-card p-7">
             <div class="feature-rule mb-5"></div>
             <div class="mb-4 inline-flex h-10 w-10 items-center justify-center rounded-md bg-muted text-primary">
               <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -896,7 +1387,7 @@
           </div>
 
           <!-- Feature 3 -->
-          <div class="feature-card tilt rounded-xl border border-border bg-card p-7">
+          <div class="feature-card rounded-xl border border-border bg-card p-7">
             <div class="feature-rule mb-5"></div>
             <div class="mb-4 inline-flex h-10 w-10 items-center justify-center rounded-md bg-muted text-primary">
               <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -911,7 +1402,7 @@
           </div>
 
           <!-- Feature 4 -->
-          <div class="feature-card tilt rounded-xl border border-border bg-card p-7">
+          <div class="feature-card rounded-xl border border-border bg-card p-7">
             <div class="feature-rule mb-5"></div>
             <div class="mb-4 inline-flex h-10 w-10 items-center justify-center rounded-md bg-muted text-primary">
               <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -925,7 +1416,7 @@
           </div>
 
           <!-- Feature 5 -->
-          <div class="feature-card tilt rounded-xl border border-border bg-card p-7">
+          <div class="feature-card rounded-xl border border-border bg-card p-7">
             <div class="feature-rule mb-5"></div>
             <div class="mb-4 inline-flex h-10 w-10 items-center justify-center rounded-md bg-muted text-primary">
               <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -940,7 +1431,7 @@
           </div>
 
           <!-- Feature 6 -->
-          <div class="feature-card tilt rounded-xl border border-border bg-card p-7">
+          <div class="feature-card rounded-xl border border-border bg-card p-7">
             <div class="feature-rule mb-5"></div>
             <div class="mb-4 inline-flex h-10 w-10 items-center justify-center rounded-md bg-muted text-primary">
               <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -955,7 +1446,7 @@
           </div>
 
           <!-- Feature 7 -->
-          <div class="feature-card tilt rounded-xl border border-border bg-card p-7">
+          <div class="feature-card rounded-xl border border-border bg-card p-7">
             <div class="feature-rule mb-5"></div>
             <div class="mb-4 inline-flex h-10 w-10 items-center justify-center rounded-md bg-muted text-primary">
               <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -970,7 +1461,7 @@
           </div>
 
           <!-- Feature 8 -->
-          <div class="feature-card tilt rounded-xl border border-border bg-card p-7">
+          <div class="feature-card rounded-xl border border-border bg-card p-7">
             <div class="feature-rule mb-5"></div>
             <div class="mb-4 inline-flex h-10 w-10 items-center justify-center rounded-md bg-muted text-primary">
               <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -985,7 +1476,7 @@
           </div>
 
           <!-- Feature 9 -->
-          <div class="feature-card tilt rounded-xl border border-border bg-card p-7">
+          <div class="feature-card rounded-xl border border-border bg-card p-7">
             <div class="feature-rule mb-5"></div>
             <div class="mb-4 inline-flex h-10 w-10 items-center justify-center rounded-md bg-muted text-primary">
               <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -1057,6 +1548,109 @@
       </div>
     </section>
 
+    <!-- ─── Compare — quick honest table vs. the usual suspects ─────── -->
+    <section class="relative px-6 py-24">
+      <div class="mx-auto max-w-5xl">
+        <div class="reveal mb-12 max-w-2xl">
+          <p class="mb-4 text-xs font-medium uppercase tracking-[0.18em] text-primary">
+            How it stacks up
+          </p>
+          <h2 class="section-heading font-display text-4xl italic md:text-5xl">
+            Vs. the usual suspects.
+          </h2>
+          <p class="mt-5 text-base text-muted-foreground">
+            An honest snapshot. Other tools have plenty Plasma doesn't —
+            multi-DB support, query plans, ER diagrams. This is what
+            Plasma optimised for and what it traded off.
+          </p>
+        </div>
+
+        <div class="reveal overflow-x-auto rounded-xl border border-border">
+          <table class="compare">
+            <thead>
+              <tr>
+                <th class="row-label" scope="col">Feature</th>
+                <th class="us" scope="col">Plasma</th>
+                <th scope="col">DBeaver</th>
+                <th scope="col">TablePlus</th>
+                <th scope="col">DataGrip</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td class="row-label">Price</td>
+                <td class="us"><span class="yes">Free, Apache 2.0</span></td>
+                <td>Free CE / paid Pro</td>
+                <td>$89 one-time</td>
+                <td>$229/yr</td>
+              </tr>
+              <tr>
+                <td class="row-label">Postgres-first design</td>
+                <td class="us"><span class="yes">Yes — only DB</span></td>
+                <td><span class="partial">Generic, 80+ DBs</span></td>
+                <td><span class="partial">Many DBs</span></td>
+                <td><span class="partial">Generic IDE</span></td>
+              </tr>
+              <tr>
+                <td class="row-label">Schema-aware autocomplete on connect</td>
+                <td class="us"><span class="yes">Instant, no setup</span></td>
+                <td><span class="partial">Manual refresh</span></td>
+                <td><span class="yes">Yes</span></td>
+                <td><span class="yes">Yes (heavy)</span></td>
+              </tr>
+              <tr>
+                <td class="row-label">Per-table layout memory</td>
+                <td class="us"><span class="yes">Widths, pins, filters</span></td>
+                <td><span class="no">Resets often</span></td>
+                <td><span class="partial">Limited</span></td>
+                <td><span class="partial">Project-scoped</span></td>
+              </tr>
+              <tr>
+                <td class="row-label">FK navigation (one click)</td>
+                <td class="us"><span class="yes">Inline arrow per cell</span></td>
+                <td><span class="partial">Right-click menu</span></td>
+                <td><span class="yes">Yes</span></td>
+                <td><span class="yes">Yes</span></td>
+              </tr>
+              <tr>
+                <td class="row-label">Themes that change everything (font, radius, shadow)</td>
+                <td class="us"><span class="yes">9, all custom</span></td>
+                <td><span class="no">Colours only</span></td>
+                <td><span class="no">Colours only</span></td>
+                <td><span class="partial">Colours only</span></td>
+              </tr>
+              <tr>
+                <td class="row-label">AI in the editor (BYO key)</td>
+                <td class="us"><span class="yes">Claude</span></td>
+                <td><span class="partial">Plugin</span></td>
+                <td><span class="no">No</span></td>
+                <td><span class="partial">JetBrains AI ($)</span></td>
+              </tr>
+              <tr>
+                <td class="row-label">Telemetry off by default</td>
+                <td class="us"><span class="yes">Yes</span></td>
+                <td><span class="partial">Opt-out</span></td>
+                <td><span class="yes">Yes</span></td>
+                <td><span class="partial">Opt-out</span></td>
+              </tr>
+              <tr>
+                <td class="row-label">First launch → connected to a query</td>
+                <td class="us"><span class="yes">~30 seconds</span></td>
+                <td><span class="partial">~3–5 minutes</span></td>
+                <td><span class="yes">~1 minute</span></td>
+                <td><span class="partial">~5 minutes</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <p class="mt-5 text-xs text-muted-foreground">
+          Last reviewed Apr 2026. If something's wrong here, please file an issue —
+          this table aims to age honestly.
+        </p>
+      </div>
+    </section>
+
     <!-- ─── Download ────────────────────────────────────────────────── -->
     <section
       id="download"
@@ -1083,7 +1677,6 @@
           <a
             href="https://ci1uagtcki1vvf8z.public.blob.vercel-storage.com/Plasma-Setup-0.0.6-x64.exe"
             data-download="Plasma-Setup-0.0.6-x64.exe"
-            data-cursor-label="INSTALL"
             class="magnetic group flex items-center gap-5 rounded-xl border border-primary bg-primary p-6 text-left text-primary-foreground transition-opacity hover:opacity-90"
           >
             <div class="flex h-12 w-12 shrink-0 items-center justify-center rounded-md bg-white/10">
@@ -1109,7 +1702,6 @@
           <a
             href="https://ci1uagtcki1vvf8z.public.blob.vercel-storage.com/Plasma-Portable-0.0.6-x64.exe"
             data-download="Plasma-Portable-0.0.6-x64.exe"
-            data-cursor-label="PORTABLE"
             class="magnetic group flex items-center gap-5 rounded-xl border border-border bg-background p-6 text-left transition-colors hover:border-primary"
           >
             <div class="flex h-12 w-12 shrink-0 items-center justify-center rounded-md bg-muted text-primary">
@@ -1132,20 +1724,43 @@
           </a>
         </div>
 
-        <!-- Platform placeholders -->
-        <div class="reveal mt-10 flex flex-wrap items-center justify-center gap-3 text-sm text-muted-foreground">
-          <span class="font-display italic">Mac and Linux soon —</span>
-          <a href="https://github.com/pankajyadav05/plasma" class="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 transition-colors hover:border-primary hover:text-foreground">
-            <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="currentColor">
-              <path d="M12 0C5.37 0 0 5.37 0 12c0 5.3 3.44 9.8 8.2 11.39.6.1.82-.26.82-.58v-2.03c-3.34.72-4.04-1.61-4.04-1.61-.54-1.38-1.33-1.75-1.33-1.75-1.09-.74.08-.73.08-.73 1.2.08 1.84 1.24 1.84 1.24 1.07 1.83 2.8 1.3 3.48.99.11-.77.42-1.3.76-1.6-2.66-.3-5.47-1.33-5.47-5.93 0-1.31.47-2.38 1.23-3.22-.12-.3-.53-1.52.12-3.17 0 0 1.01-.32 3.3 1.23a11.5 11.5 0 016 0c2.3-1.55 3.3-1.23 3.3-1.23.65 1.65.24 2.87.12 3.17.77.84 1.23 1.91 1.23 3.22 0 4.6-2.81 5.62-5.48 5.92.43.37.82 1.1.82 2.22v3.29c0 .32.22.7.83.58C20.57 21.8 24 17.3 24 12c0-6.63-5.37-12-12-12z" />
+        <!-- Verify + platform availability -->
+        <div class="reveal mt-8 flex flex-wrap items-center justify-center gap-x-6 gap-y-2 text-sm text-muted-foreground">
+          <a
+            href="https://ci1uagtcki1vvf8z.public.blob.vercel-storage.com/latest.yml"
+            class="inline-flex items-center gap-1.5 underline-offset-2 hover:text-foreground hover:underline"
+          >
+            <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M9 12l2 2 4-4M21 12c0 5-4 9-9 9s-9-4-9-9 4-9 9-9 9 4 9 9z"/>
             </svg>
-            Star on GitHub to get notified
+            Verify download (SHA512 in latest.yml)
+          </a>
+          <span aria-hidden>·</span>
+          <a
+            href="https://github.com/pankajyadav05/plasma/releases"
+            class="inline-flex items-center gap-1.5 underline-offset-2 hover:text-foreground hover:underline"
+          >
+            <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 8v8m0 0l-3-3m3 3l3-3M3 12c0 5 4 9 9 9s9-4 9-9-4-9-9-9-9 4-9 9z"/>
+            </svg>
+            All versions
+          </a>
+        </div>
+
+        <div class="reveal mt-10 flex flex-wrap items-center justify-center gap-3 text-sm text-muted-foreground">
+          <span class="font-display italic">macOS + Linux — on the roadmap.</span>
+          <a href="https://github.com/pankajyadav05/plasma/issues/new?title=Mac/Linux+build+request" class="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 transition-colors hover:border-primary hover:text-foreground">
+            <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M22 6l-10 7L2 6m0 0v12a2 2 0 002 2h16a2 2 0 002-2V6"/>
+            </svg>
+            Open an issue to vote
           </a>
         </div>
 
         <p class="reveal mt-8 text-xs text-muted-foreground">
-          Note: unsigned builds. Windows SmartScreen may warn on first launch.
-          Click "More info → Run anyway" — or build from source if you prefer.
+          Builds are unsigned — Windows SmartScreen may warn on first launch.
+          Click "More info → Run anyway", or build from
+          <a href="https://github.com/pankajyadav05/plasma" class="underline underline-offset-2 hover:text-foreground">source</a>.
         </p>
       </div>
     </section>
@@ -1266,65 +1881,13 @@
           glowRaf = false;
         };
 
-        // ─── Custom SQL cursor ────────────────────────────────────────
-        // Dot follows instantly, ring lerps behind with a smooth lag.
-        // Interactive elements (a, button, [role=button]) expand the
-        // ring and show a small SQL-prompt label next to the cursor.
-        const sqlCursor = document.getElementById("sqlCursor");
-        const cursorDot = document.getElementById("cursorDot");
-        const cursorRing = document.getElementById("cursorRing");
-        const cursorLabel = document.getElementById("cursorLabel");
-
-        if (isFinePointer && !reducedMotion) {
-          root.classList.add("cursor-ready");
-        }
-
-        let mouseX = -100;
-        let mouseY = -100;
-        let ringX = -100;
-        let ringY = -100;
-
+        // ─── Glow follow — single mousemove handler ──────────────────
         window.addEventListener("mousemove", (e) => {
-          mouseX = e.clientX;
-          mouseY = e.clientY;
           glowX = e.clientX;
           glowY = e.clientY;
           if (!glowRaf) {
             glowRaf = true;
             requestAnimationFrame(paintGlow);
-          }
-        });
-
-        const tick = () => {
-          // Dot snaps
-          cursorDot.style.transform = `translate(${mouseX}px, ${mouseY}px)`;
-          // Ring lerps for the signature trailing effect
-          ringX += (mouseX - ringX) * 0.18;
-          ringY += (mouseY - ringY) * 0.18;
-          cursorRing.style.transform = `translate(${ringX}px, ${ringY}px)`;
-          cursorLabel.style.transform = `translate(${mouseX}px, ${mouseY}px)`;
-          requestAnimationFrame(tick);
-        };
-        if (isFinePointer && !reducedMotion) tick();
-
-        // Interactive hover detection — event delegation on body.
-        const isInteractive = (el) => {
-          if (!el || !el.closest) return false;
-          return el.closest(
-            'a, button, input, [role="button"], .feature-card',
-          );
-        };
-        document.addEventListener("mouseover", (e) => {
-          const target = isInteractive(e.target);
-          if (target) {
-            sqlCursor.classList.add("is-interactive");
-            const label = target.getAttribute("data-cursor-label");
-            cursorLabel.textContent = label || "CLICK";
-          }
-        });
-        document.addEventListener("mouseout", (e) => {
-          if (!isInteractive(e.relatedTarget)) {
-            sqlCursor.classList.remove("is-interactive");
           }
         });
 
@@ -1343,20 +1906,47 @@
           }
         }
 
-        // ─── Feature card mouse-tilt ──────────────────────────────────
-        // Rotate along x/y based on the cursor's position within the card.
-        // Capped at 6deg so it reads as a breath, not a gimmick.
-        if (!reducedMotion && isFinePointer) {
-          for (const el of document.querySelectorAll(".tilt")) {
-            el.addEventListener("mousemove", (e) => {
-              const rect = el.getBoundingClientRect();
-              const nx = (e.clientX - rect.left) / rect.width - 0.5;
-              const ny = (e.clientY - rect.top) / rect.height - 0.5;
-              el.style.transform = `perspective(900px) rotateY(${nx * 6}deg) rotateX(${-ny * 6}deg) translateY(-4px)`;
+        // ─── Theme cycler — drives the hero `.app-mock` ───────────────
+        // Auto-rotates every 5s through the THEMES list. First user
+        // interaction (chip click) freezes auto-rotation — the visitor
+        // is now driving. Pauses on hero hover so people can read.
+        const cycler = document.getElementById("themeCycler");
+        const heroMock = document.getElementById("heroMock");
+        if (cycler && heroMock) {
+          const THEMES = [
+            "default", "catppuccin", "claude", "claymorphism",
+            "neo-brutalism", "quantum-rose", "forest-canopy",
+            "cyberpunk", "arctic",
+          ];
+          let idx = 0;
+          let userTook = false;
+          let paused = false;
+
+          const setTheme = (name) => {
+            heroMock.setAttribute("data-theme", name);
+            for (const chip of cycler.querySelectorAll(".theme-chip")) {
+              chip.classList.toggle("active", chip.dataset.theme === name);
+            }
+          };
+
+          for (const chip of cycler.querySelectorAll(".theme-chip")) {
+            chip.addEventListener("click", () => {
+              userTook = true;
+              setTheme(chip.dataset.theme);
             });
-            el.addEventListener("mouseleave", () => {
-              el.style.transform = "";
-            });
+          }
+
+          // Pause auto-rotate while pointer is anywhere on the hero
+          // mockup — assume the visitor is reading the table.
+          heroMock.addEventListener("mouseenter", () => { paused = true; });
+          heroMock.addEventListener("mouseleave", () => { paused = false; });
+
+          if (!reducedMotion) {
+            setInterval(() => {
+              if (userTook || paused) return;
+              idx = (idx + 1) % THEMES.length;
+              setTheme(THEMES[idx]);
+            }, 5000);
           }
         }
 
