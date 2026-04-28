@@ -147,7 +147,26 @@ const THEME_NAMES = [
   'neo-brutalism',
   'quantum-rose',
   'forest-canopy',
+  'cyberpunk',
+  'arctic',
 ] as const;
+
+const FONT_SANS_STACKS: Record<string, string> = {
+  geist: "'Geist', ui-sans-serif, system-ui, -apple-system, sans-serif",
+  inter: "'Inter', ui-sans-serif, system-ui, -apple-system, sans-serif",
+  outfit: "'Outfit', ui-sans-serif, system-ui, -apple-system, sans-serif",
+  'plus-jakarta': "'Plus Jakarta Sans', ui-sans-serif, system-ui, -apple-system, sans-serif",
+  'ibm-plex': "'IBM Plex Sans', ui-sans-serif, system-ui, -apple-system, sans-serif",
+  system:
+    "ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif",
+};
+
+const FONT_MONO_STACKS: Record<string, string> = {
+  'jetbrains-mono': "'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+  'geist-mono': "'Geist Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+  'ibm-plex-mono': "'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+  system: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+};
 
 function applyTheme(mode: 'light' | 'dark', name: string) {
   const root = document.documentElement;
@@ -158,9 +177,29 @@ function applyTheme(mode: 'light' | 'dark', name: string) {
   window.dispatchEvent(new CustomEvent('plasma:theme-changed', { detail: { mode, name } }));
 }
 
+// Inline `--font-*` overrides on <html>. Beats theme-class vars by source
+// order + specificity (inline style wins over any class rule). When the
+// user resets to 'theme', we removeProperty so the theme's choice
+// resurfaces cleanly.
+function applyFonts(sans: string, mono: string) {
+  const root = document.documentElement;
+  if (sans === 'theme' || !FONT_SANS_STACKS[sans]) {
+    root.style.removeProperty('--font-sans');
+  } else {
+    root.style.setProperty('--font-sans', FONT_SANS_STACKS[sans]);
+  }
+  if (mono === 'theme' || !FONT_MONO_STACKS[mono]) {
+    root.style.removeProperty('--font-mono');
+  } else {
+    root.style.setProperty('--font-mono', FONT_MONO_STACKS[mono]);
+  }
+}
+
 const DEFAULT_SETTINGS: Settings = {
   theme: 'light',
   themeName: 'default',
+  fontSans: 'theme',
+  fontMono: 'theme',
   sidebarCollapsed: false,
   sidebarWidth: 264,
   editorExpanded: false,
@@ -1173,8 +1212,9 @@ export const useSession = create<SessionState>((set, get) => ({
     try {
       const settings = await ipc.settings.get();
       set({ settings });
-      // Apply theme immediately on boot
+      // Apply theme + font overrides immediately on boot
       applyTheme(settings.theme, settings.themeName);
+      applyFonts(settings.fontSans, settings.fontMono);
     } catch (err) {
       console.error('[plasma] settings.get failed', err);
     }
@@ -1185,6 +1225,7 @@ export const useSession = create<SessionState>((set, get) => ({
       const next = await ipc.settings.set(patch);
       set({ settings: next });
       applyTheme(next.theme, next.themeName);
+      applyFonts(next.fontSans, next.fontMono);
     } catch (err) {
       console.error('[plasma] settings.set failed', err);
     }

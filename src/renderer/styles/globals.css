@@ -1,6 +1,6 @@
 @import "tailwindcss";
 @import "tw-animate-css";
-@import url('https://fonts.googleapis.com/css2?family=Antic&family=Geist:wght@300;400;500;600;700&family=Geist+Mono:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;700&family=Lora:ital,wght@0,400;0,500;0,600;1,400;1,500&family=Newsreader:ital,wght@0,400;0,500;0,600;1,400;1,500&family=Outfit:wght@300;400;500;600;700&family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Antic&family=Geist:wght@300;400;500;600;700&family=Geist+Mono:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@300;400;500;600;700&family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;700&family=Lora:ital,wght@0,400;0,500;0,600;1,400;1,500&family=Newsreader:ital,wght@0,400;0,500;0,600;1,400;1,500&family=Orbitron:wght@400;500;600;700;800&family=Outfit:wght@300;400;500;600;700&family=Plus+Jakarta+Sans:wght@300;400;500;600;700&family=Space+Grotesk:wght@300;400;500;600;700&display=swap');
 
 @custom-variant dark (&:is(.dark *));
 
@@ -632,6 +632,184 @@
   --sidebar-accent-foreground: oklch(0.9200 0.0250 90);
   --sidebar-border: oklch(0.3000 0.0350 130);
   --sidebar-ring: oklch(0.6800 0.1300 145);
+}
+
+/* ── cyberpunk ── neon-on-black hi-tech terminal; sharp 0.125rem corners;
+   JetBrains Mono everywhere; wider tracking; cyan glow shadows. Light
+   mode is a "blueprint" inversion — pale cyan paper + magenta ink. */
+.theme-cyberpunk {
+  --background: oklch(0.9700 0.0200 200);
+  --foreground: oklch(0.2000 0.0700 320);
+  --card: oklch(0.9850 0.0120 200);
+  --card-foreground: oklch(0.2000 0.0700 320);
+  --popover: oklch(0.9850 0.0120 200);
+  --popover-foreground: oklch(0.2000 0.0700 320);
+  --primary: oklch(0.5500 0.2400 320);
+  --primary-foreground: oklch(0.9850 0.0120 200);
+  --secondary: oklch(0.9100 0.0400 200);
+  --secondary-foreground: oklch(0.2000 0.0700 320);
+  --muted: oklch(0.9300 0.0250 200);
+  --muted-foreground: oklch(0.4500 0.0800 220);
+  --accent: oklch(0.7500 0.1800 200);
+  --accent-foreground: oklch(0.2000 0.0700 320);
+  --destructive: oklch(0.6000 0.2400 25);
+  --destructive-foreground: oklch(1.0000 0 0);
+  --border: oklch(0.7500 0.1800 200);
+  --input: oklch(0.9300 0.0250 200);
+  --ring: oklch(0.5500 0.2400 320);
+  --chart-1: oklch(0.5500 0.2400 320);
+  --chart-2: oklch(0.6500 0.2200 200);
+  --chart-3: oklch(0.6800 0.2200 145);
+  --chart-4: oklch(0.7500 0.2000 60);
+  --chart-5: oklch(0.5000 0.2200 280);
+  --sidebar: oklch(0.9550 0.0250 200);
+  --sidebar-foreground: oklch(0.2000 0.0700 320);
+  --sidebar-primary: oklch(0.5500 0.2400 320);
+  --sidebar-primary-foreground: oklch(0.9850 0.0120 200);
+  --sidebar-accent: oklch(0.9100 0.0400 200);
+  --sidebar-accent-foreground: oklch(0.2000 0.0700 320);
+  --sidebar-border: oklch(0.7500 0.1800 200);
+  --sidebar-ring: oklch(0.5500 0.2400 320);
+  --radius: 0.125rem;
+  --font-sans: 'Orbitron', 'JetBrains Mono', ui-sans-serif, sans-serif;
+  --font-serif: 'Space Grotesk', ui-serif, Georgia, serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+  --shadow-2xs: 0 0 4px 0 hsl(320 100% 50% / 0.20);
+  --shadow-xs: 0 0 4px 0 hsl(320 100% 50% / 0.20);
+  --shadow-sm: 0 0 6px 0 hsl(320 100% 50% / 0.30), 0 1px 0 0 hsl(200 100% 50% / 0.40);
+  --shadow: 0 0 8px 0 hsl(320 100% 50% / 0.35), 0 0 2px 0 hsl(200 100% 50% / 0.50);
+  --shadow-md: 0 0 12px 0 hsl(320 100% 50% / 0.40), 0 0 3px 0 hsl(200 100% 50% / 0.55);
+  --shadow-lg: 0 0 18px 0 hsl(320 100% 50% / 0.45), 0 0 4px 0 hsl(200 100% 50% / 0.60);
+  --shadow-xl: 0 0 28px 0 hsl(320 100% 50% / 0.50), 0 0 6px 0 hsl(200 100% 50% / 0.70);
+  --shadow-2xl: 0 0 48px 0 hsl(320 100% 50% / 0.65);
+  --tracking-normal: 0.05em;
+}
+.dark.theme-cyberpunk {
+  --background: oklch(0.0900 0.0250 280);
+  --foreground: oklch(0.9500 0.1200 200);
+  --card: oklch(0.1300 0.0350 280);
+  --card-foreground: oklch(0.9500 0.1200 200);
+  --popover: oklch(0.1500 0.0400 280);
+  --popover-foreground: oklch(0.9500 0.1200 200);
+  --primary: oklch(0.7500 0.2400 320);
+  --primary-foreground: oklch(0.0900 0.0250 280);
+  --secondary: oklch(0.1800 0.0400 280);
+  --secondary-foreground: oklch(0.9500 0.1200 200);
+  --muted: oklch(0.1500 0.0350 280);
+  --muted-foreground: oklch(0.7500 0.1200 200);
+  --accent: oklch(0.7800 0.2200 200);
+  --accent-foreground: oklch(0.0900 0.0250 280);
+  --destructive: oklch(0.7000 0.2400 25);
+  --destructive-foreground: oklch(0.0900 0.0250 280);
+  --border: oklch(0.4500 0.1800 320);
+  --input: oklch(0.1800 0.0400 280);
+  --ring: oklch(0.7500 0.2400 320);
+  --chart-1: oklch(0.7500 0.2400 320);
+  --chart-2: oklch(0.7800 0.2200 200);
+  --chart-3: oklch(0.8000 0.2200 145);
+  --chart-4: oklch(0.8200 0.2000 60);
+  --chart-5: oklch(0.6500 0.2200 280);
+  --sidebar: oklch(0.0700 0.0250 280);
+  --sidebar-foreground: oklch(0.9500 0.1200 200);
+  --sidebar-primary: oklch(0.7500 0.2400 320);
+  --sidebar-primary-foreground: oklch(0.0900 0.0250 280);
+  --sidebar-accent: oklch(0.1800 0.0400 280);
+  --sidebar-accent-foreground: oklch(0.7800 0.2200 200);
+  --sidebar-border: oklch(0.4500 0.1800 320);
+  --sidebar-ring: oklch(0.7500 0.2400 320);
+  --shadow-2xs: 0 0 6px 0 hsl(320 100% 60% / 0.40);
+  --shadow-xs: 0 0 6px 0 hsl(320 100% 60% / 0.40);
+  --shadow-sm: 0 0 10px 0 hsl(320 100% 60% / 0.50), 0 0 2px 0 hsl(200 100% 60% / 0.60);
+  --shadow: 0 0 14px 0 hsl(320 100% 60% / 0.55), 0 0 3px 0 hsl(200 100% 60% / 0.70);
+  --shadow-md: 0 0 20px 0 hsl(320 100% 60% / 0.60), 0 0 4px 0 hsl(200 100% 60% / 0.75);
+  --shadow-lg: 0 0 32px 0 hsl(320 100% 60% / 0.65), 0 0 6px 0 hsl(200 100% 60% / 0.80);
+  --shadow-xl: 0 0 48px 0 hsl(320 100% 60% / 0.70), 0 0 10px 0 hsl(200 100% 60% / 0.85);
+  --shadow-2xl: 0 0 80px 0 hsl(320 100% 60% / 0.85);
+}
+
+/* ── arctic ── icy frost-glass; deep navy on bone in light, pale ice
+   on midnight in dark; smooth 0.875rem radius; cool diffuse shadows
+   with a faint blue tint; Space Grotesk display + Inter body. */
+.theme-arctic {
+  --background: oklch(0.9750 0.0080 220);
+  --foreground: oklch(0.2200 0.0500 240);
+  --card: oklch(0.9900 0.0040 220);
+  --card-foreground: oklch(0.2200 0.0500 240);
+  --popover: oklch(0.9900 0.0040 220);
+  --popover-foreground: oklch(0.2200 0.0500 240);
+  --primary: oklch(0.5500 0.1500 240);
+  --primary-foreground: oklch(0.9900 0.0040 220);
+  --secondary: oklch(0.9300 0.0150 220);
+  --secondary-foreground: oklch(0.2200 0.0500 240);
+  --muted: oklch(0.9500 0.0100 220);
+  --muted-foreground: oklch(0.5000 0.0400 235);
+  --accent: oklch(0.8200 0.0900 200);
+  --accent-foreground: oklch(0.2200 0.0500 240);
+  --destructive: oklch(0.5800 0.1900 25);
+  --destructive-foreground: oklch(1.0000 0 0);
+  --border: oklch(0.8800 0.0150 220);
+  --input: oklch(0.9500 0.0100 220);
+  --ring: oklch(0.5500 0.1500 240);
+  --chart-1: oklch(0.5500 0.1500 240);
+  --chart-2: oklch(0.6800 0.1300 200);
+  --chart-3: oklch(0.7200 0.1100 180);
+  --chart-4: oklch(0.4500 0.1300 260);
+  --chart-5: oklch(0.6000 0.1500 220);
+  --sidebar: oklch(0.9650 0.0100 220);
+  --sidebar-foreground: oklch(0.2200 0.0500 240);
+  --sidebar-primary: oklch(0.5500 0.1500 240);
+  --sidebar-primary-foreground: oklch(0.9900 0.0040 220);
+  --sidebar-accent: oklch(0.9300 0.0150 220);
+  --sidebar-accent-foreground: oklch(0.2200 0.0500 240);
+  --sidebar-border: oklch(0.8800 0.0150 220);
+  --sidebar-ring: oklch(0.5500 0.1500 240);
+  --radius: 0.875rem;
+  --font-sans: 'Inter', ui-sans-serif, system-ui, sans-serif;
+  --font-serif: 'Space Grotesk', ui-serif, Georgia, serif;
+  --font-mono: 'Geist Mono', ui-monospace, monospace;
+  --shadow-2xs: 0px 1px 3px 0px hsl(220 60% 30% / 0.04);
+  --shadow-xs: 0px 1px 3px 0px hsl(220 60% 30% / 0.04);
+  --shadow-sm: 0px 2px 6px 0px hsl(220 60% 30% / 0.08), 0px 1px 2px 0px hsl(220 60% 30% / 0.04);
+  --shadow: 0px 4px 12px 0px hsl(220 60% 30% / 0.10), 0px 2px 4px 0px hsl(220 60% 30% / 0.06);
+  --shadow-md: 0px 8px 18px 0px hsl(220 60% 30% / 0.12), 0px 4px 6px 0px hsl(220 60% 30% / 0.08);
+  --shadow-lg: 0px 14px 28px 0px hsl(220 60% 30% / 0.14), 0px 8px 12px 0px hsl(220 60% 30% / 0.08);
+  --shadow-xl: 0px 24px 40px 0px hsl(220 60% 30% / 0.16), 0px 12px 20px 0px hsl(220 60% 30% / 0.10);
+  --shadow-2xl: 0px 40px 64px 0px hsl(220 60% 30% / 0.22);
+  --tracking-normal: -0.005em;
+}
+.dark.theme-arctic {
+  --background: oklch(0.1300 0.0300 240);
+  --foreground: oklch(0.9300 0.0250 220);
+  --card: oklch(0.1700 0.0350 240);
+  --card-foreground: oklch(0.9300 0.0250 220);
+  --popover: oklch(0.2000 0.0400 240);
+  --popover-foreground: oklch(0.9300 0.0250 220);
+  --primary: oklch(0.7800 0.1500 220);
+  --primary-foreground: oklch(0.1300 0.0300 240);
+  --secondary: oklch(0.2300 0.0400 240);
+  --secondary-foreground: oklch(0.9300 0.0250 220);
+  --muted: oklch(0.2000 0.0350 240);
+  --muted-foreground: oklch(0.7400 0.0400 220);
+  --accent: oklch(0.7200 0.1300 200);
+  --accent-foreground: oklch(0.1300 0.0300 240);
+  --destructive: oklch(0.6800 0.1900 25);
+  --destructive-foreground: oklch(1.0000 0 0);
+  --border: oklch(0.2800 0.0500 240);
+  --input: oklch(0.2300 0.0400 240);
+  --ring: oklch(0.7800 0.1500 220);
+  --chart-1: oklch(0.7800 0.1500 220);
+  --chart-2: oklch(0.7200 0.1300 200);
+  --chart-3: oklch(0.7500 0.1100 180);
+  --chart-4: oklch(0.6500 0.1500 260);
+  --chart-5: oklch(0.7000 0.1300 220);
+  --sidebar: oklch(0.1500 0.0300 240);
+  --sidebar-foreground: oklch(0.9300 0.0250 220);
+  --sidebar-primary: oklch(0.7800 0.1500 220);
+  --sidebar-primary-foreground: oklch(0.1300 0.0300 240);
+  --sidebar-accent: oklch(0.2300 0.0400 240);
+  --sidebar-accent-foreground: oklch(0.9300 0.0250 220);
+  --sidebar-border: oklch(0.2800 0.0500 240);
+  --sidebar-ring: oklch(0.7800 0.1500 220);
 }
 
 @theme inline {

@@ -185,9 +185,25 @@ export const SettingsShape = z.object({
       'neo-brutalism',
       'quantum-rose',
       'forest-canopy',
+      'cyberpunk',
+      'arctic',
     ])
     .catch('default')
     .default('default'),
+  /**
+   * UI font overrides. `'theme'` defers to the active palette's
+   * `--font-sans`/`--font-mono`; any other value pins an inline override
+   * on `<html>` so it wins over the theme. Monaco editor keeps its own
+   * fixed JetBrains Mono — this only affects the surrounding UI.
+   */
+  fontSans: z
+    .enum(['theme', 'geist', 'inter', 'outfit', 'plus-jakarta', 'ibm-plex', 'system'])
+    .catch('theme')
+    .default('theme'),
+  fontMono: z
+    .enum(['theme', 'jetbrains-mono', 'geist-mono', 'ibm-plex-mono', 'system'])
+    .catch('theme')
+    .default('theme'),
   sidebarCollapsed: z.boolean().default(false),
   sidebarWidth: z.number().int().min(200).max(520).default(264),
   editorExpanded: z.boolean().default(false),

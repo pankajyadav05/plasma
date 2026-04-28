@@ -132,6 +132,56 @@ const PALETTES: Array<{
       'oklch(0.1600 0.0250 130)',
     ],
   },
+  {
+    id: 'cyberpunk',
+    label: 'Cyberpunk',
+    light: [
+      'oklch(0.5500 0.2400 320)',
+      'oklch(0.9100 0.0400 200)',
+      'oklch(0.7500 0.1800 200)',
+      'oklch(0.9700 0.0200 200)',
+    ],
+    dark: [
+      'oklch(0.7500 0.2400 320)',
+      'oklch(0.1800 0.0400 280)',
+      'oklch(0.7800 0.2200 200)',
+      'oklch(0.0900 0.0250 280)',
+    ],
+  },
+  {
+    id: 'arctic',
+    label: 'Arctic',
+    light: [
+      'oklch(0.5500 0.1500 240)',
+      'oklch(0.9300 0.0150 220)',
+      'oklch(0.8200 0.0900 200)',
+      'oklch(0.9750 0.0080 220)',
+    ],
+    dark: [
+      'oklch(0.7800 0.1500 220)',
+      'oklch(0.2300 0.0400 240)',
+      'oklch(0.7200 0.1300 200)',
+      'oklch(0.1300 0.0300 240)',
+    ],
+  },
+];
+
+const FONT_SANS_OPTIONS: Array<{ id: Settings['fontSans']; label: string; sample: string }> = [
+  { id: 'theme', label: 'Theme default', sample: '' },
+  { id: 'geist', label: 'Geist', sample: "'Geist', sans-serif" },
+  { id: 'inter', label: 'Inter', sample: "'Inter', sans-serif" },
+  { id: 'outfit', label: 'Outfit', sample: "'Outfit', sans-serif" },
+  { id: 'plus-jakarta', label: 'Plus Jakarta Sans', sample: "'Plus Jakarta Sans', sans-serif" },
+  { id: 'ibm-plex', label: 'IBM Plex Sans', sample: "'IBM Plex Sans', sans-serif" },
+  { id: 'system', label: 'System UI', sample: 'system-ui, sans-serif' },
+];
+
+const FONT_MONO_OPTIONS: Array<{ id: Settings['fontMono']; label: string; sample: string }> = [
+  { id: 'theme', label: 'Theme default', sample: '' },
+  { id: 'jetbrains-mono', label: 'JetBrains Mono', sample: "'JetBrains Mono', monospace" },
+  { id: 'geist-mono', label: 'Geist Mono', sample: "'Geist Mono', monospace" },
+  { id: 'ibm-plex-mono', label: 'IBM Plex Mono', sample: "'IBM Plex Mono', monospace" },
+  { id: 'system', label: 'System mono', sample: 'ui-monospace, monospace' },
 ];
 
 /** Settings form body, shared between SettingsSheet (overlay) and SettingsCanvas (full page). */
@@ -157,6 +207,49 @@ export function SettingsBody() {
           mode={settings.theme}
           onChange={(v) => void updateSettings({ themeName: v })}
         />
+      </Field>
+
+      <Field label="UI font (sans)">
+        <Select
+          value={settings.fontSans}
+          onValueChange={(v) => void updateSettings({ fontSans: v as Settings['fontSans'] })}
+        >
+          <SelectTrigger className="w-[260px]">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {FONT_SANS_OPTIONS.map((o) => (
+              <SelectItem key={o.id} value={o.id}>
+                <span style={o.sample ? { fontFamily: o.sample } : undefined}>{o.label}</span>
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <p className="mt-1 font-display text-xs italic text-muted-foreground">
+          Body + UI text. "Theme default" follows the active palette. SQL editor keeps its own mono
+          font.
+        </p>
+      </Field>
+
+      <Field label="UI font (mono)">
+        <Select
+          value={settings.fontMono}
+          onValueChange={(v) => void updateSettings({ fontMono: v as Settings['fontMono'] })}
+        >
+          <SelectTrigger className="w-[260px]">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {FONT_MONO_OPTIONS.map((o) => (
+              <SelectItem key={o.id} value={o.id}>
+                <span style={o.sample ? { fontFamily: o.sample } : undefined}>{o.label}</span>
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <p className="mt-1 font-display text-xs italic text-muted-foreground">
+          Used by the result grid, version label, and table column types.
+        </p>
       </Field>
 
       <Field label="Sidebar">
