@@ -387,13 +387,18 @@ function ColumnCombobox({
 }
 
 /**
- * Free-text value input with a suggestion popover beneath. As the user
- * types, we debounce-fetch DISTINCT values from the underlying column
- * (capped at 20). Click or Arrow+Enter on a suggestion fills the field.
+ * Free-text value input with an inline suggestion list beneath. As the
+ * user types, we debounce-fetch DISTINCT values from the underlying
+ * column (capped at 20). Click on a suggestion fills the field.
  *
  * Suggestions are best-effort — RLS, permissions, and column-not-text
  * coercion failures all fall back to a silent empty list, leaving the
  * input as a plain text field.
+ *
+ * We deliberately avoid Radix Popover here — the parent FilterForm is
+ * already inside a Popover, and nesting one inside another causes the
+ * trigger to swallow keystrokes and steal focus from the input. A
+ * plain absolutely-positioned div sidesteps that.
  */
 function ValueAutocomplete({
   schema,
@@ -410,7 +415,7 @@ function ValueAutocomplete({
   onChange: (next: string) => void;
   onEnter: () => void;
 }) {
-  const [open, setOpen] = useState(false);
+  const [show, setShow] = useState(false);
   const [suggestions, setSuggestions] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -418,7 +423,7 @@ function ValueAutocomplete({
   // Debounce the prefix query — keystrokes shouldn't fire IPC per char.
   // Re-runs on column change too so swapping the column resets results.
   useEffect(() => {
-    if (!open) return;
+    if (!show) return;
     let cancelled = false;
     setLoading(true);
     const handle = setTimeout(async () => {
@@ -441,71 +446,95 @@ function ValueAutocomplete({
       cancelled = true;
       clearTimeout(handle);
     };
-  }, [schema, table, column, value, open]);
+  }, [schema, table, column, value, show]);
+
+  // The suggestion buttons live OUTSIDE the input, so a normal blur
+  // event would close the list before the click registers. We delay
+  // closing on blur and short-circuit it if the new focus target is the
+  // suggestion list itself.
+  const blurTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const cancelBlur = () => {
+    if (blurTimer.current) {
+      clearTimeout(blurTimer.current);
+      blurTimer.current = null;
+    }
+  };
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <Input
-          ref={inputRef}
-          value={value}
-          onFocus={() => setOpen(true)}
-          onChange={(e) => {
-            onChange(e.target.value);
-            if (!open) setOpen(true);
-          }}
-          placeholder="value"
-          className="h-8 text-xs"
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && !open) onEnter();
-            else if (e.key === 'Escape' && open) {
-              setOpen(false);
-              e.stopPropagation();
+    <div className="relative">
+      <Input
+        ref={inputRef}
+        value={value}
+        autoComplete="off"
+        spellCheck={false}
+        onFocus={() => {
+          cancelBlur();
+          setShow(true);
+        }}
+        onBlur={() => {
+          cancelBlur();
+          blurTimer.current = setTimeout(() => setShow(false), 120);
+        }}
+        onChange={(e) => {
+          onChange(e.target.value);
+          if (!show) setShow(true);
+        }}
+        placeholder="value"
+        className="h-8 text-xs"
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') {
+            // Enter: if the suggestion panel is closed OR matches the
+            // typed value exactly, save. Otherwise close suggestions.
+            if (show && suggestions.length > 0 && suggestions[0] !== value) {
+              setShow(false);
+            } else {
+              onEnter();
             }
+          } else if (e.key === 'Escape' && show) {
+            setShow(false);
+            e.stopPropagation();
+          }
+        }}
+      />
+      {show && (
+        <div
+          // mousedown on a child would otherwise blur the input first —
+          // the wrapper preventDefault stops blur, preserving focus.
+          onMouseDown={(e) => {
+            e.preventDefault();
+            cancelBlur();
           }}
-        />
-      </PopoverTrigger>
-      <PopoverContent
-        align="start"
-        sideOffset={4}
-        // Keep focus in the input — let the user keep typing while the
-        // suggestion list is visible. Without this, opening the popover
-        // would yank focus away on first render.
-        onOpenAutoFocus={(e) => e.preventDefault()}
-        onCloseAutoFocus={(e) => e.preventDefault()}
-        className="w-[var(--radix-popover-trigger-width)] p-0"
-      >
-        {loading && suggestions.length === 0 ? (
-          <div className="flex items-center gap-2 px-3 py-2 text-xs text-muted-foreground">
-            <Loader2 className="h-3 w-3 animate-spin" />
-            <span className="font-display italic">looking up values…</span>
-          </div>
-        ) : suggestions.length === 0 ? (
-          <div className="px-3 py-2 font-display text-xs italic text-muted-foreground">
-            no suggestions
-          </div>
-        ) : (
-          <div className="max-h-[240px] overflow-y-auto py-1">
-            {suggestions.map((s) => (
-              <button
-                key={s}
-                type="button"
-                onMouseDown={(e) => {
-                  // Use mousedown so the click registers before the input
-                  // loses focus and the popover starts closing.
-                  e.preventDefault();
-                  onChange(s);
-                  setOpen(false);
-                  inputRef.current?.focus();
-                }}
-                className="flex w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-left font-mono text-xs text-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
-              >
-                <span className="truncate">{s}</span>
-              </button>
-            ))}
-          </div>
-        )}
-      </PopoverContent>
-    </Popover>
+          className="absolute left-0 right-0 top-full z-50 mt-1 max-h-[200px] overflow-y-auto rounded-md border border-border bg-popover text-popover-foreground shadow-md"
+        >
+          {loading && suggestions.length === 0 ? (
+            <div className="flex items-center gap-2 px-3 py-2 text-xs text-muted-foreground">
+              <Loader2 className="h-3 w-3 animate-spin" />
+              <span className="font-display italic">looking up values…</span>
+            </div>
+          ) : suggestions.length === 0 ? (
+            <div className="px-3 py-2 font-display text-xs italic text-muted-foreground">
+              no suggestions
+            </div>
+          ) : (
+            <div className="py-1">
+              {suggestions.map((s) => (
+                <button
+                  key={s}
+                  type="button"
+                  onClick={() => {
+                    onChange(s);
+                    setShow(false);
+                    inputRef.current?.focus();
+                  }}
+                  className="flex w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-left font-mono text-xs text-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+                >
+                  <span className="truncate">{s}</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
