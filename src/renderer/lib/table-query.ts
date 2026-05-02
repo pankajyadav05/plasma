@@ -331,6 +331,53 @@ export function buildRlsPoliciesSql(schema: string, table: string): BuiltSql {
   };
 }
 
+/**
+ * Distinct values from a single column for the filter-value autocomplete.
+ *
+ * Cast to text so it works for any column type. Prefix-matches case
+ * insensitively when `prefix` is non-empty; otherwise returns the most
+ * common values. We cap aggressively (LIMIT 20) and add a STATEMENT
+ * TIMEOUT-friendly subquery cap so wide tables don't pay a full-scan
+ * cost on every keystroke — the worker's own query-cancel handles the
+ * extreme case if a key gets held down.
+ */
+export function buildDistinctValuesSql(
+  schema: string,
+  table: string,
+  column: string,
+  prefix: string,
+): BuiltSql {
+  const from = `${quoteIdent(schema)}.${quoteIdent(table)}`;
+  const col = quoteIdent(column);
+  const trimmed = prefix.trim();
+  if (trimmed.length > 0) {
+    return {
+      sql: `SELECT DISTINCT ${col}::text AS v
+            FROM ${from}
+            WHERE ${col}::text ILIKE $1
+              AND ${col} IS NOT NULL
+            ORDER BY v
+            LIMIT 20`,
+      params: [`${trimmed}%`],
+    };
+  }
+  // No prefix → sample first N rows and return distinct values from
+  // that window. Avoids a full-table DISTINCT on huge tables. Trade-off
+  // is incompleteness, which is fine — autocomplete is a hint, not a
+  // contract.
+  return {
+    sql: `SELECT DISTINCT v FROM (
+            SELECT ${col}::text AS v
+            FROM ${from}
+            WHERE ${col} IS NOT NULL
+            LIMIT 5000
+          ) s
+          ORDER BY v
+          LIMIT 20`,
+    params: [],
+  };
+}
+
 /** List role names (excluding pg_* internals), ordered. */
 export function buildRolesSql(): BuiltSql {
   return {

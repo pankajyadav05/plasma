@@ -2,7 +2,8 @@ import { Button } from '@/components/ui/button';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { cn } from '@/lib/cn';
 import { useActiveTab, useSession } from '@/stores/session';
-import { Columns3, Eye, EyeOff, Pin, PinOff } from 'lucide-react';
+import { Command } from 'cmdk';
+import { Columns3, Eye, EyeOff, Pin, PinOff, Search } from 'lucide-react';
 
 export function ColumnsPopover() {
   const tab = useActiveTab();
@@ -98,58 +99,78 @@ export function ColumnsPopover() {
             )}
           </div>
         </div>
-        <div className="max-h-[400px] overflow-y-auto py-1">
-          {allColumns.map((col) => {
-            const hidden = tab.hiddenColumns.has(col.name);
-            const sticky = tab.stickyColumns.has(col.name);
-            return (
-              <div
-                key={col.name}
-                className="group/row flex w-full items-center gap-2 px-2 py-1.5 text-sm transition-colors hover:bg-accent hover:text-accent-foreground"
-              >
-                <button
-                  type="button"
-                  onClick={() => void toggleColumnHidden(col.name)}
-                  className="flex min-w-0 flex-1 items-center gap-2.5 text-left"
-                  title={hidden ? 'Show column' : 'Hide column'}
+        <Command className="flex flex-col" shouldFilter>
+          {allColumns.length > 8 && (
+            <div className="flex items-center gap-2 border-b border-border px-3 py-2">
+              <Search className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+              <Command.Input
+                placeholder="Search columns…"
+                className="h-6 flex-1 border-0 bg-transparent text-xs text-foreground outline-none placeholder:text-muted-foreground"
+              />
+            </div>
+          )}
+          <Command.List className="max-h-[400px] overflow-y-auto py-1">
+            <Command.Empty className="px-3 py-3 font-display text-xs italic text-muted-foreground">
+              no matching column
+            </Command.Empty>
+            {allColumns.map((col) => {
+              const hidden = tab.hiddenColumns.has(col.name);
+              const sticky = tab.stickyColumns.has(col.name);
+              return (
+                // cmdk filters via the `value` prop — combine name + type
+                // so users can search either ("uuid", "created_at").
+                <Command.Item
+                  key={col.name}
+                  value={`${col.name} ${col.dataType}`}
+                  onSelect={() => void toggleColumnHidden(col.name)}
+                  className="group/row flex w-full cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 text-sm transition-colors data-[selected=true]:bg-accent data-[selected=true]:text-accent-foreground"
                 >
-                  {hidden ? (
-                    <EyeOff className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                  ) : (
-                    <Eye className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                  )}
                   <span
-                    className={cn(
-                      'truncate font-semibold',
-                      hidden && 'text-muted-foreground line-through',
-                    )}
+                    className="flex min-w-0 flex-1 items-center gap-2.5 text-left"
+                    title={hidden ? 'Show column' : 'Hide column'}
                   >
-                    {col.name}
+                    {hidden ? (
+                      <EyeOff className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                    ) : (
+                      <Eye className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                    )}
+                    <span
+                      className={cn(
+                        'truncate font-semibold',
+                        hidden && 'text-muted-foreground line-through',
+                      )}
+                    >
+                      {col.name}
+                    </span>
+                    <span className="ml-auto shrink-0 text-xs text-muted-foreground">
+                      {col.dataType}
+                    </span>
                   </span>
-                  <span className="ml-auto shrink-0 text-xs text-muted-foreground">
-                    {col.dataType}
-                  </span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => toggleStickyColumn(col.name)}
-                  className={cn(
-                    'ml-1 grid h-6 w-6 shrink-0 place-items-center rounded-sm transition-colors',
-                    sticky ? 'text-primary' : 'text-muted-foreground hover:text-foreground',
-                  )}
-                  title={sticky ? 'Unpin column' : 'Pin column (sticky left)'}
-                  aria-label={sticky ? 'Unpin column' : 'Pin column'}
-                >
-                  {sticky ? (
-                    <Pin className="h-3.5 w-3.5 fill-current" />
-                  ) : (
-                    <PinOff className="h-3.5 w-3.5" />
-                  )}
-                </button>
-              </div>
-            );
-          })}
-        </div>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      // Stop cmdk Item's onSelect from firing when the user clicks Pin.
+                      e.stopPropagation();
+                      toggleStickyColumn(col.name);
+                    }}
+                    className={cn(
+                      'ml-1 grid h-6 w-6 shrink-0 place-items-center rounded-sm transition-colors',
+                      sticky ? 'text-primary' : 'text-muted-foreground hover:text-foreground',
+                    )}
+                    title={sticky ? 'Unpin column' : 'Pin column (sticky left)'}
+                    aria-label={sticky ? 'Unpin column' : 'Pin column'}
+                  >
+                    {sticky ? (
+                      <Pin className="h-3.5 w-3.5 fill-current" />
+                    ) : (
+                      <PinOff className="h-3.5 w-3.5" />
+                    )}
+                  </button>
+                </Command.Item>
+              );
+            })}
+          </Command.List>
+        </Command>
       </PopoverContent>
     </Popover>
   );

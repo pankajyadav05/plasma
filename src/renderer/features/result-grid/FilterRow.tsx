@@ -11,12 +11,13 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { cn } from '@/lib/cn';
+import { ipc } from '@/lib/ipc';
 import { defaultOperatorFor, operatorsFor } from '@/lib/pg-types';
-import type { Filter, FilterOp } from '@/lib/table-query';
+import { buildDistinctValuesSql, type Filter, type FilterOp } from '@/lib/table-query';
 import { useActiveTab, useSession } from '@/stores/session';
 import { Command } from 'cmdk';
-import { Check, ChevronsUpDown, Plus, Search, Sparkles, X } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { Check, ChevronsUpDown, Loader2, Plus, Search, Sparkles, X } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 interface ColumnOption {
   name: string;
@@ -254,16 +255,27 @@ function FilterForm({ existing, onDone }: { existing?: Filter; onDone: () => voi
           </SelectContent>
         </Select>
       </div>
-      {needsValue && (
-        <Input
+      {needsValue && tab && tab.kind === 'table' && tab.tableSchema && tab.tableName && column ? (
+        <ValueAutocomplete
+          schema={tab.tableSchema}
+          table={tab.tableName}
+          column={column}
           value={value}
-          onChange={(e) => setValue(e.target.value)}
-          placeholder="value"
-          className="h-8 text-xs"
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') handleSave();
-          }}
+          onChange={setValue}
+          onEnter={handleSave}
         />
+      ) : (
+        needsValue && (
+          <Input
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            placeholder="value"
+            className="h-8 text-xs"
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') handleSave();
+            }}
+          />
+        )
       )}
       <Button
         variant={existing ? 'primary' : 'secondary'}
@@ -369,6 +381,130 @@ function ColumnCombobox({
             })}
           </Command.List>
         </Command>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+/**
+ * Free-text value input with a suggestion popover beneath. As the user
+ * types, we debounce-fetch DISTINCT values from the underlying column
+ * (capped at 20). Click or Arrow+Enter on a suggestion fills the field.
+ *
+ * Suggestions are best-effort — RLS, permissions, and column-not-text
+ * coercion failures all fall back to a silent empty list, leaving the
+ * input as a plain text field.
+ */
+function ValueAutocomplete({
+  schema,
+  table,
+  column,
+  value,
+  onChange,
+  onEnter,
+}: {
+  schema: string;
+  table: string;
+  column: string;
+  value: string;
+  onChange: (next: string) => void;
+  onEnter: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [suggestions, setSuggestions] = useState<string[]>([]);
+  const [loading, setLoading] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  // Debounce the prefix query — keystrokes shouldn't fire IPC per char.
+  // Re-runs on column change too so swapping the column resets results.
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    setLoading(true);
+    const handle = setTimeout(async () => {
+      try {
+        const { sql, params } = buildDistinctValuesSql(schema, table, column, value);
+        const res = await ipc.query.run(sql, params, { internal: true });
+        if (cancelled) return;
+        setSuggestions(
+          res.rows
+            .map((r) => (r[0] === null || r[0] === undefined ? '' : String(r[0])))
+            .filter((s) => s.length > 0),
+        );
+      } catch {
+        if (!cancelled) setSuggestions([]);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }, 180);
+    return () => {
+      cancelled = true;
+      clearTimeout(handle);
+    };
+  }, [schema, table, column, value, open]);
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Input
+          ref={inputRef}
+          value={value}
+          onFocus={() => setOpen(true)}
+          onChange={(e) => {
+            onChange(e.target.value);
+            if (!open) setOpen(true);
+          }}
+          placeholder="value"
+          className="h-8 text-xs"
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && !open) onEnter();
+            else if (e.key === 'Escape' && open) {
+              setOpen(false);
+              e.stopPropagation();
+            }
+          }}
+        />
+      </PopoverTrigger>
+      <PopoverContent
+        align="start"
+        sideOffset={4}
+        // Keep focus in the input — let the user keep typing while the
+        // suggestion list is visible. Without this, opening the popover
+        // would yank focus away on first render.
+        onOpenAutoFocus={(e) => e.preventDefault()}
+        onCloseAutoFocus={(e) => e.preventDefault()}
+        className="w-[var(--radix-popover-trigger-width)] p-0"
+      >
+        {loading && suggestions.length === 0 ? (
+          <div className="flex items-center gap-2 px-3 py-2 text-xs text-muted-foreground">
+            <Loader2 className="h-3 w-3 animate-spin" />
+            <span className="font-display italic">looking up values…</span>
+          </div>
+        ) : suggestions.length === 0 ? (
+          <div className="px-3 py-2 font-display text-xs italic text-muted-foreground">
+            no suggestions
+          </div>
+        ) : (
+          <div className="max-h-[240px] overflow-y-auto py-1">
+            {suggestions.map((s) => (
+              <button
+                key={s}
+                type="button"
+                onMouseDown={(e) => {
+                  // Use mousedown so the click registers before the input
+                  // loses focus and the popover starts closing.
+                  e.preventDefault();
+                  onChange(s);
+                  setOpen(false);
+                  inputRef.current?.focus();
+                }}
+                className="flex w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-left font-mono text-xs text-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+              >
+                <span className="truncate">{s}</span>
+              </button>
+            ))}
+          </div>
+        )}
       </PopoverContent>
     </Popover>
   );
