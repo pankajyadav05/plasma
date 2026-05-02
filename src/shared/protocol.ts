@@ -241,6 +241,71 @@ export const SettingsShape = z.object({
       }),
     )
     .default({}),
+  /**
+   * User-saved tab snapshots, keyed by connection id. Each entry captures
+   * everything needed to recreate a tab — for SQL tabs the editor text,
+   * for table tabs the schema/name plus filters/sort/hidden/sticky/page
+   * size. Re-opened from the right-rail "Saved" panel.
+   */
+  savedQueries: z
+    .record(
+      z.string(),
+      z.array(
+        z.discriminatedUnion('kind', [
+          z.object({
+            kind: z.literal('sql'),
+            id: z.string(),
+            name: z.string(),
+            createdAt: z.number(),
+            updatedAt: z.number(),
+            sql: z.string(),
+            pageSize: z.number().int().positive().default(50),
+          }),
+          z.object({
+            kind: z.literal('table'),
+            id: z.string(),
+            name: z.string(),
+            createdAt: z.number(),
+            updatedAt: z.number(),
+            tableSchema: z.string(),
+            tableName: z.string(),
+            filters: z
+              .array(
+                z.object({
+                  id: z.string(),
+                  column: z.string(),
+                  op: z.enum([
+                    '=',
+                    '!=',
+                    '>',
+                    '<',
+                    '>=',
+                    '<=',
+                    'LIKE',
+                    'ILIKE',
+                    'IS NULL',
+                    'IS NOT NULL',
+                  ]),
+                  value: z.string(),
+                }),
+              )
+              .default([]),
+            sort: z
+              .array(
+                z.object({
+                  column: z.string(),
+                  direction: z.enum(['asc', 'desc']),
+                }),
+              )
+              .default([]),
+            hidden: z.array(z.string()).default([]),
+            sticky: z.array(z.string()).default([]),
+            pageSize: z.number().int().positive().default(50),
+          }),
+        ]),
+      ),
+    )
+    .default({}),
   windowBounds: z
     .object({
       x: z.number().optional(),
@@ -252,6 +317,7 @@ export const SettingsShape = z.object({
     .default(null),
 });
 export type Settings = z.infer<typeof SettingsShape>;
+export type SavedQuery = Settings['savedQueries'][string][number];
 
 // ─── IPC channel names ───────────────────────────────────────────────
 

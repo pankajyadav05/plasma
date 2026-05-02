@@ -6,9 +6,14 @@ import { ipc } from '@/lib/ipc';
 import { kbd } from '@/lib/platform';
 import { buildRlsPoliciesSql } from '@/lib/table-query';
 import { type RightPanelMode, useActiveTab, useSession } from '@/stores/session';
+import type { SavedQuery } from '@shared/protocol';
 import {
+  Bookmark,
+  BookmarkPlus,
   Check,
   Code2,
+  Database,
+  FileCode,
   Loader2,
   Play,
   RefreshCw,
@@ -17,6 +22,7 @@ import {
   ShieldOff,
   Sparkles,
   Square,
+  Trash2,
   UserCircle,
   X,
 } from 'lucide-react';
@@ -59,6 +65,11 @@ export function RightRail() {
       label: 'Query editor',
     },
     {
+      mode: 'saved',
+      icon: <Bookmark className="h-[18px] w-[18px]" />,
+      label: 'Saved queries',
+    },
+    {
       mode: 'role',
       icon: <UserCircle className="h-[18px] w-[18px]" />,
       label: 'Session role',
@@ -99,6 +110,7 @@ export function RightRail() {
       >
         <div style={{ width: PANEL_WIDTH }} className="h-full">
           {mode === 'query' && <QueryPanel />}
+          {mode === 'saved' && <SavedQueriesPanel />}
           {mode === 'role' && <RolePanel />}
           {mode === 'rls' && <RlsPanel />}
         </div>
@@ -192,6 +204,15 @@ function QueryPanel() {
             ask
           </Button>
         )}
+        <Button
+          variant="ghost"
+          size="icon-xs"
+          onClick={() => setMode('saved')}
+          title="Save / open saved queries"
+          aria-label="Save current query"
+        >
+          <Bookmark />
+        </Button>
         {running ? (
           <Button variant="destructive" size="sm" onClick={handleAction}>
             <Square className="fill-current" />
@@ -455,6 +476,231 @@ function PolicyItem({ p }: { p: PolicyRow }) {
         </div>
       )}
     </div>
+  );
+}
+
+// ───────────────────────── Saved queries panel ─────────────────────────
+
+function SavedQueriesPanel() {
+  const setMode = useSession((s) => s.setRightPanelMode);
+  const tab = useActiveTab();
+  const connId = useSession((s) => s.activeConfig?.id);
+  const savedMap = useSession((s) => s.settings.savedQueries);
+  const saveCurrentTab = useSession((s) => s.saveCurrentTab);
+  const deleteSavedQuery = useSession((s) => s.deleteSavedQuery);
+  const openSavedQuery = useSession((s) => s.openSavedQuery);
+
+  const [naming, setNaming] = useState(false);
+  const [draft, setDraft] = useState('');
+  const [filter, setFilter] = useState('');
+
+  const list = (connId && savedMap?.[connId]) || [];
+  const visible = list.filter((q) => q.name.toLowerCase().includes(filter.toLowerCase()));
+
+  const canSave =
+    !!tab && !!connId && (tab.kind === 'table' ? true : tab.sql.trim().length > 0);
+
+  const defaultName = (() => {
+    if (!tab) return '';
+    if (tab.kind === 'table') {
+      const base = tab.tableSchema === 'public' ? tab.tableName : `${tab.tableSchema}.${tab.tableName}`;
+      const tag = [
+        tab.filters.length > 0 && `${tab.filters.length}f`,
+        tab.tableSort.length > 0 && 'sorted',
+        tab.hiddenColumns.size > 0 && 'cols',
+      ]
+        .filter(Boolean)
+        .join(' · ');
+      return tag ? `${base} (${tag})` : (base ?? '');
+    }
+    return tab.title;
+  })();
+
+  const startSave = () => {
+    if (!canSave) return;
+    setDraft(defaultName);
+    setNaming(true);
+  };
+
+  const confirmSave = async () => {
+    const name = draft.trim();
+    if (!name) return;
+    await saveCurrentTab(name);
+    setNaming(false);
+    setDraft('');
+  };
+
+  return (
+    <div className="flex h-full flex-col">
+      <PanelHeader title="Saved queries" hint={list.length ? `${list.length}` : undefined} onClose={() => setMode(null)}>
+        {!naming && (
+          <Button
+            variant="primary"
+            size="sm"
+            onClick={startSave}
+            disabled={!canSave}
+            title={
+              !connId
+                ? 'Connect to a database first'
+                : !canSave
+                  ? 'Open a table or write a query first'
+                  : 'Save current tab'
+            }
+          >
+            <BookmarkPlus />
+            Save
+          </Button>
+        )}
+      </PanelHeader>
+
+      {naming && (
+        <div className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-2">
+          <input
+            autoFocus
+            type="text"
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') void confirmSave();
+              else if (e.key === 'Escape') {
+                setNaming(false);
+                setDraft('');
+              }
+            }}
+            placeholder="Name this query…"
+            className="h-8 flex-1 rounded-md border border-border bg-background px-2 text-sm text-foreground outline-none transition-colors placeholder:text-muted-foreground focus:border-primary"
+          />
+          <Button variant="primary" size="sm" onClick={() => void confirmSave()} disabled={!draft.trim()}>
+            Save
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => {
+              setNaming(false);
+              setDraft('');
+            }}
+          >
+            Cancel
+          </Button>
+        </div>
+      )}
+
+      {list.length > 4 && (
+        <div className="border-b border-border px-3 py-2">
+          <input
+            type="text"
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            placeholder="Filter saved…"
+            className="h-8 w-full rounded-md border border-border bg-background px-2 text-sm text-foreground outline-none transition-colors placeholder:text-muted-foreground focus:border-primary"
+            aria-label="Filter saved queries"
+          />
+        </div>
+      )}
+
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        {!connId && (
+          <PanelEmpty title="Not connected" hint="Connect to a database to see its saved queries." />
+        )}
+        {connId && list.length === 0 && (
+          <PanelEmpty
+            title="No saved queries"
+            hint="Open a table or write SQL, then click Save to capture it here."
+          />
+        )}
+        {connId && list.length > 0 && visible.length === 0 && (
+          <div className="px-3 py-3 font-display text-xs italic text-muted-foreground">no matches</div>
+        )}
+        {visible.map((q) => (
+          <SavedQueryRow
+            key={q.id}
+            query={q}
+            onOpen={() => openSavedQuery(q.id)}
+            onDelete={() => void deleteSavedQuery(q.id)}
+          />
+        ))}
+      </div>
+
+      <PanelFooter>Saved queries are scoped to this connection and persist across restarts.</PanelFooter>
+    </div>
+  );
+}
+
+function SavedQueryRow({
+  query,
+  onOpen,
+  onDelete,
+}: {
+  query: SavedQuery;
+  onOpen: () => void;
+  onDelete: () => void;
+}) {
+  const [confirming, setConfirming] = useState(false);
+  const isTable = query.kind === 'table';
+
+  return (
+    <div className="group/saved flex items-start gap-2 border-b border-border px-3 py-2 last:border-b-0 hover:bg-accent/30">
+      <button
+        type="button"
+        onClick={onOpen}
+        className="flex min-w-0 flex-1 items-start gap-2 text-left"
+        title={isTable ? `${query.tableSchema}.${query.tableName}` : query.sql}
+      >
+        {isTable ? (
+          <Database className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+        ) : (
+          <FileCode className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+        )}
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-sm font-medium text-foreground">{query.name}</div>
+          {isTable ? (
+            <div className="mt-0.5 flex flex-wrap items-center gap-1 text-[11px] text-muted-foreground">
+              <span className="font-mono">
+                {query.tableSchema}.{query.tableName}
+              </span>
+              {query.filters.length > 0 && <Pill>{query.filters.length} filter{query.filters.length === 1 ? '' : 's'}</Pill>}
+              {query.sort.length > 0 && <Pill>sorted</Pill>}
+              {query.hidden.length > 0 && <Pill>{query.hidden.length} hidden</Pill>}
+              {query.sticky.length > 0 && <Pill>{query.sticky.length} pinned</Pill>}
+            </div>
+          ) : (
+            <div className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground">
+              {query.sql.replace(/\s+/g, ' ').trim().slice(0, 80) || '(empty)'}
+            </div>
+          )}
+        </div>
+      </button>
+      {confirming ? (
+        <div className="flex shrink-0 items-center gap-1">
+          <Button variant="destructive" size="sm" onClick={onDelete}>
+            Delete
+          </Button>
+          <Button variant="ghost" size="sm" onClick={() => setConfirming(false)}>
+            Cancel
+          </Button>
+        </div>
+      ) : (
+        <Button
+          variant="ghost"
+          size="icon-xs"
+          onClick={() => setConfirming(true)}
+          title="Delete"
+          aria-label={`Delete ${query.name}`}
+          className="opacity-0 transition-opacity group-hover/saved:opacity-100"
+        >
+          <Trash2 />
+        </Button>
+      )}
+    </div>
+  );
+}
+
+function Pill({ children }: { children: React.ReactNode }) {
+  return (
+    <span className="rounded-sm border border-border px-1 py-0.5 font-mono text-[9px] uppercase text-muted-foreground">
+      {children}
+    </span>
   );
 }
 

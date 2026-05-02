@@ -16,6 +16,7 @@ import type {
   HistoryEntry,
   QueryResult,
   SavedConnection,
+  SavedQuery,
   SchemaInfo,
   Settings,
   TxnState,
@@ -53,7 +54,7 @@ export type EntityKind = 'table' | 'view' | 'matview' | 'foreign' | 'partitioned
 /** Drives what the main right-side canvas renders. Switched from IconRail. */
 export type CanvasMode = 'database' | 'sql' | 'history' | 'settings';
 /** Which slot of the right rail is currently expanded. null = collapsed. */
-export type RightPanelMode = 'query' | 'role' | 'rls' | null;
+export type RightPanelMode = 'query' | 'role' | 'rls' | 'saved' | null;
 
 /**
  * Cheap heuristic for DDL detection. We strip leading comments/whitespace
@@ -212,6 +213,7 @@ const DEFAULT_SETTINGS: Settings = {
   favoriteSchemas: {},
   favoriteTables: {},
   tableColumnState: {},
+  savedQueries: {},
   windowBounds: null,
 };
 
@@ -456,6 +458,11 @@ interface SessionState {
   toggleEditor(): void;
   setEditorExpanded(expanded: boolean): void;
   setRightPanelMode(mode: RightPanelMode): void;
+
+  // Saved queries (per active connection)
+  saveCurrentTab(name: string): Promise<void>;
+  deleteSavedQuery(id: string): Promise<void>;
+  openSavedQuery(id: string): void;
 
   // Vault
   loadSavedConnections(): Promise<void>;
@@ -1184,6 +1191,116 @@ export const useSession = create<SessionState>((set, get) => ({
 
   setRightPanelMode(mode) {
     set({ rightPanelMode: mode });
+  },
+
+  // ── saved queries ──
+
+  async saveCurrentTab(name) {
+    const state = get();
+    const tab = activeTab(state);
+    const connId = state.activeConfig?.id;
+    if (!tab || !connId) return;
+    const trimmed = name.trim();
+    if (!trimmed) return;
+
+    const now = Date.now();
+    let entry: SavedQuery;
+    if (tab.kind === 'table' && tab.tableSchema && tab.tableName) {
+      entry = {
+        kind: 'table',
+        id: freshId(),
+        name: trimmed,
+        createdAt: now,
+        updatedAt: now,
+        tableSchema: tab.tableSchema,
+        tableName: tab.tableName,
+        filters: tab.filters,
+        sort: tab.tableSort,
+        hidden: [...tab.hiddenColumns],
+        sticky: [...tab.stickyColumns],
+        pageSize: tab.pageSize,
+      };
+    } else {
+      entry = {
+        kind: 'sql',
+        id: freshId(),
+        name: trimmed,
+        createdAt: now,
+        updatedAt: now,
+        sql: tab.sql,
+        pageSize: tab.pageSize,
+      };
+    }
+
+    const current = state.settings.savedQueries ?? {};
+    const list = current[connId] ?? [];
+    const nextMap = { ...current, [connId]: [entry, ...list] };
+    set({ settings: { ...state.settings, savedQueries: nextMap } });
+    try {
+      await ipc.settings.set({ savedQueries: nextMap });
+    } catch (err) {
+      console.error('[plasma] persist savedQueries failed', err);
+    }
+  },
+
+  async deleteSavedQuery(id) {
+    const state = get();
+    const connId = state.activeConfig?.id;
+    if (!connId) return;
+    const current = state.settings.savedQueries ?? {};
+    const list = current[connId] ?? [];
+    const nextList = list.filter((q) => q.id !== id);
+    if (nextList.length === list.length) return;
+    const nextMap = { ...current, [connId]: nextList };
+    set({ settings: { ...state.settings, savedQueries: nextMap } });
+    try {
+      await ipc.settings.set({ savedQueries: nextMap });
+    } catch (err) {
+      console.error('[plasma] persist savedQueries failed', err);
+    }
+  },
+
+  openSavedQuery(id) {
+    const state = get();
+    const connId = state.activeConfig?.id;
+    if (!connId) return;
+    const entry = (state.settings.savedQueries?.[connId] ?? []).find((q) => q.id === id);
+    if (!entry) return;
+
+    if (entry.kind === 'sql') {
+      // Spawn a fresh SQL tab pre-loaded with the saved text. Avoids
+      // clobbering whatever the user has in their current tab.
+      const tab = createEmptyTab(entry.pageSize, entry.name);
+      tab.sql = entry.sql;
+      set({
+        tabs: [...state.tabs, tab],
+        activeTabId: tab.id,
+        rightPanelMode: 'query',
+      });
+      return;
+    }
+
+    // Table snapshot: build a fresh table tab with the saved
+    // filters/sort/hidden/sticky pre-applied, then run.
+    const baseTab = createTableTab(entry.pageSize, entry.tableSchema, entry.tableName);
+    const persistedPatch = loadTableColumnStateInto(state, entry.tableSchema, entry.tableName);
+    const tab: QueryTab = {
+      ...baseTab,
+      ...persistedPatch,
+      filters: entry.filters.map((f) => ({ ...f })),
+      tableSort: entry.sort.map((s) => ({ ...s })),
+      hiddenColumns: new Set(entry.hidden),
+      stickyColumns: new Set(entry.sticky),
+      pageSize: entry.pageSize,
+    };
+    set({
+      tabs: [...state.tabs, tab],
+      activeTabId: tab.id,
+      activeTable: { schema: entry.tableSchema, name: entry.tableName },
+    });
+    void runTableDataQuery(set, get, tab.id);
+    void runTableCountQuery(set, get, tab.id);
+    void runRlsCountForTab(set, get, tab.id);
   },
 
   // ── vault ──
