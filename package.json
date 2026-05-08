@@ -1,6 +1,6 @@
 {
   "name": "plasma",
-  "version": "0.0.12",
+  "version": "0.0.13",
   "description": "A quiet place for queries. A modern Electron-based Postgres client.",
   "private": true,
   "type": "module",
@@ -23,6 +23,9 @@
     "release:major": "node scripts/release.mjs major",
     "release:upload": "node scripts/upload-release.mjs",
     "release:ship": "pnpm run dist:win && pnpm run release:upload",
+    "ship:patch": "node scripts/ship.mjs patch",
+    "ship:minor": "node scripts/ship.mjs minor",
+    "ship:major": "node scripts/ship.mjs major",
     "rebuild": "electron-rebuild",
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json",
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json",
