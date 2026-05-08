@@ -74,7 +74,11 @@ export function DeleteIndexDialog() {
             autoFocus
           />
           {error && (
-            <span className="font-display text-[11px] italic text-destructive">{error}</span>
+            <div className="rounded-md border border-destructive/40 bg-destructive/10 px-2.5 py-2 font-mono text-[11px] leading-snug text-foreground">
+              {error
+                .replace(/^Error invoking remote method '[^']+':\s*/i, '')
+                .replace(/^Error:\s*/i, '')}
+            </div>
           )}
         </div>
         <DialogFooter>

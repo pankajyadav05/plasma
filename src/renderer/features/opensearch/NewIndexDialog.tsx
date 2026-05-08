@@ -39,6 +39,16 @@ const Editor = lazy(() => import('@monaco-editor/react').then((m) => ({ default:
 type Mode = 'form' | 'json';
 
 /**
+ * Electron's `ipcRenderer.invoke` prefixes thrown errors with
+ * `Error invoking remote method '<channel>': Error: ...`. The user
+ * doesn't care about either layer — strip them so the actual cluster
+ * message is what they see first.
+ */
+function stripIpcPrefix(msg: string): string {
+  return msg.replace(/^Error invoking remote method '[^']+':\s*/i, '').replace(/^Error:\s*/i, '');
+}
+
+/**
  * Create-index dialog with two synchronised views.
  *
  * Form view edits a structured `IndexSpec`. JSON view edits the raw
@@ -356,26 +366,38 @@ export function NewIndexDialog() {
           )}
         </div>
 
+        {/* Error banner (above footer for readability) */}
+        {submitError && (
+          <div className="shrink-0 border-t border-destructive/40 bg-destructive/10 px-5 py-2.5">
+            <div className="flex items-start gap-2">
+              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-destructive" />
+              <div className="min-w-0 flex-1">
+                <div className="font-mono text-[10px] uppercase tracking-wider text-destructive">
+                  Create failed
+                </div>
+                <div className="mt-0.5 break-words font-mono text-[12px] leading-snug text-foreground">
+                  {stripIpcPrefix(submitError)}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Footer */}
-        <div className="flex shrink-0 items-center justify-between gap-3 border-t border-border px-5 py-3">
-          <div className="font-display text-[11px] italic text-muted-foreground">
-            {submitError && <span className="text-destructive">{submitError}</span>}
-          </div>
-          <div className="flex gap-2">
-            <Button variant="secondary" onClick={() => close()} disabled={submitting}>
-              Cancel
-            </Button>
-            <Button
-              onClick={() => void onSubmit()}
-              disabled={
-                submitting ||
-                (mode === 'form' && formInvalid) ||
-                (mode === 'json' && jsonError !== null)
-              }
-            >
-              {submitting ? 'Creating…' : 'Create index'}
-            </Button>
-          </div>
+        <div className="flex shrink-0 items-center justify-end gap-2 border-t border-border px-5 py-3">
+          <Button variant="secondary" onClick={() => close()} disabled={submitting}>
+            Cancel
+          </Button>
+          <Button
+            onClick={() => void onSubmit()}
+            disabled={
+              submitting ||
+              (mode === 'form' && formInvalid) ||
+              (mode === 'json' && jsonError !== null)
+            }
+          >
+            {submitting ? 'Creating…' : 'Create index'}
+          </Button>
         </div>
       </DialogContent>
     </Dialog>
