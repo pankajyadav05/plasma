@@ -462,6 +462,10 @@ interface SessionState {
   /** Latest cluster + indices snapshot for a connected OpenSearch cluster. */
   osOverview: OsOverview | null;
   osLoading: boolean;
+  /** True while the New Index dialog is mounted. */
+  osNewIndexOpen: boolean;
+  /** Index name pending delete-confirmation, or null when closed. */
+  osDeleteIndexName: string | null;
   /** Last-opened resource per non-relational engine, used to highlight sidebar. */
   activeRedisKey: string | null;
   activeOsIndex: string | null;
@@ -569,6 +573,10 @@ interface SessionState {
   openOsIndex(index: string): void;
   openOsSearch(index: string): void;
   openOsSql(): void;
+  openOsNewIndex(): void;
+  closeOsNewIndex(): void;
+  /** Open the type-to-confirm delete dialog for `name`, or close it with null. */
+  requestOsDeleteIndex(name: string | null): void;
 
   // Per-tab actions operate on the active tab by default
   setSql(sql: string): void;
@@ -708,6 +716,8 @@ export const useSession = create<SessionState>((set, get) => ({
   redisLoading: false,
   osOverview: null,
   osLoading: false,
+  osNewIndexOpen: false,
+  osDeleteIndexName: null,
   activeRedisKey: null,
   activeOsIndex: null,
   redisBulkMode: false,
@@ -1151,6 +1161,18 @@ export const useSession = create<SessionState>((set, get) => ({
       activeTabId: tab.id,
       activeOsIndex: index,
     });
+  },
+
+  openOsNewIndex() {
+    set({ osNewIndexOpen: true });
+  },
+
+  closeOsNewIndex() {
+    set({ osNewIndexOpen: false });
+  },
+
+  requestOsDeleteIndex(name) {
+    set({ osDeleteIndexName: name });
   },
 
   openOsSql() {

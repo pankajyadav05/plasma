@@ -64,6 +64,8 @@ const api: PlasmaAPI = {
     sql: (query) => ipcRenderer.invoke(IpcChannel.OsSql, query),
     aliases: () => ipcRenderer.invoke(IpcChannel.OsAliases),
     ilm: () => ipcRenderer.invoke(IpcChannel.OsIlm),
+    createIndex: (name, body) => ipcRenderer.invoke(IpcChannel.OsCreateIndex, { name, body }),
+    deleteIndex: (name) => ipcRenderer.invoke(IpcChannel.OsDeleteIndex, name),
     fieldStats: (opts) => ipcRenderer.invoke(IpcChannel.OsFieldStats, opts),
   },
   ai: {

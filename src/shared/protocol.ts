@@ -555,6 +555,18 @@ export const WorkerRequest = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('osAliases'), id: z.string() }),
   z.object({ kind: z.literal('osIlm'), id: z.string() }),
   z.object({
+    kind: z.literal('osCreateIndex'),
+    id: z.string(),
+    name: z.string().min(1),
+    /** Raw create-index body — `{ settings?, mappings?, aliases? }`. */
+    body: z.record(z.unknown()).optional(),
+  }),
+  z.object({
+    kind: z.literal('osDeleteIndex'),
+    id: z.string(),
+    name: z.string().min(1),
+  }),
+  z.object({
     kind: z.literal('osFieldStats'),
     id: z.string(),
     index: z.string(),
@@ -603,6 +615,17 @@ export const WorkerResponse = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('osSql'), id: z.string(), result: OsSqlResult }),
   z.object({ kind: z.literal('osAliases'), id: z.string(), aliases: z.array(OsAlias) }),
   z.object({ kind: z.literal('osIlm'), id: z.string(), policies: z.array(OsIlmPolicy) }),
+  z.object({
+    kind: z.literal('osCreateIndex'),
+    id: z.string(),
+    acknowledged: z.boolean(),
+    index: z.string(),
+  }),
+  z.object({
+    kind: z.literal('osDeleteIndex'),
+    id: z.string(),
+    acknowledged: z.boolean(),
+  }),
   z.object({ kind: z.literal('osFieldStats'), id: z.string(), stats: z.array(OsFieldStats) }),
 ]);
 export type WorkerResponse = z.infer<typeof WorkerResponse>;
@@ -965,6 +988,8 @@ export const IpcChannel = {
   OsSql: 'plasma:os:sql',
   OsAliases: 'plasma:os:aliases',
   OsIlm: 'plasma:os:ilm',
+  OsCreateIndex: 'plasma:os:createIndex',
+  OsDeleteIndex: 'plasma:os:deleteIndex',
   OsFieldStats: 'plasma:os:fieldStats',
   VaultList: 'plasma:vault:list',
   VaultDelete: 'plasma:vault:delete',
@@ -1096,6 +1121,11 @@ export interface PlasmaAPI {
     sql(query: string): Promise<OsSqlResult>;
     aliases(): Promise<OsAlias[]>;
     ilm(): Promise<OsIlmPolicy[]>;
+    createIndex(
+      name: string,
+      body?: Record<string, unknown>,
+    ): Promise<{ acknowledged: boolean; index: string }>;
+    deleteIndex(name: string): Promise<{ acknowledged: boolean }>;
     fieldStats(opts: {
       index: string;
       fields: string[];
