@@ -1,6 +1,6 @@
-import { Component, type ErrorInfo, type ReactNode } from 'react';
-import { RotateCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { RotateCw } from 'lucide-react';
+import { Component, type ErrorInfo, type ReactNode } from 'react';
 
 interface Props {
   children: ReactNode;
@@ -60,9 +60,12 @@ export class ErrorBoundary extends Component<Props, State> {
       <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-background p-8">
         <div className="w-full max-w-2xl rounded-lg border bg-card text-card-foreground shadow-lg">
           <header className="border-b px-8 py-6">
-            <h1 className="font-display text-3xl italic leading-tight text-destructive">Something broke.</h1>
+            <h1 className="font-display text-3xl italic leading-tight text-destructive">
+              Something broke.
+            </h1>
             <p className="mt-1 text-sm text-muted-foreground">
-              Plasma hit an unhandled error. Nothing is lost — your saved connections and query history are on disk.
+              Plasma hit an unhandled error. Nothing is lost — your saved connections and query
+              history are on disk.
             </p>
           </header>
 

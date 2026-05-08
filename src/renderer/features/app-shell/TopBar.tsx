@@ -3,7 +3,23 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { cn } from '@/lib/cn';
 import { useSession } from '@/stores/session';
 import type { SavedConnection } from '@shared/protocol';
-import { Check, ChevronsUpDown, Database, Lock, Pencil, Plus } from 'lucide-react';
+import {
+  Boxes,
+  Check,
+  ChevronsUpDown,
+  Database,
+  Layers,
+  Lock,
+  Pencil,
+  Plus,
+} from 'lucide-react';
+import type { ConnectionEngine } from '@shared/protocol';
+
+const ENGINE_ICON: Record<ConnectionEngine, typeof Database> = {
+  postgres: Database,
+  redis: Layers,
+  opensearch: Boxes,
+};
 import { BrandMark } from './BrandMark';
 import { WindowControls } from './WindowControls';
 
@@ -251,6 +267,10 @@ function ConnectionPickerRow({
         ) : (
           <span className="h-3 w-3 shrink-0" aria-hidden />
         )}
+        {(() => {
+          const Icon = ENGINE_ICON[c.engine ?? 'postgres'];
+          return <Icon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />;
+        })()}
         <span className="truncate font-medium">{c.name}</span>
       </button>
       <Button

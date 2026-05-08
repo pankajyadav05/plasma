@@ -1,5 +1,5 @@
-import { utilityProcess, type UtilityProcess } from 'electron';
-import { WorkerResponse, type WorkerRequest } from '@shared/protocol';
+import { type WorkerRequest, WorkerResponse } from '@shared/protocol';
+import { type UtilityProcess, utilityProcess } from 'electron';
 import { logger } from './logger';
 
 /**
@@ -12,12 +12,25 @@ import { logger } from './logger';
  *   - Bounded pending queue (per-id promise resolvers)
  *   - Graceful shutdown (signalled by `stop()`)
  */
+/**
+ * Worker → main events that aren't request-correlated. The supervisor
+ * routes them to a registered handler instead of trying to resolve a
+ * pending promise.
+ */
+export type WorkerBroadcast = Extract<WorkerResponse, { kind: 'redisPubsub' }>;
+
 export class WorkerSupervisor {
   private proc: UtilityProcess | null = null;
   private pending = new Map<string, (res: WorkerResponse) => void>();
   private workerEntry: string | null = null;
   private shuttingDown = false;
   private restartDelayMs = 0;
+  private broadcastHandler: ((evt: WorkerBroadcast) => void) | null = null;
+
+  /** Subscribe to non-correlated worker events. Replaces any prior handler. */
+  setBroadcastHandler(handler: ((evt: WorkerBroadcast) => void) | null): void {
+    this.broadcastHandler = handler;
+  }
 
   private static readonly BASE_BACKOFF_MS = 250;
   private static readonly MAX_BACKOFF_MS = 10_000;
@@ -52,10 +65,17 @@ export class WorkerSupervisor {
         logger.error('[plasma] worker sent invalid message', parsed.error);
         return;
       }
-      const resolver = this.pending.get(parsed.data.id);
+      const data = parsed.data;
+      // Broadcast events (currently only redisPubsub) aren't request-
+      // correlated — fan them out to whoever subscribed.
+      if (data.kind === 'redisPubsub') {
+        this.broadcastHandler?.(data);
+        return;
+      }
+      const resolver = this.pending.get(data.id);
       if (resolver) {
-        this.pending.delete(parsed.data.id);
-        resolver(parsed.data);
+        this.pending.delete(data.id);
+        resolver(data);
       }
     });
 

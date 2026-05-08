@@ -1,5 +1,5 @@
-import wordmarkSvg from '@logo/plasma-mono-accent.svg?raw';
 import { cn } from '@/lib/cn';
+import wordmarkSvg from '@logo/plasma-mono-accent.svg?raw';
 
 /**
  * Plasma brand wordmark — imports the SVG file as raw text via Vite's

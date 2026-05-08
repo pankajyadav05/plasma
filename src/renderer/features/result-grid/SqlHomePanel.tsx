@@ -1,9 +1,9 @@
-import { useEffect, useMemo } from 'react';
-import { Clock, Flame, Play } from 'lucide-react';
-import type { HistoryEntry } from '@shared/protocol';
 import { BrandMark } from '@/features/app-shell/BrandMark';
 import { formatDuration } from '@/lib/format';
 import { useSession } from '@/stores/session';
+import type { HistoryEntry } from '@shared/protocol';
+import { Clock, Flame, Play } from 'lucide-react';
+import { useEffect, useMemo } from 'react';
 
 /**
  * Home panel for empty SQL tabs. Instead of a blank editor, we show the

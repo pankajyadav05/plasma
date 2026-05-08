@@ -1,0 +1,265 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Sample B — Terminal Brutalist · Plasma</title>
+    <link rel="preconnect" href="https://fonts.bunny.net" />
+    <link href="https://fonts.bunny.net/css?family=jetbrains-mono:400,500,700,800|newsreader:400i,600i&display=swap" rel="stylesheet" />
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/lenis@1.1.13/dist/lenis.min.js"></script>
+    <style>
+      :root { --bg:#000; --fg:#fff; --dim:#9a9a9a; --line:#2a2a2a; --ox:#eb5e4e; }
+      * { -webkit-font-smoothing: antialiased; }
+      html, body { background: var(--bg); color: var(--fg); }
+      body { font-family: "JetBrains Mono", ui-monospace, monospace; overflow-x: hidden; font-feature-settings: "calt" 0; }
+      .display { font-family: "Newsreader", Georgia, serif; }
+      .ox { color: var(--ox); }
+      .bg-ox { background: var(--ox); color: #000; }
+      .border-line { border-color: var(--line); }
+
+      .uppercase-tight { letter-spacing: 0.04em; }
+      .grid-bg {
+        background-image:
+          linear-gradient(to right, rgba(255,255,255,.05) 1px, transparent 1px),
+          linear-gradient(to bottom, rgba(255,255,255,.05) 1px, transparent 1px);
+        background-size: 80px 80px;
+      }
+
+      .ascii-block { white-space: pre; line-height: 1; font-size: 11px; color: var(--dim); }
+
+      .marquee { overflow: hidden; white-space: nowrap; border-block: 1px solid var(--line); }
+      .marquee-track { display: inline-block; padding-block: 14px; animation: scroll 40s linear infinite; }
+      @keyframes scroll { from { transform: translateX(0); } to { transform: translateX(-50%); } }
+
+      .blink::after { content: "_"; animation: blink 1s steps(2) infinite; color: var(--ox); }
+      @keyframes blink { 50% { opacity: 0; } }
+
+      .reveal { opacity: 0; transform: translateY(0); transition: opacity .01s linear; }
+      .reveal.in { opacity: 1; }
+
+      .hover-invert:hover { background: var(--fg); color: var(--bg); }
+      .hover-ox:hover { background: var(--ox); color: #000; }
+
+      .ascii-art {
+        font-size: 9px; line-height: 9px; color: var(--ox);
+        white-space: pre; font-weight: 700;
+      }
+
+      .typing-1 { animation: type1 2.4s steps(60) .4s forwards; width: 0; overflow: hidden; white-space: nowrap; display: inline-block; vertical-align: top; }
+      @keyframes type1 { to { width: 100%; } }
+    </style>
+  </head>
+  <body>
+    <!-- Skip-to bar -->
+    <div class="bg-ox text-black text-[11px] uppercase-tight px-4 py-1.5 flex justify-between border-b border-line">
+      <span>// PLASMA · v0.0.10 · BUILD 6f2a91c · WIN x64</span>
+      <span>// CONN: prod-replica · LAT 2ms</span>
+      <span>// THEME: BRUTAL</span>
+    </div>
+
+    <!-- NAV -->
+    <header class="border-b border-line">
+      <div class="mx-auto max-w-[1440px] grid grid-cols-12">
+        <a class="col-span-3 px-6 py-5 border-r border-line text-2xl font-extrabold uppercase-tight">
+          <span class="ox">[</span> P<span class="ox">L</span>ASMA <span class="ox">]</span>
+        </a>
+        <nav class="col-span-6 grid grid-cols-4 text-[12px] uppercase-tight">
+          <a class="px-4 py-5 border-r border-line hover-invert">[01] STACK</a>
+          <a class="px-4 py-5 border-r border-line hover-invert">[02] FEATURES</a>
+          <a class="px-4 py-5 border-r border-line hover-invert">[03] DOWNLOAD</a>
+          <a class="px-4 py-5 border-r border-line hover-invert">[04] GITHUB</a>
+        </nav>
+        <a class="col-span-3 px-6 py-5 bg-ox text-black font-extrabold uppercase-tight flex items-center justify-between">
+          ▸ DOWNLOAD .EXE <span>0.0.10</span>
+        </a>
+      </div>
+    </header>
+
+    <!-- HERO -->
+    <section class="grid-bg border-b border-line">
+      <div class="mx-auto max-w-[1440px] grid grid-cols-12 gap-0">
+
+        <div class="col-span-12 md:col-span-9 px-6 md:px-10 py-16 border-r border-line">
+          <div class="flex items-center gap-3 text-[11px] uppercase-tight text-[color:var(--dim)] mb-10">
+            <span class="bg-ox text-black px-2 py-0.5">NEW</span>
+            <span>·</span>
+            <span class="ox">v0.0.10</span>
+            <span>·</span>
+            <span>POSTGRES + REDIS + OPENSEARCH</span>
+            <span>·</span>
+            <span class="blink">CONNECTED</span>
+          </div>
+
+          <h1 class="text-[14vw] md:text-[10.5vw] font-extrabold leading-[0.85] uppercase-tight">
+            <span class="block">A&nbsp;DATABASE</span>
+            <span class="block">CLIENT&nbsp;THAT</span>
+            <span class="block ox">DOESN'T&nbsp;</span>
+            <span class="block display italic font-[400]">shout.</span>
+          </h1>
+
+          <div class="mt-12 max-w-[60ch] text-[15px] leading-[1.7]">
+            <span class="ox">$</span> <span class="typing-1">cat ./README.md | head -3</span><br/>
+            ──────────────────────────────────────<br/>
+            ONE CLIENT. THREE ENGINES. ZERO CEREMONY.<br/>
+            SCHEMA-AWARE AUTOCOMPLETE · AI WITH ENGINE-AWARE TOOL USE ·<br/>
+            STATE THAT STICKS · NINE THEMES · APACHE 2.0
+          </div>
+
+          <div class="mt-12 flex flex-wrap items-center gap-0 border border-line w-fit">
+            <a class="px-7 py-4 bg-ox text-black font-extrabold uppercase-tight border-r border-black/20 hover:opacity-90">▶ DOWNLOAD v0.0.10</a>
+            <a class="px-7 py-4 hover-invert font-bold uppercase-tight">⌘ git clone</a>
+            <a class="px-7 py-4 border-l border-line hover-invert font-bold uppercase-tight text-[color:var(--dim)]">view source ↗</a>
+          </div>
+        </div>
+
+        <aside class="col-span-12 md:col-span-3 p-6 md:p-8">
+          <div class="text-[11px] uppercase-tight text-[color:var(--dim)] mb-3">// SYSTEM</div>
+          <div class="space-y-3 text-[12px]">
+            <div class="flex justify-between border-b border-line pb-2"><span class="text-[color:var(--dim)]">PLATFORM</span><span>WIN_x64</span></div>
+            <div class="flex justify-between border-b border-line pb-2"><span class="text-[color:var(--dim)]">SIZE</span><span>84.2 MB</span></div>
+            <div class="flex justify-between border-b border-line pb-2"><span class="text-[color:var(--dim)]">SHA256</span><span class="ox">6f2a…91c</span></div>
+            <div class="flex justify-between border-b border-line pb-2"><span class="text-[color:var(--dim)]">LICENSE</span><span>APACHE-2.0</span></div>
+            <div class="flex justify-between border-b border-line pb-2"><span class="text-[color:var(--dim)]">UPDATED</span><span>2026-05-06</span></div>
+          </div>
+
+          <div class="mt-8 text-[11px] uppercase-tight text-[color:var(--dim)] mb-3">// PERF</div>
+          <pre class="ascii-block">
+QUERY  ████████████░ 240ms
+RENDER █████░░░░░░░░  72ms
+INDEX  ███████████░░ 198ms
+EXPLAIN ██░░░░░░░░░░  38ms
+          </pre>
+
+          <div class="mt-8">
+            <pre class="ascii-art">
+ ██████╗
+ ██╔══██╗
+ ██████╔╝
+ ██╔═══╝
+ ██║
+ ╚═╝     </pre>
+          </div>
+        </aside>
+      </div>
+    </section>
+
+    <!-- MARQUEE -->
+    <div class="marquee">
+      <div class="marquee-track text-[14px] font-bold uppercase-tight">
+        <span class="px-8">POSTGRES ◆</span><span class="px-8 ox">REDIS ◆</span><span class="px-8">OPENSEARCH ◆</span>
+        <span class="px-8 ox">SCHEMA-AWARE AUTOCOMPLETE ◆</span><span class="px-8">AI ENGINE-AWARE TOOL USE ◆</span>
+        <span class="px-8 ox">EXPLAIN ANALYZE VIEWER ◆</span><span class="px-8">DISCOVER-STYLE SEARCH ◆</span>
+        <span class="px-8 ox">REDIS-CLI ◆</span><span class="px-8">9 THEMES ◆</span>
+        <span class="px-8">POSTGRES ◆</span><span class="px-8 ox">REDIS ◆</span><span class="px-8">OPENSEARCH ◆</span>
+        <span class="px-8 ox">SCHEMA-AWARE AUTOCOMPLETE ◆</span><span class="px-8">AI ENGINE-AWARE TOOL USE ◆</span>
+        <span class="px-8 ox">EXPLAIN ANALYZE VIEWER ◆</span><span class="px-8">DISCOVER-STYLE SEARCH ◆</span>
+      </div>
+    </div>
+
+    <!-- FEATURES — RAW GRID -->
+    <section class="border-b border-line">
+      <div class="mx-auto max-w-[1440px]">
+        <div class="px-6 md:px-10 py-12 border-b border-line flex items-baseline justify-between">
+          <div>
+            <div class="text-[11px] uppercase-tight text-[color:var(--dim)]">// SECTION 02</div>
+            <h2 class="text-5xl md:text-7xl font-extrabold uppercase-tight mt-2">FEATURES.<span class="ox">_</span></h2>
+          </div>
+          <div class="text-[12px] uppercase-tight text-[color:var(--dim)] hidden md:block">12 / 12 SHIPPED</div>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-3">
+          <div class="border-r border-b border-line p-8 hover-ox transition-none cursor-default">
+            <div class="text-[11px] text-[color:var(--dim)] uppercase-tight mb-2">[01]</div>
+            <h3 class="font-extrabold text-xl uppercase-tight">SCHEMA<br/>AUTOCOMPLETE</h3>
+            <p class="text-[12px] mt-3 text-[color:var(--dim)]">Reads tables, columns, FKs. Suggests before you ask.</p>
+          </div>
+          <div class="border-r border-b border-line p-8 hover-ox transition-none cursor-default">
+            <div class="text-[11px] text-[color:var(--dim)] uppercase-tight mb-2">[02]</div>
+            <h3 class="font-extrabold text-xl uppercase-tight">AI<br/>TOOL USE</h3>
+            <p class="text-[12px] mt-3 text-[color:var(--dim)]">Engine-aware. Inspects then writes. No fabrication.</p>
+          </div>
+          <div class="border-b border-line p-8 hover-ox transition-none cursor-default">
+            <div class="text-[11px] text-[color:var(--dim)] uppercase-tight mb-2">[03]</div>
+            <h3 class="font-extrabold text-xl uppercase-tight">EXPLAIN<br/>VIEWER</h3>
+            <p class="text-[12px] mt-3 text-[color:var(--dim)]">Plan tree with cost, rows, time per node.</p>
+          </div>
+          <div class="border-r border-b border-line p-8 hover-ox transition-none cursor-default">
+            <div class="text-[11px] text-[color:var(--dim)] uppercase-tight mb-2">[04]</div>
+            <h3 class="font-extrabold text-xl uppercase-tight">REDIS<br/>CLI + INSPECT</h3>
+            <p class="text-[12px] mt-3 text-[color:var(--dim)]">Memory analyzer + raw cli, side by side.</p>
+          </div>
+          <div class="border-r border-b border-line p-8 hover-ox transition-none cursor-default">
+            <div class="text-[11px] text-[color:var(--dim)] uppercase-tight mb-2">[05]</div>
+            <h3 class="font-extrabold text-xl uppercase-tight">DISCOVER<br/>SEARCH</h3>
+            <p class="text-[12px] mt-3 text-[color:var(--dim)]">OpenSearch fields, filters, time histogram.</p>
+          </div>
+          <div class="border-b border-line p-8 bg-ox text-black hover:bg-white transition-none cursor-default">
+            <div class="text-[11px] uppercase-tight mb-2">[06]</div>
+            <h3 class="font-extrabold text-xl uppercase-tight">STATE<br/>STICKS</h3>
+            <p class="text-[12px] mt-3">Tabs, filters, pins, theme. Per connection. Forever.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- COMPARE — raw -->
+    <section class="border-b border-line">
+      <div class="mx-auto max-w-[1440px] px-6 md:px-10 py-16">
+        <h2 class="text-5xl md:text-7xl font-extrabold uppercase-tight mb-10">VS.<span class="ox"> THE FIELD.</span></h2>
+        <div class="border border-line">
+          <div class="grid grid-cols-5 text-[12px] uppercase-tight border-b border-line">
+            <div class="p-4 text-[color:var(--dim)]">// CRITERION</div>
+            <div class="p-4 border-l border-line bg-ox text-black font-extrabold">PLASMA</div>
+            <div class="p-4 border-l border-line text-[color:var(--dim)]">DBeaver</div>
+            <div class="p-4 border-l border-line text-[color:var(--dim)]">DataGrip</div>
+            <div class="p-4 border-l border-line text-[color:var(--dim)]">TablePlus</div>
+          </div>
+          <div class="grid grid-cols-5 text-[13px] border-b border-line">
+            <div class="p-4">SCHEMA-AWARE AI</div>
+            <div class="p-4 border-l border-line ox font-bold">YES</div>
+            <div class="p-4 border-l border-line text-[color:var(--dim)]">no</div>
+            <div class="p-4 border-l border-line text-[color:var(--dim)]">partial</div>
+            <div class="p-4 border-l border-line text-[color:var(--dim)]">no</div>
+          </div>
+          <div class="grid grid-cols-5 text-[13px] border-b border-line">
+            <div class="p-4">PG + REDIS + OPENSEARCH</div>
+            <div class="p-4 border-l border-line ox font-bold">YES</div>
+            <div class="p-4 border-l border-line text-[color:var(--dim)]">partial</div>
+            <div class="p-4 border-l border-line text-[color:var(--dim)]">partial</div>
+            <div class="p-4 border-l border-line text-[color:var(--dim)]">pg only</div>
+          </div>
+          <div class="grid grid-cols-5 text-[13px] border-b border-line">
+            <div class="p-4">PRICE</div>
+            <div class="p-4 border-l border-line ox font-bold">FREE · APACHE 2.0</div>
+            <div class="p-4 border-l border-line text-[color:var(--dim)]">free</div>
+            <div class="p-4 border-l border-line text-[color:var(--dim)]">$229/yr</div>
+            <div class="p-4 border-l border-line text-[color:var(--dim)]">$89</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- FOOTER -->
+    <footer>
+      <div class="mx-auto max-w-[1440px] px-6 md:px-10 py-12 grid grid-cols-12 gap-6 items-end">
+        <div class="col-span-12 md:col-span-8">
+          <div class="text-[18vw] md:text-[14vw] font-extrabold uppercase-tight leading-[0.8]">PLASMA<span class="ox">.</span></div>
+        </div>
+        <div class="col-span-12 md:col-span-4 text-[11px] uppercase-tight text-[color:var(--dim)] leading-7">
+          <div class="text-white">// COLOPHON</div>
+          JETBRAINS MONO + NEWSREADER<br/>
+          BUILT IN ELECTRON · APACHE 2.0<br/>
+          © 2026 PANKAJ YADAV<br/>
+          <a class="ox">→ /github</a>&nbsp;<a class="ox">→ /releases</a>&nbsp;<a class="ox">→ /docs</a>
+        </div>
+      </div>
+    </footer>
+
+    <script>
+      const lenis = new Lenis({ lerp: 0.1, duration: 1.0, smoothWheel: true });
+      function raf(t) { lenis.raf(t); requestAnimationFrame(raf); }
+      requestAnimationFrame(raf);
+    </script>
+  </body>
+</html>

@@ -1,66 +1,78 @@
 # Plasma — marketing site
 
-Single-file static landing page for the Plasma app. Zero build step.
+Next.js 15 (App Router) marketing site for the Plasma desktop app.
+Static export → drop on any static host.
 
-## Preview locally
+## Stack
 
-Any static server works. Python one-liner:
+- Next.js 15, React 19, TypeScript
+- Tailwind 4 (CSS-first `@theme` config)
+- GSAP 3 + ScrollTrigger + `@gsap/react`
+- Lenis 1 (smooth scroll, bridged into ScrollTrigger)
+- Motion 12 (limited use)
+- Anime.js 4 (path morphs)
+- Fonts via `next/font/google`: Newsreader, Inter, JetBrains Mono
+
+## Develop
 
 ```bash
-python3 -m http.server 4000 --directory site
+cd site
+pnpm install
+pnpm dev          # localhost:3000
 ```
 
-Then open <http://localhost:4000>.
+This is a nested project — its own `node_modules`. The root pnpm install
+(for the Electron app) does not touch it.
 
-## Deploy
+## Build
 
-Drop `site/index.html` onto any static host:
+```bash
+pnpm build        # next build → out/
+```
 
-- **Vercel / Netlify / Cloudflare Pages** — drag-and-drop the `site/` folder
-- **GitHub Pages** — push the repo, set Pages source to `/site`
-- **S3 + CloudFront** — upload `index.html` as the root object
+`out/` is a fully static bundle. Drop on any static host.
+
+## Deploy (Vercel)
+
+Vercel auto-builds from `main`. Project root must be set to `site/` in
+the Vercel dashboard.
+
+Manual deploy if needed:
+
+```bash
+vercel pull --yes
+vercel build --prod
+vercel deploy --prebuilt --prod
+```
 
 ## Version sync
 
-The version shown in download URLs / filenames is pulled from the root
-`package.json`. Don't hand-edit versions in `index.html` — bump via:
+The version literal lives in `lib/version.ts`. The repo-root release
+flow patches it automatically — don't hand-edit:
 
 ```bash
-pnpm run release:patch   # 0.0.2 → 0.0.3
-pnpm run release:minor   # 0.0.2 → 0.1.0
-pnpm run release:major   # 0.0.2 → 1.0.0
+pnpm run release:patch   # at repo root: 0.0.10 → 0.0.11
+pnpm run release:minor
+pnpm run release:major
 ```
 
-This bumps `package.json`, patches `site/index.html`, and stages both
-files. You still write the commit and tag:
-
-```bash
-git commit -m "v0.0.3"
-git tag v0.0.3
-```
-
-To re-sync the site without bumping: `pnpm run version:sync`.
-
-(`pnpm version` / `npm version` are avoided — they shell out in a way
-that fails on Windows with `spawn EINVAL` under recent Node patches.)
-
-## Before you ship
-
-1. **Replace download `href`s.** Search for `data-download` in `index.html`. Each link currently points to `#` and triggers an alert. Swap in real release URLs — e.g. GitHub Releases:
-   ```
-   https://github.com/<you>/plasma/releases/download/v0.0.2/Plasma-Setup-0.0.2-x64.exe
-   ```
-2. **Replace the `https://github.com/` placeholders** in the nav, download section, and footer with the real repo URL.
-3. **Update Open Graph `og:image`** — add one before launching. 1200×630 with the wordmark + oxblood stroke works well.
-4. **Swap Tailwind CDN for a static build** if performance matters. Right now the page ships ~40 KB HTML + the Tailwind Play runtime (~80 KB compressed). Running `npx @tailwindcss/cli -i input.css -o site/styles.css` against the page's classes removes the runtime cost.
+To re-sync without bumping: `pnpm run version:sync` at repo root.
 
 ## Brand assets
 
-The hero, nav, and footer all use inlined SVG — the same Newsreader-italic "Plasma" wordmark and oxblood signature stroke as the app itself. Source files live in `../logo/`:
+Source SVGs live in `../logo/`. The favicon and OG image are copied
+into `public/` here; replace if branding shifts.
 
-- `plasma-wordmark.svg` — full wordmark
-- `plasma-mark.svg` — monogram `P`
-- `plasma-mono-accent.svg` — single-color primary
-- `favicon.svg` — referenced directly as the site favicon
+## Architecture
 
-No external dependencies beyond the Bunny Fonts webfont and Tailwind Play CDN.
+```
+site/
+├─ app/             # layout, page, globals.css
+├─ components/      # one folder per major section
+├─ lib/             # gsap, version, themes, cn
+└─ public/          # static assets (og.svg, favicon.svg)
+```
+
+Each section is a self-contained `'use client'` component composed in
+`app/page.tsx`. Shared smooth-scroll and theme provider live at the
+layout root.

@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
+  AiChatRequest,
   type AppMeta,
   ConnectionConfig,
   type ConnectionConfig as ConnectionConfigType,
@@ -21,11 +22,20 @@ import {
   type WorkerResponse,
 } from '@shared/protocol';
 import { BrowserWindow, app, ipcMain, nativeImage } from 'electron';
+import {
+  cancelAiChat,
+  isReadOnlyRedisCommand,
+  isReadOnlySql,
+  setAiToolExecutor,
+  startAiChat,
+} from './ai';
 import { closeDb, getDb } from './db';
 import { clearHistory, listHistory, recordHistory } from './history';
 import { initLogger, logger } from './logger';
 import { buildAppMenu } from './menu';
 import { getAllSettings, setSetting } from './settings';
+import { formatSql } from './sql-format';
+import { closeAllTunnels, closeTunnel, openTunnel } from './ssh-tunnel';
 import { disposeUpdater, initUpdater } from './updater';
 import {
   deleteConnection as vaultDelete,
@@ -45,6 +55,11 @@ const workerSupervisor = new WorkerSupervisor();
 // Track the connection id associated with the currently-active worker
 // connection so history entries can be linked back to the right vault row.
 let activeConnectionId: string | null = null;
+
+// Track the active engine so the AI tool executor can dispatch the
+// right tool call (sideband SQL vs Redis command vs OS search). Set
+// by ConnectionConnect / VaultConnectById, cleared on disconnect.
+let activeEngine: 'postgres' | 'redis' | 'opensearch' | null = null;
 
 // ─── App lifecycle ────────────────────────────────────────────────────
 
@@ -85,6 +100,137 @@ app.whenReady().then(async () => {
 
   await workerSupervisor.start(join(__dirname, 'workers/index.js'));
 
+  // Forward worker broadcasts (currently just Redis pub/sub) to the
+  // renderer over a dedicated event channel.
+  workerSupervisor.setBroadcastHandler((evt) => {
+    if (evt.kind === 'redisPubsub') {
+      mainWindow?.webContents.send('plasma:redis:pubsub', evt.message);
+    }
+  });
+
+  // AI tools dispatch by the active engine. Postgres uses the worker
+  // sideband connection so tool queries don't queue behind a long
+  // primary query; Redis routes through the read-only command list;
+  // OpenSearch hits search / SQL plugin.
+  setAiToolExecutor(async (name, args) => {
+    if (name === 'query_database') {
+      if (activeEngine !== 'postgres') {
+        return JSON.stringify({ error: 'no postgres connection' });
+      }
+      const sql = typeof args.sql === 'string' ? args.sql : '';
+      if (!sql) return JSON.stringify({ error: 'missing sql arg' });
+      if (!isReadOnlySql(sql)) {
+        return JSON.stringify({
+          error: 'rejected: only SELECT / EXPLAIN / SHOW / WITH / VALUES / TABLE allowed',
+        });
+      }
+      try {
+        const res = await callWorker({ kind: 'sidebandQuery', sql }, 'queryResult');
+        const cols = res.result.columns.map((c) => c.name);
+        const rows = res.result.rows
+          .slice(0, 50)
+          .map((r) => Object.fromEntries(cols.map((cn, i) => [cn, r[i]])));
+        return JSON.stringify({
+          rowCount: res.result.rowCount,
+          columns: cols,
+          rows,
+          truncated: res.result.rows.length > 50,
+        });
+      } catch (err) {
+        return JSON.stringify({
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
+    if (name === 'redis_command') {
+      if (activeEngine !== 'redis') {
+        return JSON.stringify({ error: 'no redis connection' });
+      }
+      const partsRaw = args.parts;
+      const parts = Array.isArray(partsRaw) ? partsRaw.map((p) => String(p)) : [];
+      if (parts.length === 0) return JSON.stringify({ error: 'parts required' });
+      if (!isReadOnlyRedisCommand(parts)) {
+        return JSON.stringify({
+          error: `rejected: ${parts[0]}${parts[1] ? ' ' + parts[1] : ''} is not in the read-only allow-list`,
+        });
+      }
+      try {
+        const res = await callWorker({ kind: 'redisCommand', parts }, 'redisCommand');
+        return JSON.stringify({
+          command: res.result.command,
+          args: res.result.args,
+          reply: res.result.reply,
+          durationMs: res.result.durationMs,
+        });
+      } catch (err) {
+        return JSON.stringify({
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
+    if (name === 'os_search') {
+      if (activeEngine !== 'opensearch') {
+        return JSON.stringify({ error: 'no opensearch connection' });
+      }
+      const index = typeof args.index === 'string' ? args.index : '';
+      const body = typeof args.body === 'string' ? args.body : '';
+      if (!index || !body) return JSON.stringify({ error: 'index + body required' });
+      try {
+        const res = await callWorker(
+          { kind: 'osSearch', index, body, size: 50 },
+          'osSearch',
+        );
+        return JSON.stringify({
+          total: res.result.total,
+          took: res.result.took,
+          hits: res.result.hits.slice(0, 50),
+          fields: res.result.fields,
+        });
+      } catch (err) {
+        return JSON.stringify({
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
+    if (name === 'os_sql') {
+      if (activeEngine !== 'opensearch') {
+        return JSON.stringify({ error: 'no opensearch connection' });
+      }
+      const query = typeof args.query === 'string' ? args.query : '';
+      if (!query) return JSON.stringify({ error: 'query required' });
+      // Only allow SELECT — the SQL plugin can technically issue
+      // CREATE / DELETE on some distributions, but the AI's job is
+      // observation only.
+      if (!/^\s*select\b/i.test(query)) {
+        return JSON.stringify({ error: 'only SELECT allowed' });
+      }
+      try {
+        const res = await callWorker({ kind: 'osSql', query }, 'osSql');
+        const rowsObj = res.result.rows.slice(0, 50).map((row) =>
+          Object.fromEntries(
+            res.result.columns.map((c, i) => [c.name, row[i]]),
+          ),
+        );
+        return JSON.stringify({
+          rowCount: res.result.rows.length,
+          columns: res.result.columns,
+          rows: rowsObj,
+          durationMs: res.result.durationMs,
+          truncated: res.result.rows.length > 50,
+        });
+      } catch (err) {
+        return JSON.stringify({
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
+    return JSON.stringify({ error: `unknown tool ${name}` });
+  });
+
   mainWindow = createMainWindow();
   buildAppMenu();
   registerIpcHandlers();
@@ -100,6 +246,7 @@ app.whenReady().then(async () => {
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     disposeUpdater();
+    closeAllTunnels();
     workerSupervisor.stop();
     closeDb();
     app.quit();
@@ -107,14 +254,23 @@ app.on('window-all-closed', () => {
 });
 
 app.on('before-quit', () => {
+  closeAllTunnels();
   workerSupervisor.stop();
   closeDb();
 });
 
 // ─── Worker helper ────────────────────────────────────────────────────
 
+/**
+ * Distributive Omit — preserves discriminated-union narrowing when we
+ * strip `id` from a WorkerRequest variant. Plain `Omit<U, 'id'>` flattens
+ * the union once it crosses ~10 variants and TS stops checking variant
+ * membership of the call-site object literal.
+ */
+type DistributiveOmit<T, K extends keyof T> = T extends T ? Omit<T, K> : never;
+
 async function callWorker<K extends WorkerResponse['kind']>(
-  req: Omit<WorkerRequest, 'id'>,
+  req: DistributiveOmit<WorkerRequest, 'id'>,
   expected: K,
 ): Promise<Extract<WorkerResponse, { kind: K }>> {
   const id = randomUUID();
@@ -148,20 +304,42 @@ function registerIpcHandlers() {
     IpcChannel.ConnectionConnect,
     async (_e, rawConfig: unknown): Promise<ConnectionInfo> => {
       const config = ConnectionConfig.parse(rawConfig);
-      const res = await callWorker({ kind: 'connect', config }, 'connected');
-      try {
-        vaultSave(config);
-        activeConnectionId = config.id;
-      } catch (err) {
-        logger.error('[plasma] vault save failed (non-fatal):', err);
+      const settings = SettingsShape.parse(getAllSettings());
+      const ssh = settings.connectionSsh?.[config.id];
+      const effective = { ...config };
+      if (ssh) {
+        const local = await openTunnel({
+          id: config.id,
+          ssh,
+          pgHost: config.host,
+          pgPort: config.port,
+        });
+        effective.host = local.host;
+        effective.port = local.port;
       }
-      return { serverVersion: res.serverVersion };
+      try {
+        const res = await callWorker({ kind: 'connect', config: effective }, 'connected');
+        try {
+          vaultSave(config);
+          activeConnectionId = config.id;
+          activeEngine = res.engine;
+        } catch (err) {
+          logger.error('[plasma] vault save failed (non-fatal):', err);
+        }
+        return { serverVersion: res.serverVersion, engine: res.engine };
+      } catch (err) {
+        if (ssh) closeTunnel(config.id);
+        throw err;
+      }
     },
   );
 
   ipcMain.handle(IpcChannel.ConnectionDisconnect, async (): Promise<void> => {
+    const id = activeConnectionId;
     activeConnectionId = null;
+    activeEngine = null;
     await callWorker({ kind: 'disconnect' }, 'disconnected');
+    if (id) closeTunnel(id);
   });
 
   ipcMain.handle(
@@ -170,7 +348,7 @@ function registerIpcHandlers() {
       try {
         const config = ConnectionConfig.parse(rawConfig);
         const res = await callWorker({ kind: 'connect', config }, 'connected');
-        return { ok: true, serverVersion: res.serverVersion };
+        return { ok: true, serverVersion: res.serverVersion, engine: res.engine };
       } catch (err) {
         return {
           ok: false,
@@ -180,6 +358,8 @@ function registerIpcHandlers() {
     },
   );
 
+  // Postgres-only schema introspect. For redis/opensearch the renderer
+  // calls the engine-specific overview channels directly.
   ipcMain.handle(IpcChannel.ConnectionIntrospect, async (): Promise<SchemaInfo> => {
     const res = await callWorker({ kind: 'introspect' }, 'schemaInfo');
     return res.info;
@@ -200,13 +380,27 @@ function registerIpcHandlers() {
       if (typeof id !== 'string') throw new Error('id must be a string');
       const config = vaultGetFull(id);
       if (!config) throw new Error(`no saved connection with id ${id}`);
-      const res = await callWorker({ kind: 'connect', config }, 'connected');
-      activeConnectionId = config.id;
-      const { password: _pwd, ...safeConfig } = config;
-      return {
-        info: { serverVersion: res.serverVersion },
-        config: safeConfig,
-      };
+      const settings = SettingsShape.parse(getAllSettings());
+      const ssh = settings.connectionSsh?.[id];
+      const effective = { ...config };
+      if (ssh) {
+        const local = await openTunnel({ id, ssh, pgHost: config.host, pgPort: config.port });
+        effective.host = local.host;
+        effective.port = local.port;
+      }
+      try {
+        const res = await callWorker({ kind: 'connect', config: effective }, 'connected');
+        activeConnectionId = config.id;
+        activeEngine = res.engine;
+        const { password: _pwd, ...safeConfig } = config;
+        return {
+          info: { serverVersion: res.serverVersion, engine: res.engine },
+          config: safeConfig,
+        };
+      } catch (err) {
+        if (ssh) closeTunnel(id);
+        throw err;
+      }
     },
   );
 
@@ -280,6 +474,58 @@ function registerIpcHandlers() {
     await callWorker({ kind: 'cancel' }, 'cancelled');
   });
 
+  ipcMain.handle(IpcChannel.QuerySideband, async (_e, payload: unknown): Promise<QueryResult> => {
+    let sql: string;
+    let params: unknown[] | undefined;
+    if (typeof payload === 'string') {
+      sql = payload;
+    } else if (payload && typeof payload === 'object' && 'sql' in payload) {
+      const p = payload as { sql: unknown; params?: unknown };
+      if (typeof p.sql !== 'string') throw new Error('sql must be a string');
+      sql = p.sql;
+      params = Array.isArray(p.params) ? p.params : undefined;
+    } else {
+      throw new Error('invalid sideband payload');
+    }
+    const res = await callWorker({ kind: 'sidebandQuery', sql, params }, 'queryResult');
+    return res.result;
+  });
+
+  // ── AI (OpenRouter) ──
+
+  ipcMain.handle(IpcChannel.AiChat, async (_e, raw: unknown): Promise<{ accepted: boolean }> => {
+    const parsed = AiChatRequest.parse(raw);
+    const settings = SettingsShape.parse(getAllSettings());
+    // Prefer the OpenRouter key. Fall back to the legacy claudeApiKey
+    // field so users upgrading from v0.0.10 keep working without
+    // touching settings — `claude-3-5-*` model ids on OpenRouter route
+    // to Anthropic, so the key (sk-or-...) is the only thing that
+    // really has to change.
+    const apiKey = settings.openrouterApiKey || settings.claudeApiKey;
+    const result = await startAiChat(mainWindow, parsed, apiKey, settings.openrouterModel);
+    if (!result.accepted && result.reason) {
+      // Surface the failure as a stream event too, so the UI shows it
+      // even if the renderer awaits the promise without checking the
+      // returned `accepted` flag.
+      mainWindow?.webContents.send('plasma:ai:event', {
+        kind: 'error',
+        requestId: parsed.requestId,
+        message: result.reason,
+      });
+    }
+    return { accepted: result.accepted };
+  });
+
+  ipcMain.handle(IpcChannel.AiCancel, async (_e, requestId: unknown): Promise<void> => {
+    if (typeof requestId !== 'string') return;
+    cancelAiChat(requestId);
+  });
+
+  ipcMain.handle(IpcChannel.FormatSql, (_e, sql: unknown): string => {
+    if (typeof sql !== 'string') return '';
+    return formatSql(sql);
+  });
+
   // ── Query history ──
 
   ipcMain.handle(IpcChannel.HistoryList, async (_e, opts: unknown): Promise<HistoryEntry[]> => {
@@ -327,6 +573,177 @@ function registerIpcHandlers() {
   ipcMain.handle(IpcChannel.TxnRollback, async (): Promise<TxnState> => {
     const res = await callWorker({ kind: 'rollbackTxn' }, 'txnState');
     return res.state;
+  });
+
+  // ── Redis ──
+
+  ipcMain.handle(IpcChannel.RedisOverview, async () => {
+    const res = await callWorker({ kind: 'redisOverview' }, 'redisOverview');
+    return res.info;
+  });
+
+  ipcMain.handle(IpcChannel.RedisScan, async (_e, raw: unknown) => {
+    const opts = (raw ?? {}) as {
+      cursor?: string;
+      match?: string;
+      count?: number;
+      db?: number;
+    };
+    const res = await callWorker(
+      {
+        kind: 'redisScan',
+        cursor: opts.cursor ?? '0',
+        match: typeof opts.match === 'string' && opts.match ? opts.match : undefined,
+        count: typeof opts.count === 'number' ? opts.count : 500,
+        db: typeof opts.db === 'number' ? opts.db : undefined,
+      },
+      'redisScan',
+    );
+    return res.result;
+  });
+
+  ipcMain.handle(IpcChannel.RedisGetKey, async (_e, key: unknown) => {
+    if (typeof key !== 'string') throw new Error('key must be a string');
+    const res = await callWorker({ kind: 'redisGetKey', key }, 'redisKey');
+    return res.result;
+  });
+
+  ipcMain.handle(IpcChannel.RedisDeleteKey, async (_e, key: unknown) => {
+    if (typeof key !== 'string') throw new Error('key must be a string');
+    await callWorker({ kind: 'redisDeleteKey', key }, 'redisAck');
+  });
+
+  ipcMain.handle(IpcChannel.RedisSetTtl, async (_e, raw: unknown) => {
+    const p = (raw ?? {}) as { key?: unknown; seconds?: unknown };
+    if (typeof p.key !== 'string') throw new Error('key must be a string');
+    if (typeof p.seconds !== 'number') throw new Error('seconds must be a number');
+    await callWorker(
+      { kind: 'redisSetTtl', key: p.key, seconds: Math.floor(p.seconds) },
+      'redisAck',
+    );
+  });
+
+  ipcMain.handle(IpcChannel.RedisCommand, async (_e, raw: unknown) => {
+    if (!Array.isArray(raw)) throw new Error('parts must be an array');
+    const parts = raw.map((p) => String(p));
+    if (parts.length === 0) throw new Error('empty command');
+    const res = await callWorker({ kind: 'redisCommand', parts }, 'redisCommand');
+    return res.result;
+  });
+
+  ipcMain.handle(IpcChannel.RedisAnalyze, async (_e, raw: unknown) => {
+    const opts = (raw ?? {}) as { sampleCap?: number; match?: string };
+    const res = await callWorker(
+      {
+        kind: 'redisAnalyze',
+        sampleCap: typeof opts.sampleCap === 'number' ? opts.sampleCap : 5000,
+        match: typeof opts.match === 'string' && opts.match ? opts.match : undefined,
+      },
+      'redisAnalyze',
+    );
+    return res.result;
+  });
+
+  ipcMain.handle(IpcChannel.RedisSlowlog, async (_e, raw: unknown) => {
+    const limit = typeof raw === 'number' ? raw : 64;
+    const res = await callWorker({ kind: 'redisSlowlog', limit }, 'redisSlowlog');
+    return res.entries;
+  });
+
+  ipcMain.handle(IpcChannel.RedisBulkDelete, async (_e, raw: unknown) => {
+    if (!Array.isArray(raw)) throw new Error('keys must be an array');
+    const keys = raw.map((k) => String(k));
+    if (keys.length === 0) return;
+    await callWorker({ kind: 'redisBulkDelete', keys }, 'redisAck');
+  });
+
+  ipcMain.handle(IpcChannel.RedisWrite, async (_e, raw: unknown) => {
+    // The worker re-parses via Zod, so we forward as-is.
+    await callWorker(
+      { kind: 'redisWrite', op: raw as never },
+      'redisAck',
+    );
+  });
+
+  ipcMain.handle(IpcChannel.RedisSubscribe, async (_e, raw: unknown) => {
+    const p = (raw ?? {}) as { channel?: unknown; pattern?: unknown };
+    if (typeof p.channel !== 'string' || !p.channel) throw new Error('channel required');
+    await callWorker(
+      { kind: 'redisSubscribe', channel: p.channel, pattern: p.pattern === true },
+      'redisAck',
+    );
+  });
+
+  ipcMain.handle(IpcChannel.RedisUnsubscribe, async (_e, raw: unknown) => {
+    const p = (raw ?? {}) as { channel?: unknown; pattern?: unknown };
+    if (typeof p.channel !== 'string' || !p.channel) throw new Error('channel required');
+    await callWorker(
+      { kind: 'redisUnsubscribe', channel: p.channel, pattern: p.pattern === true },
+      'redisAck',
+    );
+  });
+
+  // ── OpenSearch ──
+
+  ipcMain.handle(IpcChannel.OsOverview, async () => {
+    const res = await callWorker({ kind: 'osOverview' }, 'osOverview');
+    return res.info;
+  });
+
+  ipcMain.handle(IpcChannel.OsMapping, async (_e, index: unknown) => {
+    if (typeof index !== 'string') throw new Error('index must be a string');
+    const res = await callWorker({ kind: 'osMapping', index }, 'osMapping');
+    return res.root;
+  });
+
+  ipcMain.handle(IpcChannel.OsSearch, async (_e, raw: unknown) => {
+    const p = (raw ?? {}) as { index?: unknown; body?: unknown; size?: unknown };
+    if (typeof p.index !== 'string') throw new Error('index must be a string');
+    if (typeof p.body !== 'string') throw new Error('body must be a string');
+    const size = typeof p.size === 'number' ? p.size : 100;
+    const res = await callWorker(
+      { kind: 'osSearch', index: p.index, body: p.body, size },
+      'osSearch',
+    );
+    return res.result;
+  });
+
+  ipcMain.handle(IpcChannel.OsSql, async (_e, raw: unknown) => {
+    if (typeof raw !== 'string' || !raw) throw new Error('query required');
+    const res = await callWorker({ kind: 'osSql', query: raw }, 'osSql');
+    return res.result;
+  });
+
+  ipcMain.handle(IpcChannel.OsAliases, async () => {
+    const res = await callWorker({ kind: 'osAliases' }, 'osAliases');
+    return res.aliases;
+  });
+
+  ipcMain.handle(IpcChannel.OsIlm, async () => {
+    const res = await callWorker({ kind: 'osIlm' }, 'osIlm');
+    return res.policies;
+  });
+
+  ipcMain.handle(IpcChannel.OsFieldStats, async (_e, raw: unknown) => {
+    const p = (raw ?? {}) as {
+      index?: unknown;
+      fields?: unknown;
+      queryString?: unknown;
+    };
+    if (typeof p.index !== 'string') throw new Error('index required');
+    if (!Array.isArray(p.fields) || p.fields.length === 0) throw new Error('fields required');
+    const fields = p.fields.map((f) => String(f));
+    const res = await callWorker(
+      {
+        kind: 'osFieldStats',
+        index: p.index,
+        fields,
+        queryString:
+          typeof p.queryString === 'string' && p.queryString ? p.queryString : undefined,
+      },
+      'osFieldStats',
+    );
+    return res.stats;
   });
 
   // ── Dev sanity checks ──

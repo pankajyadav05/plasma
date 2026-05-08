@@ -13,7 +13,7 @@ import {
 import { cn } from '@/lib/cn';
 import { ipc } from '@/lib/ipc';
 import { defaultOperatorFor, operatorsFor } from '@/lib/pg-types';
-import { buildDistinctValuesSql, type Filter, type FilterOp } from '@/lib/table-query';
+import { type Filter, type FilterOp, buildDistinctValuesSql } from '@/lib/table-query';
 import { useActiveTab, useSession } from '@/stores/session';
 import { Command } from 'cmdk';
 import { Check, ChevronsUpDown, Loader2, Plus, Search, Sparkles, X } from 'lucide-react';

@@ -1,13 +1,12 @@
 #!/usr/bin/env node
 /**
- * Syncs the site's download URLs and filename labels to the version in
- * package.json. Runs automatically as the `version` npm lifecycle so
- * `pnpm version patch` bumps package.json AND patches site/index.html
- * in a single command.
+ * Syncs the site's version literal to the version in package.json. Runs
+ * automatically as part of the release flow so `pnpm run release:patch`
+ * bumps package.json AND patches site/lib/version.ts in a single command.
  *
  * Single source of truth: package.json.version
  *   → electron-builder picks it up via ${version} in electron-builder.yml
- *   → this script pushes it into site/index.html
+ *   → this script pushes it into site/lib/version.ts (Next.js site reads it)
  */
 
 import { readFileSync, writeFileSync } from 'node:fs';
@@ -20,12 +19,15 @@ const root = resolve(__dirname, '..');
 const pkg = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8'));
 const version = pkg.version;
 
-const sitePath = resolve(root, 'site/index.html');
+const sitePath = resolve(root, 'site/lib/version.ts');
 const before = readFileSync(sitePath, 'utf8');
 
-// Patterns: Plasma-Setup-X.Y.Z-x64.exe and Plasma-Portable-X.Y.Z-x64.exe.
-// Covers both the <a href="...">, data-download attr, and visible label.
+// Patch:
+//   export const VERSION = '0.0.10';
+//   …Plasma-Setup-0.0.10-x64.exe…
+//   …Plasma-Portable-0.0.10-x64.exe…
 const after = before
+  .replace(/(export const VERSION\s*=\s*')([^']+)(')/, `$1${version}$3`)
   .replace(/Plasma-Setup-\d+\.\d+\.\d+-x64\.exe/g, `Plasma-Setup-${version}-x64.exe`)
   .replace(/Plasma-Portable-\d+\.\d+\.\d+-x64\.exe/g, `Plasma-Portable-${version}-x64.exe`);
 
@@ -33,5 +35,5 @@ if (before === after) {
   console.log(`[sync-version] site already at ${version}, nothing to patch`);
 } else {
   writeFileSync(sitePath, after);
-  console.log(`[sync-version] site/index.html → ${version}`);
+  console.log(`[sync-version] site/lib/version.ts → ${version}`);
 }

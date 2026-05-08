@@ -2,7 +2,37 @@ import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/cn';
 import { kbd } from '@/lib/platform';
 import { useSession } from '@/stores/session';
-import { FileCode, PanelLeft, PanelLeftClose, Plus, Table2, X } from 'lucide-react';
+import type { TabKind } from '@/stores/session';
+import {
+  Activity,
+  Boxes,
+  Clock,
+  FileCode,
+  KeyRound,
+  PanelLeft,
+  PanelLeftClose,
+  Plus,
+  Radio,
+  Search,
+  SquareTerminal,
+  Table2,
+  Terminal,
+  X,
+} from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
+
+const TAB_ICON: Record<TabKind, LucideIcon> = {
+  sql: FileCode,
+  table: Table2,
+  'redis-key': KeyRound,
+  'redis-cli': Terminal,
+  'redis-pubsub': Radio,
+  'redis-analyze': Activity,
+  'redis-slowlog': Clock,
+  'os-search': Search,
+  'os-index': Boxes,
+  'os-sql': SquareTerminal,
+};
 
 export function TabStrip() {
   const tabs = useSession((s) => s.tabs);
@@ -12,6 +42,10 @@ export function TabStrip() {
   const addTab = useSession((s) => s.addTab);
   const sidebarCollapsed = useSession((s) => s.settings.sidebarCollapsed);
   const toggleSidebar = useSession((s) => s.toggleSidebar);
+  // The `+` button creates a fresh SQL tab; that only makes sense for
+  // Postgres. For redis / opensearch the user spawns tabs from the sidebar.
+  const engine = useSession((s) => s.activeConfig?.engine ?? 'postgres');
+  const showAddTab = engine === 'postgres';
 
   return (
     <div className="flex h-10 shrink-0 items-stretch border-b border-border bg-background">
@@ -35,7 +69,7 @@ export function TabStrip() {
       >
         {tabs.map((t) => {
           const active = t.id === activeTabId;
-          const Icon = t.kind === 'table' ? Table2 : FileCode;
+          const Icon = TAB_ICON[t.kind] ?? FileCode;
           return (
             <div
               key={t.id}
@@ -83,18 +117,20 @@ export function TabStrip() {
           );
         })}
       </div>
-      <div className="flex shrink-0 items-center border-l">
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          onClick={addTab}
-          aria-label="New SQL tab"
-          title={`New SQL tab (${kbd('T')})`}
-          className="mx-1"
-        >
-          <Plus />
-        </Button>
-      </div>
+      {showAddTab && (
+        <div className="flex shrink-0 items-center border-l">
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            onClick={addTab}
+            aria-label="New SQL tab"
+            title={`New SQL tab (${kbd('T')})`}
+            className="mx-1"
+          >
+            <Plus />
+          </Button>
+        </div>
+      )}
     </div>
   );
 }

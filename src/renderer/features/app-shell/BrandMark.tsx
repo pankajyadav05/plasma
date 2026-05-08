@@ -1,5 +1,5 @@
-import markSvg from '@logo/plasma-mark.svg?raw';
 import { cn } from '@/lib/cn';
+import markSvg from '@logo/plasma-mark.svg?raw';
 
 /**
  * Plasma monogram (italic serif P + oxblood stroke). Inlined via Vite

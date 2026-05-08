@@ -1,0 +1,333 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Sample C — Generative Tech · Plasma</title>
+    <link rel="preconnect" href="https://fonts.bunny.net" />
+    <link href="https://fonts.bunny.net/css?family=newsreader:400,400i,500i,600,600i|inter:300,400,500,600|jetbrains-mono:400,500&display=swap" rel="stylesheet" />
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/gsap.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/ScrollTrigger.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/lenis@1.1.13/dist/lenis.min.js"></script>
+    <style>
+      :root { --bg:#08080c; --bg-2:#0d0d14; --fg:#ededf2; --dim:#7a7a8a; --line:rgba(255,255,255,.08); --ox:#eb5e4e; --acid:#c8ff3e; }
+      * { -webkit-font-smoothing: antialiased; }
+      html, body { background: var(--bg); color: var(--fg); }
+      body { font-family: "Inter", system-ui, sans-serif; letter-spacing: -0.012em; overflow-x: hidden; }
+      .display { font-family: "Newsreader", Georgia, serif; letter-spacing: -0.025em; }
+      .mono { font-family: "JetBrains Mono", ui-monospace, monospace; }
+      .ox { color: var(--ox); }
+      .acid { color: var(--acid); }
+      .border-line { border-color: var(--line); }
+
+      .hero-canvas { position: absolute; inset: 0; z-index: 0; }
+      .hero-content { position: relative; z-index: 2; }
+
+      .vignette::after {
+        content:""; position:absolute; inset:0; pointer-events:none; z-index: 1;
+        background: radial-gradient(ellipse at center, transparent 0%, rgba(8,8,12,.4) 60%, rgba(8,8,12,.95) 100%);
+      }
+
+      .glow-text { text-shadow: 0 0 60px rgba(235,94,78,.45); }
+
+      .gradient-mesh {
+        background:
+          radial-gradient(40% 60% at 20% 30%, rgba(235,94,78,.18) 0, transparent 50%),
+          radial-gradient(50% 70% at 80% 20%, rgba(200,255,62,.10) 0, transparent 50%),
+          radial-gradient(60% 80% at 60% 90%, rgba(140,90,255,.14) 0, transparent 50%);
+      }
+
+      .chip {
+        display:inline-flex; align-items:center; gap:8px; padding:6px 12px;
+        border:1px solid var(--line); border-radius:999px; font-size:11px;
+        background: rgba(255,255,255,.02); backdrop-filter: blur(8px);
+      }
+      .chip .dot { width:6px; height:6px; border-radius:50%; background: var(--acid); box-shadow: 0 0 10px var(--acid); animation: pulse 1.6s ease-in-out infinite; }
+      @keyframes pulse { 50% { opacity: .35; } }
+
+      .card-glass {
+        background: rgba(255,255,255,.03); border: 1px solid var(--line);
+        backdrop-filter: blur(20px) saturate(150%); border-radius: 16px;
+      }
+
+      .reveal-up { opacity: 0; transform: translateY(30px); transition: opacity 1.1s cubic-bezier(.16,1,.3,1), transform 1.1s cubic-bezier(.16,1,.3,1); }
+      .reveal-up.in { opacity: 1; transform: none; }
+
+      .magnetic { transition: transform .3s cubic-bezier(.16,1,.3,1); }
+      .grain-overlay::before {
+        content:""; position:fixed; inset:0; z-index:99; pointer-events:none; opacity:.06;
+        background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence baseFrequency='0.85' numOctaves='2'/><feColorMatrix values='0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 0.5 0'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
+        mix-blend-mode: overlay;
+      }
+
+      .scrollbar-thin::-webkit-scrollbar { display: none; }
+    </style>
+  </head>
+  <body class="grain-overlay">
+    <header class="fixed inset-x-0 top-0 z-50">
+      <div class="mx-auto flex max-w-[1280px] items-center justify-between px-6 py-5">
+        <a class="flex items-center gap-2.5 text-[15px] font-medium tracking-tight">
+          <span class="grid h-7 w-7 place-items-center rounded-md bg-gradient-to-br from-[var(--ox)] to-[#a8311f] display italic font-semibold text-white">P</span>
+          Plasma
+        </a>
+        <nav class="hidden md:flex items-center gap-1 text-[13px] text-[color:var(--dim)] card-glass px-1.5 py-1.5">
+          <a class="px-3 py-1.5 rounded-full hover:text-white hover:bg-white/5">Stack</a>
+          <a class="px-3 py-1.5 rounded-full hover:text-white hover:bg-white/5">Features</a>
+          <a class="px-3 py-1.5 rounded-full hover:text-white hover:bg-white/5">Compare</a>
+          <a class="px-3 py-1.5 rounded-full hover:text-white hover:bg-white/5">Changelog</a>
+        </nav>
+        <a class="magnetic px-4 py-2 rounded-full bg-white text-black text-[13px] font-medium hover:bg-[color:var(--acid)]">Download v0.0.10</a>
+      </div>
+    </header>
+
+    <!-- HERO with WebGL-ish canvas particle field -->
+    <section class="relative h-screen min-h-[820px] flex items-center vignette overflow-hidden">
+      <canvas id="bgCanvas" class="hero-canvas"></canvas>
+      <div class="hero-canvas gradient-mesh"></div>
+
+      <div class="hero-content mx-auto max-w-[1280px] w-full px-6">
+        <div class="reveal-up">
+          <span class="chip"><span class="dot"></span> v0.0.10 · Postgres · Redis · OpenSearch</span>
+        </div>
+
+        <h1 class="reveal-up mt-10 display text-[10vw] md:text-[8vw] leading-[0.95] max-w-[14ch] glow-text" style="transition-delay:.1s">
+          Queries <em class="ox">arrive</em><br/>
+          before <em class="italic font-[400]">thought</em>.
+        </h1>
+
+        <div class="mt-10 grid grid-cols-12 gap-6 items-start">
+          <p class="reveal-up col-span-12 md:col-span-5 text-[16px] text-[color:var(--dim)] leading-[1.6] max-w-[44ch]" style="transition-delay:.25s">
+            One client for Postgres, Redis &amp; OpenSearch. Schema-aware autocomplete. AI with engine-aware tool use. Editorial typography. State that sticks.
+          </p>
+          <div class="reveal-up col-span-12 md:col-span-4 md:col-start-8 flex flex-wrap gap-3" style="transition-delay:.4s">
+            <a class="magnetic group inline-flex items-center gap-3 px-6 py-3.5 rounded-full bg-[color:var(--acid)] text-black text-[14px] font-medium">
+              <span class="grid place-items-center h-5 w-5 rounded-full bg-black text-[color:var(--acid)] text-[11px]">↓</span>
+              Download for Windows
+            </a>
+            <a class="magnetic inline-flex items-center gap-2 px-6 py-3.5 rounded-full border border-line text-[14px] text-white/80 hover:bg-white/5">
+              View on GitHub
+            </a>
+          </div>
+        </div>
+
+        <!-- floating live stats card -->
+        <div class="reveal-up absolute right-6 bottom-10 hidden lg:block card-glass p-5 w-[300px]" style="transition-delay:.55s">
+          <div class="mono text-[11px] text-[color:var(--dim)] uppercase tracking-widest mb-3">live · prod-replica</div>
+          <div class="space-y-2 text-[13px]">
+            <div class="flex justify-between"><span class="text-[color:var(--dim)]">latency</span><span class="mono"><span class="acid">2.1</span>ms</span></div>
+            <div class="flex justify-between"><span class="text-[color:var(--dim)]">qps</span><span class="mono">1,284</span></div>
+            <div class="flex justify-between"><span class="text-[color:var(--dim)]">cache hit</span><span class="mono ox">99.4%</span></div>
+            <div class="flex justify-between"><span class="text-[color:var(--dim)]">explain</span><span class="mono">index scan</span></div>
+          </div>
+          <div class="mt-4 h-12 flex items-end gap-1">
+            <div class="flex-1 bg-[color:var(--ox)]/40 rounded-sm" style="height:30%"></div>
+            <div class="flex-1 bg-[color:var(--ox)]/50 rounded-sm" style="height:55%"></div>
+            <div class="flex-1 bg-[color:var(--ox)]/60 rounded-sm" style="height:40%"></div>
+            <div class="flex-1 bg-[color:var(--ox)]/70 rounded-sm" style="height:80%"></div>
+            <div class="flex-1 bg-[color:var(--ox)]/80 rounded-sm" style="height:65%"></div>
+            <div class="flex-1 bg-[color:var(--acid)]/90 rounded-sm" style="height:95%"></div>
+            <div class="flex-1 bg-[color:var(--acid)] rounded-sm" style="height:72%"></div>
+          </div>
+        </div>
+
+        <div class="reveal-up absolute bottom-8 left-6 mono text-[11px] text-[color:var(--dim)] uppercase tracking-[0.2em] flex items-center gap-3" style="transition-delay:.7s">
+          <span class="inline-block h-px w-10 bg-[color:var(--dim)]"></span> scroll
+        </div>
+      </div>
+    </section>
+
+    <!-- PINNED MOCKUP SCRUB -->
+    <section class="relative px-6 py-32 border-t border-line">
+      <div class="mx-auto max-w-[1280px]">
+        <div class="reveal-up max-w-[700px]">
+          <div class="mono text-[11px] uppercase tracking-[0.2em] text-[color:var(--dim)]">// 02 — The room</div>
+          <h2 class="display mt-3 text-5xl md:text-6xl leading-[1.05]">
+            A surface so calm <em class="ox">it disappears</em> when you don't need it.
+          </h2>
+        </div>
+
+        <div class="reveal-up mt-14 card-glass p-2 overflow-hidden" style="transition-delay:.1s">
+          <div class="flex items-center gap-2 px-3 py-2 border-b border-line">
+            <span class="h-2.5 w-2.5 rounded-full bg-[color:var(--ox)]"></span>
+            <span class="h-2.5 w-2.5 rounded-full bg-white/15"></span>
+            <span class="h-2.5 w-2.5 rounded-full bg-white/15"></span>
+            <span class="ml-3 mono text-[11px] text-[color:var(--dim)]">plasma · prod-replica · sql · scratch.sql</span>
+            <span class="ml-auto chip text-[10px]"><span class="dot"></span> connected</span>
+          </div>
+          <div class="grid grid-cols-12">
+            <aside class="col-span-3 p-4 border-r border-line mono text-[12px] leading-7 text-[color:var(--dim)]">
+              <div class="text-white">▾ public</div>
+              <div class="pl-4">orders</div>
+              <div class="pl-4">customers</div>
+              <div class="pl-4 ox">order_items*</div>
+              <div class="text-white mt-3">▾ analytics</div>
+              <div class="pl-4">events</div>
+              <div class="pl-4">cohorts</div>
+            </aside>
+            <main class="col-span-9 p-6">
+              <pre class="mono text-[13px] leading-7 text-white/90"><span class="ox">SELECT</span> o.id, c.name, <span class="ox">SUM</span>(oi.qty * oi.unit_price) <span class="ox">AS</span> total
+<span class="ox">FROM</span> orders o
+<span class="ox">JOIN</span> customers c <span class="ox">ON</span> c.id = o.customer_id
+<span class="ox">JOIN</span> order_items oi <span class="ox">ON</span> oi.order_id = o.id
+<span class="ox">WHERE</span> o.created_at &gt; <span class="acid">now()</span> - <span class="acid">interval '7 days'</span>
+<span class="ox">GROUP BY</span> o.id, c.name
+<span class="ox">ORDER BY</span> total <span class="ox">DESC</span> <span class="ox">LIMIT</span> 25;</pre>
+              <div class="mt-5 grid grid-cols-4 gap-px bg-white/5 border border-line text-[12px]">
+                <div class="bg-[color:var(--bg-2)] p-2 mono text-[color:var(--dim)]">id</div>
+                <div class="bg-[color:var(--bg-2)] p-2 mono text-[color:var(--dim)]">customer</div>
+                <div class="bg-[color:var(--bg-2)] p-2 mono text-[color:var(--dim)]">items</div>
+                <div class="bg-[color:var(--bg-2)] p-2 mono text-[color:var(--dim)]">total</div>
+                <div class="bg-[color:var(--bg-2)] p-2 mono">10241</div><div class="bg-[color:var(--bg-2)] p-2 mono">Acme&nbsp;Co.</div><div class="bg-[color:var(--bg-2)] p-2 mono">8</div><div class="bg-[color:var(--bg-2)] p-2 mono acid">$ 12,480.00</div>
+                <div class="bg-[color:var(--bg-2)] p-2 mono">10240</div><div class="bg-[color:var(--bg-2)] p-2 mono">Globex</div><div class="bg-[color:var(--bg-2)] p-2 mono">5</div><div class="bg-[color:var(--bg-2)] p-2 mono">$ 9,210.50</div>
+                <div class="bg-[color:var(--bg-2)] p-2 mono">10239</div><div class="bg-[color:var(--bg-2)] p-2 mono">Initech</div><div class="bg-[color:var(--bg-2)] p-2 mono">3</div><div class="bg-[color:var(--bg-2)] p-2 mono">$ 5,780.00</div>
+              </div>
+            </main>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- FEATURE BENTO -->
+    <section class="px-6 py-32 border-t border-line relative overflow-hidden">
+      <div class="absolute inset-0 gradient-mesh opacity-50 pointer-events-none"></div>
+      <div class="relative mx-auto max-w-[1280px]">
+        <div class="reveal-up mb-14">
+          <div class="mono text-[11px] uppercase tracking-[0.2em] text-[color:var(--dim)]">// 03 — Capabilities</div>
+          <h2 class="display mt-3 text-5xl md:text-6xl">Less ceremony, <em class="ox">more answers</em>.</h2>
+        </div>
+
+        <div class="grid grid-cols-12 gap-4">
+          <div class="reveal-up card-glass col-span-12 md:col-span-7 p-8 row-span-2 min-h-[320px] relative overflow-hidden">
+            <div class="mono text-[11px] uppercase tracking-widest text-[color:var(--dim)]">Schema-aware AI</div>
+            <h3 class="display text-3xl mt-3 max-w-[20ch]">It reads your schema before it writes the query.</h3>
+            <p class="mt-4 text-[14px] text-[color:var(--dim)] max-w-[44ch]">Tool use that lists tables, peeks at FKs, samples rows. Then drafts SQL grounded in what's actually there.</p>
+            <div class="absolute -bottom-6 -right-6 h-48 w-48 rounded-full bg-[color:var(--ox)]/30 blur-3xl"></div>
+          </div>
+          <div class="reveal-up card-glass col-span-6 md:col-span-5 p-8" style="transition-delay:.05s">
+            <div class="mono text-[11px] uppercase tracking-widest text-[color:var(--dim)]">EXPLAIN viewer</div>
+            <h3 class="display text-2xl mt-3">Plan tree, costs, hot nodes.</h3>
+          </div>
+          <div class="reveal-up card-glass col-span-6 md:col-span-5 p-8" style="transition-delay:.1s">
+            <div class="mono text-[11px] uppercase tracking-widest text-[color:var(--dim)]">9 themes</div>
+            <h3 class="display text-2xl mt-3">Light, dark &amp; seven editorial in-betweens.</h3>
+          </div>
+          <div class="reveal-up card-glass col-span-12 md:col-span-4 p-8" style="transition-delay:.15s">
+            <div class="mono text-[11px] uppercase tracking-widest text-[color:var(--dim)]">redis-cli</div>
+            <h3 class="display text-2xl mt-3">Real cli, side-by-side memory inspector.</h3>
+          </div>
+          <div class="reveal-up card-glass col-span-12 md:col-span-4 p-8" style="transition-delay:.2s">
+            <div class="mono text-[11px] uppercase tracking-widest text-[color:var(--dim)]">Discover search</div>
+            <h3 class="display text-2xl mt-3">Fields, filters, time histogram for OS.</h3>
+          </div>
+          <div class="reveal-up card-glass col-span-12 md:col-span-4 p-8" style="transition-delay:.25s">
+            <div class="mono text-[11px] uppercase tracking-widest text-[color:var(--dim)]">State sticks</div>
+            <h3 class="display text-2xl mt-3">Tabs &amp; pins per connection. Forever.</h3>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- CTA -->
+    <section class="px-6 py-40 relative">
+      <div class="absolute inset-x-0 top-0 h-px bg-line"></div>
+      <div class="relative mx-auto max-w-[1280px] text-center">
+        <h2 class="reveal-up display text-[12vw] md:text-[8vw] leading-[0.9] glow-text">
+          Open a <em class="ox">quiet</em> client.
+        </h2>
+        <p class="reveal-up mt-6 text-[color:var(--dim)] text-[15px]" style="transition-delay:.1s">Free. Apache 2.0. 84&nbsp;MB. Windows.</p>
+        <div class="reveal-up mt-10 flex justify-center gap-3" style="transition-delay:.2s">
+          <a class="magnetic px-7 py-4 rounded-full bg-[color:var(--acid)] text-black font-medium">↓ Download v0.0.10</a>
+          <a class="magnetic px-7 py-4 rounded-full border border-line text-white/80 hover:bg-white/5">GitHub →</a>
+        </div>
+      </div>
+    </section>
+
+    <footer class="px-6 py-12 border-t border-line">
+      <div class="mx-auto max-w-[1280px] flex flex-wrap items-center justify-between gap-6 mono text-[11px] uppercase tracking-[0.2em] text-[color:var(--dim)]">
+        <div>Plasma · made in a quiet room · 2026</div>
+        <div class="flex gap-6"><a>github</a><a>changelog</a><a>license</a></div>
+      </div>
+    </footer>
+
+    <script>
+      // Particle constellation hero
+      const canvas = document.getElementById('bgCanvas');
+      const ctx = canvas.getContext('2d');
+      let W, H, pts = [], mouse = { x: 0, y: 0 };
+      const COUNT = 80;
+      function resize() {
+        const dpr = window.devicePixelRatio || 1;
+        W = canvas.width = canvas.offsetWidth * dpr;
+        H = canvas.height = canvas.offsetHeight * dpr;
+        canvas.style.width = canvas.offsetWidth + 'px';
+        ctx.setTransform(dpr,0,0,dpr,0,0);
+      }
+      function init() {
+        pts = [];
+        for (let i=0;i<COUNT;i++) pts.push({
+          x: Math.random()*canvas.offsetWidth,
+          y: Math.random()*canvas.offsetHeight,
+          vx: (Math.random()-.5)*0.25,
+          vy: (Math.random()-.5)*0.25,
+          r: Math.random()*1.6 + 0.4,
+        });
+      }
+      function step() {
+        const w = canvas.offsetWidth, h = canvas.offsetHeight;
+        ctx.clearRect(0,0,w,h);
+        // links
+        for (let i=0;i<pts.length;i++) {
+          for (let j=i+1;j<pts.length;j++) {
+            const a=pts[i], b=pts[j];
+            const dx=a.x-b.x, dy=a.y-b.y, d=Math.hypot(dx,dy);
+            if (d<140) {
+              ctx.strokeStyle = `rgba(235,94,78,${(1-d/140)*0.18})`;
+              ctx.lineWidth = 1;
+              ctx.beginPath(); ctx.moveTo(a.x,a.y); ctx.lineTo(b.x,b.y); ctx.stroke();
+            }
+          }
+        }
+        // mouse links
+        for (const p of pts) {
+          const dx=p.x-mouse.x, dy=p.y-mouse.y, d=Math.hypot(dx,dy);
+          if (d<200) {
+            ctx.strokeStyle = `rgba(200,255,62,${(1-d/200)*0.4})`;
+            ctx.lineWidth = 0.8;
+            ctx.beginPath(); ctx.moveTo(p.x,p.y); ctx.lineTo(mouse.x,mouse.y); ctx.stroke();
+          }
+        }
+        // points
+        for (const p of pts) {
+          p.x += p.vx; p.y += p.vy;
+          if (p.x<0||p.x>w) p.vx*=-1;
+          if (p.y<0||p.y>h) p.vy*=-1;
+          ctx.fillStyle = 'rgba(255,255,255,.55)';
+          ctx.beginPath(); ctx.arc(p.x,p.y,p.r,0,Math.PI*2); ctx.fill();
+        }
+        requestAnimationFrame(step);
+      }
+      window.addEventListener('resize', () => { resize(); init(); });
+      window.addEventListener('mousemove', (e) => { const r=canvas.getBoundingClientRect(); mouse.x=e.clientX-r.left; mouse.y=e.clientY-r.top; });
+      resize(); init(); step();
+
+      // Lenis
+      const lenis = new Lenis({ lerp: 0.1, duration: 1.2, smoothWheel: true });
+      function raf(t){ lenis.raf(t); requestAnimationFrame(raf); }
+      requestAnimationFrame(raf);
+
+      // Reveal
+      const io = new IntersectionObserver(es => es.forEach(e => e.isIntersecting && e.target.classList.add('in')), { threshold: 0.12 });
+      document.querySelectorAll('.reveal-up').forEach(el => io.observe(el));
+
+      // Magnetic
+      document.querySelectorAll('.magnetic').forEach(el => {
+        el.addEventListener('mousemove', (e) => {
+          const r = el.getBoundingClientRect();
+          el.style.transform = `translate(${(e.clientX-r.left-r.width/2)*0.18}px,${(e.clientY-r.top-r.height/2)*0.25}px)`;
+        });
+        el.addEventListener('mouseleave', () => { el.style.transform = ''; });
+      });
+    </script>
+  </body>
+</html>

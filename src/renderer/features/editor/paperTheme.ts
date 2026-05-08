@@ -69,9 +69,24 @@ function buildTheme(mode: 'light' | 'dark'): MonacoType.editor.IStandaloneThemeD
   // blue, types amber, comments grey) for readability across palettes.
   // Keyword picks up --primary so the theme flavor still lands.
   const keywordHex = hex6(primary);
-  const syntax = mode === 'dark'
-    ? { string: 'A3D977', number: '7FB8FF', type: 'E8B872', comment: '888888', identifier: hex6(fg), delimiter: 'C0C0C0' }
-    : { string: '3F6D1F', number: '1C4480', type: 'B47E11', comment: '888888', identifier: hex6(fg), delimiter: '555555' };
+  const syntax =
+    mode === 'dark'
+      ? {
+          string: 'A3D977',
+          number: '7FB8FF',
+          type: 'E8B872',
+          comment: '888888',
+          identifier: hex6(fg),
+          delimiter: 'C0C0C0',
+        }
+      : {
+          string: '3F6D1F',
+          number: '1C4480',
+          type: 'B47E11',
+          comment: '888888',
+          identifier: hex6(fg),
+          delimiter: '555555',
+        };
 
   return {
     base: mode === 'dark' ? 'vs-dark' : 'vs',
@@ -136,10 +151,7 @@ function buildTheme(mode: 'light' | 'dark'): MonacoType.editor.IStandaloneThemeD
  * Registers and activates the live theme. Call once at mount, and again
  * whenever `plasma:theme-changed` fires.
  */
-export function applyMonacoTheme(
-  monaco: typeof MonacoType,
-  mode: 'light' | 'dark',
-): void {
+export function applyMonacoTheme(monaco: typeof MonacoType, mode: 'light' | 'dark'): void {
   monaco.editor.defineTheme(PLASMA_THEME_ID, buildTheme(mode));
   monaco.editor.setTheme(PLASMA_THEME_ID);
 }

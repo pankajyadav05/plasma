@@ -1,7 +1,7 @@
-import { BrowserWindow, shell } from 'electron';
 import { existsSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { BrowserWindow, shell } from 'electron';
 import { getSetting, setSetting } from './settings';
 
 const __filename = fileURLToPath(import.meta.url);

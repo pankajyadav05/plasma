@@ -54,9 +54,17 @@ export function getLastUpdateStatus(): UpdateStatus {
 
 export function initUpdater(window: BrowserWindow): void {
   // Dev builds don't have a real signed installer — `electron-updater`
-  // throws on missing dev-app-update.yml otherwise. Skip entirely.
+  // throws on missing dev-app-update.yml otherwise. Skip the live polling
+  // path but still register stub IPC handlers so the renderer's
+  // `useUpdate` hook (which fires immediately on mount) doesn't blow up
+  // with "No handler registered for plasma:update:status".
   if (!app.isPackaged) {
     logger.info('[updater] skipped — dev build');
+    ipcMain.handle('plasma:update:check', async () => lastStatus);
+    ipcMain.handle('plasma:update:install', () => {
+      // no-op in dev
+    });
+    ipcMain.handle('plasma:update:status', () => lastStatus);
     return;
   }
 

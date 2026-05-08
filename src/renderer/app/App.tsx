@@ -1,7 +1,7 @@
-import { useEffect } from 'react';
-import { useSession } from '@/stores/session';
-import { AppShell } from '@/features/app-shell/AppShell';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
+import { AppShell } from '@/features/app-shell/AppShell';
+import { useSession } from '@/stores/session';
+import { useEffect } from 'react';
 
 export function App() {
   useEffect(() => {
@@ -36,6 +36,14 @@ export function App() {
       }),
       window.plasmaEvents.on('plasma:menu:exportCsv', () => exportEvent('csv')),
       window.plasmaEvents.on('plasma:menu:exportJson', () => exportEvent('json')),
+      // AI streaming deltas. Cast on receipt — preload sends raw IPC
+      // payloads typed as unknown[] through the generic on() facade.
+      window.plasmaEvents.on('plasma:ai:event', (...args: unknown[]) => {
+        const evt = args[0] as Parameters<
+          ReturnType<typeof useSession.getState>['aiApplyEvent']
+        >[0];
+        session().aiApplyEvent(evt);
+      }),
     ];
     return () => unsub.forEach((fn) => fn());
   }, []);

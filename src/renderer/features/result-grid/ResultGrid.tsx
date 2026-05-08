@@ -30,6 +30,20 @@ import { TableDefinitionView } from './TableDefinitionView';
 const EMPTY_STICKY_SET: ReadonlySet<string> = new Set();
 
 /**
+ * Hard cap on rows we hand to React for the table body. The grid uses a
+ * pure DOM `<table>` with sticky headers + sticky columns; rendering
+ * 100k+ rows blows the layout engine. The PaginationBar already keeps
+ * normal page sizes (50/100/250/500/1000) safe — this cap is the floor
+ * for users who set pageSize=10000 or stream-fed tabs that bypass paging.
+ *
+ * Rows beyond this cap are simply not rendered; a footer banner surfaces
+ * the truncation. Full viewport-aware virtualization (windowed render
+ * with absolute positioning) is the next step — TODO once the existing
+ * keyboard nav code can map cell coords to a visible window.
+ */
+const MAX_DOM_ROWS = 1500;
+
+/**
  * Paginated + sortable result grid with keyboard navigation and cell copy.
  *
  *  - Click a header to toggle sort (asc → desc → none)
@@ -732,7 +746,7 @@ export function ResultGrid() {
           </tr>
         </thead>
         <tbody>
-          {displayRows.map((entry, visibleRow) => {
+          {displayRows.slice(0, MAX_DOM_ROWS).map((entry, visibleRow) => {
             const rowSelected = tab.selectedCell?.row === visibleRow;
             const rowChecked = tab.selectedRows.has(entry.originalIndex);
             return (
@@ -888,6 +902,18 @@ export function ResultGrid() {
               </tr>
             );
           })}
+          {displayRows.length > MAX_DOM_ROWS && (
+            <tr>
+              <td
+                colSpan={visibleColumns.length + (writable ? 2 : 1)}
+                className="border-t border-amber-500/40 bg-amber-500/10 px-3 py-2 font-display text-xs italic text-foreground"
+              >
+                Rendering first {MAX_DOM_ROWS.toLocaleString()} of{' '}
+                {displayRows.length.toLocaleString()} rows. Use the page controls below — or LIMIT
+                in your query — to see the rest.
+              </td>
+            </tr>
+          )}
         </tbody>
       </table>
       <CellDetailDialog detail={cellDetail} onOpenChange={(o) => !o && setCellDetail(null)} />

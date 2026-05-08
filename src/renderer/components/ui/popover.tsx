@@ -1,6 +1,6 @@
-import * as React from 'react';
-import * as PopoverPrimitive from '@radix-ui/react-popover';
 import { cn } from '@/lib/cn';
+import * as PopoverPrimitive from '@radix-ui/react-popover';
+import * as React from 'react';
 
 export const Popover = PopoverPrimitive.Root;
 export const PopoverTrigger = PopoverPrimitive.Trigger;

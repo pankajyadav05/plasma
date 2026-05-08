@@ -5,6 +5,18 @@ import { useActiveTab, useSession } from '@/stores/session';
 import { AlertCircle, Loader2 } from 'lucide-react';
 import { UpdateBadge } from './UpdateBadge';
 
+/**
+ * Environment tag → theme-token class mapping. Mirrors the picker in
+ * ConnectionDialog so the badge in the status bar matches the chip
+ * the user picked when configuring the connection.
+ */
+const TAG_PILL_CLASS: Record<string, string> = {
+  local: 'bg-foreground text-background',
+  dev: 'bg-secondary text-secondary-foreground',
+  staging: 'bg-primary text-primary-foreground',
+  prod: 'bg-destructive text-destructive-foreground',
+};
+
 export function StatusBar() {
   const tab = useActiveTab();
   const activeConfig = useSession((s) => s.activeConfig);
@@ -13,6 +25,9 @@ export function StatusBar() {
   const txnState = useSession((s) => s.txnState);
   const commitTxn = useSession((s) => s.commitTxn);
   const rollbackTxn = useSession((s) => s.rollbackTxn);
+  const connTag = useSession((s) =>
+    activeConfig?.id ? s.settings.connectionTags?.[activeConfig.id] : undefined,
+  );
 
   const stateLabel =
     connectionState === 'connected'
@@ -42,6 +57,15 @@ export function StatusBar() {
         <>
           <Sep />
           <Seg>{activeConfig.name}</Seg>
+          {connTag && (
+            <Seg>
+              <span
+                className={`rounded-sm px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider ${TAG_PILL_CLASS[connTag] ?? 'bg-muted text-muted-foreground'}`}
+              >
+                {connTag}
+              </span>
+            </Seg>
+          )}
           <Sep />
           <Seg>{activeConfig.database}</Seg>
         </>

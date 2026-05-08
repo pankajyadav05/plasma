@@ -1,14 +1,12 @@
-import { lazy, Suspense, useCallback, useEffect, useRef } from 'react';
-import type { OnMount, OnChange } from '@monaco-editor/react';
+import type { OnChange, OnMount } from '@monaco-editor/react';
 import type * as MonacoType from 'monaco-editor';
+import { Suspense, lazy, useCallback, useEffect, useRef } from 'react';
 import { PLASMA_THEME_ID, applyMonacoTheme } from './paperTheme';
 import { registerSqlCompletions } from './sqlCompletions';
 
 // Lazy-load Monaco to keep the initial renderer bundle small. The
 // ~3MB editor only loads the first time the drawer is expanded.
-const Editor = lazy(() =>
-  import('@monaco-editor/react').then((m) => ({ default: m.default })),
-);
+const Editor = lazy(() => import('@monaco-editor/react').then((m) => ({ default: m.default })));
 
 interface Props {
   value: string;
@@ -18,6 +16,8 @@ interface Props {
   theme: 'light' | 'dark';
   fontSize: number;
   readOnly?: boolean;
+  onFormat?: () => void;
+  onAskAi?: (selection: string) => void;
 }
 
 /**
@@ -25,8 +25,30 @@ interface Props {
  * wires ⌘⏎ and ⌘J shortcuts, and applies the Paper Editor type
  * scale (JetBrains Mono at configurable size).
  */
-export function MonacoEditor({ value, onChange, onRun, onToggle, theme, fontSize, readOnly = false }: Props) {
+export function MonacoEditor({
+  value,
+  onChange,
+  onRun,
+  onToggle,
+  theme,
+  fontSize,
+  readOnly = false,
+  onFormat,
+  onAskAi,
+}: Props) {
   const monacoRef = useRef<typeof MonacoType | null>(null);
+  // Keep latest callbacks in refs so the addCommand bindings (registered
+  // once at mount) always see the current closure without re-binding.
+  const onRunRef = useRef(onRun);
+  const onToggleRef = useRef(onToggle);
+  const onFormatRef = useRef(onFormat);
+  const onAskAiRef = useRef(onAskAi);
+  useEffect(() => {
+    onRunRef.current = onRun;
+    onToggleRef.current = onToggle;
+    onFormatRef.current = onFormat;
+    onAskAiRef.current = onAskAi;
+  }, [onRun, onToggle, onFormat, onAskAi]);
 
   const handleMount = useCallback<OnMount>(
     (editor, monaco) => {
@@ -36,18 +58,31 @@ export function MonacoEditor({ value, onChange, onRun, onToggle, theme, fontSize
 
       // ⌘⏎ / Ctrl+Enter — run query
       editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => {
-        onRun();
+        onRunRef.current();
       });
       // ⌘J / Ctrl+J — toggle drawer
       editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyJ, () => {
-        onToggle();
+        onToggleRef.current();
+      });
+      // ⌘⇧F / Ctrl+Shift+F — format SQL
+      editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyF, () => {
+        onFormatRef.current?.();
+      });
+      // ⌘I / Ctrl+I — ask AI about the current selection (or whole doc)
+      editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyI, () => {
+        const sel = editor.getSelection();
+        const text =
+          sel && !sel.isEmpty()
+            ? (editor.getModel()?.getValueInRange(sel) ?? '')
+            : editor.getValue();
+        onAskAiRef.current?.(text);
       });
       // Esc — close drawer when focused
       editor.addCommand(monaco.KeyCode.Escape, () => {
-        onToggle();
+        onToggleRef.current();
       });
     },
-    [onRun, onToggle, theme],
+    [theme],
   );
 
   // Re-apply Monaco theme whenever the app theme or palette changes.

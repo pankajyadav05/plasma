@@ -1,7 +1,7 @@
-import { X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { kbd } from '@/lib/platform';
 import { useSession } from '@/stores/session';
+import { X } from 'lucide-react';
 import { SettingsBody } from './SettingsBody';
 
 /**

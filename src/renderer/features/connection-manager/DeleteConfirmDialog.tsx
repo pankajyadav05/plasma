@@ -1,4 +1,3 @@
-import { Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -9,6 +8,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { useSession } from '@/stores/session';
+import { Trash2 } from 'lucide-react';
 
 /**
  * Confirmation dialog before deleting a saved connection.

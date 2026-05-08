@@ -1,16 +1,17 @@
+import type { ConnectionConfig, ConnectionEngine, SavedConnection } from '@shared/protocol';
 import { safeStorage } from 'electron';
-import type { ConnectionConfig, SavedConnection } from '@shared/protocol';
 import { getDb } from './db';
 import { logger } from './logger';
 
 /**
- * Connection vault — now backed by SQLite instead of a JSON file.
+ * Connection vault — backed by SQLite.
  *
  * - Passwords encrypted via Electron `safeStorage` (OS keychain)
  * - Stored as BLOB in the `connections` table
  * - Plaintext passwords never touch disk or the renderer after the
  *   initial form submission
  * - `created_at` / `updated_at` timestamps for sorting + future audit
+ * - `engine` column drives which driver runs in the worker (added v2).
  */
 
 function assertEncryptionAvailable(): void {
@@ -37,6 +38,7 @@ function decryptPassword(ciphertext: Buffer): string {
 interface ConnectionRow {
   id: string;
   name: string;
+  engine: string;
   host: string;
   port: number;
   database: string;
@@ -45,6 +47,11 @@ interface ConnectionRow {
   password_ciphertext: Buffer;
   created_at: number;
   updated_at: number;
+}
+
+function asEngine(raw: string | null | undefined): ConnectionEngine {
+  if (raw === 'redis' || raw === 'opensearch') return raw;
+  return 'postgres';
 }
 
 // ─── Public API ──────────────────────────────────────────────────────
@@ -56,6 +63,7 @@ export function listConnections(): SavedConnection[] {
   return rows.map((r) => ({
     id: r.id,
     name: r.name,
+    engine: asEngine(r.engine),
     host: r.host,
     port: r.port,
     database: r.database,
@@ -67,6 +75,7 @@ export function listConnections(): SavedConnection[] {
 export function saveConnection(config: ConnectionConfig): void {
   const ciphertext = encryptPassword(config.password);
   const now = Date.now();
+  const engine = config.engine ?? 'postgres';
 
   const existing = getDb()
     .prepare<[string], { id: string; created_at: number }>(
@@ -78,7 +87,7 @@ export function saveConnection(config: ConnectionConfig): void {
     getDb()
       .prepare(
         `UPDATE connections
-            SET name = @name, host = @host, port = @port, database = @database,
+            SET name = @name, engine = @engine, host = @host, port = @port, database = @database,
                 user = @user, ssl = @ssl, password_ciphertext = @password_ciphertext,
                 updated_at = @updated_at
           WHERE id = @id`,
@@ -86,6 +95,7 @@ export function saveConnection(config: ConnectionConfig): void {
       .run({
         id: config.id,
         name: config.name,
+        engine,
         host: config.host,
         port: config.port,
         database: config.database,
@@ -98,13 +108,14 @@ export function saveConnection(config: ConnectionConfig): void {
     getDb()
       .prepare(
         `INSERT INTO connections
-           (id, name, host, port, database, user, ssl, password_ciphertext, created_at, updated_at)
+           (id, name, engine, host, port, database, user, ssl, password_ciphertext, created_at, updated_at)
            VALUES
-           (@id, @name, @host, @port, @database, @user, @ssl, @password_ciphertext, @created_at, @updated_at)`,
+           (@id, @name, @engine, @host, @port, @database, @user, @ssl, @password_ciphertext, @created_at, @updated_at)`,
       )
       .run({
         id: config.id,
         name: config.name,
+        engine,
         host: config.host,
         port: config.port,
         database: config.database,
@@ -115,7 +126,7 @@ export function saveConnection(config: ConnectionConfig): void {
         updated_at: now,
       });
   }
-  logger.info('[plasma] vault: saved connection', config.id);
+  logger.info('[plasma] vault: saved connection', config.id, engine);
 }
 
 export function deleteConnection(id: string): void {
@@ -136,6 +147,7 @@ export function getFullConnection(id: string): ConnectionConfig | null {
   return {
     id: row.id,
     name: row.name,
+    engine: asEngine(row.engine),
     host: row.host,
     port: row.port,
     database: row.database,

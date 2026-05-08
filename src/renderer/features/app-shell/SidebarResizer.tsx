@@ -1,6 +1,6 @@
-import { useCallback } from 'react';
 import { ipc } from '@/lib/ipc';
 import { useSession } from '@/stores/session';
+import { useCallback } from 'react';
 
 /**
  * Draggable vertical rule between the sidebar and the main area.

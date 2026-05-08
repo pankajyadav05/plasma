@@ -1,20 +1,31 @@
 import { Button } from '@/components/ui/button';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Separator } from '@/components/ui/separator';
+import { ChartDialog } from '@/features/chart/ChartDialog';
+import { ExplainDialog } from '@/features/explain/ExplainDialog';
+import { MockDataDialog } from '@/features/mock-data/MockDataDialog';
+import { PgVectorDialog } from '@/features/pgvector/PgVectorDialog';
+import { PostGisDialog } from '@/features/postgis/PostGisDialog';
 import { cn } from '@/lib/cn';
 import { type ExportFormat, copyResultToClipboard, exportResult, pickRows } from '@/lib/export';
 import { formatDuration } from '@/lib/format';
 import { useActiveTab, useSession } from '@/stores/session';
 import type { QueryResult } from '@shared/protocol';
 import {
+  BarChart3,
+  Brain,
   Check,
   Copy,
   Download,
   FileJson,
   FileText,
   FileType2,
+  Gauge,
+  Map,
   Plus,
   RefreshCw,
+  Sparkles,
+  Wand2,
 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { ColumnsPopover } from './ColumnsPopover';
@@ -37,8 +48,14 @@ export function ResultToolbar() {
   const refreshTable = useSession((s) => s.refreshTable);
   const runQuery = useSession((s) => s.runQuery);
   const editMode = useSession((s) => s.editMode);
+  const formatActiveSql = useSession((s) => s.formatActiveSql);
   const [exportOpen, setExportOpen] = useState(false);
   const [insertOpen, setInsertOpen] = useState(false);
+  const [chartOpen, setChartOpen] = useState(false);
+  const [explainOpen, setExplainOpen] = useState(false);
+  const [mockOpen, setMockOpen] = useState(false);
+  const [mapOpen, setMapOpen] = useState(false);
+  const [vectorOpen, setVectorOpen] = useState(false);
 
   // Listen for menu-driven export events so File → Export Results works
   useEffect(() => {
@@ -81,7 +98,73 @@ export function ResultToolbar() {
 
       <div className="flex-1" />
 
-      {/* ── Right cluster: Export · Refresh · duration · Insert ── */}
+      {/* ── Right cluster: Format · Explain · Chart · Export · Refresh · duration · Insert ── */}
+      {!isTable && tab.sql.trim().length > 0 && (
+        <Button
+          variant="ghost"
+          size="xs"
+          onClick={() => void formatActiveSql()}
+          title="Format SQL (⌘⇧F)"
+        >
+          <Wand2 />
+          Format
+        </Button>
+      )}
+
+      {!isTable && tab.sql.trim().length > 0 && (
+        <Button
+          variant="ghost"
+          size="xs"
+          onClick={() => setExplainOpen(true)}
+          title="EXPLAIN ANALYZE — runs the query for real"
+        >
+          <Gauge />
+          Explain
+        </Button>
+      )}
+
+      {hasResult && tab.queryResult && tab.queryResult.rows.length > 0 && (
+        <Button
+          variant="ghost"
+          size="xs"
+          onClick={() => setChartOpen(true)}
+          title="Chart this result"
+        >
+          <BarChart3 />
+          Chart
+        </Button>
+      )}
+
+      {hasResult &&
+        tab.queryResult &&
+        tab.queryResult.rows.length > 0 &&
+        tab.queryResult.columns.some((c) => /geometry|geography/i.test(c.dataTypeName)) && (
+          <Button
+            variant="ghost"
+            size="xs"
+            onClick={() => setMapOpen(true)}
+            title="Map preview (PostGIS)"
+          >
+            <Map />
+            Map
+          </Button>
+        )}
+
+      {hasResult &&
+        tab.queryResult &&
+        tab.queryResult.rows.length > 0 &&
+        tab.queryResult.columns.some((c) => /vector/i.test(c.dataTypeName)) && (
+          <Button
+            variant="ghost"
+            size="xs"
+            onClick={() => setVectorOpen(true)}
+            title="pgvector — find similar"
+          >
+            <Brain />
+            Vector
+          </Button>
+        )}
+
       {hasResult && tab.queryResult && (
         <ExportPopover
           open={exportOpen}
@@ -121,6 +204,15 @@ export function ResultToolbar() {
         <>
           <Separator orientation="vertical" className="h-4" />
           <Button
+            variant="ghost"
+            size="xs"
+            onClick={() => setMockOpen(true)}
+            title="Generate mock rows"
+          >
+            <Sparkles />
+            Mock
+          </Button>
+          <Button
             variant="primary"
             size="xs"
             onClick={() => setInsertOpen(true)}
@@ -132,6 +224,18 @@ export function ResultToolbar() {
           </Button>
         </>
       )}
+
+      <MockDataDialog open={mockOpen} onOpenChange={setMockOpen} />
+      <PostGisDialog result={tab.queryResult} open={mapOpen} onOpenChange={setMapOpen} />
+      <PgVectorDialog result={tab.queryResult} open={vectorOpen} onOpenChange={setVectorOpen} />
+
+      <ChartDialog
+        result={tab.queryResult}
+        open={chartOpen}
+        onOpenChange={setChartOpen}
+        defaultTitle={tab.title}
+      />
+      {!isTable && <ExplainDialog open={explainOpen} onOpenChange={setExplainOpen} sql={tab.sql} />}
     </div>
   );
 }

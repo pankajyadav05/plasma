@@ -1,33 +1,41 @@
-import { useEffect } from 'react';
-import { Play, Square } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Kbd } from '@/components/ui/kbd';
 import { kbd } from '@/lib/platform';
 import { useActiveTab, useSession } from '@/stores/session';
+import { Play, Square } from 'lucide-react';
+import { useEffect } from 'react';
 import { MonacoEditor } from './MonacoEditor';
 
 /**
- * Full-canvas SQL editor. Replaces the grid view when the IconRail
- * SQL Editor mode is active. Layout: TabStrip on top (already rendered
- * by AppShell), then Monaco filling the upper half, then result grid +
- * pagination below.
+ * Full-canvas SQL editor. Layout: a small toolbar (tab title + Run),
+ * then Monaco. When `expanded` is true the editor takes all remaining
+ * space — used for SQL tabs that haven't run yet, so the user is
+ * dropped straight into the editor without a "home" panel below. When
+ * `expanded` is false the editor caps at 40% so the result grid below
+ * has room.
  */
-export function SqlCanvas() {
+export function SqlCanvas({ expanded = false }: { expanded?: boolean }) {
   const tab = useActiveTab();
   const setSql = useSession((s) => s.setSql);
   const runQuery = useSession((s) => s.runQuery);
   const cancelQuery = useSession((s) => s.cancelQuery);
   const refreshTable = useSession((s) => s.refreshTable);
   const connectionState = useSession((s) => s.connectionState);
+  const formatActiveSql = useSession((s) => s.formatActiveSql);
+  const setRightPanelMode = useSession((s) => s.setRightPanelMode);
+  const aiAsk = useSession((s) => s.aiAsk);
   const theme = useSession((s) => s.settings.theme);
   const fontSize = useSession((s) => s.settings.editorFontSize);
+  const editorHeightPx = useSession((s) => s.settings.editorHeightPx);
 
-  // Force the EditorPane closed in SQL canvas — we render Monaco inline
-  // here instead, and the side pane would be redundant.
-  const setEditorExpanded = useSession((s) => s.setEditorExpanded);
+  // If the right-rail query panel is open, close it — Monaco is now
+  // rendered inline here and the side pane would be a duplicate. Other
+  // right-rail panes (AI, Saved, Role, RLS) stay untouched so users can
+  // keep them open alongside the inline editor.
+  const rightPanelMode = useSession((s) => s.rightPanelMode);
   useEffect(() => {
-    setEditorExpanded(false);
-  }, [setEditorExpanded]);
+    if (rightPanelMode === 'query') setRightPanelMode(null);
+  }, [rightPanelMode, setRightPanelMode]);
 
   if (!tab) return null;
 
@@ -42,7 +50,13 @@ export function SqlCanvas() {
   };
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col bg-background">
+    <div
+      className={
+        expanded
+          ? 'flex min-h-0 flex-1 flex-col bg-background'
+          : 'flex shrink-0 flex-col bg-background'
+      }
+    >
       <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border bg-background px-3">
         <span className="font-display text-sm italic text-muted-foreground">{tab.title}</span>
         {isTable && (
@@ -66,7 +80,14 @@ export function SqlCanvas() {
         )}
       </div>
 
-      <div className="relative h-[40%] min-h-[140px] shrink-0 border-b border-border">
+      <div
+        className={
+          expanded
+            ? 'relative min-h-0 flex-1 border-b border-border'
+            : 'relative shrink-0 border-b border-border'
+        }
+        style={expanded ? undefined : { height: `${editorHeightPx}px`, minHeight: 120 }}
+      >
         <MonacoEditor
           value={tab.sql}
           onChange={isTable ? () => {} : setSql}
@@ -75,6 +96,18 @@ export function SqlCanvas() {
           theme={theme}
           fontSize={fontSize}
           readOnly={isTable}
+          onFormat={isTable ? undefined : () => void formatActiveSql()}
+          onAskAi={
+            isTable
+              ? undefined
+              : (text) => {
+                  setRightPanelMode('ai');
+                  const seed = text.trim()
+                    ? `Explain or improve this SQL:\n\n\`\`\`sql\n${text}\n\`\`\``
+                    : '';
+                  if (seed) void aiAsk(seed);
+                }
+          }
         />
       </div>
     </div>

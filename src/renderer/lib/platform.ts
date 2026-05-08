@@ -4,10 +4,10 @@
  * to the user — tooltips, palette hints, button labels.
  */
 
-const isMac = typeof window !== "undefined" && window.plasma?.platform === "darwin";
+const isMac = typeof window !== 'undefined' && window.plasma?.platform === 'darwin';
 
 /** Modifier glyph alone — "⌘" on mac, "Ctrl" elsewhere. */
-export const MOD = isMac ? "⌘" : "Ctrl";
+export const MOD = isMac ? '⌘' : 'Ctrl';
 
 /**
  * Format a shortcut like `kbd("K")` → "⌘K" on mac, "Ctrl+K" on win/linux.

@@ -10,7 +10,7 @@
  * the locale formatter to keep large counts readable.
  */
 export function formatDuration(ms: number): string {
-  if (!Number.isFinite(ms) || ms < 0) return "–";
+  if (!Number.isFinite(ms) || ms < 0) return '–';
   if (ms < 1_000) {
     return `${Math.round(ms).toLocaleString()} ms`;
   }
@@ -27,5 +27,5 @@ export function formatDuration(ms: number): string {
   const parts = [`${minutes}m`];
   if (seconds > 0) parts.push(`${seconds}s`);
   if (remMs > 0) parts.push(`${remMs} ms`);
-  return parts.join(" ");
+  return parts.join(' ');
 }

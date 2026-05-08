@@ -1,4 +1,5 @@
 import { ipc } from '@/lib/ipc';
+import { splitSqlStatements } from '@/lib/sql-split';
 import {
   type Filter,
   type TableSort,
@@ -12,9 +13,14 @@ import {
   buildUpdateSql,
 } from '@/lib/table-query';
 import type {
+  AiMessage,
   ConnectionConfig,
+  ConnectionEngine,
   HistoryEntry,
+  OsOverview,
   QueryResult,
+  RedisOverview,
+  RedisScanResult,
   SavedConnection,
   SavedQuery,
   SchemaInfo,
@@ -48,13 +54,68 @@ const ESTIMATED_COUNT_THRESHOLD = 1_000_000;
 
 export type ConnectionState = 'idle' | 'connecting' | 'connected' | 'error';
 export type QueryRunState = 'idle' | 'running';
-export type TabKind = 'sql' | 'table';
+/**
+ * Tab kinds.
+ *  - sql/table     → Postgres
+ *  - redis-key     → key viewer (string/list/set/zset/hash/stream/json)
+ *  - redis-cli     → free-form Redis command terminal
+ *  - redis-pubsub  → live tail of one channel / pattern
+ *  - redis-analyze → memory analyzer scan result
+ *  - redis-slowlog → SLOWLOG GET viewer
+ *  - os-search     → OpenSearch DSL editor + result grid (Discover)
+ *  - os-index      → OpenSearch index detail (mapping + stats)
+ *  - os-sql        → OpenSearch SQL plugin canvas
+ */
+export type TabKind =
+  | 'sql'
+  | 'table'
+  | 'redis-key'
+  | 'redis-cli'
+  | 'redis-pubsub'
+  | 'redis-analyze'
+  | 'redis-slowlog'
+  | 'os-search'
+  | 'os-index'
+  | 'os-sql';
 export type TableViewMode = 'data' | 'definition';
 export type EntityKind = 'table' | 'view' | 'matview' | 'foreign' | 'partitioned';
 /** Drives what the main right-side canvas renders. Switched from IconRail. */
-export type CanvasMode = 'database' | 'sql' | 'history' | 'settings';
+export type CanvasMode = 'database' | 'sql' | 'history' | 'settings' | 'monitor';
 /** Which slot of the right rail is currently expanded. null = collapsed. */
-export type RightPanelMode = 'query' | 'role' | 'rls' | 'saved' | null;
+export type RightPanelMode = 'query' | 'role' | 'rls' | 'saved' | 'ai' | null;
+
+/** One row in the AI chat transcript. Streamed assistant messages mutate
+ *  in place as deltas arrive — keep them flat strings. */
+export interface AiTurn extends AiMessage {
+  id: string;
+  /** True while a streamed assistant turn is still receiving deltas. */
+  streaming?: boolean;
+  /** Server-side error captured for this turn, if any. */
+  error?: string;
+}
+
+/**
+ * Cheap heuristic for "destructive" SQL — anything that could destroy
+ * or rewrite data without trivial recovery. Used by the prod gate so
+ * accidental DELETE/TRUNCATE/DROP on a production-tagged connection
+ * trips a confirm dialog. UPDATE without a WHERE clause counts. We
+ * strip leading comments / whitespace before checking.
+ */
+function looksDestructive(sql: string): boolean {
+  const stripped = sql
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/^\s*--.*$/gm, '')
+    .trim();
+  const lower = stripped.toLowerCase();
+  if (/^(drop|truncate)\b/.test(lower)) return true;
+  if (/^delete\b/.test(lower)) return true;
+  // UPDATE without WHERE — we eyeball for the keyword and reject
+  // statements that DON'T contain a `where` token after `update`.
+  if (/^update\b/.test(lower) && !/\bwhere\b/.test(lower)) return true;
+  // ALTER TABLE … DROP COLUMN / DROP CONSTRAINT
+  if (/^alter\b.*\bdrop\b/.test(lower)) return true;
+  return false;
+}
 
 /**
  * Cheap heuristic for DDL detection. We strip leading comments/whitespace
@@ -91,6 +152,26 @@ function columnStateKey(
 // rewrite the tab's columnWidths on every pointermove — we only want
 // to hit IPC + disk once, when the user actually lets go.
 let columnWidthPersistTimer: ReturnType<typeof setTimeout> | null = null;
+
+/**
+ * One queued, uncommitted cell edit. Buffered edits accumulate as the
+ * user types in the grid; nothing hits the database until they click
+ * "Commit (N)" in the tray. PK identification is captured at queue
+ * time so a later refresh / sort doesn't break the WHERE clause.
+ */
+export interface PendingEdit {
+  id: string;
+  tabId: string;
+  schema: string;
+  table: string;
+  pkValues: Record<string, unknown>;
+  column: string;
+  oldValue: unknown;
+  newValue: string | null;
+  /** Visible row index at queue time, used for in-grid highlighting. */
+  rowIndex: number;
+  columnIndex: number;
+}
 
 export interface QueryTab {
   id: string;
@@ -138,6 +219,23 @@ export interface QueryTab {
   viewMode: TableViewMode;
   /** RLS policy count for the table backing this tab. null = not yet loaded. */
   rlsPolicyCount: number | null;
+
+  // ── Redis tab fields (kind = 'redis-key' / 'redis-cli') ──
+  /** Key currently being viewed in a redis-key tab. */
+  redisKey?: string;
+  /** Pub/sub channel/pattern for a redis-pubsub tab. */
+  redisChannel?: string;
+  redisPattern?: boolean;
+
+  // ── OpenSearch tab fields (kind = 'os-search' / 'os-index' / 'os-sql') ──
+  /** Index targeted by an os-search or os-index tab. */
+  osIndex?: string;
+  /** Cached DSL JSON body for an os-search tab. */
+  osBody?: string;
+  /** KQL/Lucene query string for the Discover canvas. */
+  osQueryString?: string;
+  /** Cached SQL text for an os-sql tab. */
+  osSql?: string;
 }
 
 const THEME_NAMES = [
@@ -205,11 +303,17 @@ const DEFAULT_SETTINGS: Settings = {
   sidebarWidth: 264,
   editorExpanded: false,
   editorFontSize: 14,
+  editorHeightPx: 280,
   defaultPageSize: 50,
   queryTimeoutMs: 0,
   telemetryEnabled: false,
+  openrouterApiKey: '',
+  openrouterModel: 'anthropic/claude-sonnet-4.5',
   claudeApiKey: '',
   transactionMode: false,
+  connectionTags: {},
+  connectionSsh: {},
+  schemaSnapshots: [],
   favoriteSchemas: {},
   favoriteTables: {},
   tableColumnState: {},
@@ -347,6 +451,27 @@ interface SessionState {
   /** The last-opened table, used to highlight the current row in the sidebar. */
   activeTable: { schema: string; name: string } | null;
 
+  // ── non-relational engine state ──
+  /** Latest INFO snapshot for a connected Redis instance. */
+  redisOverview: RedisOverview | null;
+  /** Cached SCAN page used by the Redis sidebar key tree. */
+  redisKeys: RedisScanResult | null;
+  /** SCAN MATCH filter typed by the user; null = no filter. */
+  redisMatch: string | null;
+  redisLoading: boolean;
+  /** Latest cluster + indices snapshot for a connected OpenSearch cluster. */
+  osOverview: OsOverview | null;
+  osLoading: boolean;
+  /** Last-opened resource per non-relational engine, used to highlight sidebar. */
+  activeRedisKey: string | null;
+  activeOsIndex: string | null;
+
+  // ── Bulk-select (Redis sidebar) ──
+  /** When true, the Redis sidebar shows checkboxes next to each key. */
+  redisBulkMode: boolean;
+  /** Keys currently checked in bulk mode. Cleared on disconnect / mode-off. */
+  selectedRedisKeys: Set<string>;
+
   // ── tabs ──
   tabs: QueryTab[];
   activeTabId: string;
@@ -388,6 +513,24 @@ interface SessionState {
   // ── query history (cached copy for the history sheet) ──
   history: HistoryEntry[];
 
+  // ── AI chat (OpenRouter sidecar) ──
+  aiChat: AiTurn[];
+  aiPending: boolean;
+  /** Active streaming request id, used to route deltas + cancel. */
+  aiRequestId: string | null;
+
+  // ── Pending edits (buffered inline-edit tray) ──
+  pendingEdits: PendingEdit[];
+  pendingEditsBusy: boolean;
+
+  /**
+   * When the user fires a destructive query (DELETE/TRUNCATE/DROP/
+   * UPDATE without WHERE) against a prod-tagged connection, runQuery
+   * stashes the pending SQL here and renders a confirm dialog. The
+   * user's choice resumes (or aborts) the run.
+   */
+  prodGate: { sql: string } | null;
+
   // ── actions ──
   openDialog(prefill?: ConnectionConfig): void;
   closeDialog(): void;
@@ -403,6 +546,29 @@ interface SessionState {
   disconnect(): Promise<void>;
   refreshSchema(): Promise<void>;
   toggleSchema(name: string): void;
+
+  // ── Non-relational engine actions ──
+  refreshRedisOverview(): Promise<void>;
+  scanRedisKeys(opts?: { cursor?: string; match?: string }): Promise<void>;
+  setRedisMatch(match: string | null): void;
+  openRedisKey(key: string): void;
+  openRedisCli(): void;
+  openRedisPubsub(channel: string, pattern: boolean): void;
+  openRedisAnalyze(): void;
+  openRedisSlowlog(): void;
+  deleteRedisKey(key: string): Promise<void>;
+  setRedisTtl(key: string, seconds: number): Promise<void>;
+
+  // Bulk select
+  toggleRedisBulkMode(): void;
+  toggleRedisKeyChecked(key: string): void;
+  clearRedisSelected(): void;
+  bulkDeleteSelectedRedisKeys(): Promise<void>;
+
+  refreshOsOverview(): Promise<void>;
+  openOsIndex(index: string): void;
+  openOsSearch(index: string): void;
+  openOsSql(): void;
 
   // Per-tab actions operate on the active tab by default
   setSql(sql: string): void;
@@ -490,6 +656,36 @@ interface SessionState {
   beginTxn(): Promise<void>;
   commitTxn(): Promise<void>;
   rollbackTxn(): Promise<void>;
+
+  // AI
+  aiAsk(prompt: string, opts?: { withSchema?: boolean }): Promise<void>;
+  aiCancel(): Promise<void>;
+  aiClear(): void;
+  /** Apply a streamed delta event from the main process. */
+  aiApplyEvent(
+    evt:
+      | { kind: 'delta'; requestId: string; text: string }
+      | { kind: 'done'; requestId: string }
+      | { kind: 'error'; requestId: string; message: string },
+  ): void;
+
+  // SQL formatting (calls main → sql-formatter → back). Replaces the
+  // active tab's SQL on success; no-op for table tabs (their SQL is
+  // compiled, not user-edited).
+  formatActiveSql(): Promise<void>;
+
+  // Pending edits (buffered inline-edit tray)
+  commitPendingEdits(): Promise<void>;
+  revertPendingEdits(): Promise<void>;
+
+  // Prod gate
+  setConnectionTag(
+    connectionId: string,
+    tag: 'prod' | 'staging' | 'dev' | 'local' | null,
+  ): Promise<void>;
+  /** Resume a prod-gated runQuery after user confirms. */
+  confirmProdGate(): void;
+  cancelProdGate(): void;
 }
 
 const initialTab = createEmptyTab(DEFAULT_SETTINGS.defaultPageSize);
@@ -505,6 +701,17 @@ export const useSession = create<SessionState>((set, get) => ({
   schemaLoading: false,
   expandedSchemas: new Set(),
   activeTable: null,
+
+  redisOverview: null,
+  redisKeys: null,
+  redisMatch: null,
+  redisLoading: false,
+  osOverview: null,
+  osLoading: false,
+  activeRedisKey: null,
+  activeOsIndex: null,
+  redisBulkMode: false,
+  selectedRedisKeys: new Set<string>(),
 
   tabs: [initialTab],
   activeTabId: initialTab.id,
@@ -532,6 +739,15 @@ export const useSession = create<SessionState>((set, get) => ({
   settings: DEFAULT_SETTINGS,
 
   history: [],
+
+  aiChat: [],
+  aiPending: false,
+  aiRequestId: null,
+
+  pendingEdits: [],
+  pendingEditsBusy: false,
+
+  prodGate: null,
 
   // ── dialog / palette / settings toggles ──
 
@@ -565,23 +781,27 @@ export const useSession = create<SessionState>((set, get) => ({
   async connect(config) {
     set({ connectionState: 'connecting', connectionError: null });
     try {
-      const { serverVersion } = await ipc.conn.connect(config);
+      const { serverVersion, engine } = await ipc.conn.connect(config);
+      const eff = (engine ?? config.engine ?? 'postgres') as ConnectionEngine;
       set({
-        activeConfig: config,
+        activeConfig: { ...config, engine: eff },
         serverVersion,
         connectionState: 'connected',
         dialogOpen: false,
         dialogPrefill: null,
         activeTable: null,
         txnState: 'none',
+        // Stale per-engine state from a prior connection.
+        redisOverview: null,
+        redisKeys: null,
+        redisMatch: null,
+        osOverview: null,
+        activeRedisKey: null,
+        activeOsIndex: null,
       });
-      await Promise.all([get().refreshSchema(), get().loadSavedConnections()]);
-      const schema = get().schema;
-      if (schema && schema.schemas.length > 0) {
-        const first = schema.schemas.find((s) => s.name === 'public') ?? schema.schemas[0];
-        set({ expandedSchemas: new Set([first.name]), currentSchema: first.name });
-      }
-      void get().loadAvailableRoles();
+      await get().loadSavedConnections();
+      await loadEngineOverview(set, get, eff);
+      if (eff === 'postgres') void get().loadAvailableRoles();
     } catch (err) {
       set({
         connectionState: 'error',
@@ -594,22 +814,24 @@ export const useSession = create<SessionState>((set, get) => ({
     set({ connectionState: 'connecting', connectionError: null });
     try {
       const { info, config } = await ipc.vault.connectById(id);
+      const eff = (info.engine ?? config.engine ?? 'postgres') as ConnectionEngine;
       set({
-        activeConfig: { ...config, password: '' },
+        activeConfig: { ...config, engine: eff, password: '' },
         serverVersion: info.serverVersion,
         connectionState: 'connected',
         dialogOpen: false,
         dialogPrefill: null,
         activeTable: null,
         txnState: 'none',
+        redisOverview: null,
+        redisKeys: null,
+        redisMatch: null,
+        osOverview: null,
+        activeRedisKey: null,
+        activeOsIndex: null,
       });
-      await get().refreshSchema();
-      const schema = get().schema;
-      if (schema && schema.schemas.length > 0) {
-        const first = schema.schemas.find((s) => s.name === 'public') ?? schema.schemas[0];
-        set({ expandedSchemas: new Set([first.name]), currentSchema: first.name });
-      }
-      void get().loadAvailableRoles();
+      await loadEngineOverview(set, get, eff);
+      if (eff === 'postgres') void get().loadAvailableRoles();
     } catch (err) {
       set({
         connectionState: 'error',
@@ -633,6 +855,14 @@ export const useSession = create<SessionState>((set, get) => ({
         currentSchema: null,
         availableRoles: [],
         activeRole: null,
+        redisOverview: null,
+        redisKeys: null,
+        redisMatch: null,
+        osOverview: null,
+        activeRedisKey: null,
+        activeOsIndex: null,
+        redisBulkMode: false,
+        selectedRedisKeys: new Set<string>(),
       });
       // Clear all tabs' results since they reference a now-dead connection
       set((state) => ({
@@ -650,6 +880,12 @@ export const useSession = create<SessionState>((set, get) => ({
   },
 
   async refreshSchema() {
+    // Postgres-only — the worker's `introspect` for redis/opensearch
+    // returns engine-specific overview shapes that don't fit SchemaInfo.
+    // Callers on other engines should use refreshRedisOverview /
+    // refreshOsOverview directly.
+    const eng = get().activeConfig?.engine ?? 'postgres';
+    if (eng !== 'postgres') return;
     set({ schemaLoading: true });
     try {
       const schema = await ipc.conn.introspect();
@@ -666,6 +902,270 @@ export const useSession = create<SessionState>((set, get) => ({
     if (next.has(name)) next.delete(name);
     else next.add(name);
     set({ expandedSchemas: next });
+  },
+
+  // ── Redis ──
+
+  async refreshRedisOverview() {
+    set({ redisLoading: true });
+    try {
+      const info = await ipc.redis.overview();
+      set({ redisOverview: info });
+    } catch (err) {
+      console.error('[plasma] redis overview failed', err);
+    } finally {
+      set({ redisLoading: false });
+    }
+  },
+
+  async scanRedisKeys(opts) {
+    set({ redisLoading: true });
+    try {
+      const match = opts?.match ?? get().redisMatch ?? undefined;
+      const result = await ipc.redis.scan({
+        cursor: opts?.cursor ?? '0',
+        match: match || undefined,
+        count: 500,
+      });
+      // First page replaces; subsequent pages (cursor !== '0') append.
+      const cursor = opts?.cursor ?? '0';
+      if (cursor === '0' || !get().redisKeys) {
+        set({ redisKeys: result });
+      } else {
+        const prev = get().redisKeys;
+        set({
+          redisKeys: prev
+            ? {
+                cursor: result.cursor,
+                keys: [...prev.keys, ...result.keys],
+                scanned: prev.scanned + result.scanned,
+              }
+            : result,
+        });
+      }
+    } catch (err) {
+      console.error('[plasma] redis scan failed', err);
+    } finally {
+      set({ redisLoading: false });
+    }
+  },
+
+  setRedisMatch(match) {
+    set({ redisMatch: match });
+    void get().scanRedisKeys({ cursor: '0', match: match ?? undefined });
+  },
+
+  openRedisKey(key) {
+    const state = get();
+    const existing = state.tabs.find((t) => t.kind === 'redis-key' && t.redisKey === key);
+    if (existing) {
+      set({ activeTabId: existing.id, activeRedisKey: key });
+      return;
+    }
+    const tab: QueryTab = {
+      ...createEmptyTab(state.settings.defaultPageSize, key),
+      kind: 'redis-key',
+      redisKey: key,
+    };
+    set({
+      tabs: [...state.tabs, tab],
+      activeTabId: tab.id,
+      activeRedisKey: key,
+    });
+  },
+
+  openRedisCli() {
+    const state = get();
+    const existing = state.tabs.find((t) => t.kind === 'redis-cli');
+    if (existing) {
+      set({ activeTabId: existing.id });
+      return;
+    }
+    const tab: QueryTab = {
+      ...createEmptyTab(state.settings.defaultPageSize, 'redis-cli'),
+      kind: 'redis-cli',
+    };
+    set({ tabs: [...state.tabs, tab], activeTabId: tab.id });
+  },
+
+  openRedisPubsub(channel, pattern) {
+    const state = get();
+    const tab: QueryTab = {
+      ...createEmptyTab(
+        state.settings.defaultPageSize,
+        pattern ? `psub · ${channel}` : `sub · ${channel}`,
+      ),
+      kind: 'redis-pubsub',
+      redisChannel: channel,
+      redisPattern: pattern,
+    };
+    set({ tabs: [...state.tabs, tab], activeTabId: tab.id });
+  },
+
+  openRedisAnalyze() {
+    const state = get();
+    const existing = state.tabs.find((t) => t.kind === 'redis-analyze');
+    if (existing) {
+      set({ activeTabId: existing.id });
+      return;
+    }
+    const tab: QueryTab = {
+      ...createEmptyTab(state.settings.defaultPageSize, 'memory analyzer'),
+      kind: 'redis-analyze',
+    };
+    set({ tabs: [...state.tabs, tab], activeTabId: tab.id });
+  },
+
+  openRedisSlowlog() {
+    const state = get();
+    const existing = state.tabs.find((t) => t.kind === 'redis-slowlog');
+    if (existing) {
+      set({ activeTabId: existing.id });
+      return;
+    }
+    const tab: QueryTab = {
+      ...createEmptyTab(state.settings.defaultPageSize, 'slowlog'),
+      kind: 'redis-slowlog',
+    };
+    set({ tabs: [...state.tabs, tab], activeTabId: tab.id });
+  },
+
+  toggleRedisBulkMode() {
+    const state = get();
+    set({
+      redisBulkMode: !state.redisBulkMode,
+      selectedRedisKeys: state.redisBulkMode ? new Set() : state.selectedRedisKeys,
+    });
+  },
+
+  toggleRedisKeyChecked(key) {
+    const next = new Set(get().selectedRedisKeys);
+    if (next.has(key)) next.delete(key);
+    else next.add(key);
+    set({ selectedRedisKeys: next });
+  },
+
+  clearRedisSelected() {
+    set({ selectedRedisKeys: new Set() });
+  },
+
+  async bulkDeleteSelectedRedisKeys() {
+    const keys = [...get().selectedRedisKeys];
+    if (keys.length === 0) return;
+    try {
+      await ipc.redis.bulkDelete(keys);
+    } catch (err) {
+      console.error('[plasma] bulk delete failed', err);
+      return;
+    }
+    const dropped = new Set(keys);
+    set((state) => ({
+      redisKeys: state.redisKeys
+        ? {
+            ...state.redisKeys,
+            keys: state.redisKeys.keys.filter((k) => !dropped.has(k.key)),
+          }
+        : state.redisKeys,
+      tabs: state.tabs.filter(
+        (t) => !(t.kind === 'redis-key' && t.redisKey && dropped.has(t.redisKey)),
+      ),
+      selectedRedisKeys: new Set(),
+      redisBulkMode: false,
+    }));
+  },
+
+  async deleteRedisKey(key) {
+    try {
+      await ipc.redis.deleteKey(key);
+    } catch (err) {
+      console.error('[plasma] redis delete failed', err);
+      return;
+    }
+    // Drop the key from the cached scan list and any open key tab.
+    set((state) => ({
+      redisKeys: state.redisKeys
+        ? {
+            ...state.redisKeys,
+            keys: state.redisKeys.keys.filter((k) => k.key !== key),
+          }
+        : state.redisKeys,
+      tabs: state.tabs.filter((t) => !(t.kind === 'redis-key' && t.redisKey === key)),
+      activeRedisKey: state.activeRedisKey === key ? null : state.activeRedisKey,
+    }));
+  },
+
+  async setRedisTtl(key, seconds) {
+    try {
+      await ipc.redis.setTtl(key, seconds);
+    } catch (err) {
+      console.error('[plasma] redis ttl failed', err);
+    }
+  },
+
+  // ── OpenSearch ──
+
+  async refreshOsOverview() {
+    set({ osLoading: true });
+    try {
+      const info = await ipc.os.overview();
+      set({ osOverview: info });
+    } catch (err) {
+      console.error('[plasma] os overview failed', err);
+    } finally {
+      set({ osLoading: false });
+    }
+  },
+
+  openOsIndex(index) {
+    const state = get();
+    const existing = state.tabs.find((t) => t.kind === 'os-index' && t.osIndex === index);
+    if (existing) {
+      set({ activeTabId: existing.id, activeOsIndex: index });
+      return;
+    }
+    const tab: QueryTab = {
+      ...createEmptyTab(state.settings.defaultPageSize, index),
+      kind: 'os-index',
+      osIndex: index,
+    };
+    set({
+      tabs: [...state.tabs, tab],
+      activeTabId: tab.id,
+      activeOsIndex: index,
+    });
+  },
+
+  openOsSearch(index) {
+    const state = get();
+    // Always make a new search tab — the user might want multiple
+    // queries against the same index running side by side.
+    const tab: QueryTab = {
+      ...createEmptyTab(state.settings.defaultPageSize, `${index} · search`),
+      kind: 'os-search',
+      osIndex: index,
+      osBody: '{\n  "query": { "match_all": {} },\n  "size": 50\n}',
+      osQueryString: '',
+    };
+    set({
+      tabs: [...state.tabs, tab],
+      activeTabId: tab.id,
+      activeOsIndex: index,
+    });
+  },
+
+  openOsSql() {
+    const state = get();
+    const existing = state.tabs.find((t) => t.kind === 'os-sql');
+    if (existing) {
+      set({ activeTabId: existing.id });
+      return;
+    }
+    const tab: QueryTab = {
+      ...createEmptyTab(state.settings.defaultPageSize, 'sql'),
+      kind: 'os-sql',
+      osSql: 'SELECT * FROM <index> LIMIT 50',
+    };
+    set({ tabs: [...state.tabs, tab], activeTabId: tab.id });
   },
 
   // ── per-tab actions ──
@@ -689,27 +1189,58 @@ export const useSession = create<SessionState>((set, get) => ({
 
     const sql = tab.sql.trim();
     if (!sql) return;
+
+    // Prod gate: if active connection is tagged 'prod' and the script
+    // includes any destructive statement, stash the SQL and prompt for
+    // confirmation. The user resumes via `confirmProdGate()`.
+    const connId = state.activeConfig?.id;
+    const tag = connId ? state.settings.connectionTags?.[connId] : undefined;
+    if (tag === 'prod' && state.prodGate === null) {
+      const stmts = splitSqlStatements(sql);
+      if (stmts.some(looksDestructive)) {
+        set({ prodGate: { sql } });
+        return;
+      }
+    }
+
     patchActiveTab(set, get, {
       queryRunState: 'running',
       queryError: null,
       queryErrorSql: null,
     });
+    // Multi-statement scripts: split with a quote/comment-aware tokenizer
+    // and run each separately. Last statement's QueryResult populates the
+    // grid; failures stop execution and surface "stopped at N of M".
+    const statements = splitSqlStatements(sql);
     try {
-      const result = await ipc.query.run(sql);
+      let lastResult: QueryResult | null = null;
+      let anyDdl = false;
+      for (let i = 0; i < statements.length; i++) {
+        const stmt = statements[i];
+        try {
+          lastResult = await ipc.query.run(stmt);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          const tag = statements.length > 1 ? ` (statement ${i + 1} of ${statements.length})` : '';
+          patchActiveTab(set, get, {
+            queryError: `${message}${tag}`,
+            queryErrorSql: stmt,
+            queryRunState: 'idle',
+          });
+          if (anyDdl) void get().refreshSchema();
+          return;
+        }
+        if (looksLikeDdl(stmt)) anyDdl = true;
+      }
       patchActiveTab(set, get, {
-        queryResult: result,
+        queryResult: lastResult,
         queryRunState: 'idle',
         page: 0,
         sortColumn: null,
         selectedCell: null,
         selectedRows: new Set(),
       });
-      // DDL auto-refresh: if the user just ran CREATE / ALTER / DROP /
-      // RENAME / TRUNCATE / COMMENT, the introspected schema is now
-      // stale — re-fetch so the sidebar reflects the change without
-      // forcing a manual reconnect. We fire-and-forget so the grid
-      // updates immediately.
-      if (looksLikeDdl(sql)) {
+      if (anyDdl) {
         void get().refreshSchema();
       }
     } catch (err) {
@@ -980,6 +1511,11 @@ export const useSession = create<SessionState>((set, get) => ({
   // ── row editing (table tabs only, gated by editMode) ──
 
   async updateCell(rowIndex, columnIndex, newValue) {
+    // Buffered edits: every cell change is queued in `pendingEdits` and
+    // mirrored into the visible row of `queryResult` so the grid shows
+    // the new value immediately. Nothing reaches the database until the
+    // user clicks "Commit" in the tray. This matches TablePlus' default
+    // behavior and lets users batch multi-cell fixes safely.
     const state = get();
     if (!state.editMode) throw new Error('edit mode is off');
     const tab = activeTab(state);
@@ -996,14 +1532,40 @@ export const useSession = create<SessionState>((set, get) => ({
       throw new Error('table has no primary key — cannot edit rows safely');
     }
 
-    const { sql, params } = buildUpdateSql({
+    const oldValue = row[columnIndex];
+    const edit: PendingEdit = {
+      id: freshId(),
+      tabId: tab.id,
       schema: tab.tableSchema,
       table: tab.tableName,
-      set: { [col.name]: newValue },
       pkValues,
+      column: col.name,
+      oldValue,
+      newValue,
+      rowIndex,
+      columnIndex,
+    };
+
+    // De-duplicate: replacing the same (tab, pk, column) with a fresh edit
+    // collapses repeated typing into one UPDATE on commit.
+    const pkKey = JSON.stringify(pkValues);
+    const dedupedExisting = state.pendingEdits.filter(
+      (e) => !(e.tabId === tab.id && e.column === col.name && JSON.stringify(e.pkValues) === pkKey),
+    );
+
+    // Mirror the change into the visible row so the grid shows it.
+    const newRows = tab.queryResult.rows.map((r, i) =>
+      i === rowIndex ? r.map((v, c) => (c === columnIndex ? newValue : v)) : r,
+    );
+
+    set({
+      pendingEdits: [...dedupedExisting, edit],
+      tabs: state.tabs.map((t) =>
+        t.id === tab.id && t.queryResult
+          ? { ...t, queryResult: { ...t.queryResult, rows: newRows } }
+          : t,
+      ),
     });
-    await ipc.query.run(sql, params, { internal: true });
-    await runTableDataQuery(set, get, tab.id);
   },
 
   async insertRow(values) {
@@ -1471,6 +2033,242 @@ export const useSession = create<SessionState>((set, get) => ({
       console.error('[plasma] rollbackTxn failed', err);
     }
   },
+
+  // ── AI ──
+
+  async aiAsk(prompt, opts) {
+    const trimmed = prompt.trim();
+    if (!trimmed) return;
+    const state = get();
+    if (state.aiPending) return; // single-flight per chat
+
+    const userTurn: AiTurn = {
+      id: freshId(),
+      role: 'user',
+      content: trimmed,
+    };
+    const placeholder: AiTurn = {
+      id: freshId(),
+      role: 'assistant',
+      content: '',
+      streaming: true,
+    };
+    const requestId = freshId();
+    set({
+      aiChat: [...state.aiChat, userTurn, placeholder],
+      aiPending: true,
+      aiRequestId: requestId,
+      rightPanelMode: 'ai',
+    });
+
+    // Strip Plasma-only fields before sending — main only needs role +
+    // content per OpenAI/OpenRouter chat shape.
+    const messages: AiMessage[] = [...state.aiChat, userTurn].map((t) => ({
+      role: t.role,
+      content: t.content,
+    }));
+
+    const engine = state.activeConfig?.engine ?? 'postgres';
+    const engineContext = buildEngineContext(state);
+
+    try {
+      const res = await ipc.ai.chat({
+        requestId,
+        messages,
+        engine,
+        engineContext,
+        schema:
+          engine === 'postgres'
+            ? opts?.withSchema === false
+              ? null
+              : (state.schema ?? null)
+            : null,
+        model: state.settings.openrouterModel || undefined,
+      });
+      if (!res.accepted) {
+        set((s) => ({
+          aiChat: s.aiChat.map((t) =>
+            t.id === placeholder.id ? { ...t, streaming: false, error: 'request rejected' } : t,
+          ),
+          aiPending: false,
+          aiRequestId: null,
+        }));
+      }
+    } catch (err) {
+      set((s) => ({
+        aiChat: s.aiChat.map((t) =>
+          t.id === placeholder.id
+            ? {
+                ...t,
+                streaming: false,
+                error: err instanceof Error ? err.message : String(err),
+              }
+            : t,
+        ),
+        aiPending: false,
+        aiRequestId: null,
+      }));
+    }
+  },
+
+  async aiCancel() {
+    const id = get().aiRequestId;
+    if (!id) return;
+    try {
+      await ipc.ai.cancel(id);
+    } finally {
+      set((s) => ({
+        aiPending: false,
+        aiRequestId: null,
+        aiChat: s.aiChat.map((t) => (t.streaming ? { ...t, streaming: false } : t)),
+      }));
+    }
+  },
+
+  aiClear() {
+    void get().aiCancel();
+    set({ aiChat: [] });
+  },
+
+  aiApplyEvent(evt) {
+    const state = get();
+    if (state.aiRequestId !== evt.requestId) return; // stale stream
+    if (evt.kind === 'delta') {
+      // Append delta to the last assistant turn (streaming placeholder).
+      const idx = [...state.aiChat]
+        .reverse()
+        .findIndex((t) => t.streaming && t.role === 'assistant');
+      if (idx === -1) return;
+      const realIdx = state.aiChat.length - 1 - idx;
+      set({
+        aiChat: state.aiChat.map((t, i) =>
+          i === realIdx ? { ...t, content: t.content + evt.text } : t,
+        ),
+      });
+      return;
+    }
+    if (evt.kind === 'done') {
+      set({
+        aiPending: false,
+        aiRequestId: null,
+        aiChat: state.aiChat.map((t) => (t.streaming ? { ...t, streaming: false } : t)),
+      });
+      return;
+    }
+    if (evt.kind === 'error') {
+      set({
+        aiPending: false,
+        aiRequestId: null,
+        aiChat: state.aiChat.map((t) =>
+          t.streaming ? { ...t, streaming: false, error: evt.message } : t,
+        ),
+      });
+    }
+  },
+
+  // ── Pending edits (buffered inline-edit tray) ──
+
+  async commitPendingEdits() {
+    const state = get();
+    const edits = state.pendingEdits;
+    if (edits.length === 0) return;
+    set({ pendingEditsBusy: true });
+    try {
+      // Wrap in an explicit transaction so partial failures roll back.
+      await ipc.query.run('BEGIN', undefined, { internal: true });
+      for (const e of edits) {
+        const { sql, params } = buildUpdateSql({
+          schema: e.schema,
+          table: e.table,
+          set: { [e.column]: e.newValue },
+          pkValues: e.pkValues,
+        });
+        await ipc.query.run(sql, params, { internal: true });
+      }
+      await ipc.query.run('COMMIT', undefined, { internal: true });
+      set({ pendingEdits: [] });
+      // Refresh every tab that had pending edits — the server-side row
+      // could differ from our optimistic view (triggers, defaults, etc).
+      const tabIds = new Set(edits.map((e) => e.tabId));
+      for (const id of tabIds) {
+        const tab = get().tabs.find((t) => t.id === id);
+        if (tab && tab.kind === 'table') {
+          void runTableDataQuery(set, get, id);
+        }
+      }
+    } catch (err) {
+      try {
+        await ipc.query.run('ROLLBACK', undefined, { internal: true });
+      } catch {
+        // already rolled back / connection lost — swallow
+      }
+      throw err;
+    } finally {
+      set({ pendingEditsBusy: false });
+    }
+  },
+
+  async revertPendingEdits() {
+    const state = get();
+    const tabIds = new Set(state.pendingEdits.map((e) => e.tabId));
+    set({ pendingEdits: [] });
+    // Re-run the data query for each affected tab so the optimistic
+    // mirrored cells reset to their server values.
+    for (const id of tabIds) {
+      const tab = get().tabs.find((t) => t.id === id);
+      if (tab && tab.kind === 'table') {
+        void runTableDataQuery(set, get, id);
+      }
+    }
+  },
+
+  // ── Prod gate ──
+
+  async setConnectionTag(connectionId, tag) {
+    const current = get().settings.connectionTags ?? {};
+    const next: Record<string, 'prod' | 'staging' | 'dev' | 'local'> = { ...current };
+    if (tag === null) {
+      delete next[connectionId];
+    } else {
+      next[connectionId] = tag;
+    }
+    set({ settings: { ...get().settings, connectionTags: next } });
+    try {
+      await ipc.settings.set({ connectionTags: next });
+    } catch (err) {
+      console.error('[plasma] persist connectionTags failed', err);
+    }
+  },
+
+  confirmProdGate() {
+    const gate = get().prodGate;
+    if (!gate) return;
+    set({ prodGate: null });
+    // Re-enter runQuery now that the gate is cleared. The SQL on the
+    // active tab still matches what we stashed — runQuery will see no
+    // gate set and proceed.
+    void get().runQuery();
+  },
+
+  cancelProdGate() {
+    set({ prodGate: null });
+  },
+
+  // ── SQL formatting ──
+
+  async formatActiveSql() {
+    const tab = activeTab(get());
+    if (!tab || tab.kind !== 'sql') return;
+    if (!tab.sql.trim()) return;
+    try {
+      const formatted = await ipc.sql.format(tab.sql);
+      if (formatted && formatted !== tab.sql) {
+        patchActiveTab(set, get, { sql: formatted });
+      }
+    } catch (err) {
+      console.error('[plasma] formatActiveSql failed', err);
+    }
+  },
 }));
 
 // ─── Helpers ─────────────────────────────────────────────────────────
@@ -1705,6 +2503,93 @@ async function runRlsCountForTab(
 function shortVersion(full: string): string {
   const m = full.match(/^(PostgreSQL\s+[\d.]+)/);
   return m ? m[1] : full;
+}
+
+/**
+ * Compose a short, engine-specific context blob for the AI system
+ * prompt. Keeps the renderer in charge of what's worth surfacing —
+ * main just forwards the string. Returns undefined when there's
+ * nothing useful to send (postgres uses the schema field instead).
+ */
+function buildEngineContext(state: SessionState): string | undefined {
+  const cfg = state.activeConfig;
+  if (!cfg) return undefined;
+  const engine = cfg.engine ?? 'postgres';
+
+  if (engine === 'redis' && state.redisOverview) {
+    const o = state.redisOverview;
+    const lines: string[] = [
+      `version: ${o.redisVersion}`,
+      `role: ${o.role}`,
+      `mode: ${o.mode}`,
+    ];
+    const total = o.keyspace.reduce((acc, k) => acc + k.keys, 0);
+    if (total > 0) lines.push(`total keys: ${total.toLocaleString()}`);
+    for (const k of o.keyspace.slice(0, 4)) {
+      lines.push(`db${k.db}: ${k.keys.toLocaleString()} keys (${k.expires.toLocaleString()} with TTL)`);
+    }
+    if (state.redisKeys && state.redisKeys.keys.length > 0) {
+      const sample = state.redisKeys.keys
+        .slice(0, 12)
+        .map((k) => `  ${k.key} (${k.type})`)
+        .join('\n');
+      lines.push('sample keys:', sample);
+    }
+    return lines.join('\n');
+  }
+
+  if (engine === 'opensearch' && state.osOverview) {
+    const o = state.osOverview;
+    const lines: string[] = [
+      `cluster: ${o.clusterName}`,
+      `${o.distribution} v${o.version}`,
+      `health: ${o.health}`,
+      `${o.nodes} node(s) · ${o.indices.length} indices`,
+    ];
+    if (o.indices.length > 0) {
+      lines.push('top indices:');
+      for (const idx of [...o.indices]
+        .sort((a, b) => b.docsCount - a.docsCount)
+        .slice(0, 12)) {
+        lines.push(
+          `  ${idx.index} — ${idx.docsCount.toLocaleString()} docs, ${idx.health}`,
+        );
+      }
+    }
+    return lines.join('\n');
+  }
+
+  return undefined;
+}
+
+/**
+ * Bring the right kind of overview / introspection online based on
+ * which engine the worker just connected to. Postgres uses the existing
+ * `refreshSchema` (full table/column/FK introspection); Redis fetches
+ * INFO + an initial SCAN page; OpenSearch fetches cluster + index list.
+ */
+async function loadEngineOverview(
+  set: (patch: Partial<SessionState>) => void,
+  get: () => SessionState,
+  engine: ConnectionEngine,
+): Promise<void> {
+  if (engine === 'postgres') {
+    await get().refreshSchema();
+    const schema = get().schema;
+    if (schema && schema.schemas.length > 0) {
+      const first = schema.schemas.find((s) => s.name === 'public') ?? schema.schemas[0];
+      set({ expandedSchemas: new Set([first.name]), currentSchema: first.name });
+    }
+    return;
+  }
+  if (engine === 'redis') {
+    await get().refreshRedisOverview();
+    await get().scanRedisKeys({ cursor: '0' });
+    return;
+  }
+  if (engine === 'opensearch') {
+    await get().refreshOsOverview();
+  }
 }
 
 /** React hook helper: selects the currently active tab with proper memoization. */

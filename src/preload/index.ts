@@ -36,6 +36,42 @@ const api: PlasmaAPI = {
           })
         : ipcRenderer.invoke(IpcChannel.QueryRun, sql),
     cancel: () => ipcRenderer.invoke(IpcChannel.QueryCancel),
+    sideband: (sql, params) =>
+      params
+        ? ipcRenderer.invoke(IpcChannel.QuerySideband, { sql, params })
+        : ipcRenderer.invoke(IpcChannel.QuerySideband, sql),
+  },
+  redis: {
+    overview: () => ipcRenderer.invoke(IpcChannel.RedisOverview),
+    scan: (opts) => ipcRenderer.invoke(IpcChannel.RedisScan, opts ?? {}),
+    getKey: (key) => ipcRenderer.invoke(IpcChannel.RedisGetKey, key),
+    deleteKey: (key) => ipcRenderer.invoke(IpcChannel.RedisDeleteKey, key),
+    setTtl: (key, seconds) => ipcRenderer.invoke(IpcChannel.RedisSetTtl, { key, seconds }),
+    command: (parts) => ipcRenderer.invoke(IpcChannel.RedisCommand, parts),
+    analyze: (opts) => ipcRenderer.invoke(IpcChannel.RedisAnalyze, opts ?? {}),
+    slowlog: (limit) => ipcRenderer.invoke(IpcChannel.RedisSlowlog, limit ?? 64),
+    bulkDelete: (keys) => ipcRenderer.invoke(IpcChannel.RedisBulkDelete, keys),
+    write: (op) => ipcRenderer.invoke(IpcChannel.RedisWrite, op),
+    subscribe: (channel, pattern) =>
+      ipcRenderer.invoke(IpcChannel.RedisSubscribe, { channel, pattern: pattern === true }),
+    unsubscribe: (channel, pattern) =>
+      ipcRenderer.invoke(IpcChannel.RedisUnsubscribe, { channel, pattern: pattern === true }),
+  },
+  os: {
+    overview: () => ipcRenderer.invoke(IpcChannel.OsOverview),
+    mapping: (index) => ipcRenderer.invoke(IpcChannel.OsMapping, index),
+    search: (opts) => ipcRenderer.invoke(IpcChannel.OsSearch, opts),
+    sql: (query) => ipcRenderer.invoke(IpcChannel.OsSql, query),
+    aliases: () => ipcRenderer.invoke(IpcChannel.OsAliases),
+    ilm: () => ipcRenderer.invoke(IpcChannel.OsIlm),
+    fieldStats: (opts) => ipcRenderer.invoke(IpcChannel.OsFieldStats, opts),
+  },
+  ai: {
+    chat: (req) => ipcRenderer.invoke(IpcChannel.AiChat, req),
+    cancel: (requestId) => ipcRenderer.invoke(IpcChannel.AiCancel, requestId),
+  },
+  sql: {
+    format: (sql) => ipcRenderer.invoke(IpcChannel.FormatSql, sql),
   },
   history: {
     list: (opts) => ipcRenderer.invoke(IpcChannel.HistoryList, opts ?? {}),
@@ -85,6 +121,8 @@ const eventChannels = [
   'plasma:menu:history',
   'plasma:window:maximizedChanged',
   'plasma:update:status',
+  'plasma:ai:event',
+  'plasma:redis:pubsub',
 ] as const;
 type EventChannel = (typeof eventChannels)[number];
 

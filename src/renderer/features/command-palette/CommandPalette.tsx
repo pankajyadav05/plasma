@@ -1,5 +1,8 @@
-import { useEffect, useMemo } from "react";
-import { Command } from "cmdk";
+import { Dialog, DialogOverlay, DialogPortal } from '@/components/ui/dialog';
+import { kbd } from '@/lib/platform';
+import { useSession } from '@/stores/session';
+import * as DialogPrimitive from '@radix-ui/react-dialog';
+import { Command } from 'cmdk';
 import {
   Clock,
   Command as CommandIcon,
@@ -12,11 +15,8 @@ import {
   Search,
   Settings as SettingsIcon,
   Table2,
-} from "lucide-react";
-import { Dialog, DialogPortal, DialogOverlay } from "@/components/ui/dialog";
-import * as DialogPrimitive from "@radix-ui/react-dialog";
-import { kbd } from "@/lib/platform";
-import { useSession } from "@/stores/session";
+} from 'lucide-react';
+import { useEffect, useMemo } from 'react';
 
 /**
  * Command palette — global ⌘K launcher powered by `cmdk`, wrapped in a
@@ -46,13 +46,13 @@ export function CommandPalette() {
   // Global ⌘K listener
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
         e.preventDefault();
         togglePalette();
       }
     };
-    document.addEventListener("keydown", handler);
-    return () => document.removeEventListener("keydown", handler);
+    document.addEventListener('keydown', handler);
+    return () => document.removeEventListener('keydown', handler);
   }, [togglePalette]);
 
   const tables = useMemo(() => schema?.tables ?? [], [schema]);
@@ -82,7 +82,9 @@ export function CommandPalette() {
             </div>
 
             <Command.List className="max-h-[50vh] overflow-y-auto p-2">
-              <Command.Empty className="px-4 py-8 text-center text-sm text-muted-foreground">No matches.</Command.Empty>
+              <Command.Empty className="px-4 py-8 text-center text-sm text-muted-foreground">
+                No matches.
+              </Command.Empty>
 
               <Command.Group
                 heading="Actions"
@@ -91,28 +93,35 @@ export function CommandPalette() {
                 <PaletteItem
                   icon={<Play className="h-3.5 w-3.5" />}
                   onSelect={() => runAction(runQuery)}
-                  keys={kbd("⏎")}
+                  keys={kbd('⏎')}
                 >
                   Run query
                 </PaletteItem>
-                <PaletteItem icon={<Plus className="h-3.5 w-3.5" />} onSelect={() => runAction(addTab)} keys={kbd("T")}>
+                <PaletteItem
+                  icon={<Plus className="h-3.5 w-3.5" />}
+                  onSelect={() => runAction(addTab)}
+                  keys={kbd('T')}
+                >
                   New query tab
                 </PaletteItem>
                 <PaletteItem
                   icon={<CommandIcon className="h-3.5 w-3.5" />}
                   onSelect={() => runAction(toggleEditor)}
-                  keys={kbd("J")}
+                  keys={kbd('J')}
                 >
                   Toggle query editor
                 </PaletteItem>
                 <PaletteItem
                   icon={<PanelLeft className="h-3.5 w-3.5" />}
                   onSelect={() => runAction(toggleSidebar)}
-                  keys={kbd("B")}
+                  keys={kbd('B')}
                 >
                   Toggle sidebar
                 </PaletteItem>
-                <PaletteItem icon={<Moon className="h-3.5 w-3.5" />} onSelect={() => runAction(toggleTheme)}>
+                <PaletteItem
+                  icon={<Moon className="h-3.5 w-3.5" />}
+                  onSelect={() => runAction(toggleTheme)}
+                >
                   Toggle dark mode
                 </PaletteItem>
                 <PaletteItem
@@ -122,7 +131,7 @@ export function CommandPalette() {
                     setHistoryOpen(true);
                     void loadHistory();
                   }}
-                  keys={kbd("H")}
+                  keys={kbd('H')}
                 >
                   Query history
                 </PaletteItem>
@@ -132,11 +141,17 @@ export function CommandPalette() {
                 >
                   Settings
                 </PaletteItem>
-                <PaletteItem icon={<Plus className="h-3.5 w-3.5" />} onSelect={() => runAction(() => openDialog())}>
+                <PaletteItem
+                  icon={<Plus className="h-3.5 w-3.5" />}
+                  onSelect={() => runAction(() => openDialog())}
+                >
                   New connection
                 </PaletteItem>
                 {activeConfig && (
-                  <PaletteItem icon={<LogOut className="h-3.5 w-3.5" />} onSelect={() => runAction(disconnect)}>
+                  <PaletteItem
+                    icon={<LogOut className="h-3.5 w-3.5" />}
+                    onSelect={() => runAction(disconnect)}
+                  >
                     Disconnect
                   </PaletteItem>
                 )}
@@ -153,7 +168,9 @@ export function CommandPalette() {
                       <PaletteItem
                         key={c.id}
                         icon={<Plug className="h-3.5 w-3.5" />}
-                        onSelect={() => runAction(() => (active ? Promise.resolve() : connectSaved(c.id)))}
+                        onSelect={() =>
+                          runAction(() => (active ? Promise.resolve() : connectSaved(c.id)))
+                        }
                       >
                         {c.name} -
                         <span className="ml-auto text-xs text-muted-foreground">

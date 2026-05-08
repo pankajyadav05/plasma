@@ -1,6 +1,6 @@
-import log from 'electron-log/main.js';
-import { app } from 'electron';
 import { join } from 'node:path';
+import { app } from 'electron';
+import log from 'electron-log/main.js';
 
 /**
  * Structured logger for the main process. Writes rotating files to

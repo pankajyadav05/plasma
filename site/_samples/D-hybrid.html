@@ -1,0 +1,332 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Sample D — Editorial × Generative · Plasma</title>
+    <link rel="preconnect" href="https://fonts.bunny.net" />
+    <link href="https://fonts.bunny.net/css?family=newsreader:300,400,400i,500,500i,600,600i,700i|dm-sans:300,400,500|jetbrains-mono:400,500&display=swap" rel="stylesheet" />
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/gsap.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/ScrollTrigger.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/lenis@1.1.13/dist/lenis.min.js"></script>
+    <style>
+      :root {
+        --paper: #f5efe4;
+        --paper-2: #ebe3d2;
+        --ink: #1c1a14;
+        --ink-soft: #6b665a;
+        --rule: #d8d1c3;
+        --oxblood: #b54836;
+        --primary: #eb5e4e;
+        --night: #15140f;
+      }
+      * { -webkit-font-smoothing: antialiased; }
+      html, body { background: var(--paper); color: var(--ink); }
+      body { font-family: "DM Sans", system-ui, sans-serif; letter-spacing: -0.01em; overflow-x: hidden; }
+      .display { font-family: "Newsreader", Georgia, serif; font-feature-settings: "lnum", "kern", "liga"; letter-spacing: -0.022em; }
+      .mono { font-family: "JetBrains Mono", ui-monospace, monospace; }
+      .ink-soft { color: var(--ink-soft); }
+      .ox { color: var(--oxblood); }
+      .rule { background: var(--rule); height:1px; }
+
+      /* HERO — paper above, generative canvas anchored right */
+      .hero { position: relative; }
+      .flow-canvas { position: absolute; right: 0; top: 0; bottom: 0; width: 55%; z-index: 0; }
+      @media (max-width: 900px) { .flow-canvas { width: 100%; opacity: 0.4; } }
+
+      .stroke { position: relative; display: inline-block; }
+      .stroke::after {
+        content:""; position:absolute; left:0; right:0; bottom:.07em; height:.06em; background: var(--oxblood);
+        transform: scaleX(0); transform-origin: left center; animation: draw 1.6s cubic-bezier(.65,0,.35,1) .4s forwards;
+      }
+      @keyframes draw { to { transform: scaleX(1); } }
+
+      .grain::before {
+        content: ""; position: fixed; inset: 0; pointer-events: none; z-index: 100; opacity: .055;
+        background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 0.5 0'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
+        mix-blend-mode: multiply;
+      }
+
+      .reveal-up { opacity: 0; transform: translateY(28px); transition: opacity 1.1s cubic-bezier(.16,1,.3,1), transform 1.1s cubic-bezier(.16,1,.3,1); }
+      .reveal-up.in { opacity: 1; transform: none; }
+
+      .number { font-feature-settings: "lnum","tnum"; }
+
+      .col-rule { border-left: 1px solid var(--rule); }
+
+      .marquee { overflow: hidden; white-space: nowrap; border-block: 1px solid var(--rule); }
+      .marquee-track { display: inline-block; padding-block: 16px; animation: scroll 50s linear infinite; }
+      @keyframes scroll { from { transform: translateX(0); } to { transform: translateX(-50%); } }
+
+      /* dark editorial section */
+      .night {
+        background: var(--night); color: #f3eedf;
+      }
+      .night .ink-soft { color: #b8b0a0; }
+      .night .rule { background: rgba(255,255,255,.10); }
+      .night .col-rule { border-left-color: rgba(255,255,255,.10); }
+
+      .magnetic { transition: transform .35s cubic-bezier(.16,1,.3,1); display: inline-block; }
+    </style>
+  </head>
+  <body class="grain">
+    <header class="fixed inset-x-0 top-0 z-40">
+      <div class="mx-auto flex max-w-[1280px] items-center justify-between px-8 py-6">
+        <a class="display italic text-xl tracking-tight">Plasma<span class="ox">.</span></a>
+        <nav class="hidden md:flex items-center gap-10 text-[12px] mono uppercase tracking-[0.18em] ink-soft">
+          <a>Index</a><a>Pages</a><a>Notes</a><a>Download</a>
+        </nav>
+        <a class="magnetic text-[12px] mono uppercase tracking-[0.18em] border-b border-[color:var(--ink)] pb-0.5">Get it →</a>
+      </div>
+      <div class="rule mx-8"></div>
+    </header>
+
+    <!-- HERO -->
+    <section class="hero pt-40 pb-28 px-8 relative overflow-hidden">
+      <canvas id="flowCanvas" class="flow-canvas"></canvas>
+
+      <div class="relative mx-auto max-w-[1280px] z-10">
+        <div class="grid grid-cols-12 gap-6 mb-10 mono text-[11px] uppercase tracking-[0.2em] ink-soft">
+          <div class="col-span-3">Vol. 01 / Iss. 010</div>
+          <div class="col-span-3">Postgres · Redis · OpenSearch</div>
+          <div class="col-span-3">May 2026</div>
+          <div class="col-span-3 text-right">A database client</div>
+        </div>
+        <div class="rule mb-12"></div>
+
+        <h1 class="display text-[12vw] md:text-[10vw] font-[400] leading-[0.92] max-w-[12ch]">
+          <span class="block reveal-up">A&nbsp;<em class="font-[400] italic stroke">quiet</em></span>
+          <span class="block reveal-up" style="transition-delay:.1s">place&nbsp;for</span>
+          <span class="block reveal-up display italic" style="transition-delay:.2s">queries.</span>
+        </h1>
+
+        <div class="mt-14 grid grid-cols-12 gap-6 items-end">
+          <p class="col-span-12 md:col-span-5 text-[18px] leading-[1.55] reveal-up max-w-[42ch]" style="transition-delay:.3s">
+            One client for Postgres, Redis, and OpenSearch. Schema-aware autocomplete, an AI assistant with engine-aware tool use, and editorial typography that respects your eyes.
+          </p>
+          <div class="col-span-12 md:col-span-3 col-rule pl-6 reveal-up" style="transition-delay:.42s">
+            <div class="mono text-[10px] uppercase tracking-[0.18em] ink-soft">Today</div>
+            <a class="magnetic block mt-1 display italic text-2xl underline decoration-[color:var(--oxblood)] decoration-2 underline-offset-4">Download v0.0.10 →</a>
+            <div class="mono text-[11px] mt-2 ink-soft">Windows · 84 MB · Apache 2.0</div>
+          </div>
+          <div class="col-span-12 md:col-span-3 col-rule pl-6 reveal-up" style="transition-delay:.5s">
+            <div class="mono text-[10px] uppercase tracking-[0.18em] ink-soft">Folio</div>
+            <div class="display italic text-2xl mt-1">Three engines, one quiet room.</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- MARQUEE -->
+    <div class="marquee">
+      <div class="marquee-track display italic text-3xl">
+        <span class="px-8">Postgres</span><span class="px-8 ox">·</span>
+        <span class="px-8">Redis</span><span class="px-8 ox">·</span>
+        <span class="px-8">OpenSearch</span><span class="px-8 ox">·</span>
+        <span class="px-8">Schema-aware autocomplete</span><span class="px-8 ox">·</span>
+        <span class="px-8">Engine-aware AI</span><span class="px-8 ox">·</span>
+        <span class="px-8">EXPLAIN viewer</span><span class="px-8 ox">·</span>
+        <span class="px-8">Discover search</span><span class="px-8 ox">·</span>
+        <span class="px-8">redis-cli</span><span class="px-8 ox">·</span>
+        <span class="px-8">9 themes</span><span class="px-8 ox">·</span>
+        <span class="px-8">Postgres</span><span class="px-8 ox">·</span>
+        <span class="px-8">Redis</span><span class="px-8 ox">·</span>
+        <span class="px-8">OpenSearch</span><span class="px-8 ox">·</span>
+        <span class="px-8">Schema-aware autocomplete</span><span class="px-8 ox">·</span>
+        <span class="px-8">Engine-aware AI</span><span class="px-8 ox">·</span>
+      </div>
+    </div>
+
+    <!-- PULL QUOTE -->
+    <section class="px-8 py-32">
+      <div class="mx-auto max-w-[1280px] grid grid-cols-12 gap-6">
+        <div class="col-span-12 md:col-span-2 mono text-[11px] uppercase tracking-[0.2em] ink-soft reveal-up">¶ 01 — Premise</div>
+        <blockquote class="col-span-12 md:col-span-9 display italic text-[5vw] md:text-[3.6vw] leading-[1.05] reveal-up" style="transition-delay:.1s">
+          “Most database tools <span class="not-italic mono text-[1.6vw] align-middle ink-soft">[ shout ]</span> at you. <br/>
+          Plasma <em class="stroke">whispers</em>, and the query <br/>
+          arrives anyway.”
+        </blockquote>
+      </div>
+    </section>
+
+    <div class="rule mx-8"></div>
+
+    <!-- DARK SCROLL — generative chapter -->
+    <section class="night relative overflow-hidden border-y border-[color:var(--rule)]">
+      <canvas id="darkCanvas" class="absolute inset-0 z-0 opacity-90"></canvas>
+      <div class="relative z-10 px-8 py-40">
+        <div class="mx-auto max-w-[1280px]">
+          <div class="reveal-up mono text-[11px] uppercase tracking-[0.2em] ink-soft">¶ 02 — The shape of a query</div>
+          <h2 class="reveal-up display text-[6vw] md:text-[4.6vw] mt-3 leading-[1.05] max-w-[18ch]" style="transition-delay:.1s">
+            Every join is a path. <em class="ox">Plasma</em> draws it for you,<br/>
+            so you can read the plan before you ship.
+          </h2>
+          <div class="reveal-up mt-12 grid grid-cols-12 gap-6 max-w-[900px]" style="transition-delay:.2s">
+            <div class="col-span-6 md:col-span-3">
+              <div class="display italic text-5xl number ox">240<span class="text-[28px]">ms</span></div>
+              <div class="mono text-[11px] uppercase tracking-[0.18em] ink-soft mt-1">cold start</div>
+            </div>
+            <div class="col-span-6 md:col-span-3">
+              <div class="display italic text-5xl number">9</div>
+              <div class="mono text-[11px] uppercase tracking-[0.18em] ink-soft mt-1">themes</div>
+            </div>
+            <div class="col-span-6 md:col-span-3">
+              <div class="display italic text-5xl number">3</div>
+              <div class="mono text-[11px] uppercase tracking-[0.18em] ink-soft mt-1">engines</div>
+            </div>
+            <div class="col-span-6 md:col-span-3">
+              <div class="display italic text-5xl number">∞</div>
+              <div class="mono text-[11px] uppercase tracking-[0.18em] ink-soft mt-1">tabs that stick</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- THREE PILLARS -->
+    <section class="px-8 py-32">
+      <div class="mx-auto max-w-[1280px] grid grid-cols-12 gap-6">
+        <div class="col-span-12 mb-8">
+          <div class="flex items-baseline justify-between">
+            <div class="mono text-[11px] uppercase tracking-[0.2em] ink-soft">¶ 03 — Three non-negotiables</div>
+            <div class="display italic text-2xl ink-soft">A short list.</div>
+          </div>
+          <div class="rule mt-6"></div>
+        </div>
+        <article class="col-span-12 md:col-span-4 reveal-up">
+          <div class="display italic text-7xl number">01</div>
+          <h3 class="display text-2xl mt-2 italic">Schema-aware.</h3>
+          <p class="mt-3 text-[15px] leading-[1.7] ink-soft">Autocomplete that knows your tables, columns, and foreign keys. Suggestions arrive before you finish thinking.</p>
+        </article>
+        <article class="col-span-12 md:col-span-4 col-rule pl-6 reveal-up" style="transition-delay:.1s">
+          <div class="display italic text-7xl number">02</div>
+          <h3 class="display text-2xl mt-2 italic">State that sticks.</h3>
+          <p class="mt-3 text-[15px] leading-[1.7] ink-soft">Every tab, filter, theme, and pinned cell stays put — per connection. Close, reopen, exhale.</p>
+        </article>
+        <article class="col-span-12 md:col-span-4 col-rule pl-6 reveal-up" style="transition-delay:.2s">
+          <div class="display italic text-7xl number">03</div>
+          <h3 class="display text-2xl mt-2 italic">AI that reads.</h3>
+          <p class="mt-3 text-[15px] leading-[1.7] ink-soft">Engine-aware tool use. The assistant inspects your schema, then writes the query.</p>
+        </article>
+      </div>
+    </section>
+
+    <!-- CTA -->
+    <section class="px-8 py-32 night">
+      <div class="mx-auto max-w-[1280px] text-center">
+        <h2 class="reveal-up display text-[10vw] md:text-[7vw] leading-[0.95]">
+          Open a <em class="ox">quiet</em> client.
+        </h2>
+        <p class="reveal-up mt-6 ink-soft text-[15px]" style="transition-delay:.1s">Free. Apache 2.0. 84 MB. Windows.</p>
+        <div class="reveal-up mt-10 flex justify-center gap-3" style="transition-delay:.2s">
+          <a class="magnetic px-7 py-4 bg-[color:var(--paper)] text-[color:var(--ink)] display italic text-lg">Download v0.0.10</a>
+          <a class="magnetic px-7 py-4 border border-white/30 text-white/80 display italic text-lg">GitHub</a>
+        </div>
+      </div>
+    </section>
+
+    <footer class="px-8 py-12">
+      <div class="mx-auto max-w-[1280px] flex flex-wrap justify-between gap-6 mono text-[11px] uppercase tracking-[0.2em] ink-soft">
+        <div>Plasma · Newsreader + DM Sans + JetBrains Mono · 2026</div>
+        <div class="flex gap-6"><a>github</a><a>changelog</a><a>license</a></div>
+      </div>
+    </footer>
+
+    <script>
+      // Lenis
+      const lenis = new Lenis({ lerp: 0.1, duration: 1.2, smoothWheel: true });
+      function raf(t){ lenis.raf(t); requestAnimationFrame(raf); }
+      requestAnimationFrame(raf);
+
+      // Reveal
+      const io = new IntersectionObserver(es => es.forEach(e => e.isIntersecting && e.target.classList.add('in')), { threshold: 0.12 });
+      document.querySelectorAll('.reveal-up').forEach(el => io.observe(el));
+
+      // Magnetic
+      document.querySelectorAll('.magnetic').forEach(el => {
+        el.addEventListener('mousemove', (e) => {
+          const r = el.getBoundingClientRect();
+          el.style.transform = `translate(${(e.clientX-r.left-r.width/2)*0.18}px,${(e.clientY-r.top-r.height/2)*0.22}px)`;
+        });
+        el.addEventListener('mouseleave', () => { el.style.transform = ''; });
+      });
+
+      // HERO — flow field on paper (oxblood ink)
+      (function() {
+        const c = document.getElementById('flowCanvas'); if (!c) return;
+        const ctx = c.getContext('2d');
+        let W,H, t=0; const N = 600; const pts=[];
+        function resize() {
+          const dpr = window.devicePixelRatio || 1;
+          W = c.width = c.offsetWidth*dpr; H = c.height = c.offsetHeight*dpr;
+          c.style.width = c.offsetWidth+'px'; ctx.setTransform(dpr,0,0,dpr,0,0);
+          ctx.fillStyle = '#f5efe4'; ctx.fillRect(0,0,c.offsetWidth,c.offsetHeight);
+          pts.length = 0;
+          for (let i=0;i<N;i++) pts.push({ x: Math.random()*c.offsetWidth, y: Math.random()*c.offsetHeight, life: Math.random()*200+50 });
+        }
+        function noise(x,y) {
+          // cheap noise
+          return Math.sin(x*0.005 + t*0.5)*Math.cos(y*0.006 + t*0.3) + Math.sin((x+y)*0.003 + t*0.2)*0.5;
+        }
+        function step() {
+          t += 0.005;
+          ctx.fillStyle = 'rgba(245,239,228,0.04)'; ctx.fillRect(0,0,c.offsetWidth,c.offsetHeight);
+          ctx.strokeStyle = 'rgba(181,72,54,0.10)';
+          ctx.lineWidth = 0.6;
+          for (const p of pts) {
+            const a = noise(p.x,p.y) * Math.PI * 2;
+            const nx = p.x + Math.cos(a)*1.2, ny = p.y + Math.sin(a)*1.2;
+            ctx.beginPath(); ctx.moveTo(p.x,p.y); ctx.lineTo(nx,ny); ctx.stroke();
+            p.x = nx; p.y = ny; p.life--;
+            if (p.x<0||p.y<0||p.x>c.offsetWidth||p.y>c.offsetHeight||p.life<=0) {
+              p.x = Math.random()*c.offsetWidth; p.y = Math.random()*c.offsetHeight; p.life = Math.random()*200+50;
+            }
+          }
+          requestAnimationFrame(step);
+        }
+        window.addEventListener('resize', resize);
+        resize(); step();
+      })();
+
+      // DARK chapter — constellation with cream lines
+      (function() {
+        const c = document.getElementById('darkCanvas'); if (!c) return;
+        const ctx = c.getContext('2d');
+        let W,H, pts=[]; const N=70;
+        function resize() {
+          const dpr = window.devicePixelRatio || 1;
+          W = c.width = c.offsetWidth*dpr; H = c.height = c.offsetHeight*dpr;
+          c.style.width = c.offsetWidth+'px'; c.style.height = c.offsetHeight+'px';
+          ctx.setTransform(dpr,0,0,dpr,0,0);
+        }
+        function init() {
+          pts = [];
+          for (let i=0;i<N;i++) pts.push({ x: Math.random()*c.offsetWidth, y: Math.random()*c.offsetHeight, vx:(Math.random()-.5)*0.18, vy:(Math.random()-.5)*0.18, r: Math.random()*1.4+0.4 });
+        }
+        function step() {
+          const w=c.offsetWidth, h=c.offsetHeight;
+          ctx.clearRect(0,0,w,h);
+          for (let i=0;i<pts.length;i++) {
+            for (let j=i+1;j<pts.length;j++) {
+              const a=pts[i],b=pts[j], d=Math.hypot(a.x-b.x,a.y-b.y);
+              if (d<160) {
+                ctx.strokeStyle = `rgba(243,238,223,${(1-d/160)*0.12})`;
+                ctx.beginPath(); ctx.moveTo(a.x,a.y); ctx.lineTo(b.x,b.y); ctx.stroke();
+              }
+            }
+          }
+          for (const p of pts) {
+            p.x+=p.vx; p.y+=p.vy;
+            if (p.x<0||p.x>w) p.vx*=-1; if (p.y<0||p.y>h) p.vy*=-1;
+            ctx.fillStyle = 'rgba(181,72,54,0.85)';
+            ctx.beginPath(); ctx.arc(p.x,p.y,p.r,0,Math.PI*2); ctx.fill();
+          }
+          requestAnimationFrame(step);
+        }
+        window.addEventListener('resize',()=>{ resize(); init(); });
+        resize(); init(); step();
+      })();
+    </script>
+  </body>
+</html>

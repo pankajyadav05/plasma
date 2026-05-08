@@ -1,5 +1,6 @@
 import { Button } from '@/components/ui/button';
 import { Kbd } from '@/components/ui/kbd';
+import { AiPanel } from '@/features/ai/AiPanel';
 import { MonacoEditor } from '@/features/editor/MonacoEditor';
 import { cn } from '@/lib/cn';
 import { ipc } from '@/lib/ipc';
@@ -24,9 +25,11 @@ import {
   Square,
   Trash2,
   UserCircle,
+  Wand2,
   X,
 } from 'lucide-react';
 import { useEffect, useState } from 'react';
+import { SnippetVarsDialog, applySnippetVars, extractSnippetVars } from './SnippetVarsDialog';
 
 const RAIL_WIDTH = 48;
 const PANEL_WIDTH = 460;
@@ -54,39 +57,59 @@ interface RailItem {
 export function RightRail() {
   const mode = useSession((s) => s.rightPanelMode);
   const setMode = useSession((s) => s.setRightPanelMode);
+  const engine = useSession((s) => s.activeConfig?.engine ?? 'postgres');
   const tab = useActiveTab();
   const rlsCount = tab?.kind === 'table' ? tab.rlsPolicyCount : null;
 
   const isTable = tab?.kind === 'table';
+  const isPostgres = engine === 'postgres';
+  // SQL tabs get the Monaco editor inline in the main canvas now, so
+  // the right-rail Query icon would be a duplicate. Show it only for
+  // table tabs (where it surfaces the compiled, read-only SQL). The
+  // RLS / Role / Saved-queries panels are SQL-specific — hidden when
+  // connected to redis / opensearch.
   const items: RailItem[] = [
+    ...(isPostgres && isTable
+      ? [
+          {
+            mode: 'query' as const,
+            icon: <Code2 className="h-[18px] w-[18px]" />,
+            label: 'Compiled SQL',
+          },
+        ]
+      : []),
     {
-      mode: 'query',
-      icon: <Code2 className="h-[18px] w-[18px]" />,
-      label: 'Query editor',
+      mode: 'ai',
+      icon: <Wand2 className="h-[18px] w-[18px]" />,
+      label: 'AI assistant',
     },
-    {
-      mode: 'saved',
-      icon: <Bookmark className="h-[18px] w-[18px]" />,
-      label: 'Saved queries',
-    },
-    {
-      mode: 'role',
-      icon: <UserCircle className="h-[18px] w-[18px]" />,
-      label: 'Session role',
-    },
-    {
-      mode: 'rls',
-      icon: <Shield className="h-[18px] w-[18px]" />,
-      stateIcon:
-        rlsCount === null ? (
-          <Shield className="h-[18px] w-[18px]" />
-        ) : rlsCount === 0 ? (
-          <ShieldOff className="h-[18px] w-[18px]" />
-        ) : (
-          <ShieldCheck className="h-[18px] w-[18px]" />
-        ),
-      label: 'Row-level security',
-    },
+    ...(isPostgres
+      ? ([
+          {
+            mode: 'saved',
+            icon: <Bookmark className="h-[18px] w-[18px]" />,
+            label: 'Saved queries',
+          },
+          {
+            mode: 'role',
+            icon: <UserCircle className="h-[18px] w-[18px]" />,
+            label: 'Session role',
+          },
+          {
+            mode: 'rls',
+            icon: <Shield className="h-[18px] w-[18px]" />,
+            stateIcon:
+              rlsCount === null ? (
+                <Shield className="h-[18px] w-[18px]" />
+              ) : rlsCount === 0 ? (
+                <ShieldOff className="h-[18px] w-[18px]" />
+              ) : (
+                <ShieldCheck className="h-[18px] w-[18px]" />
+              ),
+            label: 'Row-level security',
+          },
+        ] as RailItem[])
+      : []),
   ];
 
   // Auto-collapse RLS slot when there's no table tab — it has nothing
@@ -110,6 +133,7 @@ export function RightRail() {
       >
         <div style={{ width: PANEL_WIDTH }} className="h-full">
           {mode === 'query' && <QueryPanel />}
+          {mode === 'ai' && <AiPanel />}
           {mode === 'saved' && <SavedQueriesPanel />}
           {mode === 'role' && <RolePanel />}
           {mode === 'rls' && <RlsPanel />}
@@ -170,9 +194,10 @@ function QueryPanel() {
   const refreshTable = useSession((s) => s.refreshTable);
   const connectionState = useSession((s) => s.connectionState);
   const setMode = useSession((s) => s.setRightPanelMode);
+  const formatActiveSql = useSession((s) => s.formatActiveSql);
   const theme = useSession((s) => s.settings.theme);
   const fontSize = useSession((s) => s.settings.editorFontSize);
-  const claudeApiKey = useSession((s) => s.settings.claudeApiKey);
+  const apiKey = useSession((s) => s.settings.openrouterApiKey || s.settings.claudeApiKey);
 
   if (!tab) {
     return <PanelEmpty title="No active tab" hint="Open a table or write a query." />;
@@ -193,15 +218,27 @@ function QueryPanel() {
   return (
     <div className="flex h-full flex-col">
       <PanelHeader title={tab.title} hint={isTable ? 'table' : undefined} onClose={close}>
-        {!isTable && claudeApiKey.trim().length > 0 && (
+        {!isTable && apiKey.trim().length > 0 && (
           <Button
             variant="ghost"
             size="sm"
             className="font-display italic text-muted-foreground"
-            title="Ask Claude to write or explain SQL"
+            title="Open AI assistant (⌘K)"
+            onClick={() => setMode('ai')}
           >
             <Sparkles className="h-3.5 w-3.5 text-primary" />
             ask
+          </Button>
+        )}
+        {!isTable && (
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            onClick={() => void formatActiveSql()}
+            title="Format SQL (⌘⇧F)"
+            aria-label="Format SQL"
+          >
+            <Wand2 />
           </Button>
         )}
         <Button
@@ -247,6 +284,20 @@ function QueryPanel() {
           theme={theme}
           fontSize={fontSize}
           readOnly={isTable}
+          onFormat={isTable ? undefined : () => void formatActiveSql()}
+          onAskAi={
+            isTable
+              ? undefined
+              : (text) => {
+                  setMode('ai');
+                  const seed = text.trim()
+                    ? `Explain or improve this SQL:\n\n\`\`\`sql\n${text}\n\`\`\``
+                    : '';
+                  if (seed) {
+                    void useSession.getState().aiAsk(seed);
+                  }
+                }
+          }
         />
       </div>
     </div>
@@ -489,21 +540,29 @@ function SavedQueriesPanel() {
   const saveCurrentTab = useSession((s) => s.saveCurrentTab);
   const deleteSavedQuery = useSession((s) => s.deleteSavedQuery);
   const openSavedQuery = useSession((s) => s.openSavedQuery);
+  const addTab = useSession((s) => s.addTab);
+  const setSql = useSession((s) => s.setSql);
+  const runQuery = useSession((s) => s.runQuery);
 
   const [naming, setNaming] = useState(false);
   const [draft, setDraft] = useState('');
   const [filter, setFilter] = useState('');
+  const [varPrompt, setVarPrompt] = useState<{
+    name: string;
+    sql: string;
+    vars: string[];
+  } | null>(null);
 
   const list = (connId && savedMap?.[connId]) || [];
   const visible = list.filter((q) => q.name.toLowerCase().includes(filter.toLowerCase()));
 
-  const canSave =
-    !!tab && !!connId && (tab.kind === 'table' ? true : tab.sql.trim().length > 0);
+  const canSave = !!tab && !!connId && (tab.kind === 'table' ? true : tab.sql.trim().length > 0);
 
   const defaultName = (() => {
     if (!tab) return '';
     if (tab.kind === 'table') {
-      const base = tab.tableSchema === 'public' ? tab.tableName : `${tab.tableSchema}.${tab.tableName}`;
+      const base =
+        tab.tableSchema === 'public' ? tab.tableName : `${tab.tableSchema}.${tab.tableName}`;
       const tag = [
         tab.filters.length > 0 && `${tab.filters.length}f`,
         tab.tableSort.length > 0 && 'sorted',
@@ -532,7 +591,11 @@ function SavedQueriesPanel() {
 
   return (
     <div className="flex h-full flex-col">
-      <PanelHeader title="Saved queries" hint={list.length ? `${list.length}` : undefined} onClose={() => setMode(null)}>
+      <PanelHeader
+        title="Saved queries"
+        hint={list.length ? `${list.length}` : undefined}
+        onClose={() => setMode(null)}
+      >
         {!naming && (
           <Button
             variant="primary"
@@ -570,7 +633,12 @@ function SavedQueriesPanel() {
             placeholder="Name this query…"
             className="h-8 flex-1 rounded-md border border-border bg-background px-2 text-sm text-foreground outline-none transition-colors placeholder:text-muted-foreground focus:border-primary"
           />
-          <Button variant="primary" size="sm" onClick={() => void confirmSave()} disabled={!draft.trim()}>
+          <Button
+            variant="primary"
+            size="sm"
+            onClick={() => void confirmSave()}
+            disabled={!draft.trim()}
+          >
             Save
           </Button>
           <Button
@@ -601,7 +669,10 @@ function SavedQueriesPanel() {
 
       <div className="min-h-0 flex-1 overflow-y-auto">
         {!connId && (
-          <PanelEmpty title="Not connected" hint="Connect to a database to see its saved queries." />
+          <PanelEmpty
+            title="Not connected"
+            hint="Connect to a database to see its saved queries."
+          />
         )}
         {connId && list.length === 0 && (
           <PanelEmpty
@@ -610,19 +681,51 @@ function SavedQueriesPanel() {
           />
         )}
         {connId && list.length > 0 && visible.length === 0 && (
-          <div className="px-3 py-3 font-display text-xs italic text-muted-foreground">no matches</div>
+          <div className="px-3 py-3 font-display text-xs italic text-muted-foreground">
+            no matches
+          </div>
         )}
         {visible.map((q) => (
           <SavedQueryRow
             key={q.id}
             query={q}
-            onOpen={() => openSavedQuery(q.id)}
+            onOpen={() => {
+              if (q.kind === 'sql') {
+                const vars = extractSnippetVars(q.sql);
+                if (vars.length > 0) {
+                  setVarPrompt({ name: q.name, sql: q.sql, vars });
+                  return;
+                }
+              }
+              openSavedQuery(q.id);
+            }}
             onDelete={() => void deleteSavedQuery(q.id)}
           />
         ))}
       </div>
 
-      <PanelFooter>Saved queries are scoped to this connection and persist across restarts.</PanelFooter>
+      <PanelFooter>
+        Saved queries are scoped to this connection and persist across restarts.
+      </PanelFooter>
+
+      <SnippetVarsDialog
+        open={Boolean(varPrompt)}
+        varNames={varPrompt?.vars ?? []}
+        onCancel={() => setVarPrompt(null)}
+        onConfirm={(values) => {
+          if (!varPrompt) return;
+          const filled = applySnippetVars(varPrompt.sql, values);
+          // Open as a fresh SQL tab and run it. We don't mutate the saved
+          // query — the snippet stays parametric for the next call.
+          addTab();
+          // After addTab the new tab is active; setSql + runQuery target it.
+          queueMicrotask(() => {
+            setSql(filled);
+            void runQuery();
+          });
+          setVarPrompt(null);
+        }}
+      />
     </div>
   );
 }
@@ -659,7 +762,11 @@ function SavedQueryRow({
               <span className="font-mono">
                 {query.tableSchema}.{query.tableName}
               </span>
-              {query.filters.length > 0 && <Pill>{query.filters.length} filter{query.filters.length === 1 ? '' : 's'}</Pill>}
+              {query.filters.length > 0 && (
+                <Pill>
+                  {query.filters.length} filter{query.filters.length === 1 ? '' : 's'}
+                </Pill>
+              )}
               {query.sort.length > 0 && <Pill>sorted</Pill>}
               {query.hidden.length > 0 && <Pill>{query.hidden.length} hidden</Pill>}
               {query.sticky.length > 0 && <Pill>{query.sticky.length} pinned</Pill>}

@@ -1,5 +1,5 @@
-import type * as MonacoType from 'monaco-editor';
 import { useSession } from '@/stores/session';
+import type * as MonacoType from 'monaco-editor';
 
 /**
  * Schema-aware SQL autocomplete. Registered once per renderer lifetime;
@@ -51,9 +51,7 @@ export function registerSqlCompletions(monaco: typeof MonacoType): void {
       };
 
       // ── 1. Dotted access: `alias.` or `schema.` ──
-      const dotMatch = /([a-zA-Z_][a-zA-Z0-9_]*)\.([a-zA-Z_][a-zA-Z0-9_]*)?$/.exec(
-        beforeCursor,
-      );
+      const dotMatch = /([a-zA-Z_][a-zA-Z0-9_]*)\.([a-zA-Z_][a-zA-Z0-9_]*)?$/.exec(beforeCursor);
       if (dotMatch) {
         const prefix = dotMatch[1];
         // First guess: prefix is a schema name → list its tables
@@ -148,11 +146,7 @@ export function registerSqlCompletions(monaco: typeof MonacoType): void {
       }));
 
       return {
-        suggestions: [
-          ...tableSuggestions,
-          ...columnSuggestions,
-          ...keywordSuggestions,
-        ],
+        suggestions: [...tableSuggestions, ...columnSuggestions, ...keywordSuggestions],
       };
     },
   });
@@ -170,7 +164,8 @@ export function registerSqlCompletions(monaco: typeof MonacoType): void {
  */
 function resolveAlias(precedingText: string, identifier: string): string | null {
   // Walk FROM/JOIN occurrences and pair table names with their aliases
-  const re = /\b(?:from|join|update|into)\s+(?:([a-zA-Z_][a-zA-Z0-9_]*)\.)?([a-zA-Z_][a-zA-Z0-9_]*)(?:\s+(?:as\s+)?([a-zA-Z_][a-zA-Z0-9_]*))?/gi;
+  const re =
+    /\b(?:from|join|update|into)\s+(?:([a-zA-Z_][a-zA-Z0-9_]*)\.)?([a-zA-Z_][a-zA-Z0-9_]*)(?:\s+(?:as\s+)?([a-zA-Z_][a-zA-Z0-9_]*))?/gi;
   let match: RegExpExecArray | null;
   while ((match = re.exec(precedingText))) {
     const table = match[2];

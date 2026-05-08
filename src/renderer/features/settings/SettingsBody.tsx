@@ -313,18 +313,32 @@ export function SettingsBody() {
         </p>
       </Field>
 
-      <SectionTitle>AI (Claude API)</SectionTitle>
-      <Field label="Claude API key" htmlFor="claude-key">
+      <SectionTitle>AI (OpenRouter)</SectionTitle>
+      <Field label="OpenRouter API key" htmlFor="openrouter-key">
         <Input
-          id="claude-key"
+          id="openrouter-key"
           type="password"
-          value={settings.claudeApiKey}
-          onChange={(e) => void updateSettings({ claudeApiKey: e.target.value })}
-          placeholder="sk-ant-…"
+          value={settings.openrouterApiKey}
+          onChange={(e) => void updateSettings({ openrouterApiKey: e.target.value })}
+          placeholder="sk-or-…"
         />
         <p className="mt-1 font-display text-xs italic text-muted-foreground">
-          BYO — stored in the local settings table. Never leaves your machine unless you make an AI
-          request.
+          BYO — stored in the local settings table. One key gives access to Claude, GPT, Gemini,
+          Qwen, etc. Schema is sent as a system prompt; row data never leaves your machine.
+        </p>
+      </Field>
+
+      <Field label="Model" htmlFor="openrouter-model">
+        <Input
+          id="openrouter-model"
+          value={settings.openrouterModel}
+          onChange={(e) => void updateSettings({ openrouterModel: e.target.value })}
+          placeholder="anthropic/claude-sonnet-4.5"
+        />
+        <p className="mt-1 font-display text-xs italic text-muted-foreground">
+          Any OpenRouter model id. Recommended: <code>anthropic/claude-sonnet-4.5</code>,{' '}
+          <code>openai/gpt-4o</code>, <code>google/gemini-2.5-pro</code>,{' '}
+          <code>qwen/qwen-2.5-coder-32b-instruct</code>.
         </p>
       </Field>
 

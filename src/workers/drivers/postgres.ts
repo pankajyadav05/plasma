@@ -1,5 +1,5 @@
-import pg from 'pg';
 import type { ConnectionConfig, QueryResult, SchemaInfo, TxnState } from '@shared/protocol';
+import pg from 'pg';
 
 const { Client } = pg;
 type ClientT = InstanceType<typeof Client>;
@@ -18,7 +18,6 @@ export class PostgresDriver {
   private sideband: ClientT | null = null;
   private primaryBackendPid: number | null = null;
   private txnState: TxnState = 'none';
-  private currentConfig: ConnectionConfig | null = null;
 
   isConnected(): boolean {
     return this.primary !== null;
@@ -44,7 +43,6 @@ export class PostgresDriver {
     });
     await primary.connect();
     this.primary = primary;
-    this.currentConfig = config;
 
     // Grab the backend pid so the sideband can cancel it
     const pidRes = await primary.query<{ pid: number }>('SELECT pg_backend_pid() AS pid');
@@ -71,7 +69,6 @@ export class PostgresDriver {
   async disconnect(): Promise<void> {
     this.txnState = 'none';
     this.primaryBackendPid = null;
-    this.currentConfig = null;
     const p = this.primary;
     const s = this.sideband;
     this.primary = null;
@@ -102,6 +99,35 @@ export class PostgresDriver {
       this.txnState = 'none';
     }
 
+    return {
+      columns: res.fields.map((f) => ({
+        name: f.name,
+        dataTypeID: f.dataTypeID,
+        dataTypeName: pgTypeName(f.dataTypeID),
+      })),
+      rows: res.rows as unknown[][],
+      rowCount: res.rowCount ?? res.rows.length,
+      durationMs,
+      command: res.command,
+    };
+  }
+
+  /**
+   * Run a query on the sideband connection. Used by the live monitor
+   * (pg_stat_activity polling) and pg_terminate_backend so monitoring
+   * still works while a long-running query holds the primary client.
+   *
+   * Sideband never participates in the primary's transaction state.
+   */
+  async sidebandQuery(sql: string, params?: unknown[]): Promise<QueryResult> {
+    if (!this.sideband) throw new Error('not connected');
+    const start = Date.now();
+    const res = await this.sideband.query({
+      text: sql,
+      values: params,
+      rowMode: 'array',
+    });
+    const durationMs = Date.now() - start;
     return {
       columns: res.fields.map((f) => ({
         name: f.name,

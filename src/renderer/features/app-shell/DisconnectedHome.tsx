@@ -1,6 +1,33 @@
 import { Button } from '@/components/ui/button';
 import { useSession } from '@/stores/session';
-import { Database, Pencil, Plus } from 'lucide-react';
+import type { ConnectionEngine, SavedConnection } from '@shared/protocol';
+import { Boxes, Database, Layers, Pencil, Plus } from 'lucide-react';
+
+const ENGINE_META: Record<
+  ConnectionEngine,
+  { label: string; icon: typeof Database }
+> = {
+  postgres: { label: 'Postgres', icon: Database },
+  redis: { label: 'Redis', icon: Layers },
+  opensearch: { label: 'OpenSearch', icon: Boxes },
+};
+
+/**
+ * Compose the secondary meta line for a saved-connection card. The
+ * `database`/`user` fields carry different meanings per engine, so we
+ * branch instead of dumping all four like the postgres-only flavor did.
+ */
+function metaLine(c: SavedConnection): string {
+  const engine = c.engine ?? 'postgres';
+  const hostPort = `${c.host}:${c.port}`;
+  if (engine === 'redis') {
+    return `${hostPort} · db ${c.database || '0'}${c.user ? ` · ${c.user}` : ''}`;
+  }
+  if (engine === 'opensearch') {
+    return c.user ? `${hostPort} · ${c.user}` : hostPort;
+  }
+  return `${hostPort} · ${c.database} · ${c.user}`;
+}
 
 /**
  * Full-window landing when no connection is active. Centered card
@@ -37,7 +64,11 @@ export function DisconnectedHome() {
           </div>
         ) : (
           <ul className="flex flex-col gap-2">
-            {savedConnections.map((c) => (
+            {savedConnections.map((c) => {
+              const engine = c.engine ?? 'postgres';
+              const meta = ENGINE_META[engine];
+              const Icon = meta.icon;
+              return (
               <li
                 key={c.id}
                 className="group/conn flex items-stretch overflow-hidden rounded-md border border-border bg-background transition-colors hover:border-foreground/40"
@@ -49,12 +80,19 @@ export function DisconnectedHome() {
                   className="flex min-w-0 flex-1 cursor-pointer items-center gap-3 px-4 py-3 text-left disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   <span className="grid h-8 w-8 shrink-0 place-items-center rounded-sm border border-border bg-muted">
-                    <Database className="h-4 w-4 text-muted-foreground" />
+                    <Icon className="h-4 w-4 text-muted-foreground" />
                   </span>
                   <div className="min-w-0 flex-1">
-                    <div className="truncate text-sm font-medium text-foreground">{c.name}</div>
+                    <div className="flex items-center gap-2">
+                      <span className="truncate text-sm font-medium text-foreground">
+                        {c.name}
+                      </span>
+                      <span className="shrink-0 rounded-sm border border-border px-1.5 py-0 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                        {meta.label}
+                      </span>
+                    </div>
                     <div className="truncate font-mono text-[11px] text-muted-foreground">
-                      {c.host}:{c.port} · {c.database} · {c.user}
+                      {metaLine(c)}
                     </div>
                   </div>
                 </button>
@@ -71,7 +109,8 @@ export function DisconnectedHome() {
                   <Pencil className="h-3.5 w-3.5" />
                 </button>
               </li>
-            ))}
+              );
+            })}
             <li>
               <Button
                 variant="outline"

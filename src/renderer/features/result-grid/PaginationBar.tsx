@@ -1,4 +1,3 @@
-import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   Select,
@@ -10,6 +9,7 @@ import {
 import { Separator } from '@/components/ui/separator';
 import { cn } from '@/lib/cn';
 import { useActiveTab, useSession } from '@/stores/session';
+import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight } from 'lucide-react';
 
 const PAGE_SIZES = [50, 100, 250, 500, 1000] as const;
 

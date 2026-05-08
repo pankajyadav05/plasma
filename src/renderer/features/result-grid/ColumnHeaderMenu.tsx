@@ -1,4 +1,9 @@
-import { useState } from 'react';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { cn } from '@/lib/cn';
+import { defaultOperatorFor } from '@/lib/pg-types';
+import type { Filter, FilterOp } from '@/lib/table-query';
+import { useSession } from '@/stores/session';
+import type { ColumnMeta } from '@shared/protocol';
 import {
   ArrowDownAZ,
   ArrowUpAZ,
@@ -10,12 +15,7 @@ import {
   PinOff,
   X,
 } from 'lucide-react';
-import type { ColumnMeta } from '@shared/protocol';
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { cn } from '@/lib/cn';
-import type { Filter, FilterOp } from '@/lib/table-query';
-import { defaultOperatorFor } from '@/lib/pg-types';
-import { useSession } from '@/stores/session';
+import { useState } from 'react';
 
 interface Props {
   column: ColumnMeta;

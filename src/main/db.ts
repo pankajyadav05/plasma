@@ -1,7 +1,7 @@
-import Database from 'better-sqlite3';
-import { app } from 'electron';
 import { mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import Database from 'better-sqlite3';
+import { app } from 'electron';
 import { logger } from './logger';
 
 /**
@@ -17,7 +17,7 @@ import { logger } from './logger';
  * migrations safely in later releases.
  */
 
-const CURRENT_SCHEMA_VERSION = 1;
+const CURRENT_SCHEMA_VERSION = 2;
 
 let db: Database.Database | null = null;
 
@@ -87,6 +87,18 @@ function migrate(d: Database.Database): void {
         key   TEXT PRIMARY KEY,
         value TEXT NOT NULL
       );
+    `);
+    d.pragma('user_version = 1');
+  }
+
+  if (currentVersion < 2) {
+    logger.info('[plasma] migrating to schema version 2 (engine column)');
+    // SQLite doesn't support adding a column with a constraint other
+    // than DEFAULT, so we set 'postgres' as the default — every existing
+    // saved connection was a Postgres connection at v0.0.10.
+    d.exec(`
+      ALTER TABLE connections
+        ADD COLUMN engine TEXT NOT NULL DEFAULT 'postgres';
     `);
     d.pragma(`user_version = ${CURRENT_SCHEMA_VERSION}`);
   }

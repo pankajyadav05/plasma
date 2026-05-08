@@ -18,7 +18,9 @@
       "Bash(git stash *)",
       "Bash(pnpm typecheck:node)",
       "Bash(python *)",
-      "Bash(npx biome *)"
+      "Bash(npx biome *)",
+      "Bash(pnpm install *)",
+      "Bash(pnpm build *)"
     ]
   }
 }

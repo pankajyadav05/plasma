@@ -1,12 +1,12 @@
-import { lazy, Suspense, useEffect, useState } from 'react';
-import type * as MonacoType from 'monaco-editor';
-import type { OnMount } from '@monaco-editor/react';
-import { Copy, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { PLASMA_THEME_ID, applyMonacoTheme } from '@/features/editor/paperTheme';
 import { ipc } from '@/lib/ipc';
-import { applyMonacoTheme, PLASMA_THEME_ID } from '@/features/editor/paperTheme';
 import { buildDefinitionQuerySql } from '@/lib/table-query';
 import { useActiveTab, useSession } from '@/stores/session';
+import type { OnMount } from '@monaco-editor/react';
+import { Copy, Loader2 } from 'lucide-react';
+import type * as MonacoType from 'monaco-editor';
+import { Suspense, lazy, useEffect, useState } from 'react';
 
 const Editor = lazy(() => import('@monaco-editor/react').then((m) => ({ default: m.default })));
 

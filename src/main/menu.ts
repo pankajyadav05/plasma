@@ -1,4 +1,4 @@
-import { Menu, type MenuItemConstructorOptions, app, shell, BrowserWindow } from 'electron';
+import { BrowserWindow, Menu, type MenuItemConstructorOptions, app, shell } from 'electron';
 
 /**
  * Native application menu. Provides proper system shortcuts for
