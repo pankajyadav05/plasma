@@ -52,6 +52,57 @@ nsis:
 portable:
   artifactName: ${productName}-Portable-${version}-${arch}.${ext}
 
+# ── macOS ─────────────────────────────────────────────────────────────
+# Two artifacts per arch:
+#   .dmg — what users download & drag to /Applications.
+#   .zip — what electron-updater consumes for delta updates on macOS
+#          (the .dmg is not a valid auto-update payload on this platform).
+#
+# Targets both arm64 (Apple Silicon) and x64 (Intel). electron-builder
+# will run lipo on better-sqlite3's prebuilt binaries automatically.
+#
+# `identity: null` produces an unsigned build so `pnpm run dist:mac`
+# works on a stock developer machine without an Apple Developer ID in
+# the keychain. Trade-off: Gatekeeper will quarantine the .app on first
+# launch — users right-click → Open, or run
+#   xattr -cr /Applications/Plasma.app
+# To ship signed + notarized builds, replace `identity: null` with the
+# Developer ID Application string and add notarize config (see
+# https://www.electron.build/code-signing-mac).
+#
+# Auto-update on macOS requires a signed build — without signing,
+# electron-updater will surface the "available" event but the install
+# step will fail. The renderer's update UI handles the error gracefully.
+mac:
+  target:
+    - target: dmg
+      arch:
+        - arm64
+        - x64
+    - target: zip
+      arch:
+        - arm64
+        - x64
+  category: public.app-category.developer-tools
+  icon: resources/icon-1024.png
+  artifactName: ${productName}-${version}-${arch}.${ext}
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  identity: null
+
+dmg:
+  artifactName: ${productName}-${version}-${arch}.${ext}
+  # Two-pane layout: Plasma.app on the left, /Applications shortcut on
+  # the right. Standard macOS install affordance.
+  contents:
+    - x: 130
+      y: 220
+      type: file
+    - x: 410
+      y: 220
+      type: link
+      path: /Applications
+
 # ── Auto-update (electron-updater) ────────────────────────────────────
 # Generic provider — `latest.yml` + the installer + its .blockmap live
 # at the same URL space (Vercel Blob, addRandomSuffix:false). Builder

@@ -20,7 +20,8 @@
       "Bash(python *)",
       "Bash(npx biome *)",
       "Bash(pnpm install *)",
-      "Bash(pnpm build *)"
+      "Bash(pnpm build *)",
+      "Bash(pnpm --version)"
     ]
   }
 }
