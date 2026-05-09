@@ -1,87 +1,166 @@
 'use client';
 
 import { ArrowDown, ArrowUpRight } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { InstrumentFrame } from '@/components/instrument-frame';
 import { Magnetic } from '@/components/magnetic';
-import { PlasmaBlob } from '@/components/plasma-blob';
+import { Oscilloscope } from '@/components/oscilloscope';
 import { DOWNLOAD_URL, LICENSE, SIZE_LABEL, VERSION } from '@/lib/version';
 
+const PROMPT_LINES = [
+  '$ plasma --check signature',
+  'verifying plasma-setup-' + VERSION + '-x64.exe …',
+  'sha-256 a7d1…b88e  OK',
+  'authenticode  OK · pankaj yadav · ev cert',
+  '',
+  '$ plasma --connect prod-replica',
+  'reading schema · public.* analytics.* stripe.*',
+  'cached · 142 tables · 38 views · 12 enums',
+  '',
+  '$ plasma --ready',
+  'editor: monaco / 4 tabs restored',
+  'ai:     opt-in / engine-aware tool use',
+  'theme:  paper / 9 available',
+  '',
+  '↳ launching at 60fps · cold-start 583 ms',
+];
+
 /**
- * Final CTA. Reuses the plasma blob behind a single OPEN word — the
- * whole page closes the loop visually with the same fluid motif it
- * opened on. ONE tag, ONE row of CTAs, one whisper line of metadata.
+ * Final CTA — the typed terminal closes the loop. A second oscilloscope
+ * trace sits behind a giant OPEN. wordmark. Type-by-type animation of a
+ * verification + ready handshake. Two CTAs land below.
  */
 export function Open() {
+  const [typed, setTyped] = useState<string[]>([]);
+
+  useEffect(() => {
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      setTyped(PROMPT_LINES);
+      return;
+    }
+    let cancelled = false;
+    let id: ReturnType<typeof setTimeout> | undefined;
+    const step = (i: number) => {
+      if (cancelled || i >= PROMPT_LINES.length) return;
+      const next = PROMPT_LINES[i];
+      setTyped((t) => [...t, next]);
+      id = setTimeout(() => step(i + 1), 220 + Math.random() * 220);
+    };
+    id = setTimeout(() => step(0), 600);
+    return () => {
+      cancelled = true;
+      if (id) clearTimeout(id);
+    };
+  }, []);
+
   return (
     <section
       id="open"
-      className="relative h-screen min-h-[820px] overflow-hidden border-b border-line"
+      className="relative min-h-screen overflow-hidden border-b border-line-strong"
     >
-      <PlasmaBlob />
-
+      <Oscilloscope variant="hero" />
       <div
         aria-hidden
-        className="absolute inset-0 pointer-events-none"
+        className="absolute inset-0 pointer-events-none z-[1]"
         style={{
           background:
-            'radial-gradient(60% 60% at 50% 50%, transparent 0%, color-mix(in srgb, var(--bg) 30%, transparent) 50%, var(--bg) 100%)',
+            'radial-gradient(70% 70% at 50% 55%, transparent 0%, color-mix(in srgb, var(--bg) 35%, transparent) 50%, var(--bg) 100%)',
         }}
       />
 
-      <div className="absolute z-10 left-6 right-6 md:left-10 md:right-10 top-24 flex items-center justify-between font-mono text-[10px] uppercase tracking-[0.3em] text-dim">
-        <span>¶ 05 — Open it</span>
-        <span className="hidden md:inline">free · {LICENSE} · {SIZE_LABEL}</span>
+      {/* Top rail */}
+      <div className="absolute z-10 left-4 right-4 md:left-8 md:right-8 top-[88px] flex items-center justify-between label">
+        <span>¶ 13 — Open it</span>
+        <span className="hidden md:inline">
+          free · {LICENSE.toLowerCase()} · {SIZE_LABEL}
+        </span>
       </div>
 
-      <div className="relative z-10 h-full grid place-items-center px-6 md:px-10">
-        <div className="text-center">
+      <div className="relative z-10 px-4 md:px-8 pt-[20vh] pb-[12vh] grid place-items-center">
+        <div className="text-center max-w-[1240px] w-full">
           <h2
-            className="font-display italic text-fg glow-fg"
+            className="font-display text-fg glow-plasma"
             style={{
-              fontSize: 'clamp(140px, 28vw, 480px)',
-              lineHeight: 0.84,
-              letterSpacing: '-0.045em',
-              fontVariationSettings: '"opsz" 144, "SOFT" 100, "WONK" 1',
+              fontSize: 'clamp(120px, 24vw, 420px)',
+              fontVariationSettings: '"opsz" 96, "wdth" 200, "wght" 800',
+              letterSpacing: '-0.055em',
+              lineHeight: 0.86,
             }}
           >
-            Open<span className="text-ox">.</span>
+            open<span className="text-plasma">.</span>
           </h2>
           <p
-            className="mt-10 mx-auto text-fg/85 font-display italic max-w-[28ch]"
-            style={{
-              fontSize: 'clamp(20px, 2.2vw, 32px)',
-              fontVariationSettings: '"opsz" 36, "SOFT" 100, "WONK" 1',
-            }}
+            className="mt-8 mx-auto text-fg/85 max-w-[44ch] font-sans"
+            style={{ fontSize: 'clamp(18px, 1.8vw, 24px)', lineHeight: 1.4 }}
           >
-            Free. Made in a quiet room.
+            Free. Forever. Made in a quiet room.
           </p>
-          <div className="mt-12 flex justify-center flex-wrap gap-3">
+
+          <div className="mt-10 flex justify-center flex-wrap gap-3">
             <Magnetic strength={0.18}>
               <a
                 href={DOWNLOAD_URL}
-                data-cursor="windows · 86 mb"
-                className="inline-flex items-center gap-3 px-7 py-4 bg-ox text-bg font-mono text-[11px] uppercase tracking-[0.3em] hover:bg-accent"
+                data-cursor={`win·x64 · ${SIZE_LABEL}`}
+                className="inline-flex items-center gap-3 px-8 py-5 bg-plasma text-bg font-mono text-[12px] uppercase tracking-[0.3em] hover:bg-volt transition-colors"
               >
-                <ArrowDown className="h-3.5 w-3.5" />
+                <ArrowDown className="h-4 w-4" />
                 Download v{VERSION}
+                <span className="text-bg/55">/ {SIZE_LABEL}</span>
               </a>
             </Magnetic>
             <Magnetic strength={0.18}>
               <a
                 href="https://github.com/pankajyadav05/plasma/releases"
                 data-cursor="all releases"
-                className="inline-flex items-center gap-3 px-7 py-4 border border-line text-fg/85 font-mono text-[11px] uppercase tracking-[0.3em] hover:border-fg hover:text-fg"
+                className="inline-flex items-center gap-3 px-8 py-5 border border-line-strong text-fg/85 font-mono text-[12px] uppercase tracking-[0.3em] hover:border-plasma hover:text-plasma transition-colors"
               >
                 All releases
-                <ArrowUpRight className="h-3.5 w-3.5" />
+                <ArrowUpRight className="h-4 w-4" />
               </a>
             </Magnetic>
+          </div>
+
+          {/* Terminal handshake */}
+          <div className="mt-16 mx-auto max-w-[820px] text-left">
+            <InstrumentFrame
+              index="08·HANDSHAKE"
+              title="cold start trace"
+              meta="local · no network"
+              accent="plasma"
+            >
+              <div className="bg-bg-2/95 backdrop-blur-sm p-6 font-mono text-[12.5px] leading-[1.85] min-h-[360px]">
+                {typed.map((raw, i) => {
+                  const l = raw ?? '';
+                  return (
+                  <div
+                    key={i}
+                    className={
+                      l.startsWith('$')
+                        ? 'text-plasma'
+                        : l === ''
+                          ? 'h-[1em]'
+                          : l.includes('OK')
+                            ? 'text-volt'
+                            : 'text-fg/70'
+                    }
+                  >
+                    {l || ' '}
+                  </div>
+                  );
+                })}
+                {typed.length < PROMPT_LINES.length && (
+                  <span className="caret" />
+                )}
+              </div>
+            </InstrumentFrame>
           </div>
         </div>
       </div>
 
-      <div className="absolute z-10 left-6 right-6 md:left-10 md:right-10 bottom-8 flex items-center justify-between font-mono text-[10px] uppercase tracking-[0.3em] text-dim">
+      {/* Bottom rail */}
+      <div className="absolute z-10 left-4 right-4 md:left-8 md:right-8 bottom-6 flex items-center justify-between label">
         <span>plasma-setup-{VERSION}-x64.exe</span>
-        <span>sha-256 a7d1…b88e</span>
+        <span className="label-plasma">sha-256 a7d1…b88e</span>
       </div>
     </section>
   );
