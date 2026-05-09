@@ -1013,6 +1013,9 @@ packages:
       '@types/react':
         optional: true
 
+ignoredOptionalDependencies:
+  - cpu-features
+
 snapshots:
 
   '@alloc/quick-lru@5.2.0': {}

@@ -30,5 +30,10 @@
     "postcss": "^8.4.49",
     "tailwindcss": "^4.2.4",
     "typescript": "^5.7.0"
+  },
+  "pnpm": {
+    "ignoredOptionalDependencies": [
+      "cpu-features"
+    ]
   }
 }
