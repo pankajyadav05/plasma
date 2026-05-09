@@ -1,11 +1,13 @@
 'use client';
 
-import { ArrowDown, ArrowUpRight } from 'lucide-react';
+import { ArrowUpRight } from 'lucide-react';
 import { useEffect, useState } from 'react';
+import { DownloadCTA } from '@/components/DownloadCTA';
 import { InstrumentFrame } from '@/components/instrument-frame';
 import { Magnetic } from '@/components/magnetic';
 import { Oscilloscope } from '@/components/oscilloscope';
-import { DOWNLOAD_URL, LICENSE, SIZE_LABEL, VERSION } from '@/lib/version';
+import { usePlatform } from '@/lib/platform';
+import { LICENSE, VERSION } from '@/lib/version';
 
 const PROMPT_LINES = [
   '$ plasma --check signature',
@@ -32,6 +34,7 @@ const PROMPT_LINES = [
  */
 export function Open() {
   const [typed, setTyped] = useState<string[]>([]);
+  const { primary } = usePlatform();
 
   useEffect(() => {
     if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
@@ -72,7 +75,7 @@ export function Open() {
       <div className="absolute z-10 left-4 right-4 md:left-8 md:right-8 top-[88px] flex items-center justify-between label">
         <span>¶ 13 — Open it</span>
         <span className="hidden md:inline">
-          free · {LICENSE.toLowerCase()} · {SIZE_LABEL}
+          free · {LICENSE.toLowerCase()} · {primary.sizeLabel}
         </span>
       </div>
 
@@ -96,28 +99,20 @@ export function Open() {
             Free. Forever. Made in a quiet room.
           </p>
 
-          <div className="mt-10 flex justify-center flex-wrap gap-3">
-            <Magnetic strength={0.18}>
-              <a
-                href={DOWNLOAD_URL}
-                data-cursor={`win·x64 · ${SIZE_LABEL}`}
-                className="inline-flex items-center gap-3 px-8 py-5 bg-plasma text-bg font-mono text-[12px] uppercase tracking-[0.3em] hover:bg-volt transition-colors"
-              >
-                <ArrowDown className="h-4 w-4" />
-                Download v{VERSION}
-                <span className="text-bg/55">/ {SIZE_LABEL}</span>
-              </a>
-            </Magnetic>
-            <Magnetic strength={0.18}>
-              <a
-                href="https://github.com/pankajyadav05/plasma/releases"
-                data-cursor="all releases"
-                className="inline-flex items-center gap-3 px-8 py-5 border border-line-strong text-fg/85 font-mono text-[12px] uppercase tracking-[0.3em] hover:border-plasma hover:text-plasma transition-colors"
-              >
-                All releases
-                <ArrowUpRight className="h-4 w-4" />
-              </a>
-            </Magnetic>
+          <div className="mt-10 flex flex-col items-center gap-5">
+            <div className="flex justify-center flex-wrap gap-3 items-start">
+              <DownloadCTA size="lg" alternates />
+              <Magnetic strength={0.18}>
+                <a
+                  href="https://github.com/pankajyadav05/plasma/releases"
+                  data-cursor="all releases"
+                  className="inline-flex items-center gap-3 px-8 py-5 border border-line-strong text-fg/85 font-mono text-[12px] uppercase tracking-[0.3em] hover:border-plasma hover:text-plasma transition-colors"
+                >
+                  All releases
+                  <ArrowUpRight className="h-4 w-4" />
+                </a>
+              </Magnetic>
+            </div>
           </div>
 
           {/* Terminal handshake */}
@@ -159,7 +154,7 @@ export function Open() {
 
       {/* Bottom rail */}
       <div className="absolute z-10 left-4 right-4 md:left-8 md:right-8 bottom-6 flex items-center justify-between label">
-        <span>plasma-setup-{VERSION}-x64.exe</span>
+        <span>{primary.basename.toLowerCase()}</span>
         <span className="label-plasma">sha-256 a7d1…b88e</span>
       </div>
     </section>

@@ -111,7 +111,7 @@ export function Specs() {
                 armed={armed}
                 value={86}
                 suffix="MB"
-                label="installer · windows x64"
+                label="installer · macOS / windows"
                 color="text-plasma"
                 glow="glow-plasma"
               />

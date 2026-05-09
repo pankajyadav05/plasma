@@ -1,7 +1,8 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { DOWNLOAD_URL, SIZE_LABEL, VERSION } from '@/lib/version';
+import { usePlatform } from '@/lib/platform';
+import { VERSION } from '@/lib/version';
 
 const links = [
   { href: '#specs', label: 'Specs' },
@@ -15,6 +16,7 @@ const links = [
 export function TopNav() {
   const [scrolled, setScrolled] = useState(false);
   const [time, setTime] = useState('');
+  const { primary } = usePlatform();
 
   useEffect(() => {
     const onScroll = () => setScrolled(window.scrollY > 60);
@@ -44,17 +46,17 @@ export function TopNav() {
           : 'border-transparent'
       }`}
     >
-      {/* Utility ribbon */}
+      {/* Utility ribbon — version on the left, status on the right. The
+          platform/size pair lives on the CTA only; the build manifest in
+          the footer carries the long-form details. */}
       <div className="border-b border-line/60 px-4 md:px-8 py-1.5 flex items-center justify-between label">
         <div className="flex items-center gap-3">
           <span className="block h-1.5 w-1.5 rounded-full bg-plasma shadow-[0_0_8px_var(--plasma)]" />
           <span className="label-strong">PLASMA·LAB</span>
           <span className="hidden sm:inline">/ build {VERSION}</span>
-          <span className="hidden md:inline">/ win·x64 / {SIZE_LABEL}</span>
         </div>
         <div className="flex items-center gap-3">
           <span className="hidden md:inline">{time}</span>
-          <span className="hidden lg:inline">/ apache-2.0</span>
           <span className="label-plasma">● online</span>
         </div>
       </div>
@@ -84,8 +86,8 @@ export function TopNav() {
         </nav>
 
         <a
-          href={DOWNLOAD_URL}
-          data-cursor="download"
+          href={primary.url}
+          data-cursor={primary.cursor}
           className="inline-flex items-center gap-2 px-4 py-2 bg-plasma text-bg font-mono text-[10px] uppercase tracking-[0.28em] hover:bg-volt transition-colors"
         >
           ↓ DOWNLOAD

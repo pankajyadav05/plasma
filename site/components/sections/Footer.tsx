@@ -115,7 +115,7 @@ export function Footer() {
             <dl className="space-y-2 font-mono text-[12px]">
               {[
                 ['version', `v${VERSION}`],
-                ['platform', 'win·x64'],
+                ['platforms', 'mac·arm64+x64 · win·x64'],
                 ['size', SIZE_LABEL],
                 ['signature', 'a7d1…b88e'],
                 ['license', LICENSE.toLowerCase()],

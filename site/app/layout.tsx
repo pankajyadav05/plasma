@@ -62,7 +62,7 @@ const jsonLd = {
   name: 'Plasma',
   applicationCategory: 'DeveloperApplication',
   applicationSubCategory: 'Database Client',
-  operatingSystem: 'Windows 10, Windows 11',
+  operatingSystem: 'macOS 12+, Windows 10, Windows 11',
   softwareVersion: VERSION,
   description: DESCRIPTION,
   url: 'https://plasma.sh',
