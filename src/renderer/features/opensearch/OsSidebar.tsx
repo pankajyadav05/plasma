@@ -1,7 +1,7 @@
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useSession } from '@/stores/session';
-import { Boxes, Loader2, RefreshCw, Search, SquareTerminal, X } from 'lucide-react';
+import { Boxes, Loader2, Plus, RefreshCw, Search, SquareTerminal, Trash2, X } from 'lucide-react';
 import { useMemo, useState } from 'react';
 
 /**
@@ -33,6 +33,8 @@ export function OsSidebar() {
   const openIndex = useSession((s) => s.openOsIndex);
   const openSearch = useSession((s) => s.openOsSearch);
   const openOsSql = useSession((s) => s.openOsSql);
+  const openNewIndex = useSession((s) => s.openOsNewIndex);
+  const requestDelete = useSession((s) => s.requestOsDeleteIndex);
   const activeIndex = useSession((s) => s.activeOsIndex);
 
   const [filter, setFilter] = useState('');
@@ -55,6 +57,9 @@ export function OsSidebar() {
             {overview ? `${overview.distribution} ${overview.version}` : '—'}
           </span>
           <div className="flex-1" />
+          <Button variant="ghost" size="icon-xs" title="New index" onClick={openNewIndex}>
+            <Plus />
+          </Button>
           <Button
             variant="ghost"
             size="icon-xs"
@@ -158,10 +163,22 @@ export function OsSidebar() {
                         e.stopPropagation();
                         openSearch(idx.index);
                       }}
-                      className="mr-1 self-center opacity-0 transition-opacity group-hover/idx:opacity-100"
+                      className="self-center opacity-0 transition-opacity group-hover/idx:opacity-100"
                       title="Open search"
                     >
                       <Search />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon-xs"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        requestDelete(idx.index);
+                      }}
+                      className="mr-1 self-center opacity-0 transition-opacity hover:text-destructive group-hover/idx:opacity-100"
+                      title="Delete index"
+                    >
+                      <Trash2 />
                     </Button>
                   </div>
                 </li>

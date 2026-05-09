@@ -261,6 +261,23 @@ process.parentPort.on('message', async (evt: Electron.MessageEvent) => {
         send({ kind: 'osIlm', id: req.id, policies });
         break;
       }
+      case 'osCreateIndex': {
+        if (activeEngine !== 'opensearch') return unsupported(req.id, 'osCreateIndex');
+        const result = await os.createIndex(req.name, req.body);
+        send({
+          kind: 'osCreateIndex',
+          id: req.id,
+          acknowledged: result.acknowledged,
+          index: result.index,
+        });
+        break;
+      }
+      case 'osDeleteIndex': {
+        if (activeEngine !== 'opensearch') return unsupported(req.id, 'osDeleteIndex');
+        const result = await os.deleteIndex(req.name);
+        send({ kind: 'osDeleteIndex', id: req.id, acknowledged: result.acknowledged });
+        break;
+      }
       case 'osFieldStats': {
         if (activeEngine !== 'opensearch') return unsupported(req.id, 'osFieldStats');
         const stats = await os.fieldStats({

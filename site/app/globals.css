@@ -7,28 +7,53 @@
 @theme {
   --color-bg: var(--bg);
   --color-bg-2: var(--bg-2);
+  --color-bg-3: var(--bg-3);
   --color-fg: var(--fg);
   --color-dim: var(--dim);
+  --color-faint: var(--faint);
   --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
   --color-ox: var(--ox);
-  --color-accent: var(--accent);
+  --color-plasma: var(--plasma);
+  --color-plasma-soft: var(--plasma-soft);
+  --color-volt: var(--volt);
+  --color-leaf: var(--leaf);
+  --color-red: var(--red);
   --color-glass: var(--glass);
 
-  --font-display: var(--font-fraunces, 'Fraunces'), 'Times New Roman', serif;
+  --font-display: var(--font-bricolage, 'Bricolage Grotesque'), 'Helvetica Neue', sans-serif;
   --font-sans: var(--font-geist, 'Geist'), -apple-system, system-ui, sans-serif;
   --font-mono: var(--font-mono-loaded, 'JetBrains Mono'), ui-monospace, monospace;
 }
 
-/* DARK FIRST — premium tech aesthetic */
+/* PLASMA — default-dark palette mirrored from the desktop app
+   (`src/renderer/styles/globals.css` :root.dark, codename
+   "Plasma oxblood"). The brand is mono-pink + neutrals: `--ox` is the
+   primary, `--plasma` aliases it so every `text-plasma`/`glow-plasma`
+   utility renders in the brand pink. `--volt` (json gold) and `--leaf`
+   (str green) survive only as muted data-type tints used sparingly.
+   `--red` (destructive) lights up the "others" pane in Privacy Diff. */
 :root {
-  --bg: #0a0a0a;
-  --bg-2: #141414;
-  --fg: #f2ede0;
-  --dim: #6e6960;
-  --line: rgba(242, 237, 224, 0.08);
-  --ox: #ff5733;
-  --accent: #e8ff00;
-  --glass: rgba(242, 237, 224, 0.04);
+  --bg: oklch(0.1448 0 0);
+  --bg-2: oklch(0.2046 0 0);
+  --bg-3: oklch(0.2686 0 0);
+  --fg: oklch(0.9851 0 0);
+  --dim: oklch(0.7155 0 0);
+  --faint: oklch(0.45 0 0);
+  --line: oklch(1 0 0 / 0.06);
+  --line-strong: oklch(0.2768 0 0);
+
+  /* Brand · Plasma pink */
+  --ox: oklch(0.7122 0.1809 21.663);
+  --plasma: oklch(0.7122 0.1809 21.663);
+  --plasma-soft: oklch(0.78 0.16 21.663);
+
+  /* Data-type tints (used sparingly) */
+  --volt: oklch(0.78 0.14 80);
+  --leaf: oklch(0.78 0.14 135);
+  --red: oklch(0.55 0.21 28.5);
+
+  --glass: oklch(1 0 0 / 0.04);
   --grain-mix: overlay;
 }
 
@@ -37,10 +62,11 @@
 html, body { background: var(--bg); color: var(--fg); }
 
 body {
-  font-family: var(--font-sans);
-  letter-spacing: -0.011em;
+  font-family: var(--font-mono);
+  font-size: 14px;
+  letter-spacing: -0.005em;
   overflow-x: hidden;
-  font-feature-settings: 'kern', 'liga', 'ss01';
+  font-feature-settings: 'kern', 'liga', 'ss01', 'tnum';
 }
 
 /* Custom cursor — hide native on pointer-fine devices */
@@ -48,20 +74,40 @@ body {
   body, a, button, input, [role='button'] { cursor: none; }
 }
 
-::selection { background: var(--ox); color: var(--bg); }
+::selection { background: var(--plasma); color: var(--bg); }
 
-h1, h2, h3 { font-family: var(--font-display); }
-
-/* Display utility */
+/* Display utility — Bricolage Grotesque, tight + heavy */
 .font-display {
   font-family: var(--font-display);
   font-feature-settings: 'kern', 'liga', 'ss01';
-  font-variation-settings: 'opsz' 144, 'SOFT' 50, 'WONK' 1;
-  letter-spacing: -0.025em;
+  font-variation-settings: 'opsz' 96, 'wdth' 100, 'wght' 700;
+  letter-spacing: -0.045em;
+  line-height: 0.88;
+}
+.font-display-wide {
+  font-family: var(--font-display);
+  font-variation-settings: 'opsz' 96, 'wdth' 200, 'wght' 800;
+  letter-spacing: -0.04em;
 }
 
-/* The plasma metaball goo — scoped wrapper */
-.goo { filter: url(#goo); }
+h1, h2, h3 { font-family: var(--font-display); }
+
+/* Mono label utility */
+.label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.28em;
+  text-transform: uppercase;
+  color: var(--dim);
+  font-feature-settings: 'tnum';
+}
+.label-strong { color: var(--fg); }
+.label-plasma { color: var(--plasma); }
+.label-ox { color: var(--ox); }
+
+/* Hairline divider */
+.hairline { background: var(--line); height: 1px; }
+.hairline-strong { background: var(--line-strong); height: 1px; }
 
 /* Subtle film grain */
 .grain::before {
@@ -70,17 +116,71 @@ h1, h2, h3 { font-family: var(--font-display); }
   inset: 0;
   pointer-events: none;
   z-index: 100;
-  opacity: 0.05;
+  opacity: 0.045;
   background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 0.5 0'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
   mix-blend-mode: var(--grain-mix);
 }
+
+/* Lab grid background — tick marks every 80px */
+.lab-grid {
+  background-image:
+    linear-gradient(to right, oklch(1 0 0 / 0.035) 1px, transparent 1px),
+    linear-gradient(to bottom, oklch(1 0 0 / 0.035) 1px, transparent 1px);
+  background-size: 80px 80px;
+  background-position: -1px -1px;
+}
+.lab-grid-fine {
+  background-image:
+    linear-gradient(to right, oklch(1 0 0 / 0.025) 1px, transparent 1px),
+    linear-gradient(to bottom, oklch(1 0 0 / 0.025) 1px, transparent 1px);
+  background-size: 16px 16px;
+}
+
+/* Scanline overlay — subtle CRT */
+.scanlines::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image: repeating-linear-gradient(
+    to bottom,
+    transparent 0,
+    transparent 3px,
+    color-mix(in oklch, var(--ox) 20%, transparent) 3px,
+    color-mix(in oklch, var(--ox) 20%, transparent) 4px
+  );
+}
+
+/* Bracket frame — corner ticks for instrument-panel feel */
+.bracket {
+  position: relative;
+  --bracket-color: var(--line-strong);
+  --bracket-size: 14px;
+}
+.bracket::before,
+.bracket::after,
+.bracket > .bracket-bl,
+.bracket > .bracket-br {
+  content: '';
+  position: absolute;
+  width: var(--bracket-size);
+  height: var(--bracket-size);
+  border-color: var(--bracket-color);
+  border-style: solid;
+}
+.bracket::before { top: -1px; left: -1px; border-width: 1px 0 0 1px; }
+.bracket::after { top: -1px; right: -1px; border-width: 1px 1px 0 0; }
+.bracket > .bracket-bl { bottom: -1px; left: -1px; border-width: 0 0 1px 1px; }
+.bracket > .bracket-br { bottom: -1px; right: -1px; border-width: 0 1px 1px 0; }
+.bracket-plasma { --bracket-color: var(--plasma); }
+.bracket-ox { --bracket-color: var(--ox); }
 
 /* Caret blink */
 .caret::after {
   content: '▍';
   display: inline-block;
   margin-left: 2px;
-  color: var(--ox);
+  color: var(--plasma);
   animation: blink 1s steps(2) infinite;
 }
 @keyframes blink { 50% { opacity: 0; } }
@@ -101,12 +201,12 @@ h1, h2, h3 { font-family: var(--font-display); }
 
 /* Focus ring */
 :focus-visible {
-  outline: 2px solid var(--ox);
+  outline: 2px solid var(--plasma);
   outline-offset: 3px;
   border-radius: 2px;
 }
 
-/* Section number — used in section labels */
+/* Section number */
 .sec-no {
   font-family: var(--font-mono);
   font-size: 11px;
@@ -115,10 +215,27 @@ h1, h2, h3 { font-family: var(--font-display); }
   color: var(--dim);
 }
 
-/* Hairline divider */
-.hairline { background: var(--line); height: 1px; }
+/* Plasma glow */
+.glow-plasma {
+  text-shadow:
+    0 0 22px color-mix(in srgb, var(--plasma) 55%, transparent),
+    0 0 60px color-mix(in srgb, var(--plasma) 20%, transparent);
+}
+.glow-ox {
+  text-shadow:
+    0 0 30px color-mix(in srgb, var(--ox) 40%, transparent),
+    0 0 80px color-mix(in srgb, var(--ox) 20%, transparent);
+}
 
-/* Marquee for engines ribbon */
+/* ASCII bar — for schematic rows */
+.ascii-bar {
+  font-family: var(--font-mono);
+  letter-spacing: -0.04em;
+  font-variant-ligatures: none;
+  white-space: nowrap;
+}
+
+/* Marquee */
 .marquee { overflow: hidden; white-space: nowrap; }
 .marquee-track {
   display: inline-block;
@@ -130,11 +247,12 @@ h1, h2, h3 { font-family: var(--font-display); }
   to { transform: translateX(-50%); }
 }
 
-/* Plasma glow text — hot luminous edge */
-.glow-fg {
-  text-shadow:
-    0 0 30px color-mix(in srgb, var(--ox) 40%, transparent),
-    0 0 80px color-mix(in srgb, var(--ox) 20%, transparent);
+/* Spec row dotted leader (datasheet feel) */
+.dotted-leader {
+  background-image: radial-gradient(circle, var(--faint) 1px, transparent 1.4px);
+  background-size: 6px 100%;
+  background-repeat: repeat-x;
+  background-position: bottom;
 }
 
 /* Reduced motion */

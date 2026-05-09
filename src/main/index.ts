@@ -178,10 +178,7 @@ app.whenReady().then(async () => {
       const body = typeof args.body === 'string' ? args.body : '';
       if (!index || !body) return JSON.stringify({ error: 'index + body required' });
       try {
-        const res = await callWorker(
-          { kind: 'osSearch', index, body, size: 50 },
-          'osSearch',
-        );
+        const res = await callWorker({ kind: 'osSearch', index, body, size: 50 }, 'osSearch');
         return JSON.stringify({
           total: res.result.total,
           took: res.result.took,
@@ -209,11 +206,9 @@ app.whenReady().then(async () => {
       }
       try {
         const res = await callWorker({ kind: 'osSql', query }, 'osSql');
-        const rowsObj = res.result.rows.slice(0, 50).map((row) =>
-          Object.fromEntries(
-            res.result.columns.map((c, i) => [c.name, row[i]]),
-          ),
-        );
+        const rowsObj = res.result.rows
+          .slice(0, 50)
+          .map((row) => Object.fromEntries(res.result.columns.map((c, i) => [c.name, row[i]])));
         return JSON.stringify({
           rowCount: res.result.rows.length,
           columns: res.result.columns,
@@ -659,10 +654,7 @@ function registerIpcHandlers() {
 
   ipcMain.handle(IpcChannel.RedisWrite, async (_e, raw: unknown) => {
     // The worker re-parses via Zod, so we forward as-is.
-    await callWorker(
-      { kind: 'redisWrite', op: raw as never },
-      'redisAck',
-    );
+    await callWorker({ kind: 'redisWrite', op: raw as never }, 'redisAck');
   });
 
   ipcMain.handle(IpcChannel.RedisSubscribe, async (_e, raw: unknown) => {
@@ -724,6 +716,23 @@ function registerIpcHandlers() {
     return res.policies;
   });
 
+  ipcMain.handle(IpcChannel.OsCreateIndex, async (_e, raw: unknown) => {
+    const p = (raw ?? {}) as { name?: unknown; body?: unknown };
+    if (typeof p.name !== 'string' || !p.name) throw new Error('index name required');
+    const body =
+      p.body && typeof p.body === 'object' && !Array.isArray(p.body)
+        ? (p.body as Record<string, unknown>)
+        : undefined;
+    const res = await callWorker({ kind: 'osCreateIndex', name: p.name, body }, 'osCreateIndex');
+    return { acknowledged: res.acknowledged, index: res.index };
+  });
+
+  ipcMain.handle(IpcChannel.OsDeleteIndex, async (_e, raw: unknown) => {
+    if (typeof raw !== 'string' || !raw) throw new Error('index name required');
+    const res = await callWorker({ kind: 'osDeleteIndex', name: raw }, 'osDeleteIndex');
+    return { acknowledged: res.acknowledged };
+  });
+
   ipcMain.handle(IpcChannel.OsFieldStats, async (_e, raw: unknown) => {
     const p = (raw ?? {}) as {
       index?: unknown;
@@ -738,8 +747,7 @@ function registerIpcHandlers() {
         kind: 'osFieldStats',
         index: p.index,
         fields,
-        queryString:
-          typeof p.queryString === 'string' && p.queryString ? p.queryString : undefined,
+        queryString: typeof p.queryString === 'string' && p.queryString ? p.queryString : undefined,
       },
       'osFieldStats',
     );

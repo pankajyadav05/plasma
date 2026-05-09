@@ -10,6 +10,8 @@ import { HistoryCanvas } from '@/features/history/HistoryCanvas';
 import { HistorySheet } from '@/features/history/HistorySheet';
 import { MonitorCanvas } from '@/features/monitor/MonitorCanvas';
 import { NotebookDialog } from '@/features/notebook/NotebookDialog';
+import { DeleteIndexDialog } from '@/features/opensearch/DeleteIndexDialog';
+import { NewIndexDialog } from '@/features/opensearch/NewIndexDialog';
 import { OsCanvas } from '@/features/opensearch/OsCanvas';
 import { RedisCanvas } from '@/features/redis/RedisCanvas';
 import { FilterRow } from '@/features/result-grid/FilterRow';
@@ -120,6 +122,8 @@ export function AppShell() {
       <HistorySheet />
       <DeleteConfirmDialog />
       <ProdGateDialog />
+      <NewIndexDialog />
+      <DeleteIndexDialog />
       <CodegenDialog open={codegenOpen} onOpenChange={setCodegenOpen} />
       <SchemaDiffDialog open={schemaDiffOpen} onOpenChange={setSchemaDiffOpen} />
       <NotebookDialog open={notebookOpen} onOpenChange={setNotebookOpen} />

@@ -1,5 +1,5 @@
 import type { Metadata, Viewport } from 'next';
-import { Fraunces, Geist, JetBrains_Mono } from 'next/font/google';
+import { Bricolage_Grotesque, Geist, JetBrains_Mono } from 'next/font/google';
 import './globals.css';
 
 import { Cursor } from '@/components/cursor';
@@ -7,10 +7,10 @@ import { ExplainEasterEgg } from '@/components/easter-egg';
 import { SmoothScroll } from '@/components/smooth-scroll';
 import { DOWNLOAD_URL, VERSION } from '@/lib/version';
 
-const fraunces = Fraunces({
+const bricolage = Bricolage_Grotesque({
   subsets: ['latin'],
-  axes: ['SOFT', 'WONK', 'opsz'],
-  variable: '--font-fraunces',
+  axes: ['wdth', 'opsz'],
+  variable: '--font-bricolage',
   display: 'swap',
 });
 const geist = Geist({
@@ -25,9 +25,9 @@ const jbmono = JetBrains_Mono({
   display: 'swap',
 });
 
-const TITLE = 'Plasma — Postgres, Redis, OpenSearch in one editorial client.';
+const TITLE = 'Plasma — a precision client for Postgres, Redis & OpenSearch.';
 const DESCRIPTION =
-  'A modern desktop database client. Schema-aware autocomplete, AI with engine-aware tool use, EXPLAIN viewer, Discover-style search, redis-cli, nine themes. Apache 2.0.';
+  'A desktop database client built like a measurement instrument. Schema-aware autocomplete, AI with engine-aware tool use, EXPLAIN tree, redis-cli, OpenSearch Discover, nine themes. Apache 2.0.';
 
 export const metadata: Metadata = {
   metadataBase: new URL('https://plasma.sh'),
@@ -43,16 +43,16 @@ export const metadata: Metadata = {
   },
   twitter: {
     card: 'summary_large_image',
-    title: 'Plasma — a quiet place for queries',
+    title: 'Plasma — precision database client',
     description:
-      'Postgres + Redis + OpenSearch in one editorial-typography client. AI with engine-aware tool use.',
+      'Postgres, Redis & OpenSearch in one instrument-grade client. AI with engine-aware tool use.',
     images: ['/og.svg'],
   },
   icons: { icon: '/favicon.svg' },
 };
 
 export const viewport: Viewport = {
-  themeColor: '#0a0a0a',
+  themeColor: '#07080a',
   colorScheme: 'dark',
 };
 
@@ -76,7 +76,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html
       lang="en"
-      className={`${fraunces.variable} ${geist.variable} ${jbmono.variable}`}
+      className={`${bricolage.variable} ${geist.variable} ${jbmono.variable}`}
       suppressHydrationWarning
     >
       <head>

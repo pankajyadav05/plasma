@@ -243,10 +243,42 @@ export class OpenSearchDriver {
     };
   }
 
+  /**
+   * Create an index. `body` is the raw create-index request payload —
+   * `{ settings, mappings, aliases }`. Returns the cluster's own
+   * acknowledgement plus the resolved index name (which may differ from
+   * the requested name in the case of a date-math expression).
+   */
+  async createIndex(
+    name: string,
+    body: Record<string, unknown> | undefined,
+  ): Promise<{ acknowledged: boolean; index: string }> {
+    if (!this.client) throw new Error('not connected');
+    const res = (await this.client.indices.create({ index: name, body })).body as {
+      acknowledged?: boolean;
+      index?: string;
+    };
+    return {
+      acknowledged: res.acknowledged === true,
+      index: res.index ?? name,
+    };
+  }
+
+  async deleteIndex(name: string): Promise<{ acknowledged: boolean }> {
+    if (!this.client) throw new Error('not connected');
+    const res = (await this.client.indices.delete({ index: name })).body as {
+      acknowledged?: boolean;
+    };
+    return { acknowledged: res.acknowledged === true };
+  }
+
   async aliases(): Promise<OsAlias[]> {
     if (!this.client) throw new Error('not connected');
     const cat = (
-      await this.client.cat.aliases({ format: 'json', h: ['alias', 'index', 'filter', 'is_write_index'] })
+      await this.client.cat.aliases({
+        format: 'json',
+        h: ['alias', 'index', 'filter', 'is_write_index'],
+      })
     ).body as unknown as Array<Record<string, string | undefined>>;
     return cat.map((row) => ({
       alias: row.alias ?? '',
@@ -368,8 +400,7 @@ export class OpenSearchDriver {
       return {
         field: f,
         type,
-        cardinality:
-          card && typeof card.value === 'number' ? Math.round(card.value) : null,
+        cardinality: card && typeof card.value === 'number' ? Math.round(card.value) : null,
         topValues: (top?.buckets ?? []).map((b) => ({
           value: String(b.key),
           count: b.doc_count,
