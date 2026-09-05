@@ -342,23 +342,6 @@ export function SettingsBody() {
         </p>
       </Field>
 
-      <SectionTitle>Privacy</SectionTitle>
-      <Field label="Telemetry">
-        <div className="flex items-center gap-3">
-          <Checkbox
-            id="telemetry"
-            checked={settings.telemetryEnabled}
-            onCheckedChange={(v) => void updateSettings({ telemetryEnabled: Boolean(v) })}
-          />
-          <label htmlFor="telemetry" className="cursor-pointer text-sm text-foreground">
-            Send anonymous usage statistics
-          </label>
-        </div>
-        <p className="mt-1 font-display text-xs italic text-muted-foreground">
-          Off by default. We never capture SQL, connection strings, or row data.
-        </p>
-      </Field>
-
       <SectionTitle>About</SectionTitle>
       <UpdateField />
     </div>

@@ -19,14 +19,6 @@ export class PostgresDriver {
   private primaryBackendPid: number | null = null;
   private txnState: TxnState = 'none';
 
-  isConnected(): boolean {
-    return this.primary !== null;
-  }
-
-  getTxnState(): TxnState {
-    return this.txnState;
-  }
-
   async connect(config: ConnectionConfig): Promise<string> {
     // Hang up any previous clients first
     await this.disconnect();

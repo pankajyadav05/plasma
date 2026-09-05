@@ -24,10 +24,6 @@ export class OpenSearchDriver {
   private client: Client | null = null;
   private cachedVersion = 'unknown';
 
-  isConnected(): boolean {
-    return this.client !== null;
-  }
-
   async connect(config: ConnectionConfig): Promise<string> {
     await this.disconnect();
     const protocol = config.ssl ? 'https' : 'http';

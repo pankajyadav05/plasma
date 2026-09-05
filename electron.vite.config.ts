@@ -81,7 +81,6 @@ export default defineConfig({
               '@radix-ui/react-select',
               '@radix-ui/react-separator',
               '@radix-ui/react-slot',
-              '@radix-ui/react-tooltip',
             ],
             'vendor-react': ['react', 'react-dom'],
           },
