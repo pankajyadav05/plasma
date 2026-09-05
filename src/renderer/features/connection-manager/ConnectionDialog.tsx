@@ -93,12 +93,17 @@ export function ConnectionDialog() {
   const engine = (form.engine ?? 'postgres') as ConnectionEngine;
   const isEditing = Boolean(dialogPrefill);
   const setConnectionTag = useSession((s) => s.setConnectionTag);
+  const setConnectionAiRowData = useSession((s) => s.setConnectionAiRowData);
   const initialTag = useSession((s) =>
     dialogPrefill ? s.settings.connectionTags?.[dialogPrefill.id] : undefined,
   );
   const [tag, setTag] = useState<'prod' | 'staging' | 'dev' | 'local' | null>(
     initialTag ?? null,
   );
+  const initialAiRowData = useSession((s) =>
+    dialogPrefill ? s.settings.connectionAiRowData?.[dialogPrefill.id] === true : false,
+  );
+  const [allowAiRowData, setAllowAiRowData] = useState(initialAiRowData);
 
   const initialSsh = useSession((s) =>
     dialogPrefill ? s.settings.connectionSsh?.[dialogPrefill.id] : undefined,
@@ -148,6 +153,7 @@ export function ConnectionDialog() {
   const handleConnect = async (e: React.FormEvent) => {
     e.preventDefault();
     void setConnectionTag(form.id, tag);
+    void setConnectionAiRowData(form.id, allowAiRowData);
     const nextSshMap = { ...(allSsh ?? {}) };
     // SSH tunnels make sense for postgres + redis (raw TCP). OpenSearch
     // is HTTPS — most clusters terminate TLS at a public endpoint, so
@@ -405,6 +411,23 @@ export function ConnectionDialog() {
               <p className="mt-1 font-display text-xs italic text-muted-foreground">
                 "prod" tag colors the status bar red and gates DELETE / TRUNCATE / DROP behind a
                 confirm dialog.
+              </p>
+            </Field>
+
+            <Field label="AI tools">
+              <div className="flex items-center gap-3">
+                <Checkbox
+                  id="allow-ai-row-data"
+                  checked={allowAiRowData}
+                  onCheckedChange={(v) => setAllowAiRowData(Boolean(v))}
+                />
+                <label htmlFor="allow-ai-row-data" className="cursor-pointer text-sm text-foreground">
+                  Allow AI tools to read row data
+                </label>
+              </div>
+              <p className="mt-1 font-display text-xs italic text-muted-foreground">
+                Off by default (including prod). When enabled, AI tools may send capped row
+                samples to OpenRouter. Schema is always eligible as a system prompt.
               </p>
             </Field>
 

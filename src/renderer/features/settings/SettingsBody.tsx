@@ -324,7 +324,9 @@ export function SettingsBody() {
         />
         <p className="mt-1 font-display text-xs italic text-muted-foreground">
           BYO — stored in the local settings table. One key gives access to Claude, GPT, Gemini,
-          Qwen, etc. Schema is sent as a system prompt; row data never leaves your machine.
+          Qwen, etc. Schema is sent as a system prompt. Row data is only sent when you enable
+          &quot;Allow AI tools to read row data&quot; on a connection (off by default); tool
+          results are capped by rows and bytes.
         </p>
       </Field>
 

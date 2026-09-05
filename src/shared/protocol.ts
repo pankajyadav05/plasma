@@ -468,6 +468,14 @@ export const WorkerRequest = z.discriminatedUnion('kind', [
     sql: z.string(),
     params: z.array(z.unknown()).optional(),
   }),
+  // AI tool query — dedicated read-only client (U04). Never shares the
+  // sideband cancel connection's transaction / workload budget.
+  z.object({
+    kind: z.literal('aiQuery'),
+    id: z.string(),
+    sql: z.string(),
+    params: z.array(z.unknown()).optional(),
+  }),
   // ── Redis ops ──
   z.object({
     kind: z.literal('redisScan'),
@@ -699,6 +707,13 @@ export const SettingsShape = z.object({
    * settings table — no SQLite schema migration required.
    */
   connectionTags: z.record(z.string(), z.enum(['prod', 'staging', 'dev', 'local'])).default({}),
+  /**
+   * Per-connection opt-in for AI tools to read and egress row data
+   * (U06). Default off for every connection — including prod-tagged
+   * ones. When false/absent, AI tools that would serialize row samples
+   * are refused and omitted from the OpenRouter tool list.
+   */
+  connectionAiRowData: z.record(z.string(), z.boolean()).default({}),
   /**
    * Per-connection SSH tunnel config. When set, main opens an ssh2
    * tunnel before the Postgres client connects and routes traffic

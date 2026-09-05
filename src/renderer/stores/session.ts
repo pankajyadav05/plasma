@@ -312,6 +312,7 @@ const DEFAULT_SETTINGS: Settings = {
   claudeApiKey: '',
   transactionMode: false,
   connectionTags: {},
+  connectionAiRowData: {},
   connectionSsh: {},
   schemaSnapshots: [],
   favoriteSchemas: {},
@@ -691,6 +692,8 @@ interface SessionState {
     connectionId: string,
     tag: 'prod' | 'staging' | 'dev' | 'local' | null,
   ): Promise<void>;
+  /** Per-connection opt-in for AI tools to egress capped row data (U06). */
+  setConnectionAiRowData(connectionId: string, allowed: boolean): Promise<void>;
   /** Resume a prod-gated runQuery after user confirms. */
   confirmProdGate(): void;
   cancelProdGate(): void;
@@ -2259,6 +2262,22 @@ export const useSession = create<SessionState>((set, get) => ({
       await ipc.settings.set({ connectionTags: next });
     } catch (err) {
       console.error('[plasma] persist connectionTags failed', err);
+    }
+  },
+
+  async setConnectionAiRowData(connectionId, allowed) {
+    const current = get().settings.connectionAiRowData ?? {};
+    const next: Record<string, boolean> = { ...current };
+    if (allowed) {
+      next[connectionId] = true;
+    } else {
+      delete next[connectionId];
+    }
+    set({ settings: { ...get().settings, connectionAiRowData: next } });
+    try {
+      await ipc.settings.set({ connectionAiRowData: next });
+    } catch (err) {
+      console.error('[plasma] persist connectionAiRowData failed', err);
     }
   },
 

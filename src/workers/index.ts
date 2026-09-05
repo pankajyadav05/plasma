@@ -107,6 +107,12 @@ process.parentPort.on('message', async (evt: Electron.MessageEvent) => {
         send({ kind: 'queryResult', id: req.id, result });
         break;
       }
+      case 'aiQuery': {
+        if (activeEngine !== 'postgres') return unsupported(req.id, 'aiQuery');
+        const result = await pg.aiQuery(req.sql, req.params);
+        send({ kind: 'queryResult', id: req.id, result });
+        break;
+      }
       case 'cancel':
         if (activeEngine === 'postgres') await pg.cancelQuery();
         send({ kind: 'cancelled', id: req.id });
