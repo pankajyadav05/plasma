@@ -18,6 +18,8 @@ export class PostgresDriver {
   private sideband: ClientT | null = null;
   private primaryBackendPid: number | null = null;
   private txnState: TxnState = 'none';
+  /** Mirrored from the worker's connection generation for write-boundary checks. */
+  private connectionGen = 0;
 
   isConnected(): boolean {
     return this.primary !== null;
@@ -25,6 +27,15 @@ export class PostgresDriver {
 
   getTxnState(): TxnState {
     return this.txnState;
+  }
+
+  getConnectionGen(): number {
+    return this.connectionGen;
+  }
+
+  /** Called by the worker after a successful connect bumps the generation. */
+  setConnectionGen(gen: number): void {
+    this.connectionGen = gen;
   }
 
   async connect(config: ConnectionConfig): Promise<string> {
@@ -68,6 +79,7 @@ export class PostgresDriver {
 
   async disconnect(): Promise<void> {
     this.txnState = 'none';
+    this.connectionGen = 0;
     this.primaryBackendPid = null;
     const p = this.primary;
     const s = this.sideband;
@@ -76,40 +88,136 @@ export class PostgresDriver {
     await Promise.allSettled([p?.end(), s?.end()]);
   }
 
-  async query(sql: string, params?: unknown[]): Promise<QueryResult> {
+  async query(
+    sql: string,
+    params?: unknown[],
+    opts?: { autoBegin?: boolean },
+  ): Promise<QueryResult> {
     if (!this.primary) throw new Error('not connected');
 
-    const start = Date.now();
-    // rowMode:'array' returns positional tuples instead of objects —
-    // cheaper to serialize across IPC and handles duplicate column names.
-    const res = await this.primary.query({
-      text: sql,
-      values: params,
-      rowMode: 'array',
-    });
-    const durationMs = Date.now() - start;
-
-    // Any query error would have thrown above. If we got here without an
-    // error but had been in an active txn, state stays 'active'. BEGIN/COMMIT/
-    // ROLLBACK statements flow through this path too — update state if so.
     const upper = sql.trim().toUpperCase();
-    if (upper.startsWith('BEGIN') || upper.startsWith('START TRANSACTION')) {
+    const isTxnControl =
+      upper.startsWith('BEGIN') ||
+      upper.startsWith('START TRANSACTION') ||
+      upper.startsWith('COMMIT') ||
+      upper.startsWith('ROLLBACK') ||
+      upper.startsWith('ABORT');
+
+    // U05: transactionMode → auto-BEGIN before user statements when idle.
+    // Never nest BEGIN while a user transaction is already open.
+    if (opts?.autoBegin && this.txnState === 'none' && !isTxnControl) {
+      await this.primary.query('BEGIN');
       this.txnState = 'active';
-    } else if (upper.startsWith('COMMIT') || upper.startsWith('ROLLBACK')) {
-      this.txnState = 'none';
     }
 
-    return {
-      columns: res.fields.map((f) => ({
-        name: f.name,
-        dataTypeID: f.dataTypeID,
-        dataTypeName: pgTypeName(f.dataTypeID),
-      })),
-      rows: res.rows as unknown[][],
-      rowCount: res.rowCount ?? res.rows.length,
-      durationMs,
-      command: res.command,
-    };
+    const start = Date.now();
+    try {
+      // rowMode:'array' returns positional tuples instead of objects —
+      // cheaper to serialize across IPC and handles duplicate column names.
+      const res = await this.primary.query({
+        text: sql,
+        values: params,
+        rowMode: 'array',
+      });
+      const durationMs = Date.now() - start;
+
+      // BEGIN/COMMIT/ROLLBACK statements flow through this path too —
+      // update state if so. Auto-BEGIN above already set 'active'.
+      if (upper.startsWith('BEGIN') || upper.startsWith('START TRANSACTION')) {
+        this.txnState = 'active';
+      } else if (
+        upper.startsWith('COMMIT') ||
+        upper.startsWith('ROLLBACK') ||
+        upper.startsWith('ABORT')
+      ) {
+        this.txnState = 'none';
+      }
+
+      return {
+        columns: res.fields.map((f) => ({
+          name: f.name,
+          dataTypeID: f.dataTypeID,
+          dataTypeName: pgTypeName(f.dataTypeID),
+        })),
+        rows: res.rows as unknown[][],
+        rowCount: res.rowCount ?? res.rows.length,
+        durationMs,
+        command: res.command,
+      };
+    } catch (err) {
+      // A failed statement inside an open transaction leaves PG aborted
+      // until ROLLBACK — surface that so the status bar can prompt.
+      if (this.txnState === 'active') this.txnState = 'error';
+      throw err;
+    }
+  }
+
+  /**
+   * Execute a buffered edit batch under worker-owned transaction control
+   * (U01 + U05). Validates `expectedGen` against the live connection
+   * generation so edits queued for connection A cannot write to B.
+   *
+   * - No user txn open → BEGIN / UPDATEs / COMMIT
+   * - User txn already open → SAVEPOINT / UPDATEs / RELEASE (never nested
+   *   BEGIN that could COMMIT unrelated user work)
+   */
+  async commitEditBatch(
+    expectedGen: number,
+    updates: Array<{ sql: string; params?: unknown[] }>,
+  ): Promise<TxnState> {
+    if (!this.primary) throw new Error('not connected');
+    if (expectedGen !== this.connectionGen) {
+      throw new Error(
+        `connection generation mismatch: edit batch is for generation ${expectedGen}, current is ${this.connectionGen}`,
+      );
+    }
+    if (updates.length === 0) return this.txnState;
+
+    if (this.txnState === 'error') {
+      throw new Error(
+        'cannot commit edits while the current transaction is in an error state — rollback first',
+      );
+    }
+    const hadOpenTxn = this.txnState === 'active';
+    const savepoint = 'plasma_edit_batch';
+
+    try {
+      if (hadOpenTxn) {
+        await this.primary.query(`SAVEPOINT ${savepoint}`);
+      } else {
+        await this.primary.query('BEGIN');
+        this.txnState = 'active';
+      }
+
+      for (const u of updates) {
+        await this.primary.query({
+          text: u.sql,
+          values: u.params,
+          rowMode: 'array',
+        });
+      }
+
+      if (hadOpenTxn) {
+        await this.primary.query(`RELEASE SAVEPOINT ${savepoint}`);
+      } else {
+        await this.primary.query('COMMIT');
+        this.txnState = 'none';
+      }
+      return this.txnState;
+    } catch (err) {
+      try {
+        if (hadOpenTxn) {
+          await this.primary.query(`ROLLBACK TO SAVEPOINT ${savepoint}`);
+          await this.primary.query(`RELEASE SAVEPOINT ${savepoint}`);
+        } else if (this.primary) {
+          await this.primary.query('ROLLBACK');
+          this.txnState = 'none';
+        }
+      } catch {
+        this.txnState = 'error';
+      }
+      throw err;
+    }
   }
 
   /**

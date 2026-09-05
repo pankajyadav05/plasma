@@ -321,7 +321,11 @@ function registerIpcHandlers() {
         } catch (err) {
           logger.error('[plasma] vault save failed (non-fatal):', err);
         }
-        return { serverVersion: res.serverVersion, engine: res.engine };
+        return {
+          serverVersion: res.serverVersion,
+          engine: res.engine,
+          connectionGen: res.connectionGen,
+        };
       } catch (err) {
         if (ssh) closeTunnel(config.id);
         throw err;
@@ -389,7 +393,11 @@ function registerIpcHandlers() {
         activeEngine = res.engine;
         const { password: _pwd, ...safeConfig } = config;
         return {
-          info: { serverVersion: res.serverVersion, engine: res.engine },
+          info: {
+            serverVersion: res.serverVersion,
+            engine: res.engine,
+            connectionGen: res.connectionGen,
+          },
           config: safeConfig,
         };
       } catch (err) {
@@ -429,7 +437,11 @@ function registerIpcHandlers() {
     }
     const executedAt = Date.now();
     try {
-      const res = await callWorker({ kind: 'query', sql, params }, 'queryResult');
+      // U05: transactionMode wraps user statements in an auto-BEGIN on
+      // the worker. Internal/plumbing queries never opt in.
+      const settings = SettingsShape.parse(getAllSettings());
+      const autoBegin = !internal && settings.transactionMode === true;
+      const res = await callWorker({ kind: 'query', sql, params, autoBegin }, 'queryResult');
       if (!internal) {
         try {
           recordHistory({
@@ -468,6 +480,43 @@ function registerIpcHandlers() {
   ipcMain.handle(IpcChannel.QueryCancel, async (): Promise<void> => {
     await callWorker({ kind: 'cancel' }, 'cancelled');
   });
+
+  ipcMain.handle(
+    IpcChannel.QueryCommitEditBatch,
+    async (
+      _e,
+      raw: unknown,
+    ): Promise<{ state: TxnState; applied: number }> => {
+      if (!raw || typeof raw !== 'object') throw new Error('invalid edit batch payload');
+      const p = raw as { connectionGen?: unknown; updates?: unknown };
+      if (typeof p.connectionGen !== 'number' || !Number.isFinite(p.connectionGen)) {
+        throw new Error('connectionGen must be a number');
+      }
+      if (!Array.isArray(p.updates) || p.updates.length === 0) {
+        throw new Error('updates must be a non-empty array');
+      }
+      const updates = p.updates.map((u, i) => {
+        if (!u || typeof u !== 'object') throw new Error(`updates[${i}] invalid`);
+        const row = u as { sql?: unknown; params?: unknown };
+        if (typeof row.sql !== 'string' || !row.sql) {
+          throw new Error(`updates[${i}].sql must be a non-empty string`);
+        }
+        return {
+          sql: row.sql,
+          params: Array.isArray(row.params) ? row.params : undefined,
+        };
+      });
+      const res = await callWorker(
+        {
+          kind: 'commitEditBatch',
+          connectionGen: p.connectionGen,
+          updates,
+        },
+        'editBatchResult',
+      );
+      return { state: res.state, applied: res.applied };
+    },
+  );
 
   ipcMain.handle(IpcChannel.QuerySideband, async (_e, payload: unknown): Promise<QueryResult> => {
     let sql: string;

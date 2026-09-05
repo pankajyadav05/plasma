@@ -2,6 +2,7 @@ import { CodegenDialog } from '@/features/codegen/CodegenDialog';
 import { CommandPalette } from '@/features/command-palette/CommandPalette';
 import { ConnectionDialog } from '@/features/connection-manager/ConnectionDialog';
 import { DeleteConfirmDialog } from '@/features/connection-manager/DeleteConfirmDialog';
+import { PendingEditsGateDialog } from '@/features/connection-manager/PendingEditsGateDialog';
 import { ProdGateDialog } from '@/features/connection-manager/ProdGateDialog';
 import { EditorResizer } from '@/features/editor/EditorResizer';
 import { SqlCanvas } from '@/features/editor/SqlCanvas';
@@ -122,6 +123,7 @@ export function AppShell() {
       <HistorySheet />
       <DeleteConfirmDialog />
       <ProdGateDialog />
+      <PendingEditsGateDialog />
       <NewIndexDialog />
       <DeleteIndexDialog />
       <CodegenDialog open={codegenOpen} onOpenChange={setCodegenOpen} />

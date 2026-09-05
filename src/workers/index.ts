@@ -29,6 +29,8 @@ const redis = new RedisDriver();
 const os = new OpenSearchDriver();
 
 let activeEngine: ConnectionEngine | null = null;
+/** Bumped on every successful connect; edit batches must match (U01). */
+let connectionGen = 0;
 
 function send(res: WorkerResponse): void {
   process.parentPort.postMessage(res);
@@ -52,6 +54,9 @@ function unsupported(id: string, op: string): void {
 async function disconnectAll(): Promise<void> {
   await Promise.allSettled([pg.disconnect(), redis.disconnect(), os.disconnect()]);
   activeEngine = null;
+  // Keep connectionGen as-is until the next connect bumps it — stale
+  // edit batches still fail the write-boundary check because pg's
+  // mirrored gen is cleared to 0 on disconnect.
 }
 
 process.parentPort.on('message', async (evt: Electron.MessageEvent) => {
@@ -86,7 +91,15 @@ process.parentPort.on('message', async (evt: Electron.MessageEvent) => {
           serverVersion = await os.connect(req.config);
         }
         activeEngine = engine;
-        send({ kind: 'connected', id: req.id, serverVersion, engine });
+        connectionGen += 1;
+        if (engine === 'postgres') pg.setConnectionGen(connectionGen);
+        send({
+          kind: 'connected',
+          id: req.id,
+          serverVersion,
+          engine,
+          connectionGen,
+        });
         break;
       }
       case 'disconnect':
@@ -97,8 +110,21 @@ process.parentPort.on('message', async (evt: Electron.MessageEvent) => {
       // ── Postgres-only ──
       case 'query': {
         if (activeEngine !== 'postgres') return unsupported(req.id, 'query');
-        const result = await pg.query(req.sql, req.params);
+        const result = await pg.query(req.sql, req.params, {
+          autoBegin: req.autoBegin === true,
+        });
         send({ kind: 'queryResult', id: req.id, result });
+        break;
+      }
+      case 'commitEditBatch': {
+        if (activeEngine !== 'postgres') return unsupported(req.id, 'commitEditBatch');
+        const state = await pg.commitEditBatch(req.connectionGen, req.updates);
+        send({
+          kind: 'editBatchResult',
+          id: req.id,
+          state,
+          applied: req.updates.length,
+        });
         break;
       }
       case 'sidebandQuery': {

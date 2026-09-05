@@ -63,6 +63,8 @@ export type SavedConnection = z.infer<typeof SavedConnection>;
 export const ConnectionInfo = z.object({
   serverVersion: z.string(),
   engine: ConnectionEngine.default('postgres'),
+  /** Monotonic generation bumped on every successful worker connect (U01). */
+  connectionGen: z.number().int().nonnegative(),
 });
 export type ConnectionInfo = z.infer<typeof ConnectionInfo>;
 
@@ -453,6 +455,29 @@ export const WorkerRequest = z.discriminatedUnion('kind', [
     id: z.string(),
     sql: z.string(),
     params: z.array(z.unknown()).optional(),
+    /**
+     * When true (transactionMode), the worker auto-BEGINs before the
+     * statement if no user transaction is already open (U05).
+     */
+    autoBegin: z.boolean().optional(),
+  }),
+  /**
+   * Atomic pending-edit commit. Worker owns BEGIN/UPDATE…/COMMIT (or a
+   * SAVEPOINT when a user transaction is already open). Re-validates
+   * `connectionGen` at the write boundary (U01 + U05).
+   */
+  z.object({
+    kind: z.literal('commitEditBatch'),
+    id: z.string(),
+    connectionGen: z.number().int().nonnegative(),
+    updates: z
+      .array(
+        z.object({
+          sql: z.string().min(1),
+          params: z.array(z.unknown()).optional(),
+        }),
+      )
+      .min(1),
   }),
   z.object({ kind: z.literal('cancel'), id: z.string() }),
   z.object({ kind: z.literal('introspect'), id: z.string() }),
@@ -589,12 +614,19 @@ export const WorkerResponse = z.discriminatedUnion('kind', [
     id: z.string(),
     serverVersion: z.string(),
     engine: ConnectionEngine.default('postgres'),
+    connectionGen: z.number().int().nonnegative(),
   }),
   z.object({ kind: z.literal('disconnected'), id: z.string() }),
   z.object({ kind: z.literal('queryResult'), id: z.string(), result: QueryResult }),
   z.object({ kind: z.literal('cancelled'), id: z.string() }),
   z.object({ kind: z.literal('schemaInfo'), id: z.string(), info: SchemaInfo }),
   z.object({ kind: z.literal('txnState'), id: z.string(), state: TxnState }),
+  z.object({
+    kind: z.literal('editBatchResult'),
+    id: z.string(),
+    state: TxnState,
+    applied: z.number().int().nonnegative(),
+  }),
   z.object({ kind: z.literal('error'), id: z.string(), message: z.string() }),
   z.object({ kind: z.literal('redisScan'), id: z.string(), result: RedisScanResult }),
   z.object({ kind: z.literal('redisKey'), id: z.string(), result: RedisKeyValue }),
@@ -1002,6 +1034,8 @@ export const IpcChannel = {
   TxnBegin: 'plasma:txn:begin',
   TxnCommit: 'plasma:txn:commit',
   TxnRollback: 'plasma:txn:rollback',
+  /** Atomic pending-edit batch (U01+U05). */
+  QueryCommitEditBatch: 'plasma:query:commitEditBatch',
   // AI (OpenRouter)
   AiChat: 'plasma:ai:chat',
   AiCancel: 'plasma:ai:cancel',
@@ -1086,6 +1120,15 @@ export interface PlasmaAPI {
      *   table definition). User-written queries should leave this off.
      */
     run(sql: string, params?: unknown[], opts?: { internal?: boolean }): Promise<QueryResult>;
+    /**
+     * Commit a buffered edit batch atomically on the worker. Validates
+     * `connectionGen` so edits queued against connection A cannot write
+     * to connection B (U01 + U05).
+     */
+    commitEditBatch(req: {
+      connectionGen: number;
+      updates: Array<{ sql: string; params?: unknown[] }>;
+    }): Promise<{ state: TxnState; applied: number }>;
     cancel(): Promise<void>;
     /**
      * Run a query on the worker's sideband connection — never recorded
