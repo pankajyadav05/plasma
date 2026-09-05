@@ -20,28 +20,21 @@ import {
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { type CellDetail, CellDetailDialog } from './CellDetailDialog';
 import { ColumnHeaderMenu } from './ColumnHeaderMenu';
+import {
+  type IndexedRow,
+  slicePageSorted,
+  slicePageUnsorted,
+  sortRowsWithIndex,
+} from './display-rows';
 import { type RowDetail, RowDetailSheet } from './RowDetailSheet';
 import { SqlHomePanel } from './SqlHomePanel';
 import { TableDefinitionView } from './TableDefinitionView';
+import { computeRowWindow } from './windowed-rows';
 
 // Stable empty Set used as a fallback when the active tab is null. Using
 // a module-level singleton keeps the useEffect dependency reference-stable
 // across renders so we don't trip the sticky-column re-measure loop.
 const EMPTY_STICKY_SET: ReadonlySet<string> = new Set();
-
-/**
- * Hard cap on rows we hand to React for the table body. The grid uses a
- * pure DOM `<table>` with sticky headers + sticky columns; rendering
- * 100k+ rows blows the layout engine. The PaginationBar already keeps
- * normal page sizes (50/100/250/500/1000) safe — this cap is the floor
- * for users who set pageSize=10000 or stream-fed tabs that bypass paging.
- *
- * Rows beyond this cap are simply not rendered; a footer banner surfaces
- * the truncation. Full viewport-aware virtualization (windowed render
- * with absolute positioning) is the next step — TODO once the existing
- * keyboard nav code can map cell coords to a visible window.
- */
-const MAX_DOM_ROWS = 1500;
 
 /**
  * Paginated + sortable result grid with keyboard navigation and cell copy.
@@ -51,7 +44,9 @@ const MAX_DOM_ROWS = 1500;
  *  - Ctrl/Cmd+C copies the selected cell value
  *  - Long cells truncate with a native tooltip on hover
  *
- * Virtualization is still M3 — this renders all rows in the active page.
+ * U15: worker results are row/byte-capped (`truncated` flag). The tbody
+ * uses scroll-windowed rendering (replacing MAX_DOM_ROWS) so large
+ * pageSize values do not mount thousands of DOM nodes.
  */
 export function ResultGrid() {
   const tab = useActiveTab();
@@ -155,28 +150,60 @@ export function ResultGrid() {
     }
   };
 
-  // Compute display rows.
+  // Compute display rows (U14 + U15).
   //
   // Table tabs: the server already returned the sorted + paginated
   // slice, so we render all rows as-is.
   //
-  // SQL tabs: we slice client-side and optionally apply a client-side
-  // sort on top of the raw result set.
+  // SQL tabs: sorted order is memoized on (rows, sort) only so paging
+  // does not re-sort. Unsorted pages slice first, then wrap only the
+  // visible rows — never allocate an IndexedRow for every result row.
+  const sortedSqlRows = useMemo((): IndexedRow[] | null => {
+    if (!tab?.queryResult || tab.kind !== 'sql' || !tab.sortColumn) return null;
+    return sortRowsWithIndex(tab.queryResult.rows, tab.sortColumn);
+  }, [tab?.kind, tab?.queryResult, tab?.sortColumn]);
+
   const displayRows = useMemo(() => {
-    if (!tab?.queryResult) return [] as { row: unknown[]; originalIndex: number }[];
+    if (!tab?.queryResult) return [] as IndexedRow[];
     if (tab.kind === 'table') {
       return tab.queryResult.rows.map((row, i) => ({ row, originalIndex: i }));
     }
-    const withIdx = tab.queryResult.rows.map((row, i) => ({ row, originalIndex: i }));
-    if (tab.sortColumn) {
-      const { index, direction } = tab.sortColumn;
-      withIdx.sort((a, b) => compareCells(a.row[index], b.row[index], direction));
+    if (sortedSqlRows) {
+      return slicePageSorted(sortedSqlRows, tab.page, tab.pageSize);
     }
-    const start = tab.page * tab.pageSize;
-    return withIdx.slice(start, start + tab.pageSize);
-  }, [tab?.kind, tab?.queryResult, tab?.sortColumn, tab?.page, tab?.pageSize]);
+    return slicePageUnsorted(tab.queryResult.rows, tab.page, tab.pageSize);
+  }, [tab?.kind, tab?.queryResult, tab?.page, tab?.pageSize, sortedSqlRows]);
 
   const containerRef = useRef<HTMLDivElement>(null);
+  const [scrollTop, setScrollTop] = useState(0);
+  const [viewportHeight, setViewportHeight] = useState(400);
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const onScroll = () => setScrollTop(el.scrollTop);
+    const ro = new ResizeObserver((entries) => {
+      const h = entries[0]?.contentRect.height;
+      if (typeof h === 'number' && h > 0) setViewportHeight(h);
+    });
+    el.addEventListener('scroll', onScroll, { passive: true });
+    ro.observe(el);
+    setScrollTop(el.scrollTop);
+    setViewportHeight(el.clientHeight || 400);
+    return () => {
+      el.removeEventListener('scroll', onScroll);
+      ro.disconnect();
+    };
+  }, [tab?.queryResult]);
+
+  const rowWindow = useMemo(
+    () => computeRowWindow(displayRows.length, scrollTop, viewportHeight),
+    [displayRows.length, scrollTop, viewportHeight],
+  );
+  const windowedRows = useMemo(
+    () => displayRows.slice(rowWindow.start, rowWindow.end),
+    [displayRows, rowWindow.start, rowWindow.end],
+  );
 
   // Foreign-key lookup for the current table tab. Keyed by column name,
   // since FK click-through is only supported on table tabs where each
@@ -746,7 +773,13 @@ export function ResultGrid() {
           </tr>
         </thead>
         <tbody>
-          {displayRows.slice(0, MAX_DOM_ROWS).map((entry, visibleRow) => {
+          {rowWindow.topPadPx > 0 && (
+            <tr aria-hidden="true" style={{ height: rowWindow.topPadPx }}>
+              <td colSpan={visibleColumns.length + (writable ? 2 : 1)} />
+            </tr>
+          )}
+          {windowedRows.map((entry, windowIdx) => {
+            const visibleRow = rowWindow.start + windowIdx;
             const rowSelected = tab.selectedCell?.row === visibleRow;
             const rowChecked = tab.selectedRows.has(entry.originalIndex);
             return (
@@ -902,15 +935,20 @@ export function ResultGrid() {
               </tr>
             );
           })}
-          {displayRows.length > MAX_DOM_ROWS && (
+          {rowWindow.bottomPadPx > 0 && (
+            <tr aria-hidden="true" style={{ height: rowWindow.bottomPadPx }}>
+              <td colSpan={visibleColumns.length + (writable ? 2 : 1)} />
+            </tr>
+          )}
+          {tab.queryResult.truncated && (
             <tr>
               <td
                 colSpan={visibleColumns.length + (writable ? 2 : 1)}
                 className="border-t border-amber-500/40 bg-amber-500/10 px-3 py-2 font-display text-xs italic text-foreground"
               >
-                Rendering first {MAX_DOM_ROWS.toLocaleString()} of{' '}
-                {displayRows.length.toLocaleString()} rows. Use the page controls below — or LIMIT
-                in your query — to see the rest.
+                Result truncated at {tab.queryResult.rows.length.toLocaleString()} rows (worker
+                row/byte cap). Add a LIMIT — or export via a future incremental path — for the full
+                set.
               </td>
             </tr>
           )}
@@ -956,24 +994,6 @@ function SelectAllCheckbox({
       title={selectedCount === total ? 'Deselect all visible' : 'Select all visible'}
     />
   );
-}
-
-function compareCells(a: unknown, b: unknown, direction: 'asc' | 'desc'): number {
-  const mul = direction === 'asc' ? 1 : -1;
-  const na = a === null || a === undefined;
-  const nb = b === null || b === undefined;
-  if (na && nb) return 0;
-  if (na) return 1; // nulls sort last regardless of direction
-  if (nb) return -1;
-  // Numeric fast path
-  if (typeof a === 'number' && typeof b === 'number') return (a - b) * mul;
-  // Compare as strings for everything else (matches pg's display order
-  // well enough for most types; M3 can use type-aware comparators).
-  const sa = String(a);
-  const sb = String(b);
-  if (sa < sb) return -1 * mul;
-  if (sa > sb) return 1 * mul;
-  return 0;
 }
 
 // ─── Cell formatting (shared with export) ───────────────────────────

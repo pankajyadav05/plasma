@@ -55,6 +55,8 @@ const workerSupervisor = new WorkerSupervisor();
 // Track the connection id associated with the currently-active worker
 // connection so history entries can be linked back to the right vault row.
 let activeConnectionId: string | null = null;
+/** Monotonic revision stamped on query/sideband requests for chunk filtering (U15). */
+let queryRequestRevision = 0;
 
 // Track the active engine so the AI tool executor can dispatch the
 // right tool call (sideband SQL vs Redis command vs OS search). Set
@@ -105,6 +107,8 @@ app.whenReady().then(async () => {
   workerSupervisor.setBroadcastHandler((evt) => {
     if (evt.kind === 'redisPubsub') {
       mainWindow?.webContents.send('plasma:redis:pubsub', evt.message);
+    } else if (evt.kind === 'queryChunk') {
+      mainWindow?.webContents.send('plasma:query:chunk', evt);
     }
   });
 
@@ -125,7 +129,7 @@ app.whenReady().then(async () => {
         });
       }
       try {
-        const res = await callWorker({ kind: 'sidebandQuery', sql }, 'queryResult');
+        const res = await callWorker({ kind: 'sidebandQuery', sql, revision: ++queryRequestRevision }, 'queryResult');
         const cols = res.result.columns.map((c) => c.name);
         const rows = res.result.rows
           .slice(0, 50)
@@ -429,7 +433,8 @@ function registerIpcHandlers() {
     }
     const executedAt = Date.now();
     try {
-      const res = await callWorker({ kind: 'query', sql, params }, 'queryResult');
+      const revision = ++queryRequestRevision;
+      const res = await callWorker({ kind: 'query', sql, params, revision }, 'queryResult');
       if (!internal) {
         try {
           recordHistory({
@@ -482,7 +487,7 @@ function registerIpcHandlers() {
     } else {
       throw new Error('invalid sideband payload');
     }
-    const res = await callWorker({ kind: 'sidebandQuery', sql, params }, 'queryResult');
+    const res = await callWorker({ kind: 'sidebandQuery', sql, params, revision: ++queryRequestRevision }, 'queryResult');
     return res.result;
   });
 

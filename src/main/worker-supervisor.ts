@@ -1,4 +1,5 @@
-import { type WorkerRequest, WorkerResponse } from '@shared/protocol';
+import { type WorkerRequest, type WorkerResponse } from '@shared/protocol';
+import { parseWorkerResponse } from '@shared/worker-response-parse';
 import { type UtilityProcess, utilityProcess } from 'electron';
 import { logger } from './logger';
 
@@ -17,7 +18,10 @@ import { logger } from './logger';
  * routes them to a registered handler instead of trying to resolve a
  * pending promise.
  */
-export type WorkerBroadcast = Extract<WorkerResponse, { kind: 'redisPubsub' }>;
+export type WorkerBroadcast = Extract<
+  WorkerResponse,
+  { kind: 'redisPubsub' } | { kind: 'queryChunk' }
+>;
 
 export class WorkerSupervisor {
   private proc: UtilityProcess | null = null;
@@ -60,15 +64,16 @@ export class WorkerSupervisor {
     });
 
     proc.on('message', (raw: unknown) => {
-      const parsed = WorkerResponse.safeParse(raw);
-      if (!parsed.success) {
+      // U15 step 3: queryResult uses envelope validation (no per-cell Zod walk).
+      const parsed = parseWorkerResponse(raw);
+      if (!parsed.ok) {
         logger.error('[plasma] worker sent invalid message', parsed.error);
         return;
       }
       const data = parsed.data;
-      // Broadcast events (currently only redisPubsub) aren't request-
-      // correlated — fan them out to whoever subscribed.
-      if (data.kind === 'redisPubsub') {
+      // Broadcast events aren't request-correlated final responses —
+      // fan them out to whoever subscribed (redis pubsub + query chunks).
+      if (data.kind === 'redisPubsub' || data.kind === 'queryChunk') {
         this.broadcastHandler?.(data);
         return;
       }

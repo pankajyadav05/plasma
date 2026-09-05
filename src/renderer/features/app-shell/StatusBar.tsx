@@ -73,7 +73,10 @@ export function StatusBar() {
       {tab?.queryResult && !tab.queryError && (
         <>
           <Sep />
-          <Seg>{tab.queryResult.rowCount.toLocaleString()} rows</Seg>
+          <Seg>
+            {tab.queryResult.rowCount.toLocaleString()} rows
+            {tab.queryResult.truncated ? ' (truncated)' : ''}
+          </Seg>
           <Sep />
           <Seg>{formatDuration(tab.queryResult.durationMs)}</Seg>
         </>
