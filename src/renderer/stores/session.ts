@@ -173,6 +173,20 @@ export interface PendingEdit {
   columnIndex: number;
 }
 
+/**
+ * One-use authorization for a prod-gated destructive query (U11).
+ * Captured at gate time so confirm executes this exact payload once —
+ * never re-reads the live tab / never re-opens the dialog.
+ *
+ * `connectionGen` is reserved for U01 wiring; on main (pre-U01) it is
+ * captured as 0 so the approval shape stays stable across merges.
+ */
+export interface ProdGateApproval {
+  sql: string;
+  tabId: string;
+  connectionGen: number;
+}
+
 export interface QueryTab {
   id: string;
   title: string;
@@ -530,10 +544,11 @@ interface SessionState {
   /**
    * When the user fires a destructive query (DELETE/TRUNCATE/DROP/
    * UPDATE without WHERE) against a prod-tagged connection, runQuery
-   * stashes the pending SQL here and renders a confirm dialog. The
-   * user's choice resumes (or aborts) the run.
+   * stashes a one-use approval payload here and renders a confirm
+   * dialog. confirmProdGate clears this and passes the payload into
+   * runQuery so execution never re-gates (U11).
    */
-  prodGate: { sql: string } | null;
+  prodGate: ProdGateApproval | null;
 
   // ── actions ──
   openDialog(prefill?: ConnectionConfig): void;
@@ -580,7 +595,8 @@ interface SessionState {
 
   // Per-tab actions operate on the active tab by default
   setSql(sql: string): void;
-  runQuery(): Promise<void>;
+  /** Optional one-use prod-gate approval — skips re-gating (U11). */
+  runQuery(approved?: ProdGateApproval): Promise<void>;
   cancelQuery(): Promise<void>;
   openTable(schema: string, table: string): void;
   openForeignRow(refSchema: string, refTable: string, refColumn: string, value: unknown): void;
@@ -1196,36 +1212,60 @@ export const useSession = create<SessionState>((set, get) => ({
     patchActiveTab(set, get, { sql });
   },
 
-  async runQuery() {
+  async runQuery(approved?: ProdGateApproval) {
     const state = get();
-    const tab = activeTab(state);
-    if (!tab) return;
-    if (tab.queryRunState === 'running') return;
 
-    // Table tabs compile their SQL from structured state.
-    if (tab.kind === 'table') {
-      await runTableDataQuery(set, get, tab.id);
-      void runTableCountQuery(set, get, tab.id);
-      return;
-    }
-
-    const sql = tab.sql.trim();
-    if (!sql) return;
-
-    // Prod gate: if active connection is tagged 'prod' and the script
-    // includes any destructive statement, stash the SQL and prompt for
-    // confirmation. The user resumes via `confirmProdGate()`.
-    const connId = state.activeConfig?.id;
-    const tag = connId ? state.settings.connectionTags?.[connId] : undefined;
-    if (tag === 'prod' && state.prodGate === null) {
-      const stmts = splitSqlStatements(sql);
-      if (stmts.some(looksDestructive)) {
-        set({ prodGate: { sql } });
+    // Table tabs compile their SQL from structured state. Approvals are
+    // only issued for free-form SQL tabs, so ignore approved here.
+    if (!approved) {
+      const tab = activeTab(state);
+      if (!tab) return;
+      if (tab.queryRunState === 'running') return;
+      if (tab.kind === 'table') {
+        await runTableDataQuery(set, get, tab.id);
+        void runTableCountQuery(set, get, tab.id);
         return;
       }
     }
 
-    patchActiveTab(set, get, {
+    // Resolve the exact payload. An approved run uses the captured SQL +
+    // tabId (one-use); a normal run reads the active tab.
+    let originTabId: string;
+    let sql: string;
+    if (approved) {
+      const origin = state.tabs.find((t) => t.id === approved.tabId);
+      if (!origin) return;
+      if (origin.queryRunState === 'running') return;
+      originTabId = approved.tabId;
+      sql = approved.sql.trim();
+    } else {
+      const tab = activeTab(state);
+      if (!tab) return;
+      if (tab.queryRunState === 'running') return;
+      originTabId = tab.id;
+      sql = tab.sql.trim();
+    }
+    if (!sql) return;
+
+    // Prod gate: only for unapproved runs. An approved payload must never
+    // re-enter the dialog (that was the F10 loop).
+    if (!approved) {
+      const connId = state.activeConfig?.id;
+      const tag = connId ? state.settings.connectionTags?.[connId] : undefined;
+      if (tag === 'prod') {
+        const stmts = splitSqlStatements(sql);
+        if (stmts.some((s) => looksDestructive(s.text))) {
+          // connectionGen is 0 until U01 lands; keep the field so the
+          // approval shape matches {sql, tabId, connectionGen}.
+          set({
+            prodGate: { sql, tabId: originTabId, connectionGen: 0 },
+          });
+          return;
+        }
+      }
+    }
+
+    patchTabById(set, originTabId, {
       queryRunState: 'running',
       queryError: null,
       queryErrorSql: null,
@@ -1238,13 +1278,13 @@ export const useSession = create<SessionState>((set, get) => ({
       let lastResult: QueryResult | null = null;
       let anyDdl = false;
       for (let i = 0; i < statements.length; i++) {
-        const stmt = statements[i];
+        const stmt = statements[i]!.text;
         try {
           lastResult = await ipc.query.run(stmt);
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           const tag = statements.length > 1 ? ` (statement ${i + 1} of ${statements.length})` : '';
-          patchActiveTab(set, get, {
+          patchTabById(set, originTabId, {
             queryError: `${message}${tag}`,
             queryErrorSql: stmt,
             queryRunState: 'idle',
@@ -1254,7 +1294,7 @@ export const useSession = create<SessionState>((set, get) => ({
         }
         if (looksLikeDdl(stmt)) anyDdl = true;
       }
-      patchActiveTab(set, get, {
+      patchTabById(set, originTabId, {
         queryResult: lastResult,
         queryRunState: 'idle',
         page: 0,
@@ -1266,7 +1306,7 @@ export const useSession = create<SessionState>((set, get) => ({
         void get().refreshSchema();
       }
     } catch (err) {
-      patchActiveTab(set, get, {
+      patchTabById(set, originTabId, {
         queryError: err instanceof Error ? err.message : String(err),
         queryErrorSql: sql,
         queryRunState: 'idle',
@@ -2265,11 +2305,11 @@ export const useSession = create<SessionState>((set, get) => ({
   confirmProdGate() {
     const gate = get().prodGate;
     if (!gate) return;
+    // Clear dialog state first, then hand the captured payload to
+    // runQuery as a one-use authorization. Clearing alone must never
+    // stand in for approval (F10 / U11).
     set({ prodGate: null });
-    // Re-enter runQuery now that the gate is cleared. The SQL on the
-    // active tab still matches what we stashed — runQuery will see no
-    // gate set and proceed.
-    void get().runQuery();
+    void get().runQuery(gate);
   },
 
   cancelProdGate() {
