@@ -108,10 +108,20 @@ app.whenReady().then(async () => {
     }
   });
 
+  // Worker crash after readiness invalidates the live connection — the
+  // respawned worker has no DB session (U20).
+  workerSupervisor.setCrashHandler(() => {
+    const id = activeConnectionId;
+    activeConnectionId = null;
+    activeEngine = null;
+    if (id) closeTunnel(id);
+    mainWindow?.webContents.send('plasma:worker:reset');
+  });
+
   // AI tools dispatch by the active engine. Postgres uses the worker
-  // sideband connection so tool queries don't queue behind a long
-  // primary query; Redis routes through the read-only command list;
-  // OpenSearch hits search / SQL plugin.
+  // aux connection so tool queries don't queue behind a long primary
+  // query and never block cancel (U19); Redis routes through the
+  // read-only command list; OpenSearch hits search / SQL plugin.
   setAiToolExecutor(async (name, args) => {
     if (name === 'query_database') {
       if (activeEngine !== 'postgres') {
@@ -279,6 +289,19 @@ async function callWorker<K extends WorkerResponse['kind']>(
   return res as Extract<WorkerResponse, { kind: K }>;
 }
 
+function currentQueryTimeoutMs(): number {
+  return SettingsShape.parse(getAllSettings()).queryTimeoutMs;
+}
+
+/** Push queryTimeoutMs → PG statement_timeout on primary+aux (U20). */
+async function applyStatementTimeout(timeoutMs = currentQueryTimeoutMs()): Promise<void> {
+  try {
+    await callWorker({ kind: 'setStatementTimeout', timeoutMs }, 'statementTimeoutSet');
+  } catch (err) {
+    logger.error('[plasma] failed to apply statement_timeout:', err);
+  }
+}
+
 // ─── IPC handlers ─────────────────────────────────────────────────────
 
 function registerIpcHandlers() {
@@ -313,7 +336,14 @@ function registerIpcHandlers() {
         effective.port = local.port;
       }
       try {
-        const res = await callWorker({ kind: 'connect', config: effective }, 'connected');
+        const res = await callWorker(
+          {
+            kind: 'connect',
+            config: effective,
+            statementTimeoutMs: currentQueryTimeoutMs(),
+          },
+          'connected',
+        );
         try {
           vaultSave(config);
           activeConnectionId = config.id;
@@ -342,7 +372,14 @@ function registerIpcHandlers() {
     async (_e, rawConfig: unknown): Promise<ConnectionTestResult> => {
       try {
         const config = ConnectionConfig.parse(rawConfig);
-        const res = await callWorker({ kind: 'connect', config }, 'connected');
+        const res = await callWorker(
+          {
+            kind: 'connect',
+            config,
+            statementTimeoutMs: currentQueryTimeoutMs(),
+          },
+          'connected',
+        );
         return { ok: true, serverVersion: res.serverVersion, engine: res.engine };
       } catch (err) {
         return {
@@ -384,7 +421,14 @@ function registerIpcHandlers() {
         effective.port = local.port;
       }
       try {
-        const res = await callWorker({ kind: 'connect', config: effective }, 'connected');
+        const res = await callWorker(
+          {
+            kind: 'connect',
+            config: effective,
+            statementTimeoutMs: currentQueryTimeoutMs(),
+          },
+          'connected',
+        );
         activeConnectionId = config.id;
         activeEngine = res.engine;
         const { password: _pwd, ...safeConfig } = config;
@@ -549,6 +593,10 @@ function registerIpcHandlers() {
     // title bar overlay so the native window controls follow suit.
     if (merged.theme !== prev.theme && mainWindow && !mainWindow.isDestroyed()) {
       applyThemeToWindow(mainWindow, merged.theme);
+    }
+    // Push queryTimeoutMs → PG statement_timeout while connected (U20).
+    if (merged.queryTimeoutMs !== prev.queryTimeoutMs && activeEngine === 'postgres') {
+      void applyStatementTimeout(merged.queryTimeoutMs);
     }
     return merged;
   });

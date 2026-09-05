@@ -446,7 +446,13 @@ export type TxnState = z.infer<typeof TxnState>;
 
 export const WorkerRequest = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('ping'), id: z.string(), message: z.string() }),
-  z.object({ kind: z.literal('connect'), id: z.string(), config: ConnectionConfig }),
+  z.object({
+    kind: z.literal('connect'),
+    id: z.string(),
+    config: ConnectionConfig,
+    /** Applied as PG statement_timeout after connect (U20). */
+    statementTimeoutMs: z.number().int().nonnegative().optional(),
+  }),
   z.object({ kind: z.literal('disconnect'), id: z.string() }),
   z.object({
     kind: z.literal('query'),
@@ -459,14 +465,20 @@ export const WorkerRequest = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('beginTxn'), id: z.string() }),
   z.object({ kind: z.literal('commitTxn'), id: z.string() }),
   z.object({ kind: z.literal('rollbackTxn'), id: z.string() }),
-  // Sideband query — runs on the second connection so it doesn't queue
-  // behind a long-running query on `primary`. Used for live monitor +
-  // pg_terminate_backend calls.
+  // Aux query — runs on the dedicated aux connection (AI/monitor) so it
+  // never shares a session with cancel. Cancel uses a separate control
+  // client (U19).
   z.object({
     kind: z.literal('sidebandQuery'),
     id: z.string(),
     sql: z.string(),
     params: z.array(z.unknown()).optional(),
+  }),
+  // Apply PG statement_timeout on primary + aux (U20). 0 disables.
+  z.object({
+    kind: z.literal('setStatementTimeout'),
+    id: z.string(),
+    timeoutMs: z.number().int().nonnegative(),
   }),
   // ── Redis ops ──
   z.object({
@@ -593,6 +605,9 @@ export const WorkerResponse = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('disconnected'), id: z.string() }),
   z.object({ kind: z.literal('queryResult'), id: z.string(), result: QueryResult }),
   z.object({ kind: z.literal('cancelled'), id: z.string() }),
+  /** Worker process finished bootstrapping and can accept requests (U20). */
+  z.object({ kind: z.literal('ready'), id: z.string() }),
+  z.object({ kind: z.literal('statementTimeoutSet'), id: z.string() }),
   z.object({ kind: z.literal('schemaInfo'), id: z.string(), info: SchemaInfo }),
   z.object({ kind: z.literal('txnState'), id: z.string(), state: TxnState }),
   z.object({ kind: z.literal('error'), id: z.string(), message: z.string() }),
@@ -961,7 +976,7 @@ export const IpcChannel = {
   QueryRun: 'plasma:query:run',
   QueryCancel: 'plasma:query:cancel',
   /**
-   * Run a query on the worker's sideband connection. Used by the live
+   * Run a query on the worker's aux connection (AI/monitor). Used by the live
    * monitor + pg_terminate_backend so a long-running primary query
    * doesn't block the activity refresh.
    */
