@@ -1,7 +1,7 @@
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/cn';
 import { kbd } from '@/lib/platform';
-import { useSession } from '@/stores/session';
+import { tabIsDirty, useSession } from '@/stores/session';
 import type { TabKind } from '@/stores/session';
 import {
   Activity,
@@ -20,6 +20,7 @@ import {
   X,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
 
 const TAB_ICON: Record<TabKind, LucideIcon> = {
   sql: FileCode,
@@ -40,6 +41,9 @@ export function TabStrip() {
   const setActiveTab = useSession((s) => s.setActiveTab);
   const closeTab = useSession((s) => s.closeTab);
   const addTab = useSession((s) => s.addTab);
+  const renameTab = useSession((s) => s.renameTab);
+  const beginRenameTab = useSession((s) => s.beginRenameTab);
+  const renamingTabId = useSession((s) => s.renamingTabId);
   const sidebarCollapsed = useSession((s) => s.settings.sidebarCollapsed);
   const toggleSidebar = useSession((s) => s.toggleSidebar);
   // The `+` button creates a fresh SQL tab; that only makes sense for
@@ -70,6 +74,8 @@ export function TabStrip() {
         {tabs.map((t) => {
           const active = t.id === activeTabId;
           const Icon = TAB_ICON[t.kind] ?? FileCode;
+          const dirty = tabIsDirty(t);
+          const renaming = renamingTabId === t.id;
           return (
             <div
               key={t.id}
@@ -80,12 +86,21 @@ export function TabStrip() {
                   : 'text-muted-foreground hover:bg-[var(--bg-hover)] hover:text-foreground',
               )}
               onClick={() => setActiveTab(t.id)}
+              onDoubleClick={(e) => {
+                e.stopPropagation();
+                beginRenameTab(t.id);
+              }}
               role="tab"
               aria-selected={active}
               tabIndex={0}
               onKeyDown={(e) => {
-                if (e.key === 'Enter') setActiveTab(t.id);
+                if (e.key === 'Enter' && !renaming) setActiveTab(t.id);
+                if (e.key === 'F2') {
+                  e.preventDefault();
+                  beginRenameTab(t.id);
+                }
               }}
+              title={dirty ? `${t.title} (unsaved edits)` : t.title}
             >
               {active && <span className="absolute inset-x-0 bottom-[-1px] h-0.5 bg-primary" />}
               <Icon
@@ -98,8 +113,24 @@ export function TabStrip() {
                 <span className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-none bg-primary" />
               )}
               {t.queryError && <span className="shrink-0 text-xs text-primary">!</span>}
-              <span className="max-w-[180px] truncate text-sm">{t.title}</span>
-              {tabs.length > 1 && (
+              {renaming ? (
+                <TabRenameInput
+                  initial={t.title}
+                  onCommit={(next) => renameTab(t.id, next)}
+                  onCancel={() => beginRenameTab(null)}
+                />
+              ) : (
+                <span className="flex max-w-[180px] items-center gap-1 truncate text-sm">
+                  <span className="truncate">{t.title}</span>
+                  {dirty && (
+                    <span
+                      className="inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-primary"
+                      aria-label="Unsaved edits"
+                    />
+                  )}
+                </span>
+              )}
+              {tabs.length > 1 && !renaming && (
                 <Button
                   variant="ghost"
                   size="icon-xs"
@@ -132,5 +163,51 @@ export function TabStrip() {
         </div>
       )}
     </div>
+  );
+}
+
+function TabRenameInput({
+  initial,
+  onCommit,
+  onCancel,
+}: {
+  initial: string;
+  onCommit: (next: string) => void;
+  onCancel: () => void;
+}) {
+  const [value, setValue] = useState(initial);
+  const ref = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    ref.current?.focus();
+    ref.current?.select();
+  }, []);
+
+  return (
+    <input
+      ref={ref}
+      value={value}
+      onChange={(e) => setValue(e.target.value)}
+      onClick={(e) => e.stopPropagation()}
+      onBlur={() => {
+        const trimmed = value.trim();
+        if (!trimmed || trimmed === initial) onCancel();
+        else onCommit(trimmed);
+      }}
+      onKeyDown={(e) => {
+        e.stopPropagation();
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          const trimmed = value.trim();
+          if (!trimmed || trimmed === initial) onCancel();
+          else onCommit(trimmed);
+        } else if (e.key === 'Escape') {
+          e.preventDefault();
+          onCancel();
+        }
+      }}
+      className="h-6 max-w-[180px] min-w-[80px] rounded-sm border border-border bg-background px-1 text-sm text-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring"
+      aria-label="Rename tab"
+    />
   );
 }

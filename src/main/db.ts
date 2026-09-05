@@ -17,7 +17,19 @@ import { logger } from './logger';
  * migrations safely in later releases.
  */
 
-const CURRENT_SCHEMA_VERSION = 2;
+/**
+ * Schema versions:
+ *   1 — initial tables (connections, query_history, settings)
+ *   2 — connections.engine column
+ *   3 — reserved for U07 (encrypted secrets vault); may be unmerged
+ *   4 — open_tabs (U25 session restore)
+ *
+ * U25 creates `open_tabs` defensively with CREATE TABLE IF NOT EXISTS so
+ * the feature works whether or not U07's v3 migration has landed. We only
+ * claim user_version=4 once the DB is already at >=3, so an unmerged U07
+ * can still apply its v3 bump later.
+ */
+const CURRENT_SCHEMA_VERSION = 4;
 
 let db: Database.Database | null = null;
 
@@ -100,8 +112,38 @@ function migrate(d: Database.Database): void {
       ALTER TABLE connections
         ADD COLUMN engine TEXT NOT NULL DEFAULT 'postgres';
     `);
+    d.pragma('user_version = 2');
+  }
+
+  // U25 open_tabs — additive, safe whether U07 (v3) is present or not.
+  ensureOpenTabsTable(d);
+
+  const versionNow = (d.pragma('user_version', { simple: true }) as number) ?? 0;
+  if (versionNow >= 3 && versionNow < 4) {
+    logger.info('[plasma] migrating to schema version 4 (open_tabs)');
     d.pragma(`user_version = ${CURRENT_SCHEMA_VERSION}`);
   }
 
   // Future migrations go here, each bumping user_version.
+}
+
+/** Idempotent — also called from settings.ts before first open_tabs write. */
+export function ensureOpenTabsTable(d: Database.Database = getDb()): void {
+  d.exec(`
+    CREATE TABLE IF NOT EXISTS open_tabs (
+      connection_id TEXT NOT NULL,
+      position      INTEGER NOT NULL,
+      tab_id        TEXT NOT NULL,
+      kind          TEXT NOT NULL,
+      title         TEXT NOT NULL,
+      sql           TEXT NOT NULL DEFAULT '',
+      state_json    TEXT NOT NULL DEFAULT '{}',
+      is_active     INTEGER NOT NULL DEFAULT 0,
+      updated_at    INTEGER NOT NULL,
+      PRIMARY KEY (connection_id, tab_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_open_tabs_connection
+      ON open_tabs (connection_id, position);
+  `);
 }

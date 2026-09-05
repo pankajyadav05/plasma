@@ -83,6 +83,12 @@ const api: PlasmaAPI = {
     get: () => ipcRenderer.invoke(IpcChannel.SettingsGet),
     set: (patch) => ipcRenderer.invoke(IpcChannel.SettingsSet, patch),
   },
+  openTabs: {
+    load: (connectionId) => ipcRenderer.invoke(IpcChannel.OpenTabsLoad, connectionId),
+    save: (connectionId, snapshot) =>
+      ipcRenderer.invoke(IpcChannel.OpenTabsSave, { connectionId, snapshot }),
+    clear: (connectionId) => ipcRenderer.invoke(IpcChannel.OpenTabsClear, connectionId),
+  },
   txn: {
     begin: () => ipcRenderer.invoke(IpcChannel.TxnBegin),
     commit: () => ipcRenderer.invoke(IpcChannel.TxnCommit),
@@ -113,6 +119,11 @@ contextBridge.exposeInMainWorld('plasma', api);
 const eventChannels = [
   'plasma:menu:newTab',
   'plasma:menu:closeTab',
+  'plasma:menu:reopenTab',
+  'plasma:menu:nextTab',
+  'plasma:menu:prevTab',
+  'plasma:menu:renameTab',
+  'plasma:menu:selectTab',
   'plasma:menu:exportCsv',
   'plasma:menu:exportJson',
   'plasma:menu:toggleSidebar',

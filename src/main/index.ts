@@ -15,6 +15,8 @@ import {
   type QueryResult,
   type SavedConnection,
   type SchemaInfo,
+  type OpenTabsSnapshot,
+  OpenTabsSnapshot as OpenTabsSnapshotSchema,
   type Settings,
   SettingsShape,
   type TxnState,
@@ -33,7 +35,13 @@ import { closeDb, getDb } from './db';
 import { clearHistory, listHistory, recordHistory } from './history';
 import { initLogger, logger } from './logger';
 import { buildAppMenu } from './menu';
-import { getAllSettings, setSetting } from './settings';
+import {
+  clearOpenTabs,
+  getAllSettings,
+  loadOpenTabs,
+  saveOpenTabs,
+  setSetting,
+} from './settings';
 import { formatSql } from './sql-format';
 import { closeAllTunnels, closeTunnel, openTunnel } from './ssh-tunnel';
 import { disposeUpdater, initUpdater } from './updater';
@@ -367,6 +375,7 @@ function registerIpcHandlers() {
   ipcMain.handle(IpcChannel.VaultDelete, (_e, id: unknown): void => {
     if (typeof id !== 'string') throw new Error('id must be a string');
     vaultDelete(id);
+    clearOpenTabs(id);
   });
 
   ipcMain.handle(
@@ -551,6 +560,27 @@ function registerIpcHandlers() {
       applyThemeToWindow(mainWindow, merged.theme);
     }
     return merged;
+  });
+
+  // ── Open tabs (U25 session restore) ──
+
+  ipcMain.handle(IpcChannel.OpenTabsLoad, (_e, connectionId: unknown): OpenTabsSnapshot => {
+    if (typeof connectionId !== 'string' || !connectionId) {
+      return { tabs: [], activeTabId: null };
+    }
+    return loadOpenTabs(connectionId);
+  });
+
+  ipcMain.handle(IpcChannel.OpenTabsSave, (_e, raw: unknown): void => {
+    const body = raw as { connectionId?: unknown; snapshot?: unknown };
+    if (typeof body?.connectionId !== 'string' || !body.connectionId) return;
+    const snapshot = OpenTabsSnapshotSchema.parse(body.snapshot ?? { tabs: [], activeTabId: null });
+    saveOpenTabs(body.connectionId, snapshot);
+  });
+
+  ipcMain.handle(IpcChannel.OpenTabsClear, (_e, connectionId: unknown): void => {
+    if (typeof connectionId !== 'string' || !connectionId) return;
+    clearOpenTabs(connectionId);
   });
 
   // ── Transactions ──
