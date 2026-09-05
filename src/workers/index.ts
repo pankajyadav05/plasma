@@ -201,8 +201,8 @@ process.parentPort.on('message', async (evt: Electron.MessageEvent) => {
       }
       case 'redisBulkDelete': {
         if (activeEngine !== 'redis') return unsupported(req.id, 'redisBulkDelete');
-        await redis.bulkDelete(req.keys);
-        send({ kind: 'redisAck', id: req.id });
+        const result = await redis.bulkDelete(req.keys);
+        send({ kind: 'redisBulkDelete', id: req.id, result });
         break;
       }
       case 'redisWrite': {
