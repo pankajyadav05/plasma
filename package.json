@@ -1,6 +1,6 @@
 {
   "name": "plasma",
-  "version": "0.0.15",
+  "version": "0.0.16",
   "description": "A quiet place for queries. A modern Electron-based Postgres client.",
   "private": true,
   "type": "module",
