@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { type CellDetail, CellDetailDialog } from './CellDetailDialog';
+import { nextCell, prevCell } from './grid-nav';
 import { ColumnHeaderMenu } from './ColumnHeaderMenu';
 import { type RowDetail, RowDetailSheet } from './RowDetailSheet';
 import { SqlHomePanel } from './SqlHomePanel';
@@ -48,6 +49,8 @@ const MAX_DOM_ROWS = 1500;
  *
  *  - Click a header to toggle sort (asc → desc → none)
  *  - Click a cell to select; arrows move selection
+ *  - Enter opens row detail; F2 / double-click edits (when writable)
+ *  - Tab / Shift+Tab move to the next / previous cell
  *  - Ctrl/Cmd+C copies the selected cell value
  *  - Long cells truncate with a native tooltip on hover
  *
@@ -131,15 +134,17 @@ export function ResultGrid() {
       ),
   );
 
-  const commitEdit = async () => {
-    if (!editingCell) return;
+  const commitEdit = async (): Promise<boolean> => {
+    if (!editingCell) return false;
     const { row, col, value } = editingCell;
     setEditError(null);
     try {
       await updateCell(row, col, value);
       setEditingCell(null);
+      return true;
     } catch (err) {
       setEditError(err instanceof Error ? err.message : String(err));
+      return false;
     }
   };
 
@@ -316,7 +321,24 @@ export function ResultGrid() {
     document.addEventListener('pointerup', onUp);
   };
 
-  // Keyboard navigation — arrows move the selected cell, Ctrl+C copies
+  // Begin inline edit on the currently selected cell (F2 / programmatic).
+  const beginEditSelected = () => {
+    if (!writable || !tab?.selectedCell || !tab.queryResult) return false;
+    const { row, col } = tab.selectedCell;
+    const pagedRow = displayRows[row];
+    if (!pagedRow) return false;
+    const cell = pagedRow.row[col];
+    setEditingCell({
+      row,
+      col,
+      value: cell === null || cell === undefined ? '' : String(cell),
+    });
+    setEditError(null);
+    return true;
+  };
+
+  // Keyboard navigation — arrows move selection; Enter = row detail;
+  // F2 edits; Tab advances; Ctrl+C copies. (U38 accessibility floor.)
   useEffect(() => {
     if (!tab?.queryResult || tab.queryResult.columns.length === 0) return;
     const handler = (e: KeyboardEvent) => {
@@ -344,6 +366,8 @@ export function ResultGrid() {
       const { row, col } = tab.selectedCell;
       const maxRow = displayRows.length - 1;
       const maxCol = tab.queryResult ? tab.queryResult.columns.length - 1 : 0;
+      const rowCount = displayRows.length;
+      const colCount = tab.queryResult ? tab.queryResult.columns.length : 0;
       // Space opens the cell detail viewer for the current selection.
       if (e.key === ' ') {
         const pagedRow = displayRows[row];
@@ -379,6 +403,22 @@ export function ResultGrid() {
         }
         return;
       }
+      // F2 starts an inline edit when the grid is writable (Excel-style).
+      if (e.key === 'F2') {
+        if (beginEditSelected()) e.preventDefault();
+        return;
+      }
+      // Tab / Shift+Tab move selection to the next / previous cell.
+      if (e.key === 'Tab') {
+        const target = e.shiftKey
+          ? prevCell({ row, col }, rowCount, colCount)
+          : nextCell({ row, col }, rowCount, colCount);
+        if (target) {
+          setSelectedCell(target);
+          e.preventDefault();
+        }
+        return;
+      }
       if (e.key === 'ArrowDown') {
         setSelectedCell({ row: Math.min(maxRow, row + 1), col });
         e.preventDefault();
@@ -397,7 +437,17 @@ export function ResultGrid() {
     };
     document.addEventListener('keydown', handler);
     return () => document.removeEventListener('keydown', handler);
-  }, [tab?.selectedCell, tab?.queryResult, displayRows, setSelectedCell]);
+    // beginEditSelected closes over writable/displayRows/tab; list them.
+  }, [
+    tab?.selectedCell,
+    tab?.queryResult,
+    tab?.title,
+    tab?.page,
+    tab?.pageSize,
+    displayRows,
+    setSelectedCell,
+    writable,
+  ]);
 
   // ── Definition view (table tabs only) — short-circuits the grid ──
   if (tab?.kind === 'table' && tab.viewMode === 'definition') {
@@ -875,6 +925,26 @@ export function ResultGrid() {
                             } else if (e.key === 'Escape') {
                               e.preventDefault();
                               setEditingCell(null);
+                            } else if (e.key === 'Tab') {
+                              // Commit, then advance (or retreat) selection.
+                              e.preventDefault();
+                              const rowCount = displayRows.length;
+                              const colCount = tab.queryResult?.columns.length ?? 0;
+                              const target = e.shiftKey
+                                ? prevCell(
+                                    { row: visibleRow, col: origIdx },
+                                    rowCount,
+                                    colCount,
+                                  )
+                                : nextCell(
+                                    { row: visibleRow, col: origIdx },
+                                    rowCount,
+                                    colCount,
+                                  );
+                              void (async () => {
+                                const ok = await commitEdit();
+                                if (ok && target) setSelectedCell(target);
+                              })();
                             }
                           }}
                           className="h-[32px] w-full border-0 bg-transparent px-[18px] font-mono text-xs text-foreground outline-none"
