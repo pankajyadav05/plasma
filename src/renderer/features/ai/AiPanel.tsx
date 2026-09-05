@@ -26,7 +26,7 @@ export function AiPanel() {
   const setSql = useSession((s) => s.setSql);
   const runQuery = useSession((s) => s.runQuery);
   const addTab = useSession((s) => s.addTab);
-  const apiKey = useSession((s) => s.settings.openrouterApiKey || s.settings.claudeApiKey);
+  const hasApiKey = useSession((s) => Boolean(s.settings.hasOpenrouterApiKey || s.settings.hasClaudeApiKey || s.settings.openrouterApiKey || s.settings.claudeApiKey));
   const model = useSession((s) => s.settings.openrouterModel);
   const tab = useActiveTab();
 
@@ -112,7 +112,7 @@ export function AiPanel() {
       </div>
 
       <div ref={scrollerRef} className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
-        {empty && <EmptyState hasKey={Boolean(apiKey.trim())} />}
+        {empty && <EmptyState hasKey={hasApiKey} />}
         {aiChat.map((turn) => (
           <ChatTurn key={turn.id} turn={turn} onInsert={handleInsert} onRun={handleRun} />
         ))}
@@ -125,11 +125,11 @@ export function AiPanel() {
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={onKey}
             placeholder={
-              apiKey.trim()
+              hasApiKey
                 ? 'Ask for a query, paste an error, or describe what you want to find…'
                 : 'Add an OpenRouter API key in Settings to enable AI'
             }
-            disabled={!apiKey.trim()}
+            disabled={!hasApiKey}
             rows={3}
             className="w-full resize-none rounded-md border border-border bg-background px-2 py-1.5 pr-9 font-display text-sm text-foreground outline-none transition-colors placeholder:text-muted-foreground focus:border-primary disabled:cursor-not-allowed disabled:opacity-60"
           />
@@ -149,7 +149,7 @@ export function AiPanel() {
               variant="primary"
               size="icon-xs"
               onClick={submit}
-              disabled={!draft.trim() || !apiKey.trim()}
+              disabled={!draft.trim() || !hasApiKey}
               className="absolute bottom-1.5 right-1.5"
               title="Send (Enter)"
               aria-label="Send"

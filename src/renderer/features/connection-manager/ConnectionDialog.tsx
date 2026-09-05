@@ -106,14 +106,19 @@ export function ConnectionDialog() {
   const updateSettings = useSession((s) => s.updateSettings);
   const allSsh = useSession((s) => s.settings.connectionSsh);
   const [useSsh, setUseSsh] = useState(Boolean(initialSsh));
+  // Secrets are never returned by SettingsGet (U07). Empty fields mean
+  // "keep the vault value" on save when has* flags are set.
   const [ssh, setSsh] = useState({
     host: initialSsh?.host ?? '',
     port: initialSsh?.port ?? 22,
     user: initialSsh?.user ?? '',
-    password: initialSsh?.password ?? '',
-    privateKey: initialSsh?.privateKey ?? '',
-    passphrase: initialSsh?.passphrase ?? '',
+    password: '',
+    privateKey: '',
+    passphrase: '',
   });
+  const sshHasPassword = Boolean(initialSsh?.hasPassword);
+  const sshHasPrivateKey = Boolean(initialSsh?.hasPrivateKey);
+  const sshHasPassphrase = Boolean(initialSsh?.hasPassphrase);
   const showDisconnect = Boolean(
     activeConfig && isEditing && activeConfig.id === dialogPrefill?.id,
   );
@@ -357,7 +362,9 @@ export function ConnectionDialog() {
                         type="password"
                         value={ssh.password}
                         onChange={(e) => setSsh((s) => ({ ...s, password: e.target.value }))}
-                        placeholder="(or use private key)"
+                        placeholder={
+                          sshHasPassword ? '•••••• (saved — leave blank to keep)' : '(or use private key)'
+                        }
                       />
                     </Field>
                     <div className="col-span-2">
@@ -367,7 +374,11 @@ export function ConnectionDialog() {
                           onChange={(e) => setSsh((s) => ({ ...s, privateKey: e.target.value }))}
                           rows={3}
                           className="rounded-md border border-input bg-background px-2 py-1.5 font-mono text-[11px] text-foreground outline-none focus:border-primary"
-                          placeholder="-----BEGIN OPENSSH PRIVATE KEY-----…"
+                          placeholder={
+                            sshHasPrivateKey
+                              ? '(saved in OS keychain — paste a new key to replace)'
+                              : '-----BEGIN OPENSSH PRIVATE KEY-----…'
+                          }
                         />
                       </Field>
                     </div>
@@ -377,6 +388,9 @@ export function ConnectionDialog() {
                         type="password"
                         value={ssh.passphrase}
                         onChange={(e) => setSsh((s) => ({ ...s, passphrase: e.target.value }))}
+                        placeholder={
+                          sshHasPassphrase ? '•••••• (saved — leave blank to keep)' : 'if key is encrypted'
+                        }
                       />
                     </Field>
                   </div>

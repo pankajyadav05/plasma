@@ -52,7 +52,12 @@ export const ConnectionConfig = z.object({
   /** Optional for Redis (no ACL username). */
   user: z.string().default(''),
   password: z.string(),
-  /** Postgres SSL / Redis TLS / OpenSearch HTTPS. */
+  /**
+   * Postgres SSL / Redis TLS / OpenSearch HTTPS toggle.
+   * U08 will introduce a richer `tls` object (verify-full / verify-ca /
+   * insecure + CA/servername); until then this boolean is the only
+   * transport flag — leave defaults alone here.
+   */
   ssl: z.boolean().default(false),
 });
 export type ConnectionConfig = z.infer<typeof ConnectionConfig>;
@@ -682,14 +687,25 @@ export const SettingsShape = z.object({
   telemetryEnabled: z.boolean().default(false),
   /**
    * AI provider config. Plasma uses OpenRouter as the unified gateway —
-   * one key gives access to Claude, GPT, Gemini, Qwen, etc. Key stored
-   * in plain SQLite (not safeStorage) to keep the AI stack portable;
-   * OpenRouter keys are revocable + scoped, unlike a personal API key.
+   * one key gives access to Claude, GPT, Gemini, Qwen, etc.
+   *
+   * Secret storage (U07 / schema v3): the plaintext key is encrypted via
+   * Electron safeStorage in the `secrets` table. SettingsGet always
+   * returns an empty string here; `hasOpenrouterApiKey` indicates a
+   * stored value. SettingsSet with a non-empty string replaces the
+   * vault secret; empty string means "keep existing".
    */
   openrouterApiKey: z.string().default(''),
+  /** True when a vault-backed OpenRouter key exists (SettingsGet only). */
+  hasOpenrouterApiKey: z.boolean().optional(),
   openrouterModel: z.string().default('anthropic/claude-sonnet-4.5'),
-  /** Legacy field kept for backwards compat with v0.0.10 settings rows. */
+  /**
+   * Legacy field kept for backwards compat with v0.0.10 settings rows.
+   * Same vault semantics as openrouterApiKey (never returned in plaintext).
+   */
   claudeApiKey: z.string().default(''),
+  /** True when a vault-backed legacy Claude/OpenRouter key exists. */
+  hasClaudeApiKey: z.boolean().optional(),
   transactionMode: z.boolean().default(false),
   /**
    * Per-connection environment tag. Drives the status-bar color (green
@@ -701,10 +717,18 @@ export const SettingsShape = z.object({
   connectionTags: z.record(z.string(), z.enum(['prod', 'staging', 'dev', 'local'])).default({}),
   /**
    * Per-connection SSH tunnel config. When set, main opens an ssh2
-   * tunnel before the Postgres client connects and routes traffic
+   * tunnel before the Postgres/Redis client connects and routes traffic
    * through localhost:<random>. Worker is unaware — it sees a normal
-   * local connection. Keys are NOT encrypted at rest yet — TODO move
-   * to safeStorage on next schema bump.
+   * local connection.
+   *
+   * Secret fields (password / privateKey / passphrase) are write-only
+   * on SettingsSet and encrypted into the vault `secrets` table (U07 /
+   * schema v3). SettingsGet returns empty strings plus has* presence
+   * flags. Non-secret metadata (host/port/user) stays in settings JSON.
+   *
+   * TLS / `rejectUnauthorized` defaults are owned by U08 — this shape
+   * deliberately keeps ConnectionConfig.ssl as the sole transport flag
+   * for now; do not add a `tls` object here.
    */
   connectionSsh: z
     .record(
@@ -713,10 +737,22 @@ export const SettingsShape = z.object({
         host: z.string().min(1),
         port: z.number().int().positive().max(65535).default(22),
         user: z.string().min(1),
-        /** Either password OR privateKey must be supplied (privateKey wins). */
+        /**
+         * Write-only secret. Either password OR privateKey must be
+         * supplied for a new tunnel (privateKey wins). Empty on
+         * SettingsSet keeps the previously stored vault value.
+         */
         password: z.string().default(''),
+        /** Write-only secret; empty keeps the previously stored vault value. */
         privateKey: z.string().default(''),
+        /** Write-only secret; empty keeps the previously stored vault value. */
         passphrase: z.string().default(''),
+        /** SettingsGet: true when a vault password exists for this connection. */
+        hasPassword: z.boolean().optional(),
+        /** SettingsGet: true when a vault private key exists. */
+        hasPrivateKey: z.boolean().optional(),
+        /** SettingsGet: true when a vault key passphrase exists. */
+        hasPassphrase: z.boolean().optional(),
       }),
     )
     .default({}),
