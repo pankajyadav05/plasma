@@ -14,7 +14,38 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  verify:
+    name: Typecheck + tests
+    runs-on: ubuntu-latest
+    env:
+      # Pure Node checks — no packaged app is launched in this job.
+      ELECTRON_SKIP_BINARY_DOWNLOAD: 1
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm run typecheck
+
+      - name: Test
+        run: pnpm run test
+
   build-windows:
+    needs: [verify]
     runs-on: windows-latest
     steps:
       - name: Checkout
@@ -48,6 +79,7 @@ jobs:
           if-no-files-found: error
 
   build-macos:
+    needs: [verify]
     runs-on: macos-latest
     env:
       # Unsigned builds (identity: null in electron-builder.yml)

@@ -14,6 +14,7 @@ See [`DESIGN.md`](./DESIGN.md) for the design system (Paper Editor aesthetic).
 - **Zod** — typed IPC protocol (`src/shared/protocol.ts`)
 - **utilityProcess** — DB drivers run in an isolated worker process per connection
 - **Biome** — lint + format
+- **Vitest** — unit tests (`src/**/*.test.ts`)
 
 ## Requirements
 
@@ -28,9 +29,19 @@ pnpm dev              # run in development with HMR (main + preload + renderer)
 pnpm build            # production build (out/)
 pnpm start            # preview the production build
 pnpm typecheck        # tsc --noEmit for main and renderer
+pnpm test             # vitest run — unit suite (src/**/*.test.ts)
+pnpm test:watch       # vitest in watch mode
 pnpm lint             # biome check
 pnpm lint:fix         # biome check --write
 ```
+
+## Tests
+
+Unit tests live beside the code they cover as `src/**/*.test.ts` and run in a
+plain Node environment (`vitest.config.ts`) — no Electron, no DOM. The CI
+workflow runs `pnpm typecheck` + `pnpm test` on every pull request and on
+pushes to `main`, and the Release workflow gates both build jobs on the same
+checks.
 
 ## Releases
 

@@ -31,6 +31,8 @@
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json",
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json",
     "typecheck": "pnpm run typecheck:node && pnpm run typecheck:web",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "lint": "biome check src",
     "lint:fix": "biome check --write src",
     "format": "biome format --write src"
@@ -84,7 +86,8 @@
     "postcss": "^8.4.49",
     "tailwindcss": "^4.2.2",
     "typescript": "^5.6.3",
-    "vite": "^5.4.11"
+    "vite": "^5.4.11",
+    "vitest": "^2.1.8"
   },
   "pnpm": {
     "onlyBuiltDependencies": [
