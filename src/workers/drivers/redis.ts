@@ -13,6 +13,11 @@ import type {
   RedisWriteOp,
 } from '@shared/protocol';
 import Redis, { type RedisOptions } from 'ioredis';
+import {
+  accumulateHashFields,
+  exceedsFetchBudget,
+  largeValueStub,
+} from './redis-value';
 
 type RedisClient = InstanceType<typeof Redis>;
 
@@ -25,9 +30,10 @@ export type RedisPubsubListener = (msg: RedisPubsubMessage) => void;
  * `database` on the ConnectionConfig is interpreted as the Redis db
  * index (decimal string). Empty / non-numeric → db 0.
  *
- * Sampling rules: list/set/zset/stream are capped at MAX_ELEMENTS so a
+ * Sampling rules: list/set/zset/hash/stream are capped at MAX_ELEMENTS so a
  * 5M-element key doesn't OOM the renderer. The viewer surfaces a
- * "showing N of total" banner.
+ * "showing N of total" banner. Strings and RedisJSON are gated by
+ * STRLEN / MEMORY USAGE (1 MiB budget) before a full fetch.
  */
 
 const MAX_ELEMENTS = 1000;
@@ -184,9 +190,21 @@ export class RedisDriver {
     }
 
     switch (type) {
-      case 'string':
-        value = await c.get(key);
+      case 'string': {
+        // STRLEN is O(1); refuse multi-megabyte payloads before GET.
+        let strlen: number | null = null;
+        try {
+          strlen = await c.strlen(key);
+        } catch {
+          // STRLEN may be ACL-blocked — fall through to GET.
+        }
+        if (exceedsFetchBudget(strlen)) {
+          value = largeValueStub(strlen!);
+        } else {
+          value = await c.get(key);
+        }
         break;
+      }
       case 'list': {
         const len = await c.llen(key);
         const slice = await c.lrange(key, 0, MAX_ELEMENTS - 1);
@@ -215,9 +233,17 @@ export class RedisDriver {
         break;
       }
       case 'hash': {
-        const obj = await c.hgetall(key);
-        const items: [string, string][] = Object.entries(obj);
-        value = { items, total: items.length };
+        // HSCAN + HLEN — never HGETALL, which can blow the heap on wide hashes.
+        const len = await c.hlen(key);
+        const items: [string, string][] = [];
+        let cur = '0';
+        do {
+          const [next, flat] = await c.hscan(key, cur, 'COUNT', 200);
+          const capped = accumulateHashFields(items, flat, MAX_ELEMENTS);
+          cur = next;
+          if (capped) break;
+        } while (cur !== '0');
+        value = { items: items.slice(0, MAX_ELEMENTS), total: len };
         break;
       }
       case 'stream': {
@@ -239,8 +265,23 @@ export class RedisDriver {
       }
       case 'json': {
         try {
-          const raw = (await c.call('JSON.GET', key)) as string | null;
-          value = raw ? JSON.parse(raw) : null;
+          // MEMORY USAGE gates RedisJSON the same way STRLEN gates strings.
+          let memBytes: number | null = null;
+          try {
+            const rawMem = await c.call('MEMORY', 'USAGE', key);
+            if (rawMem != null) {
+              const n = Number(rawMem);
+              memBytes = Number.isFinite(n) ? n : null;
+            }
+          } catch {
+            // MEMORY USAGE may be ACL-blocked — fall through to JSON.GET.
+          }
+          if (exceedsFetchBudget(memBytes)) {
+            value = largeValueStub(memBytes!);
+          } else {
+            const raw = (await c.call('JSON.GET', key)) as string | null;
+            value = raw ? JSON.parse(raw) : null;
+          }
         } catch (err) {
           value = { error: err instanceof Error ? err.message : String(err) };
         }

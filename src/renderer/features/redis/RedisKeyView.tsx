@@ -208,6 +208,9 @@ function KeyBody({
 
   switch (data.type) {
     case 'string': {
+      if (isLargeValueStub(data.value)) {
+        return <LargeValueBlock stub={data.value} />;
+      }
       const raw = typeof data.value === 'string' ? data.value : String(data.value ?? '');
       return (
         <div className="space-y-3">
@@ -351,6 +354,16 @@ function KeyBody({
       return <StreamBody items={v.items} total={v.total} />;
     }
     case 'json': {
+      if (isLargeValueStub(data.value) || isErrorValue(data.value)) {
+        const msg = isLargeValueStub(data.value)
+          ? data.value.error
+          : (data.value as { error: string }).error;
+        return isLargeValueStub(data.value) ? (
+          <LargeValueBlock stub={data.value} />
+        ) : (
+          <ErrorBlock message={msg} />
+        );
+      }
       return (
         <pre className="overflow-auto rounded-md border border-border bg-muted/40 p-3 font-mono text-xs leading-5">
           {JSON.stringify(data.value, null, 2)}
@@ -790,6 +803,37 @@ function StreamBody({
           </table>
         </details>
       ))}
+    </div>
+  );
+}
+
+
+type LargeValueStubView = { truncated: true; sizeBytes: number; error: string };
+
+function isLargeValueStub(v: unknown): v is LargeValueStubView {
+  return (
+    typeof v === 'object' &&
+    v !== null &&
+    (v as LargeValueStubView).truncated === true &&
+    typeof (v as LargeValueStubView).error === 'string' &&
+    typeof (v as LargeValueStubView).sizeBytes === 'number'
+  );
+}
+
+function isErrorValue(v: unknown): v is { error: string } {
+  return typeof v === 'object' && v !== null && 'error' in v && typeof (v as { error: unknown }).error === 'string';
+}
+
+function LargeValueBlock({ stub }: { stub: LargeValueStubView }) {
+  return (
+    <div className="rounded-md border-l-4 border-amber-500 bg-muted/40 px-4 py-3 text-sm text-foreground">
+      <div className="font-display text-[11px] uppercase tracking-wider text-muted-foreground">
+        large value — not fetched
+      </div>
+      <p className="mt-1">{stub.error}</p>
+      <p className="mt-1 font-mono text-xs text-muted-foreground">
+        {stub.sizeBytes.toLocaleString()} bytes
+      </p>
     </div>
   );
 }
