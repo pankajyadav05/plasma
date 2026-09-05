@@ -128,6 +128,7 @@ const eventChannels = [
   'plasma:update:status',
   'plasma:ai:event',
   'plasma:redis:pubsub',
+  'plasma:pg:notice',
 ] as const;
 type EventChannel = (typeof eventChannels)[number];
 

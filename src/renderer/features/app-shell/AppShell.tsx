@@ -19,6 +19,7 @@ import { FilterRow } from '@/features/result-grid/FilterRow';
 import { PaginationBar } from '@/features/result-grid/PaginationBar';
 import { PendingEditsTray } from '@/features/result-grid/PendingEditsTray';
 import { ResultGrid } from '@/features/result-grid/ResultGrid';
+import { ResultMessagesStrip } from '@/features/result-grid/ResultMessagesStrip';
 import { ResultToolbar } from '@/features/result-grid/ResultToolbar';
 import { RightRail } from '@/features/right-rail/RightRail';
 import { SchemaDiffDialog } from '@/features/schema-diff/SchemaDiffDialog';
@@ -250,7 +251,11 @@ function EngineCanvas() {
 
 function SqlOnlyCanvas() {
   const tab = useActiveTab();
-  const hasResultOrError = Boolean(tab?.queryResult || tab?.queryError);
+  const hasResultOrError = Boolean(
+    tab?.queryResult ||
+    (tab?.queryResults && tab.queryResults.length > 0) ||
+    tab?.queryError,
+  );
   return (
     <main className="flex min-h-0 min-w-0 flex-1 flex-col bg-background">
       <TabStrip />
@@ -258,6 +263,7 @@ function SqlOnlyCanvas() {
       {hasResultOrError && (
         <>
           <EditorResizer />
+          <ResultMessagesStrip />
           <ResultGrid />
           <PendingEditsTray />
           <PaginationBar />
@@ -275,7 +281,11 @@ function DatabaseCanvas() {
   // panel is suppressed). Once a query has run, the editor caps at ~40%
   // and the result grid takes the rest.
   const isSqlTab = tab?.kind === 'sql';
-  const hasResultOrError = Boolean(tab?.queryResult || tab?.queryError);
+  const hasResultOrError = Boolean(
+    tab?.queryResult ||
+    (tab?.queryResults && tab.queryResults.length > 0) ||
+    tab?.queryError,
+  );
   const showGrid = !isSqlTab || hasResultOrError;
   return (
     <main className="flex min-h-0 min-w-0 flex-1 flex-col bg-background">
@@ -284,6 +294,7 @@ function DatabaseCanvas() {
       {isSqlTab && hasResultOrError && <EditorResizer />}
       {showFilterRow && <FilterRow />}
       {showGrid && <ResultToolbar />}
+      {showGrid && <ResultMessagesStrip />}
       {showGrid && <ResultGrid />}
       <PendingEditsTray />
       {showGrid && <PaginationBar />}

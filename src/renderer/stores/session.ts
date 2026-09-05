@@ -19,6 +19,7 @@ import type {
   ConnectionEngine,
   HistoryEntry,
   OsOverview,
+  PgNotice,
   QueryResult,
   RedisOverview,
   RedisScanResult,
@@ -192,6 +193,26 @@ export interface QueryTab {
   queryError: string | null;
   queryErrorSql: string | null;
   /**
+   * All statement results from the last SQL-tab run (U26). The grid shows
+   * `queryResults[activeResultIndex]`; `queryResult` is kept in sync for
+   * existing consumers (toolbar, export, status bar).
+   */
+  queryResults: QueryResult[];
+  /** Index into `queryResults` currently shown in the grid. */
+  activeResultIndex: number;
+  /**
+   * Monotonic request generation for SQL runs. Bumped before each async
+   * query IPC so a late response can be dropped if the tab was closed or a
+   * newer run superseded it (U03 origin-tab publishing, used by U26).
+   */
+  queryGeneration: number;
+  /**
+   * Live NOTICE stream for the in-flight / last run, keyed by statement
+   * index. Populated from `plasma:pg:notice` and mirrored onto each
+   * `QueryResult.notices` when the statement completes.
+   */
+  queryNotices: Array<{ statementIndex: number; notice: PgNotice }>;
+  /**
    * Character range in `sql` of the statement currently executing.
    * Monaco paints a decoration over this span while `queryRunState === 'running'`.
    */
@@ -349,6 +370,10 @@ function createEmptyTab(pageSize: number, title = 'query-1.sql'): QueryTab {
     queryResult: null,
     queryError: null,
     queryErrorSql: null,
+    queryResults: [],
+    activeResultIndex: 0,
+    queryGeneration: 0,
+    queryNotices: [],
     queryRunningRange: null,
     queryErrorRange: null,
     page: 0,
@@ -380,6 +405,10 @@ function createTableTab(pageSize: number, schemaName: string, tableName: string)
     queryResult: null,
     queryError: null,
     queryErrorSql: null,
+    queryResults: [],
+    activeResultIndex: 0,
+    queryGeneration: 0,
+    queryNotices: [],
     queryRunningRange: null,
     queryErrorRange: null,
     page: 0,
@@ -602,6 +631,12 @@ interface SessionState {
    * - `{ sql, base? }`: run this exact script (prod-gate resume); skips caret resolution
    */
   runQuery(opts?: { all?: boolean; sql?: string; base?: number }): Promise<void>;
+  /** Switch the grid to another statement result from the last multi-result run (U26). */
+  setActiveResultIndex(index: number): void;
+  /** ⌥← / ⌥→ — cycle the statement switcher. */
+  cycleActiveResult(delta: -1 | 1): void;
+  /** Append a streamed Postgres NOTICE to the origin tab of the in-flight run. */
+  appendPgNotice(notice: PgNotice): void;
   cancelQuery(): Promise<void>;
   openTable(schema: string, table: string): void;
   openForeignRow(refSchema: string, refTable: string, refColumn: string, value: unknown): void;
@@ -900,6 +935,9 @@ export const useSession = create<SessionState>((set, get) => ({
         tabs: state.tabs.map((t) => ({
           ...t,
           queryResult: null,
+          queryResults: [],
+          activeResultIndex: 0,
+          queryNotices: [],
           queryError: null,
           page: 0,
           sortColumn: null,
@@ -1263,36 +1301,69 @@ export const useSession = create<SessionState>((set, get) => ({
       }
     }
 
-    patchActiveTab(set, get, {
+    // U03/U26: capture origin tab + generation before any await so results /
+    // errors / notices publish only to that tab (not whichever is active later).
+    const originTabId = tab.id;
+    const generation = tab.queryGeneration + 1;
+    patchTabById(set, originTabId, {
       queryRunState: 'running',
       queryError: null,
       queryErrorSql: null,
       queryErrorRange: null,
       queryRunningRange: null,
+      queryGeneration: generation,
+      queryResults: [],
+      activeResultIndex: 0,
+      queryResult: null,
+      queryNotices: [],
     });
+
+    const publishOrigin = (patch: Partial<QueryTab>) => {
+      const current = get().tabs.find((t) => t.id === originTabId);
+      if (!current || current.queryGeneration !== generation) return;
+      patchTabById(set, originTabId, patch);
+    };
+
     // Multi-statement scripts: split with a quote/comment-aware tokenizer
-    // and run each separately. Last statement's QueryResult populates the
-    // grid; failures stop execution and surface "stopped at N of M".
-    // Offsets are remapped into the full tab buffer for Monaco decorations.
+    // and run each separately. Collect every QueryResult for the statement
+    // switcher / messages strip (U26). Failures stop execution and surface
+    // "stopped at N of M". Offsets remap into the full tab buffer for Monaco.
     const statements = splitSqlStatements(script).map((s) => ({
       text: s.text,
       start: base + s.start,
       end: base + s.end,
     }));
     try {
-      let lastResult: QueryResult | null = null;
+      const results: QueryResult[] = [];
       let anyDdl = false;
       for (let i = 0; i < statements.length; i++) {
         const stmt = statements[i]!;
-        patchActiveTab(set, get, {
+        publishOrigin({
           queryRunningRange: { start: stmt.start, end: stmt.end },
         });
         try {
-          lastResult = await ipc.query.run(stmt.text);
+          const result = await ipc.query.run(stmt.text);
+          // Attach any streamed notices that arrived for this statement
+          // index (driver also returns notices; merge uniquely by message).
+          const current = get().tabs.find((t) => t.id === originTabId);
+          const streamed = (current?.queryNotices ?? [])
+            .filter((n) => n.statementIndex === i)
+            .map((n) => n.notice);
+          const merged = mergeNotices(result.notices, streamed);
+          results.push(merged.length > 0 ? { ...result, notices: merged } : result);
+          // Progressive reveal: keep the latest result visible while the rest run.
+          publishOrigin({
+            ...resultPatch(results, defaultActiveResultIndex(results)),
+            page: 0,
+            sortColumn: null,
+            selectedCell: null,
+            selectedRows: new Set(),
+          });
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           const tag = statements.length > 1 ? ` (statement ${i + 1} of ${statements.length})` : '';
-          patchActiveTab(set, get, {
+          publishOrigin({
+            ...resultPatch(results, defaultActiveResultIndex(results)),
             queryError: `${message}${tag}`,
             queryErrorSql: stmt.text,
             queryErrorRange: { start: stmt.start, end: stmt.end },
@@ -1304,8 +1375,8 @@ export const useSession = create<SessionState>((set, get) => ({
         }
         if (looksLikeDdl(stmt.text)) anyDdl = true;
       }
-      patchActiveTab(set, get, {
-        queryResult: lastResult,
+      publishOrigin({
+        ...resultPatch(results, defaultActiveResultIndex(results)),
         queryRunState: 'idle',
         queryRunningRange: null,
         page: 0,
@@ -1317,7 +1388,7 @@ export const useSession = create<SessionState>((set, get) => ({
         void get().refreshSchema();
       }
     } catch (err) {
-      patchActiveTab(set, get, {
+      publishOrigin({
         queryError: err instanceof Error ? err.message : String(err),
         queryErrorSql: script,
         queryErrorRange:
@@ -1328,6 +1399,43 @@ export const useSession = create<SessionState>((set, get) => ({
         queryRunState: 'idle',
       });
     }
+  },
+
+  setActiveResultIndex(index) {
+    const tab = activeTab(get());
+    if (!tab || tab.queryResults.length === 0) return;
+    const clamped = Math.max(0, Math.min(index, tab.queryResults.length - 1));
+    if (clamped === tab.activeResultIndex) return;
+    patchActiveTab(set, get, {
+      ...resultPatch(tab.queryResults, clamped),
+      page: 0,
+      sortColumn: null,
+      selectedCell: null,
+      selectedRows: new Set(),
+    });
+  },
+
+  cycleActiveResult(delta) {
+    const tab = activeTab(get());
+    if (!tab || tab.queryResults.length <= 1) return;
+    const next =
+      (tab.activeResultIndex + delta + tab.queryResults.length) % tab.queryResults.length;
+    get().setActiveResultIndex(next);
+  },
+
+  appendPgNotice(notice) {
+    // Attach to the tab that is currently running a SQL script. Prefer a
+    // running tab over the active one so a focus change mid-run still lands
+    // notices on the origin (U03 + U26).
+    const state = get();
+    const running =
+      state.tabs.find((t) => t.queryRunState === 'running' && t.kind === 'sql') ??
+      activeTab(state);
+    if (!running || running.kind !== 'sql') return;
+    const statementIndex = running.queryResults.length; // next / in-flight index
+    patchTabById(set, running.id, {
+      queryNotices: [...running.queryNotices, { statementIndex, notice }],
+    });
   },
 
   async cancelQuery() {
@@ -1638,11 +1746,15 @@ export const useSession = create<SessionState>((set, get) => ({
 
     set({
       pendingEdits: [...dedupedExisting, edit],
-      tabs: state.tabs.map((t) =>
-        t.id === tab.id && t.queryResult
-          ? { ...t, queryResult: { ...t.queryResult, rows: newRows } }
-          : t,
-      ),
+      tabs: state.tabs.map((t) => {
+        if (t.id !== tab.id || !t.queryResult) return t;
+        const nextResult = { ...t.queryResult, rows: newRows };
+        const results =
+          t.queryResults.length > 0
+            ? t.queryResults.map((r, i) => (i === t.activeResultIndex ? nextResult : r))
+            : [nextResult];
+        return { ...t, queryResult: nextResult, queryResults: results };
+      }),
     });
   },
 
@@ -2449,6 +2561,46 @@ function loadTableColumnStateInto(
   };
 }
 
+
+/** Prefer the last result that has columns (a SELECT); else the last result. */
+function defaultActiveResultIndex(results: QueryResult[]): number {
+  if (results.length === 0) return 0;
+  for (let i = results.length - 1; i >= 0; i--) {
+    if ((results[i]?.columns.length ?? 0) > 0) return i;
+  }
+  return results.length - 1;
+}
+
+function resultPatch(
+  results: QueryResult[],
+  activeIndex: number,
+): Pick<QueryTab, 'queryResults' | 'activeResultIndex' | 'queryResult'> {
+  if (results.length === 0) {
+    return { queryResults: [], activeResultIndex: 0, queryResult: null };
+  }
+  const idx = Math.max(0, Math.min(activeIndex, results.length - 1));
+  return {
+    queryResults: results,
+    activeResultIndex: idx,
+    queryResult: results[idx] ?? null,
+  };
+}
+
+function mergeNotices(
+  a: PgNotice[] | undefined,
+  b: PgNotice[] | undefined,
+): PgNotice[] {
+  const out: PgNotice[] = [];
+  const seen = new Set<string>();
+  for (const n of [...(a ?? []), ...(b ?? [])]) {
+    const key = `${n.severity ?? ''}|${n.code ?? ''}|${n.message}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(n);
+  }
+  return out;
+}
+
 function patchTabById(
   set: (fn: (s: SessionState) => Partial<SessionState>) => void,
   tabId: string,
@@ -2494,10 +2646,11 @@ async function runTableDataQuery(
   try {
     const result = await ipc.query.run(sql, params, { internal: true });
     patchTabById(set, tabId, {
-      queryResult: result,
+      ...resultPatch([result], 0),
       queryRunState: 'idle',
       selectedCell: null,
       selectedRows: new Set(),
+      queryNotices: [],
     });
   } catch (err) {
     patchTabById(set, tabId, {

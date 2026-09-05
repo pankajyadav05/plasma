@@ -371,12 +371,25 @@ export const ColumnMeta = z.object({
 });
 export type ColumnMeta = z.infer<typeof ColumnMeta>;
 
+/** Postgres NOTICE / RAISE NOTICE (and WARNING) payload from `pg`. */
+export const PgNotice = z.object({
+  message: z.string(),
+  severity: z.string().optional(),
+  code: z.string().optional(),
+  detail: z.string().optional(),
+  hint: z.string().optional(),
+  where: z.string().optional(),
+});
+export type PgNotice = z.infer<typeof PgNotice>;
+
 export const QueryResult = z.object({
   columns: z.array(ColumnMeta),
   rows: z.array(z.array(z.unknown())),
   rowCount: z.number().int(),
   durationMs: z.number(),
   command: z.string().optional(),
+  /** Notices captured while this statement ran (U26). */
+  notices: z.array(PgNotice).optional(),
 });
 export type QueryResult = z.infer<typeof QueryResult>;
 
@@ -627,6 +640,12 @@ export const WorkerResponse = z.discriminatedUnion('kind', [
     acknowledged: z.boolean(),
   }),
   z.object({ kind: z.literal('osFieldStats'), id: z.string(), stats: z.array(OsFieldStats) }),
+  /**
+   * Postgres NOTICE broadcast — not request-correlated. The id is a
+   * constant `'notice-event'` sentinel so the supervisor can route it
+   * to a separate handler instead of trying to resolve a pending promise.
+   */
+  z.object({ kind: z.literal('pgNotice'), id: z.string(), notice: PgNotice }),
 ]);
 export type WorkerResponse = z.infer<typeof WorkerResponse>;
 
@@ -981,6 +1000,8 @@ export const IpcChannel = {
   RedisUnsubscribe: 'plasma:redis:unsubscribe',
   /** Renderer-facing event channel for streamed pub/sub messages. */
   RedisPubsubEvent: 'plasma:redis:pubsub',
+  /** Renderer-facing event channel for streamed Postgres NOTICEs (U26). */
+  PgNoticeEvent: 'plasma:pg:notice',
   // OpenSearch ops
   OsOverview: 'plasma:os:overview',
   OsMapping: 'plasma:os:mapping',

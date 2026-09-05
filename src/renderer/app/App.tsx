@@ -48,6 +48,13 @@ export function App() {
         >[0];
         session().aiApplyEvent(evt);
       }),
+      // U26: stream Postgres NOTICE / RAISE NOTICE into the origin tab.
+      window.plasmaEvents.on('plasma:pg:notice', (...args: unknown[]) => {
+        const notice = args[0] as Parameters<
+          ReturnType<typeof useSession.getState>['appendPgNotice']
+        >[0];
+        session().appendPgNotice(notice);
+      }),
     ];
     return () => {
       for (const fn of unsub) fn();

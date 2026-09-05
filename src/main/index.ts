@@ -100,11 +100,13 @@ app.whenReady().then(async () => {
 
   await workerSupervisor.start(join(__dirname, 'workers/index.js'));
 
-  // Forward worker broadcasts (currently just Redis pub/sub) to the
-  // renderer over a dedicated event channel.
+  // Forward worker broadcasts (Redis pub/sub, Postgres NOTICE) to the
+  // renderer over dedicated event channels.
   workerSupervisor.setBroadcastHandler((evt) => {
     if (evt.kind === 'redisPubsub') {
       mainWindow?.webContents.send('plasma:redis:pubsub', evt.message);
+    } else if (evt.kind === 'pgNotice') {
+      mainWindow?.webContents.send('plasma:pg:notice', evt.notice);
     }
   });
 

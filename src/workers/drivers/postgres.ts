@@ -1,8 +1,37 @@
-import type { ConnectionConfig, QueryResult, SchemaInfo, TxnState } from '@shared/protocol';
+import type {
+  ConnectionConfig,
+  PgNotice,
+  QueryResult,
+  SchemaInfo,
+  TxnState,
+} from '@shared/protocol';
 import pg from 'pg';
 
 const { Client } = pg;
 type ClientT = InstanceType<typeof Client>;
+
+/** Minimal shape of a node-pg / pg-protocol notice event. */
+interface PgNoticeRaw {
+  message?: string;
+  severity?: string;
+  name?: string;
+  code?: string;
+  detail?: string;
+  hint?: string;
+  where?: string;
+}
+
+/** Map a node-pg notice event into our wire shape. */
+function toPgNotice(n: PgNoticeRaw): PgNotice {
+  return {
+    message: n.message ?? '',
+    severity: n.severity || n.name || undefined,
+    code: n.code || undefined,
+    detail: n.detail || undefined,
+    hint: n.hint || undefined,
+    where: n.where || undefined,
+  };
+}
 
 /**
  * Postgres driver — wraps two `pg.Client` connections:
@@ -18,6 +47,21 @@ export class PostgresDriver {
   private sideband: ClientT | null = null;
   private primaryBackendPid: number | null = null;
   private txnState: TxnState = 'none';
+  /** Notices accumulated for the in-flight primary query (U26). */
+  private pendingNotices: PgNotice[] = [];
+  /** Optional fan-out so the worker can stream notices over the event channel. */
+  private noticeListener: ((notice: PgNotice) => void) | null = null;
+
+  /** Subscribe to NOTICE / RAISE NOTICE events from the primary client. */
+  setNoticeListener(listener: ((notice: PgNotice) => void) | null): void {
+    this.noticeListener = listener;
+  }
+
+  private handleNotice = (raw: PgNoticeRaw): void => {
+    const notice = toPgNotice(raw);
+    this.pendingNotices.push(notice);
+    this.noticeListener?.(notice);
+  };
 
   isConnected(): boolean {
     return this.primary !== null;
@@ -42,6 +86,9 @@ export class PostgresDriver {
       application_name: 'plasma',
     });
     await primary.connect();
+    // U26: capture RAISE NOTICE / server notices for the messages strip
+    // and stream them to the worker's broadcast channel.
+    primary.on('notice', this.handleNotice);
     this.primary = primary;
 
     // Grab the backend pid so the sideband can cancel it
@@ -69,8 +116,10 @@ export class PostgresDriver {
   async disconnect(): Promise<void> {
     this.txnState = 'none';
     this.primaryBackendPid = null;
+    this.pendingNotices = [];
     const p = this.primary;
     const s = this.sideband;
+    if (p) p.removeListener('notice', this.handleNotice);
     this.primary = null;
     this.sideband = null;
     await Promise.allSettled([p?.end(), s?.end()]);
@@ -79,15 +128,32 @@ export class PostgresDriver {
   async query(sql: string, params?: unknown[]): Promise<QueryResult> {
     if (!this.primary) throw new Error('not connected');
 
+    this.pendingNotices = [];
     const start = Date.now();
     // rowMode:'array' returns positional tuples instead of objects —
     // cheaper to serialize across IPC and handles duplicate column names.
-    const res = await this.primary.query({
-      text: sql,
-      values: params,
-      rowMode: 'array',
-    });
+    let res: {
+      fields: Array<{ name: string; dataTypeID: number }>;
+      rows: unknown[];
+      rowCount: number | null;
+      command: string;
+    };
+    try {
+      res = await this.primary.query({
+        text: sql,
+        values: params,
+        rowMode: 'array',
+      });
+    } catch (err) {
+      // Notices that arrived before the error still belong with this statement;
+      // leave them on the instance until the next query resets — but for the
+      // thrown path the session only sees the error string, so clear here.
+      this.pendingNotices = [];
+      throw err;
+    }
     const durationMs = Date.now() - start;
+    const notices = this.pendingNotices;
+    this.pendingNotices = [];
 
     // Any query error would have thrown above. If we got here without an
     // error but had been in an active txn, state stays 'active'. BEGIN/COMMIT/
@@ -109,6 +175,7 @@ export class PostgresDriver {
       rowCount: res.rowCount ?? res.rows.length,
       durationMs,
       command: res.command,
+      notices: notices.length > 0 ? notices : undefined,
     };
   }
 
