@@ -1,8 +1,57 @@
 import type { ConnectionConfig, QueryResult, SchemaInfo, TxnState } from '@shared/protocol';
+import {
+  RESULT_CURSOR_CHUNK,
+  appendBoundedRows,
+  emptyBoundState,
+} from '@shared/result-bounds';
 import pg from 'pg';
+import Cursor from 'pg-cursor';
 
 const { Client } = pg;
 type ClientT = InstanceType<typeof Client>;
+
+export type QueryChunkHandler = (chunk: {
+  rows: unknown[][];
+  columns?: QueryResult['columns'];
+  chunkIndex: number;
+  done: boolean;
+  truncated: boolean;
+}) => void;
+
+type QueryOpts = {
+  revision?: number;
+  onChunk?: QueryChunkHandler;
+};
+
+function readCursorBatch(
+  cursor: Cursor<unknown[]>,
+  n: number,
+): Promise<{ rows: unknown[][]; fields: pg.FieldDef[]; command?: string; rowCount: number }> {
+  return new Promise((resolve, reject) => {
+    cursor.read(n, (err, rows, result) => {
+      if (err) {
+        reject(err);
+        return;
+      }
+      resolve({
+        rows: (rows ?? []) as unknown[][],
+        fields: result?.fields ?? [],
+        command: result?.command,
+        rowCount: result?.rowCount ?? (rows?.length ?? 0),
+      });
+    });
+  });
+}
+
+async function closeCursor(cursor: Cursor): Promise<void> {
+  await new Promise<void>((resolve) => {
+    try {
+      cursor.close(() => resolve());
+    } catch {
+      resolve();
+    }
+  });
+}
 
 /**
  * Postgres driver — wraps two `pg.Client` connections:
@@ -76,22 +125,19 @@ export class PostgresDriver {
     await Promise.allSettled([p?.end(), s?.end()]);
   }
 
-  async query(sql: string, params?: unknown[]): Promise<QueryResult> {
+  /**
+   * Run SQL on the primary connection with pg-cursor bounded reads (U15).
+   * Stops at MAX_RESULT_ROWS / MAX_RESULT_BYTES and sets `truncated`.
+   * Optional `onChunk` emits cursor batches for the event channel (step 2).
+   */
+  async query(sql: string, params?: unknown[], opts?: QueryOpts): Promise<QueryResult> {
     if (!this.primary) throw new Error('not connected');
 
     const start = Date.now();
-    // rowMode:'array' returns positional tuples instead of objects —
-    // cheaper to serialize across IPC and handles duplicate column names.
-    const res = await this.primary.query({
-      text: sql,
-      values: params,
-      rowMode: 'array',
-    });
+    const result = await this.runBounded(this.primary, sql, params, opts);
     const durationMs = Date.now() - start;
 
-    // Any query error would have thrown above. If we got here without an
-    // error but had been in an active txn, state stays 'active'. BEGIN/COMMIT/
-    // ROLLBACK statements flow through this path too — update state if so.
+    // BEGIN/COMMIT/ROLLBACK statements flow through this path too.
     const upper = sql.trim().toUpperCase();
     if (upper.startsWith('BEGIN') || upper.startsWith('START TRANSACTION')) {
       this.txnState = 'active';
@@ -99,17 +145,7 @@ export class PostgresDriver {
       this.txnState = 'none';
     }
 
-    return {
-      columns: res.fields.map((f) => ({
-        name: f.name,
-        dataTypeID: f.dataTypeID,
-        dataTypeName: pgTypeName(f.dataTypeID),
-      })),
-      rows: res.rows as unknown[][],
-      rowCount: res.rowCount ?? res.rows.length,
-      durationMs,
-      command: res.command,
-    };
+    return { ...result, durationMs };
   }
 
   /**
@@ -119,25 +155,79 @@ export class PostgresDriver {
    *
    * Sideband never participates in the primary's transaction state.
    */
-  async sidebandQuery(sql: string, params?: unknown[]): Promise<QueryResult> {
+  async sidebandQuery(sql: string, params?: unknown[], opts?: QueryOpts): Promise<QueryResult> {
     if (!this.sideband) throw new Error('not connected');
     const start = Date.now();
-    const res = await this.sideband.query({
-      text: sql,
-      values: params,
-      rowMode: 'array',
-    });
-    const durationMs = Date.now() - start;
+    const result = await this.runBounded(this.sideband, sql, params, opts);
+    return { ...result, durationMs: Date.now() - start };
+  }
+
+  /**
+   * Shared cursor read with row/byte caps. Emits chunks when `onChunk` is set.
+   */
+  private async runBounded(
+    client: ClientT,
+    sql: string,
+    params: unknown[] | undefined,
+    opts?: QueryOpts,
+  ): Promise<Omit<QueryResult, 'durationMs'>> {
+    const cursor = client.query(new Cursor(sql, params ?? [], { rowMode: 'array' }));
+    const state = emptyBoundState();
+    let columns: QueryResult['columns'] = [];
+    let command: string | undefined;
+    let chunkIndex = 0;
+
+    try {
+      while (true) {
+        const batch = await readCursorBatch(cursor, RESULT_CURSOR_CHUNK);
+        if (columns.length === 0 && batch.fields.length > 0) {
+          columns = batch.fields.map((f) => ({
+            name: f.name,
+            dataTypeID: f.dataTypeID,
+            dataTypeName: pgTypeName(f.dataTypeID),
+          }));
+        }
+        if (batch.command) command = batch.command;
+
+        const before = state.rows.length;
+        const stop = appendBoundedRows(state, batch.rows);
+        const accepted = state.rows.length - before;
+        const chunkRows = accepted > 0 ? batch.rows.slice(0, accepted) : [];
+
+        if (opts?.onChunk && (chunkRows.length > 0 || chunkIndex === 0)) {
+          opts.onChunk({
+            rows: chunkRows,
+            columns: chunkIndex === 0 ? columns : undefined,
+            chunkIndex,
+            done: false,
+            truncated: state.truncated,
+          });
+        }
+        chunkIndex++;
+
+        if (stop || batch.rows.length === 0 || batch.rows.length < RESULT_CURSOR_CHUNK) {
+          break;
+        }
+      }
+    } finally {
+      await closeCursor(cursor);
+    }
+
+    if (opts?.onChunk) {
+      opts.onChunk({
+        rows: [],
+        chunkIndex,
+        done: true,
+        truncated: state.truncated,
+      });
+    }
+
     return {
-      columns: res.fields.map((f) => ({
-        name: f.name,
-        dataTypeID: f.dataTypeID,
-        dataTypeName: pgTypeName(f.dataTypeID),
-      })),
-      rows: res.rows as unknown[][],
-      rowCount: res.rowCount ?? res.rows.length,
-      durationMs,
-      command: res.command,
+      columns,
+      rows: state.rows,
+      rowCount: state.rows.length,
+      command,
+      truncated: state.truncated,
     };
   }
 
