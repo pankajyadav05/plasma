@@ -20,6 +20,12 @@ import {
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { type CellDetail, CellDetailDialog } from './CellDetailDialog';
 import { ColumnHeaderMenu } from './ColumnHeaderMenu';
+import {
+  type IndexedRow,
+  slicePageSorted,
+  slicePageUnsorted,
+  sortRowsWithIndex,
+} from './display-rows';
 import { type RowDetail, RowDetailSheet } from './RowDetailSheet';
 import { SqlHomePanel } from './SqlHomePanel';
 import { TableDefinitionView } from './TableDefinitionView';
@@ -155,26 +161,29 @@ export function ResultGrid() {
     }
   };
 
-  // Compute display rows.
+  // Compute display rows (U14).
   //
   // Table tabs: the server already returned the sorted + paginated
   // slice, so we render all rows as-is.
   //
-  // SQL tabs: we slice client-side and optionally apply a client-side
-  // sort on top of the raw result set.
+  // SQL tabs: sorted order is memoized on (rows, sort) only so paging
+  // does not re-sort. Unsorted pages slice first, then wrap only the
+  // visible rows — never allocate an IndexedRow for every result row.
+  const sortedSqlRows = useMemo((): IndexedRow[] | null => {
+    if (!tab?.queryResult || tab.kind !== 'sql' || !tab.sortColumn) return null;
+    return sortRowsWithIndex(tab.queryResult.rows, tab.sortColumn);
+  }, [tab?.kind, tab?.queryResult, tab?.sortColumn]);
+
   const displayRows = useMemo(() => {
-    if (!tab?.queryResult) return [] as { row: unknown[]; originalIndex: number }[];
+    if (!tab?.queryResult) return [] as IndexedRow[];
     if (tab.kind === 'table') {
       return tab.queryResult.rows.map((row, i) => ({ row, originalIndex: i }));
     }
-    const withIdx = tab.queryResult.rows.map((row, i) => ({ row, originalIndex: i }));
-    if (tab.sortColumn) {
-      const { index, direction } = tab.sortColumn;
-      withIdx.sort((a, b) => compareCells(a.row[index], b.row[index], direction));
+    if (sortedSqlRows) {
+      return slicePageSorted(sortedSqlRows, tab.page, tab.pageSize);
     }
-    const start = tab.page * tab.pageSize;
-    return withIdx.slice(start, start + tab.pageSize);
-  }, [tab?.kind, tab?.queryResult, tab?.sortColumn, tab?.page, tab?.pageSize]);
+    return slicePageUnsorted(tab.queryResult.rows, tab.page, tab.pageSize);
+  }, [tab?.kind, tab?.queryResult, tab?.page, tab?.pageSize, sortedSqlRows]);
 
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -956,24 +965,6 @@ function SelectAllCheckbox({
       title={selectedCount === total ? 'Deselect all visible' : 'Select all visible'}
     />
   );
-}
-
-function compareCells(a: unknown, b: unknown, direction: 'asc' | 'desc'): number {
-  const mul = direction === 'asc' ? 1 : -1;
-  const na = a === null || a === undefined;
-  const nb = b === null || b === undefined;
-  if (na && nb) return 0;
-  if (na) return 1; // nulls sort last regardless of direction
-  if (nb) return -1;
-  // Numeric fast path
-  if (typeof a === 'number' && typeof b === 'number') return (a - b) * mul;
-  // Compare as strings for everything else (matches pg's display order
-  // well enough for most types; M3 can use type-aware comparators).
-  const sa = String(a);
-  const sb = String(b);
-  if (sa < sb) return -1 * mul;
-  if (sa > sb) return 1 * mul;
-  return 0;
 }
 
 // ─── Cell formatting (shared with export) ───────────────────────────
