@@ -4,14 +4,15 @@
  *
  * Requires:
  *   - BLOB_READ_WRITE_TOKEN in env (from Vercel dashboard → Storage → Blob)
- *   - artifacts already built via `pnpm run dist:win` (lives in release/)
+ *   - Windows artifacts already built via `pnpm run dist:win` (lives in release/)
+ *   - Optional Mac artifacts from `pnpm run dist:mac` (DMG/ZIP/latest-mac.yml)
  *
  * Usage:
  *   pnpm run release:upload
  *
- * Uploads `Plasma-Setup-${version}-x64.exe` and `Plasma-Portable-${version}-x64.exe`
- * to the blob store root. `addRandomSuffix: false` keeps URLs stable and
- * matching the hrefs baked into site/index.html.
+ * Uploads Windows installer + portable + manifests, and any present Mac
+ * artifacts, to the blob store root. `addRandomSuffix: false` keeps URLs
+ * stable and matching the hrefs baked into site/index.html.
  */
 
 import { existsSync, readFileSync, statSync } from 'node:fs';
@@ -47,35 +48,84 @@ if (!process.env.BLOB_READ_WRITE_TOKEN) {
 const pkg = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8'));
 const version = pkg.version;
 
+/** @type {{ name: string, contentType: string, required?: boolean }[]} */
 const artifacts = [
-  // The installer + its blockmap (delta updates) and the manifest
-  // electron-updater polls. The portable EXE has no blockmap and is
-  // not auto-updatable but still ships for direct download.
+  // Windows — installer + blockmap (delta updates) + portable + manifest.
+  // Required: fail fast if the Win build wasn't run.
   {
     name: `Plasma-Setup-${version}-x64.exe`,
     contentType: 'application/vnd.microsoft.portable-executable',
+    required: true,
   },
-  { name: `Plasma-Setup-${version}-x64.exe.blockmap`, contentType: 'application/octet-stream' },
+  {
+    name: `Plasma-Setup-${version}-x64.exe.blockmap`,
+    contentType: 'application/octet-stream',
+    required: true,
+  },
   {
     name: `Plasma-Portable-${version}-x64.exe`,
     contentType: 'application/vnd.microsoft.portable-executable',
+    required: true,
   },
-  { name: 'latest.yml', contentType: 'text/yaml' },
+  { name: 'latest.yml', contentType: 'text/yaml', required: true },
+
+  // macOS — DMG (user download) + ZIP (electron-updater) for arm64 + x64,
+  // plus latest-mac.yml and any blockmaps electron-builder emitted.
+  // Optional so a Windows-only local upload still works; CI builds both.
+  {
+    name: `Plasma-${version}-arm64.dmg`,
+    contentType: 'application/x-apple-diskimage',
+  },
+  {
+    name: `Plasma-${version}-x64.dmg`,
+    contentType: 'application/x-apple-diskimage',
+  },
+  { name: `Plasma-${version}-arm64.zip`, contentType: 'application/zip' },
+  { name: `Plasma-${version}-x64.zip`, contentType: 'application/zip' },
+  {
+    name: `Plasma-${version}-arm64.zip.blockmap`,
+    contentType: 'application/octet-stream',
+  },
+  {
+    name: `Plasma-${version}-x64.zip.blockmap`,
+    contentType: 'application/octet-stream',
+  },
+  {
+    name: `Plasma-${version}-arm64.dmg.blockmap`,
+    contentType: 'application/octet-stream',
+  },
+  {
+    name: `Plasma-${version}-x64.dmg.blockmap`,
+    contentType: 'application/octet-stream',
+  },
+  { name: 'latest-mac.yml', contentType: 'text/yaml' },
 ];
 
-// Fail fast if anything's missing — better to know before uploading half.
-const missing = artifacts.filter((a) => !existsSync(resolve(root, 'release', a.name)));
-if (missing.length > 0) {
-  console.error(`[upload] missing artifacts in release/:`);
-  for (const m of missing) console.error(`  - ${m.name}`);
+const releaseDir = resolve(root, 'release');
+const requiredMissing = artifacts.filter(
+  (a) => a.required && !existsSync(resolve(releaseDir, a.name)),
+);
+if (requiredMissing.length > 0) {
+  console.error('[upload] missing required Windows artifacts in release/:');
+  for (const m of requiredMissing) console.error(`  - ${m.name}`);
   console.error('[upload] run `pnpm run dist:win` first');
   process.exit(1);
 }
 
+const optionalMissing = artifacts.filter(
+  (a) => !a.required && !existsSync(resolve(releaseDir, a.name)),
+);
+if (optionalMissing.length > 0) {
+  console.log('[upload] skipping missing Mac artifacts (Windows-only upload?):');
+  for (const m of optionalMissing) console.log(`  - ${m.name}`);
+}
+
+const toUpload = artifacts.filter((a) => existsSync(resolve(releaseDir, a.name)));
+
 const fmtMB = (bytes) => `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 
-for (const { name, contentType } of artifacts) {
-  const filePath = resolve(root, 'release', name);
+for (const { name, contentType } of toUpload) {
+  const filePath = resolve(releaseDir, name);
   const size = statSync(filePath).size;
   console.log(`[upload] ${name} (${fmtMB(size)}) …`);
 
@@ -93,4 +143,8 @@ console.log('');
 console.log('[upload] done. verify the site download links match:');
 console.log(`  https://<your-blob-host>/Plasma-Setup-${version}-x64.exe`);
 console.log(`  https://<your-blob-host>/Plasma-Portable-${version}-x64.exe`);
-console.log(`  https://<your-blob-host>/latest.yml          ← auto-update manifest`);
+console.log(`  https://<your-blob-host>/latest.yml          ← Win auto-update`);
+if (toUpload.some((a) => a.name === 'latest-mac.yml')) {
+  console.log(`  https://<your-blob-host>/Plasma-${version}-arm64.dmg`);
+  console.log(`  https://<your-blob-host>/latest-mac.yml    ← Mac auto-update`);
+}
