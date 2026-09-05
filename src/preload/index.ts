@@ -17,7 +17,7 @@ const api: PlasmaAPI = {
   conn: {
     connect: (config) => ipcRenderer.invoke(IpcChannel.ConnectionConnect, config),
     disconnect: () => ipcRenderer.invoke(IpcChannel.ConnectionDisconnect),
-    test: (config) => ipcRenderer.invoke(IpcChannel.ConnectionTest, config),
+    test: (config, ssh) => ipcRenderer.invoke(IpcChannel.ConnectionTest, config, ssh),
     introspect: () => ipcRenderer.invoke(IpcChannel.ConnectionIntrospect),
   },
   vault: {
