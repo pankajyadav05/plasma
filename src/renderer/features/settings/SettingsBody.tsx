@@ -188,6 +188,9 @@ const FONT_MONO_OPTIONS: Array<{ id: Settings['fontMono']; label: string; sample
 export function SettingsBody() {
   const settings = useSession((s) => s.settings);
   const updateSettings = useSession((s) => s.updateSettings);
+  // Local draft: SettingsGet redacts API keys to '', so binding the input
+  // to settings.openrouterApiKey would clear it after every keystroke.
+  const [apiKeyDraft, setApiKeyDraft] = useState('');
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-1 py-2">
@@ -318,13 +321,24 @@ export function SettingsBody() {
         <Input
           id="openrouter-key"
           type="password"
-          value={settings.openrouterApiKey}
-          onChange={(e) => void updateSettings({ openrouterApiKey: e.target.value })}
-          placeholder="sk-or-…"
+          value={apiKeyDraft}
+          onChange={(e) => setApiKeyDraft(e.target.value)}
+          onBlur={() => {
+            if (apiKeyDraft.trim()) {
+              void updateSettings({ openrouterApiKey: apiKeyDraft.trim() }).then(() => {
+                setApiKeyDraft('');
+              });
+            }
+          }}
+          placeholder={
+            settings.hasOpenrouterApiKey || settings.hasClaudeApiKey
+              ? '•••••••• (saved in OS keychain — enter a new key to replace)'
+              : 'sk-or-…'
+          }
         />
         <p className="mt-1 font-display text-xs italic text-muted-foreground">
-          BYO — stored in the local settings table. One key gives access to Claude, GPT, Gemini,
-          Qwen, etc. Schema is sent as a system prompt; row data never leaves your machine.
+          BYO — encrypted with the OS keychain (safeStorage). One key gives access to Claude, GPT,
+          Gemini, Qwen, etc. Schema is sent as a system prompt; row data never leaves your machine.
         </p>
       </Field>
 
