@@ -33,7 +33,7 @@ import { closeDb, getDb } from './db';
 import { clearHistory, listHistory, recordHistory } from './history';
 import { initLogger, logger } from './logger';
 import { buildAppMenu } from './menu';
-import { getAllSettings, setSetting } from './settings';
+import { changedSettings, getAllSettings, setSettings } from './settings';
 import { formatSql } from './sql-format';
 import { closeAllTunnels, closeTunnel, openTunnel } from './ssh-tunnel';
 import { disposeUpdater, initUpdater } from './updater';
@@ -542,9 +542,13 @@ function registerIpcHandlers() {
   ipcMain.handle(IpcChannel.SettingsSet, (_e, patch: unknown): Settings => {
     const prev = SettingsShape.parse(getAllSettings());
     const merged = SettingsShape.parse({ ...prev, ...(patch as Record<string, unknown>) });
-    for (const [k, v] of Object.entries(merged)) {
-      setSetting(k, v);
-    }
+    // Persist only keys that actually changed, in one SQLite transaction
+    // (U18 / F14). Unrelated large blobs like connectionSsh stay untouched.
+    const changed = changedSettings(
+      prev as Record<string, unknown>,
+      merged as Record<string, unknown>,
+    );
+    setSettings(changed);
     // Side effect: if theme changed, update the native window background +
     // title bar overlay so the native window controls follow suit.
     if (merged.theme !== prev.theme && mainWindow && !mainWindow.isDestroyed()) {
