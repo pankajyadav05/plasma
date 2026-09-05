@@ -8,6 +8,7 @@ import { SqlCanvas } from '@/features/editor/SqlCanvas';
 import { TabStrip } from '@/features/editor/TabStrip';
 import { HistoryCanvas } from '@/features/history/HistoryCanvas';
 import { HistorySheet } from '@/features/history/HistorySheet';
+import { ShortcutCheatSheet } from '@/features/keymap/ShortcutCheatSheet';
 import { MonitorCanvas } from '@/features/monitor/MonitorCanvas';
 import { NotebookDialog } from '@/features/notebook/NotebookDialog';
 import { DeleteIndexDialog } from '@/features/opensearch/DeleteIndexDialog';
@@ -18,6 +19,7 @@ import { FilterRow } from '@/features/result-grid/FilterRow';
 import { PaginationBar } from '@/features/result-grid/PaginationBar';
 import { PendingEditsTray } from '@/features/result-grid/PendingEditsTray';
 import { ResultGrid } from '@/features/result-grid/ResultGrid';
+import { ResultMessagesStrip } from '@/features/result-grid/ResultMessagesStrip';
 import { ResultToolbar } from '@/features/result-grid/ResultToolbar';
 import { RightRail } from '@/features/right-rail/RightRail';
 import { SchemaDiffDialog } from '@/features/schema-diff/SchemaDiffDialog';
@@ -25,6 +27,7 @@ import { SettingsCanvas } from '@/features/settings/SettingsCanvas';
 import { SettingsSheet } from '@/features/settings/SettingsSheet';
 import { Sidebar } from '@/features/sidebar/Sidebar';
 import { useActiveTab, useSession } from '@/stores/session';
+import { matchGlobalBinding } from '@shared/keymap';
 import { useEffect, useState } from 'react';
 import { DisconnectedHome } from './DisconnectedHome';
 import { IconRail } from './IconRail';
@@ -50,9 +53,10 @@ export function AppShell() {
   const [codegenOpen, setCodegenOpen] = useState(false);
   const [notebookOpen, setNotebookOpen] = useState(false);
   const [schemaDiffOpen, setSchemaDiffOpen] = useState(false);
+  const [cheatSheetOpen, setCheatSheetOpen] = useState(false);
 
-  // Global shortcuts: ⌘J toggle editor, ⌘B toggle sidebar, Esc closes
-  // settings/history full-window canvases back to database.
+  // Global shortcuts — chords come from `@shared/keymap`. ⌘K is the
+  // command palette (DESIGN.md); AI panel is ⌘L; ⌘/ opens this cheat-sheet.
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       const tag = (document.activeElement?.tagName ?? '').toLowerCase();
@@ -65,36 +69,75 @@ export function AppShell() {
           return;
         }
       }
-      if (!(e.metaKey || e.ctrlKey)) return;
-      if (e.key.toLowerCase() === 'j' && !inInput) {
-        e.preventDefault();
-        useSession.getState().toggleEditor();
-      } else if (e.key.toLowerCase() === 'b' && !inInput) {
-        e.preventDefault();
-        void useSession.getState().toggleSidebar();
-      } else if (e.key.toLowerCase() === 'k') {
-        // ⌘K toggles the AI panel (works even when an input is focused —
-        // common Linear/Raycast pattern). Lowercase comparison covers
-        // Shift-K (some terminals send 'K' when capslock is engaged).
-        e.preventDefault();
-        const cur = useSession.getState().rightPanelMode;
-        useSession.getState().setRightPanelMode(cur === 'ai' ? null : 'ai');
-      } else if (e.shiftKey && e.key.toLowerCase() === 'g') {
-        // ⌘⇧G — open the codegen dialog.
-        e.preventDefault();
-        setCodegenOpen(true);
-      } else if (e.shiftKey && e.key.toLowerCase() === 'n') {
-        // ⌘⇧N — open the notebook canvas.
-        e.preventDefault();
-        setNotebookOpen(true);
-      } else if (e.shiftKey && e.key.toLowerCase() === 'd') {
-        // ⌘⇧D — schema diff.
-        e.preventDefault();
-        setSchemaDiffOpen(true);
+
+      const hit = matchGlobalBinding(e);
+      if (!hit) return;
+
+      // Skip editor-adjacent toggles while typing in a plain input, but
+      // always allow palette / AI / cheat-sheet (Linear/Raycast pattern).
+      const allowInInput = hit.id === 'palette' || hit.id === 'toggleAi' || hit.id === 'cheatSheet';
+      if (inInput && !allowInInput) return;
+
+      // Menu-owned run/cancel/new-tab/etc. still arrive via IPC; only
+      // handle the DOM-primary actions here to avoid double-firing when
+      // a native accelerator also delivers a keydown.
+      switch (hit.id) {
+        case 'palette':
+          e.preventDefault();
+          useSession.getState().togglePalette();
+          break;
+        case 'toggleAi':
+          e.preventDefault();
+          {
+            const cur = useSession.getState().rightPanelMode;
+            useSession.getState().setRightPanelMode(cur === 'ai' ? null : 'ai');
+          }
+          break;
+        case 'cheatSheet':
+          e.preventDefault();
+          setCheatSheetOpen((v) => !v);
+          break;
+        case 'toggleEditor':
+          e.preventDefault();
+          useSession.getState().toggleEditor();
+          break;
+        case 'toggleSidebar':
+          e.preventDefault();
+          void useSession.getState().toggleSidebar();
+          break;
+        case 'codegen':
+          e.preventDefault();
+          setCodegenOpen(true);
+          break;
+        case 'notebook':
+          e.preventDefault();
+          setNotebookOpen(true);
+          break;
+        case 'schemaDiff':
+          e.preventDefault();
+          setSchemaDiffOpen(true);
+          break;
+        default:
+          // runQuery / cancelQuery / history / tabs / export — menu IPC
+          break;
       }
     };
     document.addEventListener('keydown', handler);
     return () => document.removeEventListener('keydown', handler);
+  }, []);
+
+  // Native menu → cheat-sheet / AI (channels registered in preload).
+  useEffect(() => {
+    const unsub = [
+      window.plasmaEvents.on('plasma:menu:cheatSheet', () => setCheatSheetOpen(true)),
+      window.plasmaEvents.on('plasma:menu:toggleAi', () => {
+        const cur = useSession.getState().rightPanelMode;
+        useSession.getState().setRightPanelMode(cur === 'ai' ? null : 'ai');
+      }),
+    ];
+    return () => {
+      for (const fn of unsub) fn();
+    };
   }, []);
 
   const disconnected = connectionState !== 'connected';
@@ -127,6 +170,7 @@ export function AppShell() {
       <CodegenDialog open={codegenOpen} onOpenChange={setCodegenOpen} />
       <SchemaDiffDialog open={schemaDiffOpen} onOpenChange={setSchemaDiffOpen} />
       <NotebookDialog open={notebookOpen} onOpenChange={setNotebookOpen} />
+      <ShortcutCheatSheet open={cheatSheetOpen} onOpenChange={setCheatSheetOpen} />
     </>
   );
 }
@@ -207,7 +251,11 @@ function EngineCanvas() {
 
 function SqlOnlyCanvas() {
   const tab = useActiveTab();
-  const hasResultOrError = Boolean(tab?.queryResult || tab?.queryError);
+  const hasResultOrError = Boolean(
+    tab?.queryResult ||
+    (tab?.queryResults && tab.queryResults.length > 0) ||
+    tab?.queryError,
+  );
   return (
     <main className="flex min-h-0 min-w-0 flex-1 flex-col bg-background">
       <TabStrip />
@@ -215,6 +263,7 @@ function SqlOnlyCanvas() {
       {hasResultOrError && (
         <>
           <EditorResizer />
+          <ResultMessagesStrip />
           <ResultGrid />
           <PendingEditsTray />
           <PaginationBar />
@@ -232,7 +281,11 @@ function DatabaseCanvas() {
   // panel is suppressed). Once a query has run, the editor caps at ~40%
   // and the result grid takes the rest.
   const isSqlTab = tab?.kind === 'sql';
-  const hasResultOrError = Boolean(tab?.queryResult || tab?.queryError);
+  const hasResultOrError = Boolean(
+    tab?.queryResult ||
+    (tab?.queryResults && tab.queryResults.length > 0) ||
+    tab?.queryError,
+  );
   const showGrid = !isSqlTab || hasResultOrError;
   return (
     <main className="flex min-h-0 min-w-0 flex-1 flex-col bg-background">
@@ -241,6 +294,7 @@ function DatabaseCanvas() {
       {isSqlTab && hasResultOrError && <EditorResizer />}
       {showFilterRow && <FilterRow />}
       {showGrid && <ResultToolbar />}
+      {showGrid && <ResultMessagesStrip />}
       {showGrid && <ResultGrid />}
       <PendingEditsTray />
       {showGrid && <PaginationBar />}

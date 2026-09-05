@@ -191,9 +191,22 @@ export function ResultToolbar() {
       {hasResult && tab.queryResult && (
         <>
           <Separator orientation="vertical" className="h-4" />
+          {tab.queryResults.length > 1 && (
+            <span
+              className="tabular-nums text-[11px] text-muted-foreground"
+              title="Active statement result — use ⌥←/→ or the messages strip to switch"
+            >
+              {tab.activeResultIndex + 1}/{tab.queryResults.length}
+            </span>
+          )}
           <span
             className="tabular-nums text-xs text-muted-foreground"
-            title={`Query duration · ${tab.queryResult.durationMs.toLocaleString()} ms`}
+            title={
+              tab.queryResults.length > 1
+                ? `Statement ${tab.activeResultIndex + 1} · ${tab.queryResult.durationMs.toLocaleString()} ms` +
+                  ` · total ${tab.queryResults.reduce((s, r) => s + r.durationMs, 0).toLocaleString()} ms`
+                : `Query duration · ${tab.queryResult.durationMs.toLocaleString()} ms`
+            }
           >
             {formatDuration(tab.queryResult.durationMs)}
           </span>

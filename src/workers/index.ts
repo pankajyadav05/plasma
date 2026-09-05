@@ -1,6 +1,7 @@
 /// <reference types="electron" />
 import {
   type ConnectionEngine,
+  type PgNotice,
   type RedisPubsubMessage,
   WorkerRequest,
   type WorkerResponse,
@@ -39,6 +40,11 @@ function send(res: WorkerResponse): void {
 // route it to its broadcast handler.
 redis.setPubsubListener((message: RedisPubsubMessage) => {
   send({ kind: 'redisPubsub', id: 'pubsub-event', message });
+});
+
+// U26: stream Postgres NOTICE / RAISE NOTICE to main → renderer.
+pg.setNoticeListener((notice: PgNotice) => {
+  send({ kind: 'pgNotice', id: 'notice-event', notice });
 });
 
 function unsupported(id: string, op: string): void {

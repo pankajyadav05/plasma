@@ -118,13 +118,17 @@ const eventChannels = [
   'plasma:menu:toggleSidebar',
   'plasma:menu:toggleEditor',
   'plasma:menu:palette',
+  'plasma:menu:toggleAi',
+  'plasma:menu:cheatSheet',
   'plasma:menu:runQuery',
+  'plasma:menu:runQueryAll',
   'plasma:menu:cancelQuery',
   'plasma:menu:history',
   'plasma:window:maximizedChanged',
   'plasma:update:status',
   'plasma:ai:event',
   'plasma:redis:pubsub',
+  'plasma:pg:notice',
 ] as const;
 type EventChannel = (typeof eventChannels)[number];
 
