@@ -6,16 +6,16 @@ export const VERSION = '0.0.15';
 
 // ── Windows ──
 export const DOWNLOAD_URL =
-  'https://ci1uagtcki1vvf8z.public.blob.vercel-storage.com/Plasma-Setup-0.0.15-x64.exe';
+  'https://pub-05a2064511bc41689f299b542b07b67f.r2.dev/Plasma-Setup-0.0.15-x64.exe';
 export const PORTABLE_URL =
-  'https://ci1uagtcki1vvf8z.public.blob.vercel-storage.com/Plasma-Portable-0.0.15-x64.exe';
+  'https://pub-05a2064511bc41689f299b542b07b67f.r2.dev/Plasma-Portable-0.0.15-x64.exe';
 export const SIZE_LABEL = '84 MB';
 
 // ── macOS ──
 export const MAC_ARM64_URL =
-  'https://ci1uagtcki1vvf8z.public.blob.vercel-storage.com/Plasma-0.0.15-arm64.dmg';
+  'https://pub-05a2064511bc41689f299b542b07b67f.r2.dev/Plasma-0.0.15-arm64.dmg';
 export const MAC_X64_URL =
-  'https://ci1uagtcki1vvf8z.public.blob.vercel-storage.com/Plasma-0.0.15-x64.dmg';
+  'https://pub-05a2064511bc41689f299b542b07b67f.r2.dev/Plasma-0.0.15-x64.dmg';
 export const MAC_ARM64_SIZE_LABEL = '112 MB';
 export const MAC_X64_SIZE_LABEL = '117 MB';
 
