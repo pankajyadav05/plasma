@@ -1,10 +1,23 @@
 import { getDb } from './db';
+import { type HistoryListOpts, buildHistoryListQuery } from './history-query';
 
 /**
  * Query history — records every executed query (success or failure)
  * in SQLite for later recall. Capped at 5000 entries; oldest are
  * pruned on insert.
+ *
+ * List/search is server-side (U35): LIKE + connection/status/duration
+ * facets, using the existing `(connection_id, executed_at)` index.
  */
+
+export type { HistoryListOpts } from './history-query';
+export {
+  HISTORY_DURATION_MS,
+  buildHistoryListQuery,
+  escapeLike,
+  type HistoryDurationFacet,
+  type HistoryStatusFacet,
+} from './history-query';
 
 const MAX_HISTORY_ROWS = 5000;
 
@@ -61,26 +74,33 @@ export function recordHistory(entry: Omit<HistoryEntry, 'id'>): void {
   tx();
 }
 
-export function listHistory(opts: { limit?: number; connectionId?: string } = {}): HistoryEntry[] {
-  const limit = opts.limit ?? 500;
+export function listHistory(opts: HistoryListOpts = {}): HistoryEntry[] {
   const db = getDb();
-  const rows = opts.connectionId
-    ? db
-        .prepare<[string, number], HistoryRow>(
-          `SELECT * FROM query_history
-             WHERE connection_id = ?
-             ORDER BY executed_at DESC
-             LIMIT ?`,
-        )
-        .all(opts.connectionId, limit)
-    : db
-        .prepare<[number], HistoryRow>(
-          `SELECT * FROM query_history
-             ORDER BY executed_at DESC
-             LIMIT ?`,
-        )
-        .all(limit);
+  const { sql, params } = buildHistoryListQuery(opts);
+  const rows = db.prepare<unknown[], HistoryRow>(sql).all(...params);
   return rows.map(fromRow);
+}
+
+/**
+ * Most recent successful (or any) statement for a connection — used by
+ * ⌘↑ recall when the editor buffer is empty (psql muscle memory).
+ */
+export function latestHistory(opts: {
+  connectionId?: string;
+  preferOk?: boolean;
+} = {}): HistoryEntry | null {
+  const preferOk = opts.preferOk !== false;
+  const entries = listHistory({
+    limit: preferOk ? 20 : 1,
+    connectionId: opts.connectionId,
+    status: preferOk ? 'ok' : 'all',
+  });
+  if (entries.length > 0) return entries[0]!;
+  if (preferOk) {
+    const any = listHistory({ limit: 1, connectionId: opts.connectionId });
+    return any[0] ?? null;
+  }
+  return null;
 }
 
 export function clearHistory(): void {

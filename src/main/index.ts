@@ -9,6 +9,7 @@ import {
   type ConnectionInfo,
   type ConnectionTestResult,
   type HistoryEntry,
+  HistoryListOpts,
   IpcChannel,
   type PingRequest,
   type PingResponse,
@@ -30,7 +31,7 @@ import {
   startAiChat,
 } from './ai';
 import { closeDb, getDb } from './db';
-import { clearHistory, listHistory, recordHistory } from './history';
+import { clearHistory, latestHistory, listHistory, recordHistory } from './history';
 import { initLogger, logger } from './logger';
 import { buildAppMenu } from './menu';
 import { getAllSettings, setSetting } from './settings';
@@ -524,9 +525,19 @@ function registerIpcHandlers() {
   // ── Query history ──
 
   ipcMain.handle(IpcChannel.HistoryList, async (_e, opts: unknown): Promise<HistoryEntry[]> => {
-    const safe = (opts ?? {}) as { limit?: number; connectionId?: string };
+    const safe = HistoryListOpts.parse(opts ?? {});
     return listHistory(safe);
   });
+
+  ipcMain.handle(
+    IpcChannel.HistoryLatest,
+    async (_e, opts: unknown): Promise<HistoryEntry | null> => {
+      const raw = (opts ?? {}) as { connectionId?: string };
+      return latestHistory({
+        connectionId: typeof raw.connectionId === 'string' ? raw.connectionId : undefined,
+      });
+    },
+  );
 
   ipcMain.handle(IpcChannel.HistoryClear, async (): Promise<void> => {
     clearHistory();

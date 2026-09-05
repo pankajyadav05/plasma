@@ -17,6 +17,7 @@ import type {
   ConnectionConfig,
   ConnectionEngine,
   HistoryEntry,
+  HistoryListOpts,
   OsOverview,
   QueryResult,
   RedisOverview,
@@ -514,8 +515,10 @@ interface SessionState {
   // ── settings ──
   settings: Settings;
 
-  // ── query history (cached copy for the history sheet) ──
+  // ── query history (cached copy for the history sheet / canvas) ──
   history: HistoryEntry[];
+  /** Active server-side filters for history.list (U35). */
+  historyFilter: HistoryListOpts;
 
   // ── AI chat (OpenRouter sidecar) ──
   aiChat: AiTurn[];
@@ -656,9 +659,14 @@ interface SessionState {
   setSidebarWidth(width: number): void;
 
   // History
-  loadHistory(): Promise<void>;
+  loadHistory(opts?: HistoryListOpts): Promise<void>;
+  setHistoryFilter(patch: Partial<HistoryListOpts>): void;
   clearHistory(): Promise<void>;
   reuseHistoryQuery(sql: string): void;
+  /** Pin a history SQL string into saved queries (snippet). */
+  saveHistoryAsSnippet(sql: string, name: string, connectionId?: string | null): Promise<void>;
+  /** ⌘↑ in an empty editor — recall the previous statement for this connection. */
+  recallPreviousHistory(): Promise<boolean>;
 
   // Transactions
   beginTxn(): Promise<void>;
@@ -749,6 +757,7 @@ export const useSession = create<SessionState>((set, get) => ({
   settings: DEFAULT_SETTINGS,
 
   history: [],
+  historyFilter: { status: 'all', duration: 'all' },
 
   aiChat: [],
   aiPending: false,
@@ -1684,6 +1693,9 @@ export const useSession = create<SessionState>((set, get) => ({
 
   setCanvasMode(mode) {
     set({ canvasMode: mode });
+    if (mode === 'history') {
+      void get().loadHistory();
+    }
   },
 
   setCurrentSchema(name) {
@@ -2008,13 +2020,49 @@ export const useSession = create<SessionState>((set, get) => ({
 
   // ── history ──
 
-  async loadHistory() {
+  async loadHistory(opts) {
+    const state = get();
+    const merged: HistoryListOpts = {
+      ...state.historyFilter,
+      ...(opts ?? {}),
+      limit: opts?.limit ?? state.historyFilter.limit ?? 500,
+    };
+    // Persist filter patch (search/facets) before the round-trip.
+    if (opts && Object.keys(opts).length > 0) {
+      set({ historyFilter: { ...state.historyFilter, ...opts } });
+    }
+
+    // connectionId semantics:
+    //   - omitted / undefined → default to the active connection
+    //   - '' → all connections (no SQL filter)
+    //   - concrete id → that connection only
+    let connectionId = merged.connectionId;
+    if (connectionId === undefined) {
+      connectionId = state.activeConfig?.id;
+    } else if (connectionId === '') {
+      connectionId = undefined;
+    }
+
+    const status = merged.status === 'all' ? undefined : merged.status;
+    const duration = merged.duration === 'all' ? undefined : merged.duration;
+    const search = merged.search?.trim() ? merged.search : undefined;
+
     try {
-      const history = await ipc.history.list({ limit: 500 });
+      const history = await ipc.history.list({
+        limit: merged.limit,
+        connectionId,
+        search,
+        status,
+        duration,
+      });
       set({ history });
     } catch (err) {
       console.error('[plasma] history.list failed', err);
     }
+  },
+
+  setHistoryFilter(patch) {
+    set({ historyFilter: { ...get().historyFilter, ...patch } });
   },
 
   async clearHistory() {
@@ -2024,7 +2072,53 @@ export const useSession = create<SessionState>((set, get) => ({
 
   reuseHistoryQuery(sql) {
     patchActiveTab(set, get, { sql });
-    set({ historyOpen: false, rightPanelMode: 'query' });
+    set({ historyOpen: false, canvasMode: 'sql', rightPanelMode: 'query' });
+  },
+
+  async saveHistoryAsSnippet(sql, name, connectionId) {
+    const state = get();
+    const connId = connectionId || state.activeConfig?.id;
+    if (!connId) return;
+    const trimmed = name.trim();
+    if (!trimmed || !sql.trim()) return;
+    const now = Date.now();
+    const entry = {
+      kind: 'sql' as const,
+      id: freshId(),
+      name: trimmed,
+      createdAt: now,
+      updatedAt: now,
+      sql,
+      pageSize: state.settings.defaultPageSize,
+    };
+    const current = state.settings.savedQueries ?? {};
+    const list = current[connId] ?? [];
+    const nextMap = { ...current, [connId]: [entry, ...list] };
+    set({ settings: { ...state.settings, savedQueries: nextMap } });
+    try {
+      await ipc.settings.set({ savedQueries: nextMap });
+    } catch (err) {
+      console.error('[plasma] saveHistoryAsSnippet failed', err);
+    }
+  },
+
+  async recallPreviousHistory() {
+    const state = get();
+    const tab = activeTab(state);
+    if (!tab || tab.kind !== 'sql') return false;
+    if (tab.sql.trim().length > 0) return false;
+    try {
+      const entry = await ipc.history.latest({
+        connectionId: state.activeConfig?.id,
+      });
+      if (!entry?.sql) return false;
+      patchActiveTab(set, get, { sql: entry.sql });
+      set({ rightPanelMode: 'query', canvasMode: 'sql' });
+      return true;
+    } catch (err) {
+      console.error('[plasma] recallPreviousHistory failed', err);
+      return false;
+    }
   },
 
   // ── transactions ──

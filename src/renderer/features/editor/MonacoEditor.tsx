@@ -18,11 +18,13 @@ interface Props {
   readOnly?: boolean;
   onFormat?: () => void;
   onAskAi?: (selection: string) => void;
+  /** ⌘↑ / Ctrl+↑ when the buffer is empty — recall previous history statement. */
+  onRecallPrevious?: () => void;
 }
 
 /**
  * Monaco wrapper — registers the Plasma themes on first mount,
- * wires ⌘⏎ and ⌘J shortcuts, and applies the Paper Editor type
+ * wires ⌘⏎ / ⌘J / ⌘↑ (empty-buffer history recall) shortcuts, and applies the Paper Editor type
  * scale (JetBrains Mono at configurable size).
  */
 export function MonacoEditor({
@@ -35,6 +37,7 @@ export function MonacoEditor({
   readOnly = false,
   onFormat,
   onAskAi,
+  onRecallPrevious,
 }: Props) {
   const monacoRef = useRef<typeof MonacoType | null>(null);
   // Keep latest callbacks in refs so the addCommand bindings (registered
@@ -43,12 +46,14 @@ export function MonacoEditor({
   const onToggleRef = useRef(onToggle);
   const onFormatRef = useRef(onFormat);
   const onAskAiRef = useRef(onAskAi);
+  const onRecallPreviousRef = useRef(onRecallPrevious);
   useEffect(() => {
     onRunRef.current = onRun;
     onToggleRef.current = onToggle;
     onFormatRef.current = onFormat;
     onAskAiRef.current = onAskAi;
-  }, [onRun, onToggle, onFormat, onAskAi]);
+    onRecallPreviousRef.current = onRecallPrevious;
+  }, [onRun, onToggle, onFormat, onAskAi, onRecallPrevious]);
 
   const handleMount = useCallback<OnMount>(
     (editor, monaco) => {
@@ -80,6 +85,18 @@ export function MonacoEditor({
       // Esc — close drawer when focused
       editor.addCommand(monaco.KeyCode.Escape, () => {
         onToggleRef.current();
+      });
+
+      // ⌘↑ / Ctrl+↑ — when the buffer is empty, recall the previous
+      // statement from history (psql muscle memory). Only intercept when
+      // empty so the default "go to top" binding still works otherwise.
+      editor.onKeyDown((e) => {
+        const mod = e.metaKey || e.ctrlKey;
+        if (!mod || e.keyCode !== monaco.KeyCode.UpArrow) return;
+        if (editor.getValue().trim().length > 0) return;
+        e.preventDefault();
+        e.stopPropagation();
+        onRecallPreviousRef.current?.();
       });
     },
     [theme],
