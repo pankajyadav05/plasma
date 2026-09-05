@@ -6,7 +6,7 @@ import { useActiveTab, useSession } from '@/stores/session';
 import type { OnMount } from '@monaco-editor/react';
 import { Copy, Loader2 } from 'lucide-react';
 import type * as MonacoType from 'monaco-editor';
-import { Suspense, lazy, useEffect, useState } from 'react';
+import { Suspense, lazy, useEffect, useMemo, useState } from 'react';
 
 const Editor = lazy(() => import('@monaco-editor/react').then((m) => ({ default: m.default })));
 
@@ -31,9 +31,19 @@ export function TableDefinitionView() {
   const addTab = useSession((s) => s.addTab);
   const fontSize = useSession((s) => s.settings.editorFontSize);
   const theme = useSession((s) => s.settings.theme);
+  const schema = useSession((s) => s.schema);
   const [ddl, setDdl] = useState<string>('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  const schemaIndexes = useMemo(() => {
+    if (!tab || tab.kind !== 'table' || !tab.tableSchema || !tab.tableName || !schema) {
+      return [];
+    }
+    return (schema.indexes ?? []).filter(
+      (i) => i.schema === tab.tableSchema && i.table === tab.tableName,
+    );
+  }, [schema, tab?.kind, tab?.tableSchema, tab?.tableName]);
 
   useEffect(() => {
     if (!tab || tab.kind !== 'table' || !tab.tableSchema || !tab.tableName) return;
@@ -52,7 +62,18 @@ export function TableDefinitionView() {
           c3: String(r[4] ?? ''),
           c4: String(r[5] ?? ''),
         }));
-        setDdl(composeDdl(tab.tableSchema!, tab.tableName!, rows));
+        const fromQuery = composeDdl(tab.tableSchema!, tab.tableName!, rows);
+        setDdl(
+          appendSchemaIndexes(
+            fromQuery,
+            tab.tableSchema!,
+            tab.tableName!,
+            (schema?.indexes ?? []).filter(
+              (i) => i.schema === tab.tableSchema && i.table === tab.tableName,
+            ),
+            rows,
+          ),
+        );
       } catch (err) {
         if (!cancelled) {
           setError(err instanceof Error ? err.message : String(err));
@@ -64,7 +85,7 @@ export function TableDefinitionView() {
     return () => {
       cancelled = true;
     };
-  }, [tab?.tableSchema, tab?.tableName, tab?.kind]);
+  }, [tab?.tableSchema, tab?.tableName, tab?.kind, schema]);
 
   const handleMount: OnMount = (_editor, monaco) => {
     applyMonacoTheme(monaco as typeof MonacoType, theme);
@@ -126,6 +147,33 @@ export function TableDefinitionView() {
           <pre className="whitespace-pre-wrap break-words text-xs text-muted-foreground">
             {error}
           </pre>
+        </div>
+      )}
+
+      {!loading && !error && schemaIndexes.length > 0 && (
+        <div className="shrink-0 border-b border-border bg-background px-3 py-2">
+          <div className="mb-1 font-display text-[10px] italic uppercase tracking-wider text-muted-foreground">
+            Indexes · {schemaIndexes.length}
+          </div>
+          <ul className="flex flex-col gap-0.5">
+            {schemaIndexes.map((idx) => (
+              <li
+                key={idx.name}
+                className="flex items-baseline gap-2 font-mono text-[11px] text-foreground"
+                title={idx.definition}
+              >
+                <span className="truncate font-medium">{idx.name}</span>
+                <span className="shrink-0 text-[9px] uppercase text-muted-foreground">
+                  {idx.isPrimary ? 'pk' : idx.isUnique ? 'unique' : 'index'}
+                </span>
+                {idx.columns.length > 0 && (
+                  <span className="truncate text-muted-foreground">
+                    ({idx.columns.join(', ')})
+                  </span>
+                )}
+              </li>
+            ))}
+          </ul>
         </div>
       )}
 
@@ -201,4 +249,32 @@ function composeDdl(schema: string, table: string, rows: DefRow[]): string {
     .join('\n\n');
 
   return [head, consLines, idxLines].filter(Boolean).join('\n\n');
+}
+
+/**
+ * If the live DDL query already emitted CREATE INDEX lines, leave them.
+ * Otherwise append any introspected indexes that are not constraint-backed
+ * duplicates already covered by ALTER TABLE … ADD CONSTRAINT.
+ */
+function appendSchemaIndexes(
+  ddl: string,
+  _schema: string,
+  _table: string,
+  indexes: Array<{
+    name: string;
+    definition: string;
+    isPrimary: boolean;
+    isUnique: boolean;
+  }>,
+  rows: DefRow[],
+): string {
+  if (indexes.length === 0) return ddl;
+  const consNames = new Set(rows.filter((r) => r.kind === 'con').map((r) => r.c1));
+  const idxFromQuery = new Set(rows.filter((r) => r.kind === 'idx').map((r) => r.c1));
+  const missing = indexes.filter(
+    (i) => !i.isPrimary && !consNames.has(i.name) && !idxFromQuery.has(i.name),
+  );
+  if (missing.length === 0) return ddl;
+  const extra = missing.map((i) => `${i.definition};`).join('\n\n');
+  return `${ddl}\n\n${extra}`;
 }

@@ -508,6 +508,21 @@ function compactSchema(schema: SchemaInfo): string {
   if (schema.tables.length > MAX_TABLES) {
     lines.push(`-- … ${schema.tables.length - MAX_TABLES} more tables omitted for brevity`);
   }
+  const enums = schema.enums ?? [];
+  for (const e of enums.slice(0, 40)) {
+    lines.push(`ENUM ${e.schema}.${e.name} (${e.labels.join(' | ')})`);
+  }
+  if (enums.length > 40) {
+    lines.push(`-- … ${enums.length - 40} more enums omitted`);
+  }
+  const functions = schema.functions ?? [];
+  for (const f of functions.slice(0, 40)) {
+    const args = f.identityArgs ? `(${f.identityArgs})` : '()';
+    lines.push(`${f.kind.toUpperCase()} ${f.schema}.${f.name}${args} → ${f.returnType || 'void'}`);
+  }
+  if (functions.length > 40) {
+    lines.push(`-- … ${functions.length - 40} more functions omitted`);
+  }
   return lines.join('\n');
 }
 

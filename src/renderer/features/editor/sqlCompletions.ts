@@ -1,5 +1,8 @@
 import { useSession } from '@/stores/session';
 import type * as MonacoType from 'monaco-editor';
+import { enumLabelsForContext } from './enumCompletions';
+
+export { enumLabelsForContext, labelsForDataType } from './enumCompletions';
 
 /**
  * Schema-aware SQL autocomplete. Registered once per renderer lifetime;
@@ -12,7 +15,8 @@ import type * as MonacoType from 'monaco-editor';
  *      the matching table / the tables of the matching schema.
  *   2. Bare identifier after `FROM / JOIN / UPDATE / INTO` — suggest
  *      tables (qualified only when schema isn't `public`).
- *   3. Everywhere else — suggest tables + column names + SQL keywords.
+ *   3. Enum-typed column after `=` / `IN (` — suggest enum labels (U34).
+ *   4. Everywhere else — suggest tables + column names + SQL keywords.
  *
  * The provider does NOT try to parse SQL. It walks back ~400 chars
  * before the cursor with cheap regexes to decide context. Good enough
@@ -26,7 +30,7 @@ export function registerSqlCompletions(monaco: typeof MonacoType): void {
   registered = true;
 
   monaco.languages.registerCompletionItemProvider('sql', {
-    triggerCharacters: ['.', ' '],
+    triggerCharacters: ['.', ' ', '=', '('],
     provideCompletionItems: (model, position) => {
       const schema = useSession.getState().schema;
       if (!schema) return { suggestions: [] };
@@ -89,7 +93,22 @@ export function registerSqlCompletions(monaco: typeof MonacoType): void {
         return { suggestions: [] };
       }
 
-      // ── 2. After FROM / JOIN / UPDATE / INTO / ONLY / TABLE ──
+      // ── 2. Enum labels after `col =` / `col IN (` ──
+      const enumLabels = enumLabelsForContext(schema, beforeCursor, precedingText);
+      if (enumLabels && enumLabels.length > 0) {
+        return {
+          suggestions: enumLabels.map((label) => ({
+            label: `'${label}'`,
+            kind: monaco.languages.CompletionItemKind.EnumMember,
+            insertText: `'${label.replace(/'/g, "''")}'`,
+            range,
+            detail: 'enum',
+            sortText: `0_${label}`,
+          })),
+        };
+      }
+
+      // ── 3. After FROM / JOIN / UPDATE / INTO / ONLY / TABLE ──
       // Match the last such keyword in the preceding text that isn't
       // already followed by a complete identifier.
       const afterKeyword =
@@ -112,7 +131,7 @@ export function registerSqlCompletions(monaco: typeof MonacoType): void {
         };
       }
 
-      // ── 3. General: tables + columns + keywords ──
+      // ── 4. General: tables + columns + keywords ──
       const tableSuggestions = schema.tables.map((t) => {
         const qualified = t.schema === 'public' ? t.name : `${t.schema}.${t.name}`;
         return {
