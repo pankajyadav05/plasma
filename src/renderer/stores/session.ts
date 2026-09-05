@@ -1,5 +1,4 @@
 import { ipc } from '@/lib/ipc';
-import { splitSqlStatements } from '@/lib/sql-split';
 import {
   type Filter,
   type TableSort,
@@ -10,7 +9,6 @@ import {
   buildInsertSql,
   buildRlsCountSql,
   buildRolesSql,
-  buildUpdateSql,
 } from '@/lib/table-query';
 import type {
   AiMessage,
@@ -28,6 +26,15 @@ import type {
   TxnState,
 } from '@shared/protocol';
 import { create } from 'zustand';
+import {
+  cancelProdGate as cancelProdGateAction,
+  confirmProdGate as confirmProdGateAction,
+} from './session-prod-gate';
+import {
+  commitPendingEdits as commitPendingEditsAction,
+  revertPendingEdits as revertPendingEditsAction,
+} from './session-pending-edits';
+import { runQuery as runQueryAction } from './session-run-query';
 
 /**
  * When a table is unfiltered AND the introspected estimate is above this
@@ -48,9 +55,11 @@ const ESTIMATED_COUNT_THRESHOLD = 1_000_000;
  *     tabs doesn't lose scroll/selection context.
  *   - Settings mirrored into the store from the main-process SQLite store
  *     on boot, and persisted via `updateSettings`.
- *   - Flat action surface — no slices yet, since every piece touches
- *     every other piece. Split if this file crosses ~500 lines.
+ *   - Action ownership for runQuery / confirmProdGate / commitPendingEdits
+ *     lives in sibling modules (U39): session-run-query, session-prod-gate,
+ *     session-pending-edits. This file composes them into the store.
  */
+
 
 export type ConnectionState = 'idle' | 'connecting' | 'connected' | 'error';
 export type QueryRunState = 'idle' | 'running';
@@ -92,47 +101,6 @@ export interface AiTurn extends AiMessage {
   streaming?: boolean;
   /** Server-side error captured for this turn, if any. */
   error?: string;
-}
-
-/**
- * Cheap heuristic for "destructive" SQL — anything that could destroy
- * or rewrite data without trivial recovery. Used by the prod gate so
- * accidental DELETE/TRUNCATE/DROP on a production-tagged connection
- * trips a confirm dialog. UPDATE without a WHERE clause counts. We
- * strip leading comments / whitespace before checking.
- */
-function looksDestructive(sql: string): boolean {
-  const stripped = sql
-    .replace(/\/\*[\s\S]*?\*\//g, '')
-    .replace(/^\s*--.*$/gm, '')
-    .trim();
-  const lower = stripped.toLowerCase();
-  if (/^(drop|truncate)\b/.test(lower)) return true;
-  if (/^delete\b/.test(lower)) return true;
-  // UPDATE without WHERE — we eyeball for the keyword and reject
-  // statements that DON'T contain a `where` token after `update`.
-  if (/^update\b/.test(lower) && !/\bwhere\b/.test(lower)) return true;
-  // ALTER TABLE … DROP COLUMN / DROP CONSTRAINT
-  if (/^alter\b.*\bdrop\b/.test(lower)) return true;
-  return false;
-}
-
-/**
- * Cheap heuristic for DDL detection. We strip leading comments/whitespace
- * and look for a top-level keyword that implies the schema graph has
- * changed. Not a parser — false positives on DML containing the word
- * `create` inside a string literal are acceptable (worst case is one
- * extra introspect call).
- */
-function looksLikeDdl(sql: string): boolean {
-  const stripped = sql
-    .replace(/\/\*[\s\S]*?\*\//g, '')
-    .replace(/^\s*--.*$/gm, '')
-    .trim()
-    .toLowerCase();
-  return /^(create|alter|drop|rename|truncate|comment|grant|revoke|vacuum|reindex|cluster)\b/.test(
-    stripped,
-  );
 }
 
 /**
@@ -1165,122 +1133,11 @@ export const useSession = create<SessionState>((set, get) => ({
   },
 
   async runQuery() {
-    const state = get();
-    const tab = activeTab(state);
-    if (!tab) return;
-    if (tab.queryRunState === 'running') return;
-
-    // Table tabs compile their SQL from structured state.
-    if (tab.kind === 'table') {
-      await runTableDataQuery(set, get, tab.id);
-      void runTableCountQuery(set, get, tab.id);
-      return;
-    }
-
-    const sql = tab.sql.trim();
-    if (!sql) return;
-
-    // Prod gate: if active connection is tagged 'prod' and the script
-    // includes any destructive statement, stash the SQL and prompt for
-    // confirmation. The user resumes via `confirmProdGate()`.
-    const connId = state.activeConfig?.id;
-    const tag = connId ? state.settings.connectionTags?.[connId] : undefined;
-    if (tag === 'prod' && state.prodGate === null) {
-      const stmts = splitSqlStatements(sql);
-      if (stmts.some(looksDestructive)) {
-        set({ prodGate: { sql } });
-        return;
-      }
-    }
-
-    // U03 + U01: capture origin tab + query generation + connection
-    // generation before any await so results/errors publish only to that
-    // tab on the same connection (not whichever is active later).
-    const originTabId = tab.id;
-    const generation = tab.queryGeneration + 1;
-    const originConnGen = state.connectionGen;
-    patchTabById(set, originTabId, {
-      queryRunState: 'running',
-      queryError: null,
-      queryErrorSql: null,
-      queryGeneration: generation,
+    await runQueryAction(set, get, {
+      patchTabById,
+      runTableDataQuery,
+      runTableCountQuery,
     });
-
-    const publishOrigin = (patch: Partial<QueryTab>) => {
-      const current = get().tabs.find((t) => t.id === originTabId);
-      // Drop if the origin tab was closed or a newer request superseded it.
-      if (!current || current.queryGeneration !== generation) return;
-      // Drop result payload if the connection changed under us; still clear
-      // running so the origin tab does not stay stuck.
-      if (get().connectionGen !== originConnGen) {
-        if (patch.queryRunState === 'idle' || patch.queryError != null) {
-          patchTabById(set, originTabId, {
-            queryRunState: 'idle',
-            queryError:
-              patch.queryError ??
-              'connection changed while query was running — result discarded',
-          });
-        }
-        return;
-      }
-      patchTabById(set, originTabId, patch);
-    };
-
-    // Multi-statement scripts: split with a quote/comment-aware tokenizer
-    // and run each separately. Last statement's QueryResult populates the
-    // grid; failures stop execution and surface "stopped at N of M".
-    const statements = splitSqlStatements(sql);
-    try {
-      let lastResult: QueryResult | null = null;
-      let anyDdl = false;
-      for (let i = 0; i < statements.length; i++) {
-        const stmt = statements[i];
-        try {
-          lastResult = await ipc.query.run(stmt);
-        } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
-          const tag = statements.length > 1 ? ` (statement ${i + 1} of ${statements.length})` : '';
-          publishOrigin({
-            queryError: `${message}${tag}`,
-            queryErrorSql: stmt,
-            queryRunState: 'idle',
-          });
-          if (anyDdl) void get().refreshSchema();
-          return;
-        }
-        if (looksLikeDdl(stmt)) anyDdl = true;
-      }
-      publishOrigin({
-        queryResult: lastResult,
-        queryRunState: 'idle',
-        page: 0,
-        sortColumn: null,
-        selectedCell: null,
-        selectedRows: new Set(),
-      });
-      // U05: worker may have auto-BEGUN under transactionMode — mirror
-      // that into the status-bar txn indicator.
-      if (get().settings.transactionMode && get().connectionGen === originConnGen) {
-        const last = statements[statements.length - 1]?.trim().toUpperCase() ?? '';
-        if (last.startsWith('COMMIT') || last.startsWith('ROLLBACK') || last.startsWith('ABORT')) {
-          set({ txnState: 'none' });
-        } else {
-          set({ txnState: 'active' });
-        }
-      }
-      if (anyDdl) {
-        void get().refreshSchema();
-      }
-    } catch (err) {
-      publishOrigin({
-        queryError: err instanceof Error ? err.message : String(err),
-        queryErrorSql: sql,
-        queryRunState: 'idle',
-      });
-      if (get().settings.transactionMode && get().connectionGen === originConnGen) {
-        set({ txnState: 'error' });
-      }
-    }
   },
 
   async cancelQuery() {
@@ -2202,65 +2059,14 @@ export const useSession = create<SessionState>((set, get) => ({
   },
 
   // ── Pending edits (buffered inline-edit tray) ──
+  // Ownership: session-pending-edits.ts (U39)
 
   async commitPendingEdits() {
-    const state = get();
-    const edits = state.pendingEdits;
-    if (edits.length === 0) return;
-    // U01: every edit must still target the live connection generation.
-    const liveGen = state.connectionGen;
-    const mismatched = edits.filter((e) => e.connectionGen !== liveGen);
-    if (mismatched.length > 0 || liveGen <= 0) {
-      throw new Error(
-        'pending edits belong to a previous connection — discard them before committing',
-      );
-    }
-    set({ pendingEditsBusy: true });
-    try {
-      // U05: one worker request owns BEGIN/UPDATEs/COMMIT (or SAVEPOINT
-      // when a user transaction is already open). Never a sequence of
-      // unrelated IPC calls that can commit foreign work.
-      const updates = edits.map((e) => {
-        const { sql, params } = buildUpdateSql({
-          schema: e.schema,
-          table: e.table,
-          set: { [e.column]: e.newValue },
-          pkValues: e.pkValues,
-        });
-        return { sql, params };
-      });
-      const res = await ipc.query.commitEditBatch({
-        connectionGen: liveGen,
-        updates,
-      });
-      set({ pendingEdits: [], txnState: res.state });
-      // Refresh every still-open tab that had pending edits. Edits whose
-      // origin tab was closed are preserved through commit (U01) but have
-      // nothing to refresh.
-      const tabIds = new Set(edits.map((e) => e.tabId));
-      for (const id of tabIds) {
-        const tab = get().tabs.find((t) => t.id === id);
-        if (tab && tab.kind === 'table') {
-          void runTableDataQuery(set, get, id);
-        }
-      }
-    } finally {
-      set({ pendingEditsBusy: false });
-    }
+    await commitPendingEditsAction(set, get, { runTableDataQuery });
   },
 
   async revertPendingEdits() {
-    const state = get();
-    const tabIds = new Set(state.pendingEdits.map((e) => e.tabId));
-    set({ pendingEdits: [] });
-    // Re-run the data query for each affected tab so the optimistic
-    // mirrored cells reset to their server values.
-    for (const id of tabIds) {
-      const tab = get().tabs.find((t) => t.id === id);
-      if (tab && tab.kind === 'table') {
-        void runTableDataQuery(set, get, id);
-      }
-    }
+    await revertPendingEditsAction(set, get, { runTableDataQuery });
   },
 
   // ── Prod gate ──
@@ -2282,17 +2088,11 @@ export const useSession = create<SessionState>((set, get) => ({
   },
 
   confirmProdGate() {
-    const gate = get().prodGate;
-    if (!gate) return;
-    set({ prodGate: null });
-    // Re-enter runQuery now that the gate is cleared. The SQL on the
-    // active tab still matches what we stashed — runQuery will see no
-    // gate set and proceed.
-    void get().runQuery();
+    confirmProdGateAction(set, get);
   },
 
   cancelProdGate() {
-    set({ prodGate: null });
+    cancelProdGateAction(set);
   },
 
   // ── Connection-switch gate (pending edits) ──
