@@ -442,6 +442,66 @@ export type HistoryEntry = z.infer<typeof HistoryEntry>;
 export const TxnState = z.enum(['none', 'active', 'error']);
 export type TxnState = z.infer<typeof TxnState>;
 
+// ─── Open tabs / session restore (U25) ───────────────────────────────
+
+/**
+ * Persisted tab draft. SQL is stored plaintext (same class as query_history;
+ * planner Q2). Transient fields (results, selection, running state) are
+ * intentionally omitted — restore rebuilds an idle tab ready to re-run.
+ */
+export const PersistedOpenTab = z.object({
+  id: z.string(),
+  title: z.string(),
+  kind: z.enum([
+    'sql',
+    'table',
+    'redis-key',
+    'redis-cli',
+    'redis-pubsub',
+    'redis-analyze',
+    'redis-slowlog',
+    'os-search',
+    'os-index',
+    'os-sql',
+  ]),
+  sql: z.string().default(''),
+  // Table-tab structured state
+  tableSchema: z.string().optional(),
+  tableName: z.string().optional(),
+  tableSort: z
+    .array(z.object({ column: z.string(), direction: z.enum(['asc', 'desc']) }))
+    .optional(),
+  filters: z
+    .array(
+      z.object({
+        id: z.string(),
+        column: z.string(),
+        op: z.string(),
+        value: z.string(),
+      }),
+    )
+    .optional(),
+  hiddenColumns: z.array(z.string()).optional(),
+  stickyColumns: z.array(z.string()).optional(),
+  viewMode: z.enum(['data', 'definition']).optional(),
+  pageSize: z.number().int().positive().optional(),
+  // Redis / OpenSearch
+  redisKey: z.string().optional(),
+  redisChannel: z.string().optional(),
+  redisPattern: z.boolean().optional(),
+  osIndex: z.string().optional(),
+  osBody: z.string().optional(),
+  osQueryString: z.string().optional(),
+  osSql: z.string().optional(),
+});
+export type PersistedOpenTab = z.infer<typeof PersistedOpenTab>;
+
+export const OpenTabsSnapshot = z.object({
+  tabs: z.array(PersistedOpenTab),
+  activeTabId: z.string().nullable(),
+});
+export type OpenTabsSnapshot = z.infer<typeof OpenTabsSnapshot>;
+
 // ─── Worker messages (main ↔ utilityProcess) ────────────────────────
 
 export const WorkerRequest = z.discriminatedUnion('kind', [
@@ -999,6 +1059,9 @@ export const IpcChannel = {
   HistoryClear: 'plasma:history:clear',
   SettingsGet: 'plasma:settings:get',
   SettingsSet: 'plasma:settings:set',
+  OpenTabsLoad: 'plasma:openTabs:load',
+  OpenTabsSave: 'plasma:openTabs:save',
+  OpenTabsClear: 'plasma:openTabs:clear',
   TxnBegin: 'plasma:txn:begin',
   TxnCommit: 'plasma:txn:commit',
   TxnRollback: 'plasma:txn:rollback',
@@ -1154,6 +1217,11 @@ export interface PlasmaAPI {
   settings: {
     get(): Promise<Settings>;
     set(patch: Partial<Settings>): Promise<Settings>;
+  };
+  openTabs: {
+    load(connectionId: string): Promise<OpenTabsSnapshot>;
+    save(connectionId: string, snapshot: OpenTabsSnapshot): Promise<void>;
+    clear(connectionId: string): Promise<void>;
   };
   txn: {
     begin(): Promise<TxnState>;

@@ -25,6 +25,14 @@ export function App() {
       window.plasmaEvents.on('plasma:menu:closeTab', () =>
         session().closeTab(session().activeTabId),
       ),
+      window.plasmaEvents.on('plasma:menu:reopenTab', () => session().reopenClosedTab()),
+      window.plasmaEvents.on('plasma:menu:nextTab', () => session().cycleTab(1)),
+      window.plasmaEvents.on('plasma:menu:prevTab', () => session().cycleTab(-1)),
+      window.plasmaEvents.on('plasma:menu:renameTab', () => session().beginRenameTab()),
+      window.plasmaEvents.on('plasma:menu:selectTab', (...args: unknown[]) => {
+        const idx = typeof args[0] === 'number' ? args[0] : Number(args[0]);
+        if (Number.isFinite(idx)) session().selectTabByIndex(idx);
+      }),
       window.plasmaEvents.on('plasma:menu:toggleSidebar', () => void session().toggleSidebar()),
       window.plasmaEvents.on('plasma:menu:toggleEditor', () => session().toggleEditor()),
       window.plasmaEvents.on('plasma:menu:palette', () => session().togglePalette()),

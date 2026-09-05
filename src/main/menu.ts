@@ -39,6 +39,72 @@ export function buildAppMenu(): void {
           accelerator: 'CmdOrCtrl+W',
           click: () => sendToFocusedWindow('plasma:menu:closeTab'),
         },
+        {
+          label: 'Reopen Closed Tab',
+          accelerator: 'CmdOrCtrl+Shift+T',
+          click: () => sendToFocusedWindow('plasma:menu:reopenTab'),
+        },
+        {
+          label: 'Rename Tab',
+          accelerator: 'CmdOrCtrl+R',
+          click: () => sendToFocusedWindow('plasma:menu:renameTab'),
+        },
+        {
+          label: 'Next Tab',
+          accelerator: 'CmdOrCtrl+Shift+]',
+          click: () => sendToFocusedWindow('plasma:menu:nextTab'),
+        },
+        {
+          label: 'Previous Tab',
+          accelerator: 'CmdOrCtrl+Shift+[',
+          click: () => sendToFocusedWindow('plasma:menu:prevTab'),
+        },
+        { type: 'separator' },
+        {
+          label: 'Tab 1',
+          accelerator: 'CmdOrCtrl+1',
+          click: () => sendToFocusedWindow('plasma:menu:selectTab', 0),
+        },
+        {
+          label: 'Tab 2',
+          accelerator: 'CmdOrCtrl+2',
+          click: () => sendToFocusedWindow('plasma:menu:selectTab', 1),
+        },
+        {
+          label: 'Tab 3',
+          accelerator: 'CmdOrCtrl+3',
+          click: () => sendToFocusedWindow('plasma:menu:selectTab', 2),
+        },
+        {
+          label: 'Tab 4',
+          accelerator: 'CmdOrCtrl+4',
+          click: () => sendToFocusedWindow('plasma:menu:selectTab', 3),
+        },
+        {
+          label: 'Tab 5',
+          accelerator: 'CmdOrCtrl+5',
+          click: () => sendToFocusedWindow('plasma:menu:selectTab', 4),
+        },
+        {
+          label: 'Tab 6',
+          accelerator: 'CmdOrCtrl+6',
+          click: () => sendToFocusedWindow('plasma:menu:selectTab', 5),
+        },
+        {
+          label: 'Tab 7',
+          accelerator: 'CmdOrCtrl+7',
+          click: () => sendToFocusedWindow('plasma:menu:selectTab', 6),
+        },
+        {
+          label: 'Tab 8',
+          accelerator: 'CmdOrCtrl+8',
+          click: () => sendToFocusedWindow('plasma:menu:selectTab', 7),
+        },
+        {
+          label: 'Tab 9',
+          accelerator: 'CmdOrCtrl+9',
+          click: () => sendToFocusedWindow('plasma:menu:selectTab', 8),
+        },
         { type: 'separator' },
         {
           label: 'Export Results as CSV…',
@@ -84,7 +150,7 @@ export function buildAppMenu(): void {
           click: () => sendToFocusedWindow('plasma:menu:palette'),
         },
         { type: 'separator' },
-        { role: 'reload' },
+        { role: 'reload', accelerator: 'CmdOrCtrl+Shift+R' },
         { role: 'toggleDevTools' },
         { role: 'togglefullscreen' },
       ],
@@ -128,7 +194,7 @@ export function buildAppMenu(): void {
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
-function sendToFocusedWindow(channel: string): void {
+function sendToFocusedWindow(channel: string, ...args: unknown[]): void {
   const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
-  win?.webContents.send(channel);
+  win?.webContents.send(channel, ...args);
 }

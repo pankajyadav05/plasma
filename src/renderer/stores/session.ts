@@ -18,6 +18,7 @@ import type {
   ConnectionEngine,
   HistoryEntry,
   OsOverview,
+  PersistedOpenTab,
   QueryResult,
   RedisOverview,
   RedisScanResult,
@@ -27,6 +28,7 @@ import type {
   Settings,
   TxnState,
 } from '@shared/protocol';
+import { isTabDirty, serializeSnapshot, serializeTab } from '@shared/open-tabs';
 import { create } from 'zustand';
 
 /**
@@ -153,6 +155,96 @@ function columnStateKey(
 // to hit IPC + disk once, when the user actually lets go.
 let columnWidthPersistTimer: ReturnType<typeof setTimeout> | null = null;
 
+/** Debounced open-tabs persistence (U25). */
+let openTabsPersistTimer: ReturnType<typeof setTimeout> | null = null;
+const OPEN_TABS_PERSIST_MS = 400;
+const MAX_CLOSED_TABS = 20;
+
+function scheduleOpenTabsPersist(get: () => SessionState): void {
+  if (openTabsPersistTimer) clearTimeout(openTabsPersistTimer);
+  openTabsPersistTimer = setTimeout(() => {
+    openTabsPersistTimer = null;
+    void flushOpenTabsPersist(get);
+  }, OPEN_TABS_PERSIST_MS);
+}
+
+async function flushOpenTabsPersist(get: () => SessionState): Promise<void> {
+  if (openTabsPersistTimer) {
+    clearTimeout(openTabsPersistTimer);
+    openTabsPersistTimer = null;
+  }
+  const state = get();
+  const connId = state.activeConfig?.id;
+  if (!connId) return;
+  try {
+    const snapshot = serializeSnapshot(state.tabs, state.activeTabId);
+    await ipc.openTabs.save(connId, snapshot);
+  } catch (err) {
+    console.error('[plasma] persist open tabs failed', err);
+  }
+}
+
+function tabFromPersisted(p: PersistedOpenTab, fallbackPageSize: number): QueryTab {
+  const pageSize = p.pageSize ?? fallbackPageSize;
+  const base = createEmptyTab(pageSize, p.title);
+  const sql = p.sql ?? '';
+  const tab: QueryTab = {
+    ...base,
+    id: p.id,
+    title: p.title,
+    kind: p.kind,
+    sql,
+    baselineSql: sql,
+    tableSchema: p.tableSchema,
+    tableName: p.tableName,
+    tableSort: (p.tableSort as QueryTab['tableSort']) ?? [],
+    filters: (p.filters as QueryTab['filters']) ?? [],
+    hiddenColumns: new Set(p.hiddenColumns ?? []),
+    stickyColumns: new Set(p.stickyColumns ?? []),
+    viewMode: p.viewMode ?? 'data',
+    redisKey: p.redisKey,
+    redisChannel: p.redisChannel,
+    redisPattern: p.redisPattern,
+    osIndex: p.osIndex,
+    osBody: p.osBody,
+    osQueryString: p.osQueryString,
+    osSql: p.osSql,
+    baselineOsBody: p.osBody,
+    baselineOsSql: p.osSql,
+  };
+  return tab;
+}
+
+async function restoreOpenTabsForConnection(
+  set: (partial: Partial<SessionState> | ((s: SessionState) => Partial<SessionState>)) => void,
+  get: () => SessionState,
+  connectionId: string,
+): Promise<void> {
+  try {
+    const snapshot = await ipc.openTabs.load(connectionId);
+    if (!snapshot.tabs.length) return;
+    const pageSize = get().settings.defaultPageSize;
+    const tabs = snapshot.tabs.map((p) => tabFromPersisted(p, pageSize));
+    const activeTabId =
+      (snapshot.activeTabId && tabs.some((t) => t.id === snapshot.activeTabId)
+        ? snapshot.activeTabId
+        : tabs[0]?.id) ?? get().activeTabId;
+    set({ tabs, activeTabId, closedTabs: [] });
+
+    // Re-run data queries for restored table tabs (best-effort).
+    const setFn = (fn: (s: SessionState) => Partial<SessionState>) => set(fn);
+    for (const tab of tabs) {
+      if (tab.kind === 'table' && tab.tableSchema && tab.tableName) {
+        void runTableDataQuery(setFn, get, tab.id);
+        void runTableCountQuery(setFn, get, tab.id);
+      }
+    }
+  } catch (err) {
+    console.error('[plasma] restore open tabs failed', err);
+  }
+}
+
+
 /**
  * One queued, uncommitted cell edit. Buffered edits accumulate as the
  * user types in the grid; nothing hits the database until they click
@@ -236,6 +328,14 @@ export interface QueryTab {
   osQueryString?: string;
   /** Cached SQL text for an os-sql tab. */
   osSql?: string;
+
+  /**
+   * Dirty-tracking baselines. Set on create / restore / successful run.
+   * TabStrip shows a dirty marker when editable content diverges.
+   */
+  baselineSql: string;
+  baselineOsBody?: string;
+  baselineOsSql?: string;
 }
 
 const THEME_NAMES = [
@@ -353,6 +453,7 @@ function createEmptyTab(pageSize: number, title = 'query-1.sql'): QueryTab {
     countLoading: false,
     viewMode: 'data',
     rlsPolicyCount: null,
+    baselineSql: '',
   };
 }
 
@@ -384,6 +485,7 @@ function createTableTab(pageSize: number, schemaName: string, tableName: string)
     countLoading: false,
     viewMode: 'data',
     rlsPolicyCount: null,
+    baselineSql: '',
   };
 }
 
@@ -616,7 +718,16 @@ interface SessionState {
   closeTab(id: string): void;
   setActiveTab(id: string): void;
   renameActiveTab(title: string): void;
+  renameTab(id: string, title: string): void;
+  selectTabByIndex(index: number): void;
+  cycleTab(delta: 1 | -1): void;
+  reopenClosedTab(): void;
+  beginRenameTab(id?: string | null): void;
   setTabViewMode(mode: TableViewMode): void;
+  /** Recently closed tabs (newest last), capped — feeds ⌘⇧T. */
+  closedTabs: PersistedOpenTab[];
+  /** Tab id currently inline-renaming in TabStrip; null = none. */
+  renamingTabId: string | null;
 
   // Canvas mode + entity filtering
   setCanvasMode(mode: CanvasMode): void;
@@ -725,6 +836,8 @@ export const useSession = create<SessionState>((set, get) => ({
 
   tabs: [initialTab],
   activeTabId: initialTab.id,
+  closedTabs: [],
+  renamingTabId: null,
 
   canvasMode: 'database',
   currentSchema: null,
@@ -812,6 +925,7 @@ export const useSession = create<SessionState>((set, get) => ({
       await get().loadSavedConnections();
       await loadEngineOverview(set, get, eff);
       if (eff === 'postgres') void get().loadAvailableRoles();
+      await restoreOpenTabsForConnection(set, get, config.id);
     } catch (err) {
       set({
         connectionState: 'error',
@@ -842,6 +956,7 @@ export const useSession = create<SessionState>((set, get) => ({
       });
       await loadEngineOverview(set, get, eff);
       if (eff === 'postgres') void get().loadAvailableRoles();
+      await restoreOpenTabsForConnection(set, get, id);
     } catch (err) {
       set({
         connectionState: 'error',
@@ -852,6 +967,7 @@ export const useSession = create<SessionState>((set, get) => ({
 
   async disconnect() {
     try {
+      await flushOpenTabsPersist(get);
       await ipc.conn.disconnect();
     } finally {
       set({
@@ -1154,6 +1270,7 @@ export const useSession = create<SessionState>((set, get) => ({
       kind: 'os-search',
       osIndex: index,
       osBody: '{\n  "query": { "match_all": {} },\n  "size": 50\n}',
+      baselineOsBody: '{\n  "query": { "match_all": {} },\n  "size": 50\n}',
       osQueryString: '',
     };
     set({
@@ -1186,6 +1303,7 @@ export const useSession = create<SessionState>((set, get) => ({
       ...createEmptyTab(state.settings.defaultPageSize, 'sql'),
       kind: 'os-sql',
       osSql: 'SELECT * FROM <index> LIMIT 50',
+      baselineOsSql: 'SELECT * FROM <index> LIMIT 50',
     };
     set({ tabs: [...state.tabs, tab], activeTabId: tab.id });
   },
@@ -1194,6 +1312,7 @@ export const useSession = create<SessionState>((set, get) => ({
 
   setSql(sql) {
     patchActiveTab(set, get, { sql });
+    scheduleOpenTabsPersist(get);
   },
 
   async runQuery() {
@@ -1261,6 +1380,7 @@ export const useSession = create<SessionState>((set, get) => ({
         sortColumn: null,
         selectedCell: null,
         selectedRows: new Set(),
+        baselineSql: tab.sql,
       });
       if (anyDdl) {
         void get().refreshSchema();
@@ -1310,6 +1430,7 @@ export const useSession = create<SessionState>((set, get) => ({
     void runTableDataQuery(set, get, tab.id);
     void runTableCountQuery(set, get, tab.id);
     void runRlsCountForTab(set, get, tab.id);
+    scheduleOpenTabsPersist(get);
   },
 
   openForeignRow(refSchema, refTable, refColumn, value) {
@@ -1445,6 +1566,7 @@ export const useSession = create<SessionState>((set, get) => ({
       page: 0,
     });
     await runTableDataQuery(set, get, tab.id);
+    scheduleOpenTabsPersist(get);
     void runTableCountQuery(set, get, tab.id);
   },
 
@@ -1455,6 +1577,7 @@ export const useSession = create<SessionState>((set, get) => ({
     patchActiveTab(set, get, { filters: nextFilters, page: 0 });
     await runTableDataQuery(set, get, tab.id);
     void runTableCountQuery(set, get, tab.id);
+    scheduleOpenTabsPersist(get);
   },
 
   async removeFilter(id) {
@@ -1466,6 +1589,7 @@ export const useSession = create<SessionState>((set, get) => ({
     });
     await runTableDataQuery(set, get, tab.id);
     void runTableCountQuery(set, get, tab.id);
+    scheduleOpenTabsPersist(get);
   },
 
   async clearFilters() {
@@ -1474,6 +1598,7 @@ export const useSession = create<SessionState>((set, get) => ({
     patchActiveTab(set, get, { filters: [], page: 0 });
     await runTableDataQuery(set, get, tab.id);
     void runTableCountQuery(set, get, tab.id);
+    scheduleOpenTabsPersist(get);
   },
 
   async setHiddenColumns(hidden) {
@@ -1652,14 +1777,28 @@ export const useSession = create<SessionState>((set, get) => ({
     const n = state.tabs.length + 1;
     const tab = createEmptyTab(pageSize, `query-${n}.sql`);
     set({ tabs: [...state.tabs, tab], activeTabId: tab.id });
+    scheduleOpenTabsPersist(get);
   },
 
   closeTab(id) {
     const state = get();
+    const closing = state.tabs.find((t) => t.id === id);
+    const pushClosed = (tab: QueryTab | undefined) => {
+      if (!tab) return [] as PersistedOpenTab[];
+      const next = [...state.closedTabs, serializeTab(tab)];
+      return next.length > MAX_CLOSED_TABS ? next.slice(-MAX_CLOSED_TABS) : next;
+    };
+
     if (state.tabs.length === 1) {
-      // Don't close the last tab — reset it instead
+      // Don't close the last tab — reset it instead, but remember it for ⌘⇧T.
       const fresh = createEmptyTab(state.settings.defaultPageSize);
-      set({ tabs: [fresh], activeTabId: fresh.id });
+      set({
+        tabs: [fresh],
+        activeTabId: fresh.id,
+        closedTabs: pushClosed(closing),
+        renamingTabId: null,
+      });
+      scheduleOpenTabsPersist(get);
       return;
     }
     const idx = state.tabs.findIndex((t) => t.id === id);
@@ -1669,15 +1808,88 @@ export const useSession = create<SessionState>((set, get) => ({
     if (state.activeTabId === id) {
       nextActive = nextTabs[Math.min(idx, nextTabs.length - 1)].id;
     }
-    set({ tabs: nextTabs, activeTabId: nextActive });
+    set({
+      tabs: nextTabs,
+      activeTabId: nextActive,
+      closedTabs: pushClosed(closing),
+      renamingTabId: state.renamingTabId === id ? null : state.renamingTabId,
+    });
+    scheduleOpenTabsPersist(get);
   },
 
   setActiveTab(id) {
-    if (get().tabs.some((t) => t.id === id)) set({ activeTabId: id });
+    if (get().tabs.some((t) => t.id === id)) {
+      set({ activeTabId: id });
+      scheduleOpenTabsPersist(get);
+    }
   },
 
   renameActiveTab(title) {
     patchActiveTab(set, get, { title });
+    scheduleOpenTabsPersist(get);
+  },
+
+  renameTab(id, title) {
+    const trimmed = title.trim();
+    if (!trimmed) return;
+    set((state) => ({
+      tabs: state.tabs.map((t) => (t.id === id ? { ...t, title: trimmed } : t)),
+      renamingTabId: null,
+    }));
+    scheduleOpenTabsPersist(get);
+  },
+
+  selectTabByIndex(index) {
+    const tabs = get().tabs;
+    if (tabs.length === 0) return;
+    // ⌘9 (index 8) jumps to the last tab — VS Code / Chrome convention.
+    if (index === 8) {
+      get().setActiveTab(tabs[tabs.length - 1].id);
+      return;
+    }
+    if (index < 0 || index >= tabs.length) return;
+    get().setActiveTab(tabs[index].id);
+  },
+
+  cycleTab(delta) {
+    const state = get();
+    if (state.tabs.length === 0) return;
+    const idx = state.tabs.findIndex((t) => t.id === state.activeTabId);
+    const next = (idx + delta + state.tabs.length) % state.tabs.length;
+    get().setActiveTab(state.tabs[next].id);
+  },
+
+  reopenClosedTab() {
+    const state = get();
+    if (state.closedTabs.length === 0) return;
+    const closed = state.closedTabs[state.closedTabs.length - 1];
+    const rest = state.closedTabs.slice(0, -1);
+    const tab = tabFromPersisted(closed, state.settings.defaultPageSize);
+    // Avoid id collisions if the tab is somehow still open.
+    if (state.tabs.some((t) => t.id === tab.id)) {
+      tab.id = freshId();
+    }
+    set({
+      tabs: [...state.tabs, tab],
+      activeTabId: tab.id,
+      closedTabs: rest,
+    });
+    scheduleOpenTabsPersist(get);
+    if (tab.kind === 'table' && tab.tableSchema && tab.tableName) {
+      const setFn = (fn: (s: SessionState) => Partial<SessionState>) => set(fn);
+      void runTableDataQuery(setFn, get, tab.id);
+      void runTableCountQuery(setFn, get, tab.id);
+    }
+  },
+
+  beginRenameTab(id) {
+    const state = get();
+    const target = id === undefined ? state.activeTabId : id;
+    if (target && state.tabs.some((t) => t.id === target)) {
+      set({ renamingTabId: target });
+    } else {
+      set({ renamingTabId: null });
+    }
   },
 
   // ── canvas mode + entity filtering ──
@@ -2294,6 +2506,13 @@ export const useSession = create<SessionState>((set, get) => ({
 }));
 
 // ─── Helpers ─────────────────────────────────────────────────────────
+
+export function tabIsDirty(tab: QueryTab): boolean {
+  return isTabDirty(
+    { sql: tab.sql, kind: tab.kind, osBody: tab.osBody, osSql: tab.osSql },
+    { sql: tab.baselineSql, osBody: tab.baselineOsBody, osSql: tab.baselineOsSql },
+  );
+}
 
 export function activeTab(state: SessionState): QueryTab | undefined {
   return state.tabs.find((t) => t.id === state.activeTabId);
