@@ -32,6 +32,14 @@ pnpm lint             # biome check
 pnpm lint:fix         # biome check --write
 ```
 
+## Releases
+
+1. Merge your PR to `main`.
+2. Run `pnpm ship:patch` (or `ship:minor` / `ship:major`) — bumps version, tags `v*`, pushes.
+3. The Release GitHub Action builds Windows + macOS, uploads to Vercel Blob, and creates a GitHub Release.
+
+Requires repo secret `BLOB_READ_WRITE_TOKEN`. macOS builds are currently **unsigned** (`identity: null`).
+
 ## Project layout
 
 ```
