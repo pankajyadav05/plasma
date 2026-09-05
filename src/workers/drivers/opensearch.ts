@@ -10,6 +10,7 @@ import type {
   OsSearchResult,
   OsSqlResult,
 } from '@shared/protocol';
+import { buildNodeTlsOptions, insecureTlsWarning, resolveTls } from '@shared/tls';
 
 /**
  * OpenSearch driver — wraps the official @opensearch-project/opensearch
@@ -36,10 +37,14 @@ export class OpenSearchDriver {
         ? { username: config.user || '', password: config.password || '' }
         : undefined;
     const node = `${protocol}://${config.host}:${config.port}`;
+    const ssl = buildNodeTlsOptions(config);
+    if (resolveTls(config)?.mode === 'insecure') {
+      console.warn(insecureTlsWarning(config.host));
+    }
     const client = new Client({
       node,
       auth,
-      ssl: config.ssl ? { rejectUnauthorized: false } : undefined,
+      ssl,
       requestTimeout: 10_000,
     });
     // Validate the connection eagerly with a /_info request.

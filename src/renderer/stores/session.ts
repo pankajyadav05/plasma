@@ -313,6 +313,7 @@ const DEFAULT_SETTINGS: Settings = {
   transactionMode: false,
   connectionTags: {},
   connectionSsh: {},
+  sshKnownHosts: {},
   schemaSnapshots: [],
   favoriteSchemas: {},
   favoriteTables: {},

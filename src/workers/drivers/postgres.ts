@@ -1,4 +1,5 @@
 import type { ConnectionConfig, QueryResult, SchemaInfo, TxnState } from '@shared/protocol';
+import { buildNodeTlsOptions, insecureTlsWarning, resolveTls } from '@shared/tls';
 import pg from 'pg';
 
 const { Client } = pg;
@@ -31,13 +32,18 @@ export class PostgresDriver {
     // Hang up any previous clients first
     await this.disconnect();
 
+    const ssl = buildNodeTlsOptions(config) ?? false;
+    if (resolveTls(config)?.mode === 'insecure') {
+      console.warn(insecureTlsWarning(config.host));
+    }
+
     const primary = new Client({
       host: config.host,
       port: config.port,
       database: config.database,
       user: config.user,
       password: config.password,
-      ssl: config.ssl ? { rejectUnauthorized: false } : false,
+      ssl,
       connectionTimeoutMillis: 10_000,
       application_name: 'plasma',
     });
@@ -55,7 +61,7 @@ export class PostgresDriver {
       database: config.database,
       user: config.user,
       password: config.password,
-      ssl: config.ssl ? { rejectUnauthorized: false } : false,
+      ssl,
       connectionTimeoutMillis: 10_000,
       application_name: 'plasma-sideband',
     });

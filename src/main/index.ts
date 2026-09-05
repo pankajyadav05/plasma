@@ -21,7 +21,7 @@ import {
   type WorkerRequest,
   type WorkerResponse,
 } from '@shared/protocol';
-import { BrowserWindow, app, ipcMain, nativeImage } from 'electron';
+import { BrowserWindow, app, dialog, ipcMain, nativeImage } from 'electron';
 import {
   cancelAiChat,
   isReadOnlyRedisCommand,
@@ -35,7 +35,8 @@ import { initLogger, logger } from './logger';
 import { buildAppMenu } from './menu';
 import { getAllSettings, setSetting } from './settings';
 import { formatSql } from './sql-format';
-import { closeAllTunnels, closeTunnel, openTunnel } from './ssh-tunnel';
+import { closeAllTunnels, closeTunnel, openTunnel, setHostKeyPrompt } from './ssh-tunnel';
+import { assertTlsAllowedForTag, resolveTls } from '@shared/tls';
 import { disposeUpdater, initUpdater } from './updater';
 import {
   deleteConnection as vaultDelete,
@@ -228,6 +229,7 @@ app.whenReady().then(async () => {
 
   mainWindow = createMainWindow();
   buildAppMenu();
+  installSshHostKeyPrompt();
   registerIpcHandlers();
   initUpdater(mainWindow);
 
@@ -279,6 +281,69 @@ async function callWorker<K extends WorkerResponse['kind']>(
   return res as Extract<WorkerResponse, { kind: K }>;
 }
 
+// ─── TLS + SSH connect prep (U08) ────────────────────────────────────
+
+function enforceTlsPolicy(config: ConnectionConfigType, settings: Settings): void {
+  const tag = settings.connectionTags?.[config.id];
+  assertTlsAllowedForTag(resolveTls(config), tag);
+}
+
+/**
+ * When traffic is routed through a local SSH tunnel, the worker sees
+ * 127.0.0.1 — preserve the original DB hostname as TLS servername so
+ * verify-full still authenticates the real certificate.
+ */
+async function withOptionalTunnel(
+  config: ConnectionConfigType,
+  settings: Settings,
+): Promise<{ effective: ConnectionConfigType; usedSsh: boolean }> {
+  enforceTlsPolicy(config, settings);
+  const ssh = settings.connectionSsh?.[config.id];
+  if (!ssh) {
+    return { effective: config, usedSsh: false };
+  }
+  const local = await openTunnel({
+    id: config.id,
+    ssh,
+    pgHost: config.host,
+    pgPort: config.port,
+  });
+  const effective: ConnectionConfigType = {
+    ...config,
+    host: local.host,
+    port: local.port,
+  };
+  if (effective.ssl) {
+    effective.tls = {
+      mode: effective.tls?.mode ?? 'verify-full',
+      ca: effective.tls?.ca,
+      servername: effective.tls?.servername || config.host,
+    };
+  }
+  return { effective, usedSsh: true };
+}
+
+function installSshHostKeyPrompt(): void {
+  setHostKeyPrompt(async ({ host, port, fingerprint }) => {
+    const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+    const options = {
+      type: 'warning' as const,
+      buttons: ['Trust and continue', 'Cancel'],
+      defaultId: 1,
+      cancelId: 1,
+      title: 'Unknown SSH host',
+      message: `The SSH host ${host}:${port} is not in your known hosts.`,
+      detail:
+        `Fingerprint:\n${fingerprint}\n\n` +
+        'Trust this host only if you expected this connection. Plasma will remember the key for next time.',
+    };
+    const result = win
+      ? await dialog.showMessageBox(win, options)
+      : await dialog.showMessageBox(options);
+    return result.response === 0;
+  });
+}
+
 // ─── IPC handlers ─────────────────────────────────────────────────────
 
 function registerIpcHandlers() {
@@ -300,18 +365,7 @@ function registerIpcHandlers() {
     async (_e, rawConfig: unknown): Promise<ConnectionInfo> => {
       const config = ConnectionConfig.parse(rawConfig);
       const settings = SettingsShape.parse(getAllSettings());
-      const ssh = settings.connectionSsh?.[config.id];
-      const effective = { ...config };
-      if (ssh) {
-        const local = await openTunnel({
-          id: config.id,
-          ssh,
-          pgHost: config.host,
-          pgPort: config.port,
-        });
-        effective.host = local.host;
-        effective.port = local.port;
-      }
+      const { effective, usedSsh } = await withOptionalTunnel(config, settings);
       try {
         const res = await callWorker({ kind: 'connect', config: effective }, 'connected');
         try {
@@ -323,7 +377,7 @@ function registerIpcHandlers() {
         }
         return { serverVersion: res.serverVersion, engine: res.engine };
       } catch (err) {
-        if (ssh) closeTunnel(config.id);
+        if (usedSsh) closeTunnel(config.id);
         throw err;
       }
     },
@@ -342,6 +396,8 @@ function registerIpcHandlers() {
     async (_e, rawConfig: unknown): Promise<ConnectionTestResult> => {
       try {
         const config = ConnectionConfig.parse(rawConfig);
+        const settings = SettingsShape.parse(getAllSettings());
+        enforceTlsPolicy(config, settings);
         const res = await callWorker({ kind: 'connect', config }, 'connected');
         return { ok: true, serverVersion: res.serverVersion, engine: res.engine };
       } catch (err) {
@@ -376,13 +432,7 @@ function registerIpcHandlers() {
       const config = vaultGetFull(id);
       if (!config) throw new Error(`no saved connection with id ${id}`);
       const settings = SettingsShape.parse(getAllSettings());
-      const ssh = settings.connectionSsh?.[id];
-      const effective = { ...config };
-      if (ssh) {
-        const local = await openTunnel({ id, ssh, pgHost: config.host, pgPort: config.port });
-        effective.host = local.host;
-        effective.port = local.port;
-      }
+      const { effective, usedSsh } = await withOptionalTunnel(config, settings);
       try {
         const res = await callWorker({ kind: 'connect', config: effective }, 'connected');
         activeConnectionId = config.id;
@@ -393,7 +443,7 @@ function registerIpcHandlers() {
           config: safeConfig,
         };
       } catch (err) {
-        if (ssh) closeTunnel(id);
+        if (usedSsh) closeTunnel(id);
         throw err;
       }
     },
