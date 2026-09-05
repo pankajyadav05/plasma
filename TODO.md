@@ -55,7 +55,8 @@ Canonical source: `src/shared/keymap.ts` (native menu, DOM listeners, Monaco, an
 | ⌘/ | Keyboard shortcuts cheat-sheet |
 | ⌘T | New query tab |
 | ⌘W | Close tab |
-| ⌘⏎ | Run query |
+| ⌘⏎ | Run selection / statement at cursor |
+| ⌘⇧⏎ | Run all (whole buffer) |
 | ⌘. | Cancel query |
 | ⌘H | Query history |
 | ⌘⇧E | Export results as CSV |

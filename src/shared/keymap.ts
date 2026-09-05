@@ -14,6 +14,7 @@ export type KeyId =
   | 'toggleSidebar'
   | 'toggleEditor'
   | 'runQuery'
+  | 'runQueryAll'
   | 'cancelQuery'
   | 'history'
   | 'newTab'
@@ -95,10 +96,18 @@ export const KEYMAP: readonly KeyBinding[] = [
   {
     id: 'runQuery',
     chord: { key: 'Enter', mod: true },
-    label: 'Run query',
+    label: 'Run selection / at cursor',
     category: 'Query',
     scope: 'global',
     menuChannel: 'plasma:menu:runQuery',
+  },
+  {
+    id: 'runQueryAll',
+    chord: { key: 'Enter', mod: true, shift: true },
+    label: 'Run all',
+    category: 'Query',
+    scope: 'global',
+    menuChannel: 'plasma:menu:runQueryAll',
   },
   {
     id: 'cancelQuery',

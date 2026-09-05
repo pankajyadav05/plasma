@@ -55,6 +55,20 @@ describe('keymap', () => {
     expect(matchesBinding(ev({ key: 'g', metaKey: true }), 'codegen')).toBe(false);
   });
 
+  it('binds ⌘⏎ to smart run and ⌘⇧⏎ to run-all', () => {
+    expect(binding('runQuery').chord).toEqual({ key: 'Enter', mod: true });
+    expect(binding('runQueryAll').chord).toEqual({ key: 'Enter', mod: true, shift: true });
+    expect(accelerator('runQuery')).toBe('CmdOrCtrl+Return');
+    expect(accelerator('runQueryAll')).toBe('CmdOrCtrl+Shift+Return');
+    expect(matchesBinding(ev({ key: 'Enter', metaKey: true }), 'runQuery')).toBe(true);
+    expect(matchesBinding(ev({ key: 'Enter', metaKey: true, shiftKey: true }), 'runQueryAll')).toBe(
+      true,
+    );
+    expect(matchesBinding(ev({ key: 'Enter', metaKey: true, shiftKey: true }), 'runQuery')).toBe(
+      false,
+    );
+  });
+
   it('resolves a global binding and skips editor-scoped chords', () => {
     expect(matchGlobalBinding(ev({ key: 'k', metaKey: true }))?.id).toBe('palette');
     expect(matchGlobalBinding(ev({ key: '/', metaKey: true }))?.id).toBe('cheatSheet');

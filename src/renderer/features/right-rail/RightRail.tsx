@@ -213,6 +213,11 @@ function QueryPanel() {
     else void runQuery();
   };
 
+  const handleRunAll = () => {
+    if (running || isTable) return;
+    void runQuery({ all: true });
+  };
+
   const close = () => setMode(null);
 
   return (
@@ -280,7 +285,11 @@ function QueryPanel() {
           value={tab.sql}
           onChange={isTable ? NOOP : setSql}
           onRun={handleAction}
+          onRunAll={handleRunAll}
           onToggle={close}
+          runningRange={tab.queryRunningRange}
+          errorRange={tab.queryErrorRange}
+          errorMessage={tab.queryError}
           theme={theme}
           fontSize={fontSize}
           readOnly={isTable}

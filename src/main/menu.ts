@@ -106,6 +106,11 @@ export function buildAppMenu(): void {
           click: () => sendToFocusedWindow('plasma:menu:runQuery'),
         },
         {
+          label: 'Run All',
+          accelerator: accelerator('runQueryAll'),
+          click: () => sendToFocusedWindow('plasma:menu:runQueryAll'),
+        },
+        {
           label: 'Cancel',
           accelerator: accelerator('cancelQuery'),
           click: () => sendToFocusedWindow('plasma:menu:cancelQuery'),

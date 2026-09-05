@@ -121,6 +121,7 @@ const eventChannels = [
   'plasma:menu:toggleAi',
   'plasma:menu:cheatSheet',
   'plasma:menu:runQuery',
+  'plasma:menu:runQueryAll',
   'plasma:menu:cancelQuery',
   'plasma:menu:history',
   'plasma:window:maximizedChanged',
