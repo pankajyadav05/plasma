@@ -7,6 +7,8 @@ import {
   ConnectionConfig,
   type ConnectionConfig as ConnectionConfigType,
   type ConnectionInfo,
+  ConnectionSshConfig,
+  type ConnectionSshConfig as ConnectionSshConfigType,
   type ConnectionTestResult,
   type HistoryEntry,
   IpcChannel,
@@ -58,7 +60,8 @@ let activeConnectionId: string | null = null;
 
 // Track the active engine so the AI tool executor can dispatch the
 // right tool call (sideband SQL vs Redis command vs OS search). Set
-// by ConnectionConnect / VaultConnectById, cleared on disconnect.
+// by establishLiveConnection, cleared on disconnect. Never touched by
+// ConnectionTest.
 let activeEngine: 'postgres' | 'redis' | 'opensearch' | null = null;
 
 // ─── App lifecycle ────────────────────────────────────────────────────
@@ -279,6 +282,55 @@ async function callWorker<K extends WorkerResponse['kind']>(
   return res as Extract<WorkerResponse, { kind: K }>;
 }
 
+// ─── Live connection lifecycle (single ownership path) ────────────────
+//
+// Real connects (dialog Save+Connect and vault connect-by-id) share one
+// helper: SSH prep → worker connect → identity update → optional vault
+// persist. Identity updates MUST sit outside the non-fatal vaultSave try
+// so a storage failure cannot leave main thinking the old connection is
+// still active while the worker is on the new one.
+// "Test Connection" uses a separate path (testConnect + throwaway tunnel)
+// and never calls this helper.
+
+async function establishLiveConnection(
+  config: ConnectionConfigType,
+  opts: { persist: boolean },
+): Promise<{ serverVersion: string; engine: NonNullable<typeof activeEngine> }> {
+  const settings = SettingsShape.parse(getAllSettings());
+  const ssh = settings.connectionSsh?.[config.id];
+  const effective = { ...config };
+  let openedTunnel = false;
+  if (ssh) {
+    const local = await openTunnel({
+      id: config.id,
+      ssh,
+      pgHost: config.host,
+      pgPort: config.port,
+    });
+    effective.host = local.host;
+    effective.port = local.port;
+    openedTunnel = true;
+  }
+  try {
+    const res = await callWorker({ kind: 'connect', config: effective }, 'connected');
+    // Successful worker connect → update identity immediately, before any
+    // non-fatal persistence work.
+    activeConnectionId = config.id;
+    activeEngine = res.engine;
+    if (opts.persist) {
+      try {
+        vaultSave(config);
+      } catch (err) {
+        logger.error('[plasma] vault save failed (non-fatal):', err);
+      }
+    }
+    return { serverVersion: res.serverVersion, engine: res.engine };
+  } catch (err) {
+    if (openedTunnel) closeTunnel(config.id);
+    throw err;
+  }
+}
+
 // ─── IPC handlers ─────────────────────────────────────────────────────
 
 function registerIpcHandlers() {
@@ -299,33 +351,8 @@ function registerIpcHandlers() {
     IpcChannel.ConnectionConnect,
     async (_e, rawConfig: unknown): Promise<ConnectionInfo> => {
       const config = ConnectionConfig.parse(rawConfig);
-      const settings = SettingsShape.parse(getAllSettings());
-      const ssh = settings.connectionSsh?.[config.id];
-      const effective = { ...config };
-      if (ssh) {
-        const local = await openTunnel({
-          id: config.id,
-          ssh,
-          pgHost: config.host,
-          pgPort: config.port,
-        });
-        effective.host = local.host;
-        effective.port = local.port;
-      }
-      try {
-        const res = await callWorker({ kind: 'connect', config: effective }, 'connected');
-        try {
-          vaultSave(config);
-          activeConnectionId = config.id;
-          activeEngine = res.engine;
-        } catch (err) {
-          logger.error('[plasma] vault save failed (non-fatal):', err);
-        }
-        return { serverVersion: res.serverVersion, engine: res.engine };
-      } catch (err) {
-        if (ssh) closeTunnel(config.id);
-        throw err;
-      }
+      const res = await establishLiveConnection(config, { persist: true });
+      return { serverVersion: res.serverVersion, engine: res.engine };
     },
   );
 
@@ -339,16 +366,48 @@ function registerIpcHandlers() {
 
   ipcMain.handle(
     IpcChannel.ConnectionTest,
-    async (_e, rawConfig: unknown): Promise<ConnectionTestResult> => {
+    async (_e, rawConfig: unknown, rawSsh?: unknown): Promise<ConnectionTestResult> => {
+      // Isolated probe: own SSH tunnel (throwaway id) + worker testConnect
+      // (throwaway driver). Never disconnectAll() on the live session and
+      // never mutate activeConnectionId / activeEngine.
+      let tunnelId: string | null = null;
       try {
         const config = ConnectionConfig.parse(rawConfig);
-        const res = await callWorker({ kind: 'connect', config }, 'connected');
+        const engine = config.engine ?? 'postgres';
+        // Explicit ssh arg wins (including null = "no tunnel for this probe").
+        // When omitted, fall back to any saved bastion for this connection id
+        // so callers that only pass config still exercise SSH when configured.
+        let ssh: ConnectionSshConfigType | undefined;
+        if (rawSsh === null) {
+          ssh = undefined;
+        } else if (rawSsh !== undefined) {
+          ssh = ConnectionSshConfig.parse(rawSsh);
+        } else {
+          const settings = SettingsShape.parse(getAllSettings());
+          ssh = settings.connectionSsh?.[config.id];
+        }
+        const effective = { ...config };
+        // OpenSearch is HTTPS — SSH tunnels are for raw TCP (pg/redis).
+        if (ssh && engine !== 'opensearch') {
+          tunnelId = `test:${randomUUID()}`;
+          const local = await openTunnel({
+            id: tunnelId,
+            ssh,
+            pgHost: config.host,
+            pgPort: config.port,
+          });
+          effective.host = local.host;
+          effective.port = local.port;
+        }
+        const res = await callWorker({ kind: 'testConnect', config: effective }, 'connected');
         return { ok: true, serverVersion: res.serverVersion, engine: res.engine };
       } catch (err) {
         return {
           ok: false,
           message: err instanceof Error ? err.message : String(err),
         };
+      } finally {
+        if (tunnelId) closeTunnel(tunnelId);
       }
     },
   );
@@ -375,27 +434,12 @@ function registerIpcHandlers() {
       if (typeof id !== 'string') throw new Error('id must be a string');
       const config = vaultGetFull(id);
       if (!config) throw new Error(`no saved connection with id ${id}`);
-      const settings = SettingsShape.parse(getAllSettings());
-      const ssh = settings.connectionSsh?.[id];
-      const effective = { ...config };
-      if (ssh) {
-        const local = await openTunnel({ id, ssh, pgHost: config.host, pgPort: config.port });
-        effective.host = local.host;
-        effective.port = local.port;
-      }
-      try {
-        const res = await callWorker({ kind: 'connect', config: effective }, 'connected');
-        activeConnectionId = config.id;
-        activeEngine = res.engine;
-        const { password: _pwd, ...safeConfig } = config;
-        return {
-          info: { serverVersion: res.serverVersion, engine: res.engine },
-          config: safeConfig,
-        };
-      } catch (err) {
-        if (ssh) closeTunnel(id);
-        throw err;
-      }
+      const res = await establishLiveConnection(config, { persist: false });
+      const { password: _pwd, ...safeConfig } = config;
+      return {
+        info: { serverVersion: res.serverVersion, engine: res.engine },
+        config: safeConfig,
+      };
     },
   );
 

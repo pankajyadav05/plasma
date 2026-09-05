@@ -15,6 +15,7 @@ import {
 import type {
   AiMessage,
   ConnectionConfig,
+  ConnectionSshConfig,
   ConnectionEngine,
   HistoryEntry,
   OsOverview,
@@ -545,7 +546,10 @@ interface SessionState {
   setHistoryOpen(open: boolean): void;
   requestDeleteConnection(id: string | null): void;
 
-  testConnection(config: ConnectionConfig): Promise<{ ok: boolean; message: string }>;
+  testConnection(
+    config: ConnectionConfig,
+    ssh?: ConnectionSshConfig | null,
+  ): Promise<{ ok: boolean; message: string }>;
   connect(config: ConnectionConfig): Promise<void>;
   disconnect(): Promise<void>;
   refreshSchema(): Promise<void>;
@@ -776,9 +780,12 @@ export const useSession = create<SessionState>((set, get) => ({
 
   // ── connection ──
 
-  async testConnection(config) {
+  async testConnection(config, ssh) {
     try {
-      const res = await ipc.conn.test(config);
+      // Pass candidate SSH through so the probe uses the dialog's
+      // in-progress bastion (including null = explicitly no tunnel).
+      // Never mutates live session state — main/worker isolate the probe.
+      const res = await ipc.conn.test(config, ssh);
       if (res.ok) {
         return { ok: true, message: `Connected · ${shortVersion(res.serverVersion)}` };
       }

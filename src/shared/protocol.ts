@@ -76,6 +76,22 @@ export const ConnectionTestResult = z.discriminatedUnion('ok', [
 ]);
 export type ConnectionTestResult = z.infer<typeof ConnectionTestResult>;
 
+/**
+ * SSH bastion config for a connection. Used both in Settings.connectionSsh
+ * and as an optional candidate payload on ConnectionTest so "Test" can
+ * exercise tunnels that have not been persisted yet.
+ */
+export const ConnectionSshConfig = z.object({
+  host: z.string().min(1),
+  port: z.number().int().positive().max(65535).default(22),
+  user: z.string().min(1),
+  /** Either password OR privateKey must be supplied (privateKey wins). */
+  password: z.string().default(''),
+  privateKey: z.string().default(''),
+  passphrase: z.string().default(''),
+});
+export type ConnectionSshConfig = z.infer<typeof ConnectionSshConfig>;
+
 // ─── Redis types ─────────────────────────────────────────────────────
 
 /**
@@ -447,6 +463,12 @@ export type TxnState = z.infer<typeof TxnState>;
 export const WorkerRequest = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('ping'), id: z.string(), message: z.string() }),
   z.object({ kind: z.literal('connect'), id: z.string(), config: ConnectionConfig }),
+  /**
+   * Throwaway connect used by "Test Connection". Must NOT call
+   * disconnectAll() or mutate the live activeEngine — the worker spins
+   * up an isolated driver, probes it, and disposes in finally.
+   */
+  z.object({ kind: z.literal('testConnect'), id: z.string(), config: ConnectionConfig }),
   z.object({ kind: z.literal('disconnect'), id: z.string() }),
   z.object({
     kind: z.literal('query'),
@@ -706,20 +728,7 @@ export const SettingsShape = z.object({
    * local connection. Keys are NOT encrypted at rest yet — TODO move
    * to safeStorage on next schema bump.
    */
-  connectionSsh: z
-    .record(
-      z.string(),
-      z.object({
-        host: z.string().min(1),
-        port: z.number().int().positive().max(65535).default(22),
-        user: z.string().min(1),
-        /** Either password OR privateKey must be supplied (privateKey wins). */
-        password: z.string().default(''),
-        privateKey: z.string().default(''),
-        passphrase: z.string().default(''),
-      }),
-    )
-    .default({}),
+  connectionSsh: z.record(z.string(), ConnectionSshConfig).default({}),
   /**
    * Schema snapshots used by the diff tool. Keyed by snapshot id; the
    * payload holds the connection it came from, a user label, the
@@ -1063,7 +1072,15 @@ export interface PlasmaAPI {
   conn: {
     connect(config: ConnectionConfig): Promise<ConnectionInfo>;
     disconnect(): Promise<void>;
-    test(config: ConnectionConfig): Promise<ConnectionTestResult>;
+    /**
+     * Probe a candidate config without touching the live session.
+     * Optional `ssh` is the candidate bastion (null/undefined = no tunnel).
+     * Pass the dialog's in-progress SSH form so unsaved tunnels are tested.
+     */
+    test(
+      config: ConnectionConfig,
+      ssh?: ConnectionSshConfig | null,
+    ): Promise<ConnectionTestResult>;
     introspect(): Promise<SchemaInfo>;
   };
   vault: {
