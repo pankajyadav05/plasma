@@ -190,6 +190,17 @@ export interface QueryTab {
   queryResult: QueryResult | null;
   queryError: string | null;
   queryErrorSql: string | null;
+  /**
+   * Monotonic request generation for SQL runs. Bumped before each async
+   * query IPC so a late response can be dropped if the tab was closed or a
+   * newer run superseded it (U03).
+   */
+  queryGeneration: number;
+  /**
+   * Monotonic request generation for SQL formatting (separate from
+   * queryGeneration so format cannot strand a running query).
+   */
+  formatGeneration: number;
   page: number;
   pageSize: number;
   selectedCell: { row: number; col: number } | null;
@@ -338,6 +349,8 @@ function createEmptyTab(pageSize: number, title = 'query-1.sql'): QueryTab {
     queryResult: null,
     queryError: null,
     queryErrorSql: null,
+    queryGeneration: 0,
+    formatGeneration: 0,
     page: 0,
     pageSize,
     sortColumn: null,
@@ -367,6 +380,8 @@ function createTableTab(pageSize: number, schemaName: string, tableName: string)
     queryResult: null,
     queryError: null,
     queryErrorSql: null,
+    queryGeneration: 0,
+    formatGeneration: 0,
     page: 0,
     pageSize,
     sortColumn: null,
@@ -678,8 +693,9 @@ interface SessionState {
   ): void;
 
   // SQL formatting (calls main → sql-formatter → back). Replaces the
-  // active tab's SQL on success; no-op for table tabs (their SQL is
-  // compiled, not user-edited).
+  // origin tab's SQL on success; no-op for table tabs (their SQL is
+  // compiled, not user-edited). Late responses are dropped if the tab
+  // closed or a newer request superseded the call (U03).
   formatActiveSql(): Promise<void>;
 
   // Pending edits (buffered inline-edit tray)
@@ -1225,11 +1241,24 @@ export const useSession = create<SessionState>((set, get) => ({
       }
     }
 
-    patchActiveTab(set, get, {
+    // U03: capture origin tab + generation before any await so results /
+    // errors publish only to that tab (not whichever is active later).
+    const originTabId = tab.id;
+    const generation = tab.queryGeneration + 1;
+    patchTabById(set, originTabId, {
       queryRunState: 'running',
       queryError: null,
       queryErrorSql: null,
+      queryGeneration: generation,
     });
+
+    const publishOrigin = (patch: Partial<QueryTab>) => {
+      const current = get().tabs.find((t) => t.id === originTabId);
+      // Drop if the origin tab was closed or a newer request superseded it.
+      if (!current || current.queryGeneration !== generation) return;
+      patchTabById(set, originTabId, patch);
+    };
+
     // Multi-statement scripts: split with a quote/comment-aware tokenizer
     // and run each separately. Last statement's QueryResult populates the
     // grid; failures stop execution and surface "stopped at N of M".
@@ -1244,7 +1273,7 @@ export const useSession = create<SessionState>((set, get) => ({
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           const tag = statements.length > 1 ? ` (statement ${i + 1} of ${statements.length})` : '';
-          patchActiveTab(set, get, {
+          publishOrigin({
             queryError: `${message}${tag}`,
             queryErrorSql: stmt,
             queryRunState: 'idle',
@@ -1254,7 +1283,7 @@ export const useSession = create<SessionState>((set, get) => ({
         }
         if (looksLikeDdl(stmt)) anyDdl = true;
       }
-      patchActiveTab(set, get, {
+      publishOrigin({
         queryResult: lastResult,
         queryRunState: 'idle',
         page: 0,
@@ -1266,7 +1295,7 @@ export const useSession = create<SessionState>((set, get) => ({
         void get().refreshSchema();
       }
     } catch (err) {
-      patchActiveTab(set, get, {
+      publishOrigin({
         queryError: err instanceof Error ? err.message : String(err),
         queryErrorSql: sql,
         queryRunState: 'idle',
@@ -2282,10 +2311,19 @@ export const useSession = create<SessionState>((set, get) => ({
     const tab = activeTab(get());
     if (!tab || tab.kind !== 'sql') return;
     if (!tab.sql.trim()) return;
+    // U03: format must write back to the origin tab, not the active one
+    // at completion time. Bump formatGeneration so a superseded format is
+    // dropped without interfering with an in-flight queryGeneration.
+    const originTabId = tab.id;
+    const originSql = tab.sql;
+    const generation = tab.formatGeneration + 1;
+    patchTabById(set, originTabId, { formatGeneration: generation });
     try {
-      const formatted = await ipc.sql.format(tab.sql);
-      if (formatted && formatted !== tab.sql) {
-        patchActiveTab(set, get, { sql: formatted });
+      const formatted = await ipc.sql.format(originSql);
+      const current = get().tabs.find((t) => t.id === originTabId);
+      if (!current || current.formatGeneration !== generation) return;
+      if (formatted && formatted !== current.sql) {
+        patchTabById(set, originTabId, { sql: formatted });
       }
     } catch (err) {
       console.error('[plasma] formatActiveSql failed', err);
