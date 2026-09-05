@@ -309,7 +309,9 @@ export function SettingsBody() {
           </label>
         </div>
         <p className="mt-1 font-display text-xs italic text-muted-foreground">
-          Requires you to explicitly commit or rollback — see the status bar.
+          The worker auto-begins a transaction before each user statement. Commit or
+          rollback from the status bar. Edit batches use their own worker-owned
+          transaction (or a savepoint if one is already open).
         </p>
       </Field>
 

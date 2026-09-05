@@ -171,7 +171,22 @@ export interface PendingEdit {
   /** Visible row index at queue time, used for in-grid highlighting. */
   rowIndex: number;
   columnIndex: number;
+  /**
+   * Connection generation at queue time (U01). Commit refuses to write
+   * if the live generation no longer matches — even if the originating
+   * tab has since been closed.
+   */
+  connectionGen: number;
 }
+
+/**
+ * Stashed disconnect / reconnect while buffered edits still exist.
+ * The user must commit, discard, or cancel before the switch proceeds (U01).
+ */
+export type ConnectionActionGate =
+  | { kind: 'disconnect' }
+  | { kind: 'connect'; config: ConnectionConfig }
+  | { kind: 'connectSaved'; id: string };
 
 export interface QueryTab {
   id: string;
@@ -458,6 +473,13 @@ interface SessionState {
   connectionError: string | null;
   serverVersion: string | null;
   txnState: TxnState;
+  /**
+   * Monotonic generation from the worker, bumped on every successful
+   * connect. Pending edits and in-flight query publishes bind to this (U01).
+   */
+  connectionGen: number;
+  /** Non-null while disconnect/connect is blocked on pending edits. */
+  connectionActionGate: ConnectionActionGate | null;
 
   // ── schema introspection ──
   schema: SchemaInfo | null;
@@ -710,6 +732,11 @@ interface SessionState {
   /** Resume a prod-gated runQuery after user confirms. */
   confirmProdGate(): void;
   cancelProdGate(): void;
+
+  // Connection-switch gate (pending edits)
+  /** Commit or discard pending edits, then proceed with the stashed switch. */
+  resolveConnectionAction(choice: 'commit' | 'discard'): Promise<void>;
+  cancelConnectionAction(): void;
 }
 
 const initialTab = createEmptyTab(DEFAULT_SETTINGS.defaultPageSize);
@@ -720,6 +747,8 @@ export const useSession = create<SessionState>((set, get) => ({
   connectionError: null,
   serverVersion: null,
   txnState: 'none',
+  connectionGen: 0,
+  connectionActionGate: null,
 
   schema: null,
   schemaLoading: false,
@@ -805,104 +834,27 @@ export const useSession = create<SessionState>((set, get) => ({
   },
 
   async connect(config) {
-    set({ connectionState: 'connecting', connectionError: null });
-    try {
-      const { serverVersion, engine } = await ipc.conn.connect(config);
-      const eff = (engine ?? config.engine ?? 'postgres') as ConnectionEngine;
-      set({
-        activeConfig: { ...config, engine: eff },
-        serverVersion,
-        connectionState: 'connected',
-        dialogOpen: false,
-        dialogPrefill: null,
-        activeTable: null,
-        txnState: 'none',
-        // Stale per-engine state from a prior connection.
-        redisOverview: null,
-        redisKeys: null,
-        redisMatch: null,
-        osOverview: null,
-        activeRedisKey: null,
-        activeOsIndex: null,
-      });
-      await get().loadSavedConnections();
-      await loadEngineOverview(set, get, eff);
-      if (eff === 'postgres') void get().loadAvailableRoles();
-    } catch (err) {
-      set({
-        connectionState: 'error',
-        connectionError: err instanceof Error ? err.message : String(err),
-      });
+    if (get().pendingEdits.length > 0) {
+      set({ connectionActionGate: { kind: 'connect', config } });
+      return;
     }
+    await performConnect(set, get, config);
   },
 
   async connectSaved(id) {
-    set({ connectionState: 'connecting', connectionError: null });
-    try {
-      const { info, config } = await ipc.vault.connectById(id);
-      const eff = (info.engine ?? config.engine ?? 'postgres') as ConnectionEngine;
-      set({
-        activeConfig: { ...config, engine: eff, password: '' },
-        serverVersion: info.serverVersion,
-        connectionState: 'connected',
-        dialogOpen: false,
-        dialogPrefill: null,
-        activeTable: null,
-        txnState: 'none',
-        redisOverview: null,
-        redisKeys: null,
-        redisMatch: null,
-        osOverview: null,
-        activeRedisKey: null,
-        activeOsIndex: null,
-      });
-      await loadEngineOverview(set, get, eff);
-      if (eff === 'postgres') void get().loadAvailableRoles();
-    } catch (err) {
-      set({
-        connectionState: 'error',
-        connectionError: err instanceof Error ? err.message : String(err),
-      });
+    if (get().pendingEdits.length > 0) {
+      set({ connectionActionGate: { kind: 'connectSaved', id } });
+      return;
     }
+    await performConnectSaved(set, get, id);
   },
 
   async disconnect() {
-    try {
-      await ipc.conn.disconnect();
-    } finally {
-      set({
-        activeConfig: null,
-        serverVersion: null,
-        connectionState: 'idle',
-        schema: null,
-        expandedSchemas: new Set(),
-        activeTable: null,
-        txnState: 'none',
-        currentSchema: null,
-        availableRoles: [],
-        activeRole: null,
-        redisOverview: null,
-        redisKeys: null,
-        redisMatch: null,
-        osOverview: null,
-        activeRedisKey: null,
-        activeOsIndex: null,
-        redisBulkMode: false,
-        selectedRedisKeys: new Set<string>(),
-      });
-      // Clear all tabs' results since they reference a now-dead connection
-      set((state) => ({
-        tabs: state.tabs.map((t) => ({
-          ...t,
-          queryResult: null,
-          queryError: null,
-          page: 0,
-          sortColumn: null,
-          selectedCell: null,
-          selectedRows: new Set(),
-        })),
-      }));
+    if (get().pendingEdits.length > 0) {
+      set({ connectionActionGate: { kind: 'disconnect' } });
+      return;
     }
+    await performDisconnect(set, get);
   },
 
   async refreshSchema() {
@@ -1241,10 +1193,12 @@ export const useSession = create<SessionState>((set, get) => ({
       }
     }
 
-    // U03: capture origin tab + generation before any await so results /
-    // errors publish only to that tab (not whichever is active later).
+    // U03 + U01: capture origin tab + query generation + connection
+    // generation before any await so results/errors publish only to that
+    // tab on the same connection (not whichever is active later).
     const originTabId = tab.id;
     const generation = tab.queryGeneration + 1;
+    const originConnGen = state.connectionGen;
     patchTabById(set, originTabId, {
       queryRunState: 'running',
       queryError: null,
@@ -1256,6 +1210,19 @@ export const useSession = create<SessionState>((set, get) => ({
       const current = get().tabs.find((t) => t.id === originTabId);
       // Drop if the origin tab was closed or a newer request superseded it.
       if (!current || current.queryGeneration !== generation) return;
+      // Drop result payload if the connection changed under us; still clear
+      // running so the origin tab does not stay stuck.
+      if (get().connectionGen !== originConnGen) {
+        if (patch.queryRunState === 'idle' || patch.queryError != null) {
+          patchTabById(set, originTabId, {
+            queryRunState: 'idle',
+            queryError:
+              patch.queryError ??
+              'connection changed while query was running — result discarded',
+          });
+        }
+        return;
+      }
       patchTabById(set, originTabId, patch);
     };
 
@@ -1291,6 +1258,16 @@ export const useSession = create<SessionState>((set, get) => ({
         selectedCell: null,
         selectedRows: new Set(),
       });
+      // U05: worker may have auto-BEGUN under transactionMode — mirror
+      // that into the status-bar txn indicator.
+      if (get().settings.transactionMode && get().connectionGen === originConnGen) {
+        const last = statements[statements.length - 1]?.trim().toUpperCase() ?? '';
+        if (last.startsWith('COMMIT') || last.startsWith('ROLLBACK') || last.startsWith('ABORT')) {
+          set({ txnState: 'none' });
+        } else {
+          set({ txnState: 'active' });
+        }
+      }
       if (anyDdl) {
         void get().refreshSchema();
       }
@@ -1300,6 +1277,9 @@ export const useSession = create<SessionState>((set, get) => ({
         queryErrorSql: sql,
         queryRunState: 'idle',
       });
+      if (get().settings.transactionMode && get().connectionGen === originConnGen) {
+        set({ txnState: 'error' });
+      }
     }
   },
 
@@ -1583,6 +1563,9 @@ export const useSession = create<SessionState>((set, get) => ({
       throw new Error('table has no primary key — cannot edit rows safely');
     }
 
+    if (state.connectionGen <= 0) {
+      throw new Error('not connected — cannot queue edits');
+    }
     const oldValue = row[columnIndex];
     const edit: PendingEdit = {
       id: freshId(),
@@ -1595,6 +1578,7 @@ export const useSession = create<SessionState>((set, get) => ({
       newValue,
       rowIndex,
       columnIndex,
+      connectionGen: state.connectionGen,
     };
 
     // De-duplicate: replacing the same (tab, pk, column) with a fresh edit
@@ -2223,23 +2207,36 @@ export const useSession = create<SessionState>((set, get) => ({
     const state = get();
     const edits = state.pendingEdits;
     if (edits.length === 0) return;
+    // U01: every edit must still target the live connection generation.
+    const liveGen = state.connectionGen;
+    const mismatched = edits.filter((e) => e.connectionGen !== liveGen);
+    if (mismatched.length > 0 || liveGen <= 0) {
+      throw new Error(
+        'pending edits belong to a previous connection — discard them before committing',
+      );
+    }
     set({ pendingEditsBusy: true });
     try {
-      // Wrap in an explicit transaction so partial failures roll back.
-      await ipc.query.run('BEGIN', undefined, { internal: true });
-      for (const e of edits) {
+      // U05: one worker request owns BEGIN/UPDATEs/COMMIT (or SAVEPOINT
+      // when a user transaction is already open). Never a sequence of
+      // unrelated IPC calls that can commit foreign work.
+      const updates = edits.map((e) => {
         const { sql, params } = buildUpdateSql({
           schema: e.schema,
           table: e.table,
           set: { [e.column]: e.newValue },
           pkValues: e.pkValues,
         });
-        await ipc.query.run(sql, params, { internal: true });
-      }
-      await ipc.query.run('COMMIT', undefined, { internal: true });
-      set({ pendingEdits: [] });
-      // Refresh every tab that had pending edits — the server-side row
-      // could differ from our optimistic view (triggers, defaults, etc).
+        return { sql, params };
+      });
+      const res = await ipc.query.commitEditBatch({
+        connectionGen: liveGen,
+        updates,
+      });
+      set({ pendingEdits: [], txnState: res.state });
+      // Refresh every still-open tab that had pending edits. Edits whose
+      // origin tab was closed are preserved through commit (U01) but have
+      // nothing to refresh.
       const tabIds = new Set(edits.map((e) => e.tabId));
       for (const id of tabIds) {
         const tab = get().tabs.find((t) => t.id === id);
@@ -2247,13 +2244,6 @@ export const useSession = create<SessionState>((set, get) => ({
           void runTableDataQuery(set, get, id);
         }
       }
-    } catch (err) {
-      try {
-        await ipc.query.run('ROLLBACK', undefined, { internal: true });
-      } catch {
-        // already rolled back / connection lost — swallow
-      }
-      throw err;
     } finally {
       set({ pendingEditsBusy: false });
     }
@@ -2305,6 +2295,32 @@ export const useSession = create<SessionState>((set, get) => ({
     set({ prodGate: null });
   },
 
+  // ── Connection-switch gate (pending edits) ──
+
+  async resolveConnectionAction(choice) {
+    const gate = get().connectionActionGate;
+    if (!gate) return;
+    if (choice === 'commit') {
+      await get().commitPendingEdits();
+    } else {
+      await get().revertPendingEdits();
+    }
+    // Clear gate before performing the action so a nested guard does not
+    // re-stash the same switch.
+    set({ connectionActionGate: null });
+    if (gate.kind === 'disconnect') {
+      await performDisconnect(set, get);
+    } else if (gate.kind === 'connect') {
+      await performConnect(set, get, gate.config);
+    } else {
+      await performConnectSaved(set, get, gate.id);
+    }
+  },
+
+  cancelConnectionAction() {
+    set({ connectionActionGate: null });
+  },
+
   // ── SQL formatting ──
 
   async formatActiveSql() {
@@ -2335,6 +2351,128 @@ export const useSession = create<SessionState>((set, get) => ({
 
 export function activeTab(state: SessionState): QueryTab | undefined {
   return state.tabs.find((t) => t.id === state.activeTabId);
+}
+
+type SessionSet = (
+  partial:
+    | Partial<SessionState>
+    | ((s: SessionState) => Partial<SessionState>),
+) => void;
+type SessionGet = () => SessionState;
+
+async function performConnect(
+  set: SessionSet,
+  get: SessionGet,
+  config: ConnectionConfig,
+): Promise<void> {
+  set({ connectionState: 'connecting', connectionError: null });
+  try {
+    const { serverVersion, engine, connectionGen } = await ipc.conn.connect(config);
+    const eff = (engine ?? config.engine ?? 'postgres') as ConnectionEngine;
+    set({
+      activeConfig: { ...config, engine: eff },
+      serverVersion,
+      connectionState: 'connected',
+      connectionGen,
+      dialogOpen: false,
+      dialogPrefill: null,
+      activeTable: null,
+      txnState: 'none',
+      pendingEdits: [],
+      // Stale per-engine state from a prior connection.
+      redisOverview: null,
+      redisKeys: null,
+      redisMatch: null,
+      osOverview: null,
+      activeRedisKey: null,
+      activeOsIndex: null,
+    });
+    await get().loadSavedConnections();
+    await loadEngineOverview(set, get, eff);
+    if (eff === 'postgres') void get().loadAvailableRoles();
+  } catch (err) {
+    set({
+      connectionState: 'error',
+      connectionError: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+async function performConnectSaved(
+  set: SessionSet,
+  get: SessionGet,
+  id: string,
+): Promise<void> {
+  set({ connectionState: 'connecting', connectionError: null });
+  try {
+    const { info, config } = await ipc.vault.connectById(id);
+    const eff = (info.engine ?? config.engine ?? 'postgres') as ConnectionEngine;
+    set({
+      activeConfig: { ...config, engine: eff, password: '' },
+      serverVersion: info.serverVersion,
+      connectionState: 'connected',
+      connectionGen: info.connectionGen,
+      dialogOpen: false,
+      dialogPrefill: null,
+      activeTable: null,
+      txnState: 'none',
+      pendingEdits: [],
+      redisOverview: null,
+      redisKeys: null,
+      redisMatch: null,
+      osOverview: null,
+      activeRedisKey: null,
+      activeOsIndex: null,
+    });
+    await loadEngineOverview(set, get, eff);
+    if (eff === 'postgres') void get().loadAvailableRoles();
+  } catch (err) {
+    set({
+      connectionState: 'error',
+      connectionError: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+async function performDisconnect(set: SessionSet, _get: SessionGet): Promise<void> {
+  try {
+    await ipc.conn.disconnect();
+  } finally {
+    set({
+      activeConfig: null,
+      serverVersion: null,
+      connectionState: 'idle',
+      connectionGen: 0,
+      schema: null,
+      expandedSchemas: new Set(),
+      activeTable: null,
+      txnState: 'none',
+      currentSchema: null,
+      availableRoles: [],
+      activeRole: null,
+      pendingEdits: [],
+      redisOverview: null,
+      redisKeys: null,
+      redisMatch: null,
+      osOverview: null,
+      activeRedisKey: null,
+      activeOsIndex: null,
+      redisBulkMode: false,
+      selectedRedisKeys: new Set<string>(),
+    });
+    // Clear all tabs' results since they reference a now-dead connection
+    set((state) => ({
+      tabs: state.tabs.map((t) => ({
+        ...t,
+        queryResult: null,
+        queryError: null,
+        page: 0,
+        sortColumn: null,
+        selectedCell: null,
+        selectedRows: new Set(),
+      })),
+    }));
+  }
 }
 
 function patchActiveTab(
@@ -2466,6 +2604,7 @@ async function runTableDataQuery(
     pageSize: tab.pageSize,
   });
 
+  const originConnGen = state.connectionGen;
   patchTabById(set, tabId, {
     queryRunState: 'running',
     queryError: null,
@@ -2475,6 +2614,17 @@ async function runTableDataQuery(
 
   try {
     const result = await ipc.query.run(sql, params, { internal: true });
+    // U01: drop stale results if the connection changed while in flight.
+    if (get().connectionGen !== originConnGen) {
+      const still = get().tabs.find((t) => t.id === tabId);
+      if (still) {
+        patchTabById(set, tabId, {
+          queryRunState: 'idle',
+          queryError: 'connection changed while query was running — result discarded',
+        });
+      }
+      return;
+    }
     patchTabById(set, tabId, {
       queryResult: result,
       queryRunState: 'idle',
@@ -2482,6 +2632,11 @@ async function runTableDataQuery(
       selectedRows: new Set(),
     });
   } catch (err) {
+    if (get().connectionGen !== originConnGen) {
+      const still = get().tabs.find((t) => t.id === tabId);
+      if (still) patchTabById(set, tabId, { queryRunState: 'idle' });
+      return;
+    }
     patchTabById(set, tabId, {
       queryError: err instanceof Error ? err.message : String(err),
       queryErrorSql: sql,
