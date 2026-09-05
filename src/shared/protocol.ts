@@ -31,15 +31,33 @@ export type AppMeta = z.infer<typeof AppMeta>;
  * `engine` column is new.
  *
  * Field reuse across engines (kept this way for vault simplicity):
- *   - postgres   : host, port, database, user, password, ssl
+ *   - postgres   : host, port, database, user, password, ssl, tls?
  *   - redis      : host, port, password (user optional ACL),
  *                  database = numeric DB index as string ('0'),
- *                  ssl = TLS toggle, user = '' or ACL username
+ *                  ssl = TLS toggle, user = '' or ACL username, tls?
  *   - opensearch : host, port (9200/443), user, password (basic auth),
- *                  database = unused (kept ''), ssl = use HTTPS
+ *                  database = unused (kept ''), ssl = use HTTPS, tls?
  */
 export const ConnectionEngine = z.enum(['postgres', 'redis', 'opensearch']);
 export type ConnectionEngine = z.infer<typeof ConnectionEngine>;
+
+/**
+ * Per-connection TLS verification policy (U08).
+ * - verify-full: authenticate CA chain + hostname (default when ssl=true)
+ * - verify-ca: authenticate CA chain, skip hostname match
+ * - insecure: skip verification (explicit override; blocked on prod tags)
+ */
+export const TlsMode = z.enum(['verify-full', 'verify-ca', 'insecure']);
+export type TlsMode = z.infer<typeof TlsMode>;
+
+export const ConnectionTls = z.object({
+  mode: TlsMode.default('verify-full'),
+  /** Optional PEM CA bundle / cert for custom CAs. */
+  ca: z.string().optional(),
+  /** Optional SNI / hostname override (defaults to connection host). */
+  servername: z.string().optional(),
+});
+export type ConnectionTls = z.infer<typeof ConnectionTls>;
 
 export const ConnectionConfig = z.object({
   id: z.string(),
@@ -54,6 +72,12 @@ export const ConnectionConfig = z.object({
   password: z.string(),
   /** Postgres SSL / Redis TLS / OpenSearch HTTPS. */
   ssl: z.boolean().default(false),
+  /**
+   * TLS verification details when `ssl` is true. Omitted/`undefined`
+   * defaults to verify-full (rejectUnauthorized: true). Does not replace
+   * secret storage — password/SSH secrets stay on the U07 path.
+   */
+  tls: ConnectionTls.optional(),
 });
 export type ConnectionConfig = z.infer<typeof ConnectionConfig>;
 
@@ -830,6 +854,25 @@ export const SettingsShape = z.object({
           }),
         ]),
       ),
+    )
+    .default({}),
+  /**
+   * SSH known-hosts store (U08). Keyed by `host:port`. Values hold the
+   * base64-encoded raw host key accepted on first use (TOFU) or imported
+   * later. Mismatches refuse the connection.
+   */
+  sshKnownHosts: z
+    .record(
+      z.string(),
+      z.object({
+        host: z.string(),
+        port: z.number().int().positive().max(65535),
+        /** Base64 of the raw host public key blob from ssh2. */
+        key: z.string().min(1),
+        /** Optional key type string when available (e.g. ssh-ed25519). */
+        type: z.string().optional(),
+        addedAt: z.number().int().nonnegative(),
+      }),
     )
     .default({}),
   windowBounds: z

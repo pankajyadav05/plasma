@@ -10,8 +10,15 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import { useSession } from '@/stores/session';
-import type { ConnectionConfig, ConnectionEngine } from '@shared/protocol';
+import type { ConnectionConfig, ConnectionEngine, TlsMode } from '@shared/protocol';
 import { Boxes, Database, Layers, Loader2, Play, Trash2 } from 'lucide-react';
 import { useState } from 'react';
 
@@ -139,7 +146,17 @@ export function ConnectionDialog() {
     setTest({ kind: 'idle' });
   };
 
+  const tlsBlockedForProd =
+    form.ssl && (form.tls?.mode ?? 'verify-full') === 'insecure' && tag === 'prod';
+
   const handleTest = async () => {
+    if (tlsBlockedForProd) {
+      setTest({
+        kind: 'fail',
+        message: 'TLS mode "insecure" is not allowed for production-tagged connections.',
+      });
+      return;
+    }
     setTest({ kind: 'testing' });
     const res = await testConnection(form);
     setTest(res.ok ? { kind: 'ok', message: res.message } : { kind: 'fail', message: res.message });
@@ -147,6 +164,13 @@ export function ConnectionDialog() {
 
   const handleConnect = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (tlsBlockedForProd) {
+      setTest({
+        kind: 'fail',
+        message: 'TLS mode "insecure" is not allowed for production-tagged connections.',
+      });
+      return;
+    }
     void setConnectionTag(form.id, tag);
     const nextSshMap = { ...(allSsh ?? {}) };
     // SSH tunnels make sense for postgres + redis (raw TCP). OpenSearch
@@ -286,24 +310,116 @@ export function ConnectionDialog() {
               </Field>
             </div>
 
-            {/* SSL / TLS / HTTPS toggle, label varies by engine */}
-            <div className="flex items-center gap-3">
-              <Checkbox
-                id="conn-ssl"
-                checked={form.ssl}
-                onCheckedChange={(v) => update('ssl', Boolean(v))}
-              />
-              <label
-                htmlFor="conn-ssl"
-                className="cursor-pointer text-sm font-medium text-foreground"
-              >
-                {engine === 'postgres' && 'Use SSL'}
-                {engine === 'redis' && 'Use TLS'}
-                {engine === 'opensearch' && 'Use HTTPS'}
-              </label>
-              <span className="font-display text-xs italic text-muted-foreground">
-                — rejectUnauthorized: false, for dev
-              </span>
+            {/* SSL / TLS / HTTPS + verification mode (U08) */}
+            <div className="flex flex-col gap-3">
+              <div className="flex items-center gap-3">
+                <Checkbox
+                  id="conn-ssl"
+                  checked={form.ssl}
+                  onCheckedChange={(v) => {
+                    const on = Boolean(v);
+                    setForm({
+                      ...form,
+                      ssl: on,
+                      tls: on
+                        ? (form.tls ?? { mode: 'verify-full' })
+                        : undefined,
+                    });
+                    setTest({ kind: 'idle' });
+                  }}
+                />
+                <label
+                  htmlFor="conn-ssl"
+                  className="cursor-pointer text-sm font-medium text-foreground"
+                >
+                  {engine === 'postgres' && 'Use SSL'}
+                  {engine === 'redis' && 'Use TLS'}
+                  {engine === 'opensearch' && 'Use HTTPS'}
+                </label>
+              </div>
+              {form.ssl && (
+                <div className="flex flex-col gap-3 rounded-md border border-border p-3">
+                  <Field label="Certificate verification">
+                    <Select
+                      value={form.tls?.mode ?? 'verify-full'}
+                      onValueChange={(mode: TlsMode) => {
+                        setForm({
+                          ...form,
+                          tls: {
+                            mode,
+                            ca: form.tls?.ca,
+                            servername: form.tls?.servername,
+                          },
+                        });
+                        setTest({ kind: 'idle' });
+                      }}
+                    >
+                      <SelectTrigger className="w-full">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="verify-full">
+                          Verify full (certificate + hostname)
+                        </SelectItem>
+                        <SelectItem value="verify-ca">
+                          Verify CA (certificate only)
+                        </SelectItem>
+                        <SelectItem value="insecure" disabled={tag === 'prod'}>
+                          Insecure (skip verification)
+                        </SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </Field>
+                  {(form.tls?.mode ?? 'verify-full') === 'insecure' && (
+                    <div className="rounded-md border-l-4 border-destructive bg-muted px-3 py-2 text-xs text-foreground">
+                      Warning: certificate verification is disabled. Do not use this for
+                      production data. Self-signed servers should prefer a custom CA under
+                      verify-full / verify-ca.
+                    </div>
+                  )}
+                  {tag === 'prod' && (form.tls?.mode ?? 'verify-full') === 'insecure' && (
+                    <div className="rounded-md border-l-4 border-destructive bg-muted px-3 py-2 text-xs text-foreground">
+                      Insecure TLS is not allowed on production-tagged connections.
+                    </div>
+                  )}
+                  <Field label="Custom CA (PEM, optional)" htmlFor="conn-tls-ca">
+                    <textarea
+                      id="conn-tls-ca"
+                      value={form.tls?.ca ?? ''}
+                      onChange={(e) =>
+                        setForm({
+                          ...form,
+                          tls: {
+                            mode: form.tls?.mode ?? 'verify-full',
+                            ca: e.target.value,
+                            servername: form.tls?.servername,
+                          },
+                        })
+                      }
+                      rows={3}
+                      className="rounded-md border border-input bg-background px-2 py-1.5 font-mono text-[11px] text-foreground outline-none focus:border-primary"
+                      placeholder="-----BEGIN CERTIFICATE-----…"
+                    />
+                  </Field>
+                  <Field label="TLS server name (optional)" htmlFor="conn-tls-servername">
+                    <Input
+                      id="conn-tls-servername"
+                      value={form.tls?.servername ?? ''}
+                      onChange={(e) =>
+                        setForm({
+                          ...form,
+                          tls: {
+                            mode: form.tls?.mode ?? 'verify-full',
+                            ca: form.tls?.ca,
+                            servername: e.target.value || undefined,
+                          },
+                        })
+                      }
+                      placeholder={form.host || 'defaults to host'}
+                    />
+                  </Field>
+                </div>
+              )}
             </div>
 
             {/* SSH section: hidden for OpenSearch (HTTPS over public endpoints) */}
@@ -454,12 +570,12 @@ export function ConnectionDialog() {
               type="button"
               variant="outline"
               onClick={() => void handleTest()}
-              disabled={test.kind === 'testing' || connecting}
+              disabled={test.kind === 'testing' || connecting || tlsBlockedForProd}
             >
               {test.kind === 'testing' && <Loader2 className="animate-spin" />}
               {test.kind === 'testing' ? 'Testing…' : 'Test'}
             </Button>
-            <Button type="submit" variant="primary" disabled={connecting}>
+            <Button type="submit" variant="primary" disabled={connecting || tlsBlockedForProd}>
               {connecting ? <Loader2 className="animate-spin" /> : <Play />}
               {connecting ? 'Connecting…' : 'Connect'}
             </Button>

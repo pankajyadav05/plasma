@@ -12,6 +12,7 @@ import type {
   RedisValueType,
   RedisWriteOp,
 } from '@shared/protocol';
+import { buildNodeTlsOptions, insecureTlsWarning, resolveTls } from '@shared/tls';
 import Redis, { type RedisOptions } from 'ioredis';
 
 type RedisClient = InstanceType<typeof Redis>;
@@ -579,13 +580,17 @@ function parseKeyspaceSection(lines: string[]): { db: number; keys: number; expi
  * the (lazy) subscriber connection so they share auth + TLS config.
  */
 function buildClientOptions(config: ConnectionConfig): RedisOptions {
+  const tls = buildNodeTlsOptions(config);
+  if (resolveTls(config)?.mode === 'insecure') {
+    console.warn(insecureTlsWarning(config.host));
+  }
   return {
     host: config.host,
     port: config.port,
     password: config.password || undefined,
     username: config.user || undefined,
     db: parseDbIndex(config.database),
-    tls: config.ssl ? { rejectUnauthorized: false } : undefined,
+    tls,
     lazyConnect: true,
     maxRetriesPerRequest: 1,
     connectTimeout: 10_000,
