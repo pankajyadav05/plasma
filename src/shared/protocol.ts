@@ -161,7 +161,8 @@ export type RedisOverview = z.infer<typeof RedisOverview>;
 export const RedisAnalyzeSample = z.object({
   key: z.string(),
   type: RedisValueType,
-  bytes: z.number().int(),
+  /** null when MEMORY USAGE failed / was ACL-blocked — not the same as 0. */
+  bytes: z.number().int().nullable(),
   ttlMs: z.number().int().nullable(),
 });
 export type RedisAnalyzeSample = z.infer<typeof RedisAnalyzeSample>;
@@ -191,6 +192,19 @@ export const RedisAnalyzeResult = z.object({
   ),
 });
 export type RedisAnalyzeResult = z.infer<typeof RedisAnalyzeResult>;
+
+export const RedisBulkDeleteFailure = z.object({
+  key: z.string(),
+  error: z.string(),
+});
+export type RedisBulkDeleteFailure = z.infer<typeof RedisBulkDeleteFailure>;
+
+/** Partial-success result for pipelined DEL — never treat command errors as ack. */
+export const RedisBulkDeleteResult = z.object({
+  deleted: z.array(z.string()),
+  failed: z.array(RedisBulkDeleteFailure),
+});
+export type RedisBulkDeleteResult = z.infer<typeof RedisBulkDeleteResult>;
 
 export const RedisSlowlogEntry = z.object({
   id: z.number().int(),
@@ -601,6 +615,11 @@ export const WorkerResponse = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('redisOverview'), id: z.string(), info: RedisOverview }),
   z.object({ kind: z.literal('redisCommand'), id: z.string(), result: RedisCommandResult }),
   z.object({ kind: z.literal('redisAck'), id: z.string() }),
+  z.object({
+    kind: z.literal('redisBulkDelete'),
+    id: z.string(),
+    result: RedisBulkDeleteResult,
+  }),
   z.object({ kind: z.literal('redisAnalyze'), id: z.string(), result: RedisAnalyzeResult }),
   z.object({ kind: z.literal('redisSlowlog'), id: z.string(), entries: z.array(RedisSlowlogEntry) }),
   /**
@@ -1109,7 +1128,7 @@ export interface PlasmaAPI {
     command(parts: string[]): Promise<RedisCommandResult>;
     analyze(opts?: { sampleCap?: number; match?: string }): Promise<RedisAnalyzeResult>;
     slowlog(limit?: number): Promise<RedisSlowlogEntry[]>;
-    bulkDelete(keys: string[]): Promise<void>;
+    bulkDelete(keys: string[]): Promise<RedisBulkDeleteResult>;
     write(op: RedisWriteOp): Promise<void>;
     subscribe(channel: string, pattern?: boolean): Promise<void>;
     unsubscribe(channel: string, pattern?: boolean): Promise<void>;
