@@ -20,15 +20,21 @@
  *   4. git push <remote> HEAD                (unless --no-push)
  *   5. git push <remote> --tags              (unless --no-tag or --no-push)
  *
- * Aborts if working tree has staged or unstaged changes other than
- * package.json — release.mjs already touches that file. This prevents
- * accidentally committing in-progress work alongside the version bump.
+ * Aborts if working tree has staged or unstaged changes other than the
+ * allowed release files (package.json, site/lib/version.ts). Pre-existing
+ * edits in those allowed files are committed wholesale with the version
+ * bump — release.mjs rewrites version fields and stages both paths.
  */
 
 import { readFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
+import {
+  parsePorcelainZ,
+  isAllowedPorcelainEntry,
+  SHIP_ALLOWED_PATHS,
+} from './lib/porcelain.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = resolve(__dirname, '..');
@@ -66,19 +72,17 @@ function capture(cmd, argv) {
   return r.stdout;
 }
 
-// ── Pre-flight: clean tree (allow only package.json modified) ─────────
-const status = capture('git', ['status', '--porcelain']);
-const dirty = status
-  .split('\n')
-  .map((l) => l.trim())
-  .filter(Boolean)
-  .filter((l) => {
-    const path = l.slice(3);
-    return path !== 'package.json' && path !== 'site/lib/version.ts';
-  });
+// ── Pre-flight: clean tree (allow only release files; commit them wholesale) ─
+// Use NUL-delimited porcelain so leading status spaces (e.g. " M path") are
+// preserved — line trim + slice(3) used to corrupt unstaged allowed paths.
+const status = capture('git', ['status', '--porcelain', '-z']);
+const dirty = parsePorcelainZ(status).filter((e) => !isAllowedPorcelainEntry(e, SHIP_ALLOWED_PATHS));
 if (dirty.length) {
   console.error('[ship] aborting — working tree has unrelated changes:');
-  for (const l of dirty) console.error(`  ${l}`);
+  for (const e of dirty) {
+    const label = e.newPath ? `${e.xy} ${e.path} -> ${e.newPath}` : `${e.xy} ${e.path}`;
+    console.error(`  ${label}`);
+  }
   console.error('       commit or stash them first.');
   process.exit(1);
 }
