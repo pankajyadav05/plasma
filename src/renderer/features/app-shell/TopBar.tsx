@@ -80,18 +80,30 @@ export function TopBar() {
 
       <div className="flex-1" />
 
-      {activeConfig && (
-        <Button
-          variant={editMode ? 'primary' : 'outline'}
-          size="xs"
-          onClick={toggleEditMode}
-          title={editMode ? 'Writes enabled — click to lock' : 'Read-only — click to enable writes'}
-          className="no-drag"
-        >
-          {editMode ? <Pencil /> : <Lock />}
-          {editMode ? 'Edit mode' : 'Read only'}
-        </Button>
-      )}
+      {activeConfig &&
+        (activeConfig.readOnly ? (
+          <Button
+            variant="outline"
+            size="xs"
+            disabled
+            title="This connection is read-only — writes are disabled"
+            className="no-drag"
+          >
+            <Lock />
+            Read only
+          </Button>
+        ) : (
+          <Button
+            variant={editMode ? 'primary' : 'outline'}
+            size="xs"
+            onClick={toggleEditMode}
+            title={editMode ? 'Writes enabled — click to lock' : 'Read-only — click to enable writes'}
+            className="no-drag"
+          >
+            {editMode ? <Pencil /> : <Lock />}
+            {editMode ? 'Edit mode' : 'Read only'}
+          </Button>
+        ))}
 
       {!isMac && <WindowControls />}
     </header>

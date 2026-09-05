@@ -44,6 +44,7 @@ interface ConnectionRow {
   database: string;
   user: string;
   ssl: number; // sqlite boolean
+  read_only: number; // sqlite boolean (U28)
   password_ciphertext: Buffer;
   created_at: number;
   updated_at: number;
@@ -69,6 +70,7 @@ export function listConnections(): SavedConnection[] {
     database: r.database,
     user: r.user,
     ssl: Boolean(r.ssl),
+    readOnly: Boolean(r.read_only),
   }));
 }
 
@@ -88,7 +90,8 @@ export function saveConnection(config: ConnectionConfig): void {
       .prepare(
         `UPDATE connections
             SET name = @name, engine = @engine, host = @host, port = @port, database = @database,
-                user = @user, ssl = @ssl, password_ciphertext = @password_ciphertext,
+                user = @user, ssl = @ssl, read_only = @read_only,
+                password_ciphertext = @password_ciphertext,
                 updated_at = @updated_at
           WHERE id = @id`,
       )
@@ -101,6 +104,7 @@ export function saveConnection(config: ConnectionConfig): void {
         database: config.database,
         user: config.user,
         ssl: config.ssl ? 1 : 0,
+        read_only: config.readOnly ? 1 : 0,
         password_ciphertext: ciphertext,
         updated_at: now,
       });
@@ -108,9 +112,9 @@ export function saveConnection(config: ConnectionConfig): void {
     getDb()
       .prepare(
         `INSERT INTO connections
-           (id, name, engine, host, port, database, user, ssl, password_ciphertext, created_at, updated_at)
+           (id, name, engine, host, port, database, user, ssl, read_only, password_ciphertext, created_at, updated_at)
            VALUES
-           (@id, @name, @engine, @host, @port, @database, @user, @ssl, @password_ciphertext, @created_at, @updated_at)`,
+           (@id, @name, @engine, @host, @port, @database, @user, @ssl, @read_only, @password_ciphertext, @created_at, @updated_at)`,
       )
       .run({
         id: config.id,
@@ -121,6 +125,7 @@ export function saveConnection(config: ConnectionConfig): void {
         database: config.database,
         user: config.user,
         ssl: config.ssl ? 1 : 0,
+        read_only: config.readOnly ? 1 : 0,
         password_ciphertext: ciphertext,
         created_at: now,
         updated_at: now,
@@ -153,6 +158,7 @@ export function getFullConnection(id: string): ConnectionConfig | null {
     database: row.database,
     user: row.user,
     ssl: Boolean(row.ssl),
+    readOnly: Boolean(row.read_only),
     password: decryptPassword(row.password_ciphertext),
   };
 }

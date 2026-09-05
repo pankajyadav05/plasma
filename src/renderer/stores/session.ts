@@ -767,7 +767,14 @@ export const useSession = create<SessionState>((set, get) => ({
   setPaletteOpen: (open) => set({ paletteOpen: open }),
   togglePalette: () => set({ paletteOpen: !get().paletteOpen }),
 
-  toggleEditMode: () => set({ editMode: !get().editMode }),
+  toggleEditMode: () => {
+    // Connection-level read-only (U28) locks the session — no UI toggle.
+    if (get().activeConfig?.readOnly) {
+      set({ editMode: false });
+      return;
+    }
+    set({ editMode: !get().editMode });
+  },
 
   setSettingsOpen: (open) => set({ settingsOpen: open }),
   setHistoryOpen: (open) => set({ historyOpen: open }),
@@ -801,6 +808,8 @@ export const useSession = create<SessionState>((set, get) => ({
         dialogPrefill: null,
         activeTable: null,
         txnState: 'none',
+        // U28: connection-level read-only forces the session write lock off.
+        editMode: config.readOnly ? false : get().editMode,
         // Stale per-engine state from a prior connection.
         redisOverview: null,
         redisKeys: null,
@@ -833,6 +842,7 @@ export const useSession = create<SessionState>((set, get) => ({
         dialogPrefill: null,
         activeTable: null,
         txnState: 'none',
+        editMode: config.readOnly ? false : get().editMode,
         redisOverview: null,
         redisKeys: null,
         redisMatch: null,
@@ -1060,6 +1070,7 @@ export const useSession = create<SessionState>((set, get) => ({
   },
 
   async bulkDeleteSelectedRedisKeys() {
+    if (get().activeConfig?.readOnly) throw new Error('connection is read-only');
     const keys = [...get().selectedRedisKeys];
     if (keys.length === 0) return;
     try {
@@ -1085,6 +1096,7 @@ export const useSession = create<SessionState>((set, get) => ({
   },
 
   async deleteRedisKey(key) {
+    if (get().activeConfig?.readOnly) throw new Error('connection is read-only');
     try {
       await ipc.redis.deleteKey(key);
     } catch (err) {
@@ -1105,6 +1117,7 @@ export const useSession = create<SessionState>((set, get) => ({
   },
 
   async setRedisTtl(key, seconds) {
+    if (get().activeConfig?.readOnly) throw new Error('connection is read-only');
     try {
       await ipc.redis.setTtl(key, seconds);
     } catch (err) {
@@ -1539,6 +1552,7 @@ export const useSession = create<SessionState>((set, get) => ({
     // user clicks "Commit" in the tray. This matches TablePlus' default
     // behavior and lets users batch multi-cell fixes safely.
     const state = get();
+    if (state.activeConfig?.readOnly) throw new Error('connection is read-only');
     if (!state.editMode) throw new Error('edit mode is off');
     const tab = activeTab(state);
     if (!tab || tab.kind !== 'table' || !tab.tableSchema || !tab.tableName) return;
@@ -1592,6 +1606,7 @@ export const useSession = create<SessionState>((set, get) => ({
 
   async insertRow(values) {
     const state = get();
+    if (state.activeConfig?.readOnly) throw new Error('connection is read-only');
     if (!state.editMode) throw new Error('edit mode is off');
     const tab = activeTab(state);
     if (!tab || tab.kind !== 'table' || !tab.tableSchema || !tab.tableName) return;
@@ -1621,6 +1636,7 @@ export const useSession = create<SessionState>((set, get) => ({
 
   async deleteRow(rowIndex) {
     const state = get();
+    if (state.activeConfig?.readOnly) throw new Error('connection is read-only');
     if (!state.editMode) throw new Error('edit mode is off');
     const tab = activeTab(state);
     if (!tab || tab.kind !== 'table' || !tab.tableSchema || !tab.tableName) return;
@@ -2192,6 +2208,7 @@ export const useSession = create<SessionState>((set, get) => ({
 
   async commitPendingEdits() {
     const state = get();
+    if (state.activeConfig?.readOnly) throw new Error('connection is read-only');
     const edits = state.pendingEdits;
     if (edits.length === 0) return;
     set({ pendingEditsBusy: true });
