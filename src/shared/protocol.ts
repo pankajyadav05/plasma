@@ -679,7 +679,6 @@ export const SettingsShape = z.object({
   editorHeightPx: z.number().int().min(120).max(1200).default(280),
   defaultPageSize: z.number().int().positive().default(50),
   queryTimeoutMs: z.number().int().nonnegative().default(0), // 0 = no timeout
-  telemetryEnabled: z.boolean().default(false),
   /**
    * AI provider config. Plasma uses OpenRouter as the unified gateway —
    * one key gives access to Claude, GPT, Gemini, Qwen, etc. Key stored
