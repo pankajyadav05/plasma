@@ -62,6 +62,14 @@ export class PostgresDriver {
     await sideband.connect();
     this.sideband = sideband;
 
+    // U28: session-level read-only. Applies to every subsequent transaction
+    // on these clients (including implicit single-statement txns). Sideband
+    // gets the same flag so monitor/cancel never accidentally write.
+    if (config.readOnly) {
+      await primary.query('SET default_transaction_read_only = on');
+      await sideband.query('SET default_transaction_read_only = on');
+    }
+
     const res = await primary.query<{ version: string }>('SELECT version()');
     return res.rows[0]?.version ?? 'unknown';
   }

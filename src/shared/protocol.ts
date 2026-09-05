@@ -54,6 +54,13 @@ export const ConnectionConfig = z.object({
   password: z.string(),
   /** Postgres SSL / Redis TLS / OpenSearch HTTPS. */
   ssl: z.boolean().default(false),
+  /**
+   * Per-connection read-only mode (U28). When true, Postgres sessions set
+   * `default_transaction_read_only = on` on connect and the UI hides write
+   * affordances. Prod-tagged connections suggest this on by default in the
+   * connection dialog. Optional TLS fields (U08) are orthogonal — omitted here.
+   */
+  readOnly: z.boolean().default(false),
 });
 export type ConnectionConfig = z.infer<typeof ConnectionConfig>;
 

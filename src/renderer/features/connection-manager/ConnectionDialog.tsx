@@ -11,6 +11,7 @@ import {
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useSession } from '@/stores/session';
+import { suggestReadOnlyForTag } from '@shared/connection-readonly';
 import type { ConnectionConfig, ConnectionEngine } from '@shared/protocol';
 import { Boxes, Database, Layers, Loader2, Play, Trash2 } from 'lucide-react';
 import { useState } from 'react';
@@ -70,6 +71,7 @@ function freshConfig(engine: ConnectionEngine = 'postgres'): ConnectionConfig {
     user: d.user,
     password: '',
     ssl: d.ssl,
+    readOnly: false,
   };
 }
 
@@ -391,7 +393,16 @@ export function ConnectionDialog() {
                     key={t}
                     type="button"
                     aria-pressed={tag === t}
-                    onClick={() => setTag(tag === t ? null : t)}
+                    onClick={() => {
+                      const next = tag === t ? null : t;
+                      setTag(next);
+                      // Prod suggests read-only by default (U28). User can
+                      // still uncheck the box after selecting prod.
+                      if (suggestReadOnlyForTag(next) && !form.readOnly) {
+                        setForm({ ...form, readOnly: true });
+                        setTest({ kind: 'idle' });
+                      }
+                    }}
                     className={
                       tag === t
                         ? `rounded-md px-3 py-1.5 text-xs font-semibold uppercase tracking-wider ${TAG_ACTIVE_CLASS[t]}`
@@ -401,10 +412,27 @@ export function ConnectionDialog() {
                     {t}
                   </button>
                 ))}
+                <span className="mx-1 h-4 w-px bg-border" aria-hidden />
+                <div className="flex items-center gap-2">
+                  <Checkbox
+                    id="conn-readonly"
+                    checked={Boolean(form.readOnly)}
+                    onCheckedChange={(v) => update('readOnly', Boolean(v))}
+                  />
+                  <label
+                    htmlFor="conn-readonly"
+                    className="cursor-pointer text-xs font-semibold uppercase tracking-wider text-foreground"
+                  >
+                    Read-only
+                  </label>
+                </div>
               </div>
               <p className="mt-1 font-display text-xs italic text-muted-foreground">
                 "prod" tag colors the status bar red and gates DELETE / TRUNCATE / DROP behind a
-                confirm dialog.
+                confirm dialog. Read-only sets{' '}
+                <span className="font-mono not-italic">default_transaction_read_only</span> on
+                connect and hides edit affordances
+                {tag === 'prod' ? ' — suggested for prod' : ''}.
               </p>
             </Field>
 

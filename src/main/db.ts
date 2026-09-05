@@ -104,4 +104,18 @@ function migrate(d: Database.Database): void {
   }
 
   // Future migrations go here, each bumping user_version.
+  // U07 owns schema v3 (secrets); U25 owns v4 (open_tabs). U28's
+  // read_only column is applied defensively below so it does not steal
+  // those version numbers when parallel branches land in either order.
+  ensureReadOnlyColumn(d);
+}
+
+function ensureReadOnlyColumn(d: Database.Database): void {
+  const cols = d.prepare('PRAGMA table_info(connections)').all() as Array<{ name: string }>;
+  if (cols.some((c) => c.name === 'read_only')) return;
+  logger.info('[plasma] adding connections.read_only column (U28)');
+  d.exec(`
+    ALTER TABLE connections
+      ADD COLUMN read_only INTEGER NOT NULL DEFAULT 0
+  `);
 }
