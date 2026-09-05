@@ -159,7 +159,7 @@ export function RightRail() {
               title={
                 disabled
                   ? `${it.label} — open a table tab first`
-                  : `${it.label} (${it.mode === 'query' ? kbd('J') : 'click'})`
+                  : `${it.label} (${it.mode === 'query' ? kbd('J') : it.mode === 'ai' ? kbd('L') : 'click'})`
               }
               className={cn(
                 'relative grid h-9 w-9 cursor-pointer place-items-center rounded-md transition-colors duration-150',
@@ -223,7 +223,7 @@ function QueryPanel() {
             variant="ghost"
             size="sm"
             className="font-display italic text-muted-foreground"
-            title="Open AI assistant (⌘K)"
+            title={`Open AI assistant (${kbd('L')})`}
             onClick={() => setMode('ai')}
           >
             <Sparkles className="h-3.5 w-3.5 text-primary" />
@@ -235,7 +235,7 @@ function QueryPanel() {
             variant="ghost"
             size="icon-xs"
             onClick={() => void formatActiveSql()}
-            title="Format SQL (⌘⇧F)"
+            title={`Format SQL (${kbd('⇧F')})`}
             aria-label="Format SQL"
           >
             <Wand2 />

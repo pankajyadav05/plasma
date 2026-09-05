@@ -16,16 +16,15 @@ import {
   Settings as SettingsIcon,
   Table2,
 } from 'lucide-react';
-import { useEffect, useMemo } from 'react';
+import { useMemo } from 'react';
 
 /**
- * Command palette — global ⌘K launcher powered by `cmdk`, wrapped in a
- * Radix Dialog for focus management + Esc + portal behaviour.
+ * Command palette — ⌘K launcher (see `@shared/keymap`) powered by `cmdk`,
+ * wrapped in a Radix Dialog for focus management + Esc + portal behaviour.
  */
 export function CommandPalette() {
   const open = useSession((s) => s.paletteOpen);
   const setOpen = useSession((s) => s.setPaletteOpen);
-  const togglePalette = useSession((s) => s.togglePalette);
 
   const schema = useSession((s) => s.schema);
   const savedConnections = useSession((s) => s.savedConnections);
@@ -43,17 +42,7 @@ export function CommandPalette() {
   const disconnect = useSession((s) => s.disconnect);
   const openDialog = useSession((s) => s.openDialog);
 
-  // Global ⌘K listener
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
-        e.preventDefault();
-        togglePalette();
-      }
-    };
-    document.addEventListener('keydown', handler);
-    return () => document.removeEventListener('keydown', handler);
-  }, [togglePalette]);
+  // ⌘K is owned by `@shared/keymap` + AppShell / native menu — no local listener.
 
   const tables = useMemo(() => schema?.tables ?? [], [schema]);
 
