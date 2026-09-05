@@ -282,12 +282,156 @@ export class PostgresDriver {
        ORDER BY n.nspname, c.relname, a.attnum`,
     );
 
+    // Functions / procedures / aggregates / window funcs in user schemas.
+    const functions = await this.primary.query<{
+      schema: string;
+      name: string;
+      identity_args: string;
+      return_type: string;
+      language: string;
+      kind: 'f' | 'p' | 'a' | 'w';
+    }>(
+      `SELECT n.nspname AS schema,
+              p.proname AS name,
+              pg_get_function_identity_arguments(p.oid) AS identity_args,
+              COALESCE(pg_get_function_result(p.oid), '') AS return_type,
+              l.lanname AS language,
+              p.prokind AS kind
+       FROM pg_proc p
+       JOIN pg_namespace n ON n.oid = p.pronamespace
+       JOIN pg_language l ON l.oid = p.prolang
+       WHERE p.prokind IN ('f', 'p', 'a', 'w')
+         AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+         AND n.nspname NOT LIKE 'pg_temp_%'
+       ORDER BY n.nspname, p.proname, identity_args`,
+    );
+
+    // Enum types with ordered labels (one row per type via array_agg).
+    const enums = await this.primary.query<{
+      schema: string;
+      name: string;
+      labels: string[] | null;
+    }>(
+      `SELECT n.nspname AS schema,
+              t.typname AS name,
+              array_agg(e.enumlabel ORDER BY e.enumsortorder) AS labels
+       FROM pg_type t
+       JOIN pg_namespace n ON n.oid = t.typnamespace
+       JOIN pg_enum e ON e.enumtypid = t.oid
+       WHERE t.typtype = 'e'
+         AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+         AND n.nspname NOT LIKE 'pg_temp_%'
+       GROUP BY n.nspname, t.typname
+       ORDER BY n.nspname, t.typname`,
+    );
+
+    // Indexes (including those backing PK/unique constraints).
+    const indexes = await this.primary.query<{
+      schema: string;
+      table: string;
+      name: string;
+      definition: string;
+      is_unique: boolean;
+      is_primary: boolean;
+      columns: string[] | null;
+    }>(
+      `SELECT n.nspname AS schema,
+              c.relname AS "table",
+              i.relname AS name,
+              pg_get_indexdef(ix.indexrelid) AS definition,
+              ix.indisunique AS is_unique,
+              ix.indisprimary AS is_primary,
+              COALESCE(
+                (
+                  SELECT array_agg(a.attname ORDER BY k.ord)
+                  FROM unnest(ix.indkey) WITH ORDINALITY AS k(attnum, ord)
+                  JOIN pg_attribute a
+                    ON a.attrelid = c.oid AND a.attnum = k.attnum
+                  WHERE k.attnum > 0
+                ),
+                ARRAY[]::text[]
+              ) AS columns
+       FROM pg_index ix
+       JOIN pg_class i ON i.oid = ix.indexrelid
+       JOIN pg_class c ON c.oid = ix.indrelid
+       JOIN pg_namespace n ON n.oid = c.relnamespace
+       WHERE c.relkind IN ('r', 'p', 'm')
+         AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+         AND n.nspname NOT LIKE 'pg_temp_%'
+       ORDER BY n.nspname, c.relname, i.relname`,
+    );
+
+    // User triggers (skip internal constraint triggers).
+    const triggers = await this.primary.query<{
+      schema: string;
+      table: string;
+      name: string;
+      timing: string;
+      events: string;
+      definition: string;
+      enabled: string;
+    }>(
+      `SELECT n.nspname AS schema,
+              c.relname AS "table",
+              t.tgname AS name,
+              CASE
+                WHEN (t.tgtype & 2) = 2 THEN 'BEFORE'
+                WHEN (t.tgtype & 64) = 64 THEN 'INSTEAD OF'
+                ELSE 'AFTER'
+              END AS timing,
+              concat_ws(
+                '/',
+                CASE WHEN (t.tgtype & 4) = 4 THEN 'INSERT' END,
+                CASE WHEN (t.tgtype & 8) = 8 THEN 'DELETE' END,
+                CASE WHEN (t.tgtype & 16) = 16 THEN 'UPDATE' END,
+                CASE WHEN (t.tgtype & 32) = 32 THEN 'TRUNCATE' END
+              ) AS events,
+              pg_get_triggerdef(t.oid, true) AS definition,
+              t.tgenabled::text AS enabled
+       FROM pg_trigger t
+       JOIN pg_class c ON c.oid = t.tgrelid
+       JOIN pg_namespace n ON n.oid = c.relnamespace
+       WHERE NOT t.tgisinternal
+         AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+         AND n.nspname NOT LIKE 'pg_temp_%'
+       ORDER BY n.nspname, c.relname, t.tgname`,
+    );
+
+    // Sequences via pg_sequence (PG 10+).
+    const sequences = await this.primary.query<{
+      schema: string;
+      name: string;
+      data_type: string;
+      start_value: string;
+      increment_by: string;
+    }>(
+      `SELECT n.nspname AS schema,
+              c.relname AS name,
+              format_type(s.seqtypid, NULL) AS data_type,
+              s.seqstart::text AS start_value,
+              s.seqincrement::text AS increment_by
+       FROM pg_class c
+       JOIN pg_namespace n ON n.oid = c.relnamespace
+       JOIN pg_sequence s ON s.seqrelid = c.oid
+       WHERE c.relkind = 'S'
+         AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+         AND n.nspname NOT LIKE 'pg_temp_%'
+       ORDER BY n.nspname, c.relname`,
+    );
+
     const kindMap = {
       r: 'table',
       v: 'view',
       m: 'matview',
       f: 'foreign',
       p: 'partitioned',
+    } as const;
+
+    const fnKindMap = {
+      f: 'function',
+      p: 'procedure',
+      a: 'aggregate',
+      w: 'window',
     } as const;
 
     return {
@@ -315,6 +459,44 @@ export class PostgresDriver {
         refSchema: r.ref_schema,
         refTable: r.ref_table,
         refColumn: r.ref_column,
+      })),
+      functions: functions.rows.map((r) => ({
+        schema: r.schema,
+        name: r.name,
+        identityArgs: r.identity_args ?? '',
+        returnType: r.return_type ?? '',
+        language: r.language,
+        kind: fnKindMap[r.kind],
+      })),
+      enums: enums.rows.map((r) => ({
+        schema: r.schema,
+        name: r.name,
+        labels: r.labels ?? [],
+      })),
+      indexes: indexes.rows.map((r) => ({
+        schema: r.schema,
+        table: r.table,
+        name: r.name,
+        definition: r.definition,
+        isUnique: r.is_unique,
+        isPrimary: r.is_primary,
+        columns: r.columns ?? [],
+      })),
+      triggers: triggers.rows.map((r) => ({
+        schema: r.schema,
+        table: r.table,
+        name: r.name,
+        timing: r.timing,
+        events: r.events,
+        definition: r.definition,
+        enabled: r.enabled !== 'D',
+      })),
+      sequences: sequences.rows.map((r) => ({
+        schema: r.schema,
+        name: r.name,
+        dataType: r.data_type,
+        startValue: r.start_value,
+        incrementBy: r.increment_by,
       })),
     };
   }

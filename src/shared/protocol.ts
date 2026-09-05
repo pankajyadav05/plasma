@@ -421,6 +421,81 @@ export const SchemaInfo = z.object({
       }),
     )
     .default([]),
+  /**
+   * User-defined functions / procedures / aggregates / window functions.
+   * `identityArgs` is the pg_get_function_identity_arguments() string
+   * (empty for zero-arg functions). Old snapshots may omit this field.
+   */
+  functions: z
+    .array(
+      z.object({
+        schema: z.string(),
+        name: z.string(),
+        identityArgs: z.string(),
+        returnType: z.string(),
+        language: z.string(),
+        kind: z.enum(['function', 'procedure', 'aggregate', 'window']),
+      }),
+    )
+    .default([]),
+  /**
+   * Enum types with ordered labels. Used by SQL autocomplete after `=` / `IN (`.
+   */
+  enums: z
+    .array(
+      z.object({
+        schema: z.string(),
+        name: z.string(),
+        labels: z.array(z.string()),
+      }),
+    )
+    .default([]),
+  /**
+   * Indexes on introspected tables (including PK/unique constraint indexes).
+   * Surfaced in TableDefinitionView and schema diff / AI context.
+   */
+  indexes: z
+    .array(
+      z.object({
+        schema: z.string(),
+        table: z.string(),
+        name: z.string(),
+        definition: z.string(),
+        isUnique: z.boolean(),
+        isPrimary: z.boolean(),
+        columns: z.array(z.string()).default([]),
+      }),
+    )
+    .default([]),
+  /**
+   * Non-internal triggers. `timing` is BEFORE / AFTER / INSTEAD OF;
+   * `events` is a slash-joined list like INSERT/UPDATE.
+   */
+  triggers: z
+    .array(
+      z.object({
+        schema: z.string(),
+        table: z.string(),
+        name: z.string(),
+        timing: z.string(),
+        events: z.string(),
+        definition: z.string(),
+        enabled: z.boolean(),
+      }),
+    )
+    .default([]),
+  /** Sequences (relkind = S) in user schemas. */
+  sequences: z
+    .array(
+      z.object({
+        schema: z.string(),
+        name: z.string(),
+        dataType: z.string(),
+        startValue: z.string(),
+        incrementBy: z.string(),
+      }),
+    )
+    .default([]),
 });
 export type SchemaInfo = z.infer<typeof SchemaInfo>;
 

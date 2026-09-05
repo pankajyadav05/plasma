@@ -4,23 +4,30 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { cn } from '@/lib/cn';
 import { type EntityKind, useSession } from '@/stores/session';
 import {
+  Braces,
+  ChevronDown,
+  ChevronRight,
   Eye,
   Filter as FilterIcon,
+  FunctionSquare,
   GitBranch,
   Globe,
+  Hash,
   Layers,
   Search,
   Star,
   Table2,
+  Zap,
   X,
 } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 
 /**
  * Tables-mode sidebar content. Replaces the legacy schema tree with:
  *   - Schema picker (dropdown at top)
  *   - Filter row (search + entity-type filter)
  *   - Flat entity list (tables + views + matviews) for the selected schema
+ *   - Collapsible sections for functions, enums, sequences, triggers (U34)
  */
 export function EntityList() {
   const activeConfig = useSession((s) => s.activeConfig);
@@ -33,8 +40,17 @@ export function EntityList() {
   const openTable = useSession((s) => s.openTable);
   const favoriteTables = useSession((s) => s.settings.favoriteTables);
   const toggleFavoriteTable = useSession((s) => s.toggleFavoriteTable);
+  const addTab = useSession((s) => s.addTab);
+  const setSql = useSession((s) => s.setSql);
+  const setEditorExpanded = useSession((s) => s.setEditorExpanded);
 
   const [search, setSearch] = useState('');
+  const [openSections, setOpenSections] = useState<Record<string, boolean>>({
+    functions: true,
+    enums: true,
+    sequences: true,
+    triggers: true,
+  });
 
   const favoriteTableSet = new Set(activeConfig ? (favoriteTables?.[activeConfig.id] ?? []) : []);
 
@@ -55,6 +71,54 @@ export function EntityList() {
       });
     // biome-ignore lint/correctness/useExhaustiveDependencies: favoriteTableSet ref shifts every render
   }, [schema, effectiveSchema, entityFilter, search]);
+
+  const q = search.trim().toLowerCase();
+
+  const functions = useMemo(() => {
+    if (!schema || !effectiveSchema) return [];
+    return (schema.functions ?? [])
+      .filter((f) => f.schema === effectiveSchema)
+      .filter((f) => (q ? f.name.toLowerCase().includes(q) : true))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [schema, effectiveSchema, q]);
+
+  const enums = useMemo(() => {
+    if (!schema || !effectiveSchema) return [];
+    return (schema.enums ?? [])
+      .filter((e) => e.schema === effectiveSchema)
+      .filter((e) => (q ? e.name.toLowerCase().includes(q) : true))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [schema, effectiveSchema, q]);
+
+  const sequences = useMemo(() => {
+    if (!schema || !effectiveSchema) return [];
+    return (schema.sequences ?? [])
+      .filter((s) => s.schema === effectiveSchema)
+      .filter((s) => (q ? s.name.toLowerCase().includes(q) : true))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [schema, effectiveSchema, q]);
+
+  const triggers = useMemo(() => {
+    if (!schema || !effectiveSchema) return [];
+    return (schema.triggers ?? [])
+      .filter((t) => t.schema === effectiveSchema)
+      .filter((t) =>
+        q
+          ? t.name.toLowerCase().includes(q) || t.table.toLowerCase().includes(q)
+          : true,
+      )
+      .sort((a, b) => a.name.localeCompare(b.name) || a.table.localeCompare(b.table));
+  }, [schema, effectiveSchema, q]);
+
+  const openInEditor = (sql: string) => {
+    addTab();
+    setSql(sql);
+    setEditorExpanded(true);
+  };
+
+  const toggleSection = (key: string) => {
+    setOpenSections((prev) => ({ ...prev, [key]: !prev[key] }));
+  };
 
   if (!activeConfig) {
     return (
@@ -88,9 +152,9 @@ export function EntityList() {
               type="text"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search tables…"
+              placeholder="Search schema…"
               className="h-8 w-full rounded-md border border-sidebar-border bg-background pl-8 pr-7 text-sm text-foreground outline-none transition-colors placeholder:text-muted-foreground focus:border-primary"
-              aria-label="Search tables"
+              aria-label="Search schema"
             />
             {search && (
               <button
@@ -107,11 +171,11 @@ export function EntityList() {
         </div>
       </div>
 
-      {/* ── Entity list ── */}
+      {/* ── Entity list + extra sections ── */}
       <div className="min-h-0 flex-1 overflow-y-auto py-1">
         {entities.length === 0 && (
           <div className="px-4 py-3 font-display text-sm italic text-muted-foreground">
-            {search ? `no entities match "${search}"` : 'empty'}
+            {search ? `no tables match "${search}"` : 'no tables'}
           </div>
         )}
         {entities.map((t) => {
@@ -133,8 +197,175 @@ export function EntityList() {
             />
           );
         })}
+
+        <SchemaSection
+          title="Functions"
+          count={functions.length}
+          open={openSections.functions !== false}
+          onToggle={() => toggleSection('functions')}
+        >
+          {functions.map((f) => {
+            const argHint = f.identityArgs
+              ? f.identityArgs
+                  .split(',')
+                  .map((a) => a.trim())
+                  .filter(Boolean)
+                  .map((a) => `/* ${a} */`)
+                  .join(', ')
+              : '';
+            const callName =
+              f.schema === 'public'
+                ? quoteIdent(f.name)
+                : `${quoteIdent(f.schema)}.${quoteIdent(f.name)}`;
+            const stub =
+              f.kind === 'procedure'
+                ? `CALL ${callName}(${argHint});`
+                : `SELECT ${callName}(${argHint});`;
+            return (
+              <SimpleRow
+                key={`${f.schema}.${f.name}.${f.identityArgs}`}
+                icon={FunctionSquare}
+                name={f.name}
+                detail={f.kind === 'function' ? f.returnType : f.kind}
+                title={`${f.schema}.${f.name}(${f.identityArgs}) → ${f.returnType || f.kind}`}
+                onClick={() => openInEditor(`-- ${f.kind} ${f.schema}.${f.name}(${f.identityArgs})\n${stub}`)}
+              />
+            );
+          })}
+        </SchemaSection>
+
+        <SchemaSection
+          title="Enums"
+          count={enums.length}
+          open={openSections.enums !== false}
+          onToggle={() => toggleSection('enums')}
+        >
+          {enums.map((e) => {
+            const qualified = e.schema === 'public' ? e.name : `${e.schema}.${e.name}`;
+            const labels = e.labels.map((l) => `'${l.replace(/'/g, "''")}'`).join(', ');
+            return (
+              <SimpleRow
+                key={`${e.schema}.${e.name}`}
+                icon={Braces}
+                name={e.name}
+                detail={`${e.labels.length}`}
+                title={`${qualified}: ${e.labels.join(' | ')}`}
+                onClick={() =>
+                  openInEditor(
+                    `-- enum ${qualified}\n-- labels: ${e.labels.join(', ')}\nSELECT unnest(ARRAY[${labels}]::${quoteIdent(e.schema)}.${quoteIdent(e.name)}[]);`,
+                  )
+                }
+              />
+            );
+          })}
+        </SchemaSection>
+
+        <SchemaSection
+          title="Sequences"
+          count={sequences.length}
+          open={openSections.sequences !== false}
+          onToggle={() => toggleSection('sequences')}
+        >
+          {sequences.map((s) => {
+            const qualified =
+              s.schema === 'public' ? quoteIdent(s.name) : `${quoteIdent(s.schema)}.${quoteIdent(s.name)}`;
+            return (
+              <SimpleRow
+                key={`${s.schema}.${s.name}`}
+                icon={Hash}
+                name={s.name}
+                detail={s.dataType}
+                title={`${s.schema}.${s.name} (${s.dataType}, start ${s.startValue})`}
+                onClick={() => openInEditor(`SELECT * FROM ${qualified};`)}
+              />
+            );
+          })}
+        </SchemaSection>
+
+        <SchemaSection
+          title="Triggers"
+          count={triggers.length}
+          open={openSections.triggers !== false}
+          onToggle={() => toggleSection('triggers')}
+        >
+          {triggers.map((t) => (
+            <SimpleRow
+              key={`${t.schema}.${t.table}.${t.name}`}
+              icon={Zap}
+              name={t.name}
+              detail={t.table}
+              title={`${t.timing} ${t.events} ON ${t.schema}.${t.table}${t.enabled ? '' : ' (disabled)'}`}
+              onClick={() => openInEditor(`${t.definition};`)}
+            />
+          ))}
+        </SchemaSection>
       </div>
     </div>
+  );
+}
+
+function quoteIdent(s: string): string {
+  return `"${s.replace(/"/g, '""')}"`;
+}
+
+function SchemaSection({
+  title,
+  count,
+  open,
+  onToggle,
+  children,
+}: {
+  title: string;
+  count: number;
+  open: boolean;
+  onToggle: () => void;
+  children: ReactNode;
+}) {
+  if (count === 0) return null;
+  return (
+    <div className="mt-2 border-t border-sidebar-border pt-1">
+      <button
+        type="button"
+        onClick={onToggle}
+        className="mx-2 flex h-7 w-[calc(100%-1rem)] items-center gap-1 rounded-md px-2 text-left text-[10px] font-medium uppercase tracking-wider text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+      >
+        {open ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+        <span className="flex-1">{title}</span>
+        <span className="font-mono text-[9px] normal-case tracking-normal">{count}</span>
+      </button>
+      {open && children}
+    </div>
+  );
+}
+
+function SimpleRow({
+  icon: Icon,
+  name,
+  detail,
+  title,
+  onClick,
+}: {
+  icon: typeof Table2;
+  name: string;
+  detail?: string;
+  title: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={title}
+      className="group/row cv-row-28 mx-2 flex h-7 w-[calc(100%-1rem)] items-center gap-2 rounded-md px-2 text-left font-mono text-xs text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+    >
+      <Icon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+      <span className="min-w-0 flex-1 truncate">{name}</span>
+      {detail ? (
+        <span className="max-w-[40%] shrink-0 truncate font-mono text-[9px] text-muted-foreground/80">
+          {detail}
+        </span>
+      ) : null}
+    </button>
   );
 }
 
