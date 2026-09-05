@@ -57,9 +57,18 @@ async function disconnectAll(): Promise<void> {
 process.parentPort.on('message', async (evt: Electron.MessageEvent) => {
   const parsed = WorkerRequest.safeParse(evt.data);
   if (!parsed.success) {
+    // Preserve the caller's correlation id when present so the supervisor
+    // can settle the original pending promise (U20).
+    const rawId =
+      evt.data &&
+      typeof evt.data === 'object' &&
+      'id' in evt.data &&
+      typeof (evt.data as { id: unknown }).id === 'string'
+        ? (evt.data as { id: string }).id
+        : 'unknown';
     send({
       kind: 'error',
-      id: 'unknown',
+      id: rawId,
       message: `invalid request: ${parsed.error.message}`,
     });
     return;
@@ -79,7 +88,7 @@ process.parentPort.on('message', async (evt: Electron.MessageEvent) => {
         const engine = req.config.engine ?? 'postgres';
         let serverVersion = '';
         if (engine === 'postgres') {
-          serverVersion = await pg.connect(req.config);
+          serverVersion = await pg.connect(req.config, req.statementTimeoutMs);
         } else if (engine === 'redis') {
           serverVersion = await redis.connect(req.config);
         } else if (engine === 'opensearch') {
@@ -87,6 +96,13 @@ process.parentPort.on('message', async (evt: Electron.MessageEvent) => {
         }
         activeEngine = engine;
         send({ kind: 'connected', id: req.id, serverVersion, engine });
+        break;
+      }
+      case 'setStatementTimeout': {
+        if (activeEngine === 'postgres') {
+          await pg.setStatementTimeout(req.timeoutMs);
+        }
+        send({ kind: 'statementTimeoutSet', id: req.id });
         break;
       }
       case 'disconnect':
@@ -300,7 +316,11 @@ process.parentPort.on('message', async (evt: Electron.MessageEvent) => {
 
 process.on('uncaughtException', (err) => {
   console.error('[plasma-worker] uncaught:', err);
-  // Fall through — let the parent see the stderr and decide to restart.
+  // Installing this handler suppresses Node's default fatal exit; exit
+  // explicitly so the supervisor can restart (U20).
+  process.exit(1);
 });
 
+// Readiness handshake for the supervisor (U20).
+send({ kind: 'ready', id: 'boot' });
 console.log('plasma db worker ready');

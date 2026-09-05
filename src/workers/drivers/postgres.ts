@@ -1,23 +1,26 @@
 import type { ConnectionConfig, QueryResult, SchemaInfo, TxnState } from '@shared/protocol';
+import { formatStatementTimeoutSql } from '@shared/worker-policy';
 import pg from 'pg';
 
 const { Client } = pg;
 type ClientT = InstanceType<typeof Client>;
 
 /**
- * Postgres driver — wraps two `pg.Client` connections:
- *   1. `primary` — carries queries / transactions
- *   2. `sideband` — cheap second connection used only for pg_cancel_backend,
- *      so that cancellation works even while `primary` is mid-query
+ * Postgres driver — wraps three `pg.Client` connections (U19):
+ *   1. `primary` — carries user queries / transactions
+ *   2. `control` — cancel only (`pg_cancel_backend`); never runs AI/monitor SQL
+ *   3. `aux` — AI tools + live monitor / terminate so they cannot block cancel
  *
  * Lives in the utilityProcess so a crashing query or a rogue network read
  * never blocks the main process or the renderer.
  */
 export class PostgresDriver {
   private primary: ClientT | null = null;
-  private sideband: ClientT | null = null;
+  private control: ClientT | null = null;
+  private aux: ClientT | null = null;
   private primaryBackendPid: number | null = null;
   private txnState: TxnState = 'none';
+  private statementTimeoutMs = 0;
 
   isConnected(): boolean {
     return this.primary !== null;
@@ -27,40 +30,46 @@ export class PostgresDriver {
     return this.txnState;
   }
 
-  async connect(config: ConnectionConfig): Promise<string> {
+  private clientOpts(config: ConnectionConfig, application_name: string) {
+    return {
+      host: config.host,
+      port: config.port,
+      database: config.database,
+      user: config.user,
+      password: config.password,
+      ssl: config.ssl ? { rejectUnauthorized: false } : false,
+      connectionTimeoutMillis: 10_000,
+      application_name,
+    };
+  }
+
+  async connect(config: ConnectionConfig, statementTimeoutMs?: number): Promise<string> {
     // Hang up any previous clients first
     await this.disconnect();
 
-    const primary = new Client({
-      host: config.host,
-      port: config.port,
-      database: config.database,
-      user: config.user,
-      password: config.password,
-      ssl: config.ssl ? { rejectUnauthorized: false } : false,
-      connectionTimeoutMillis: 10_000,
-      application_name: 'plasma',
-    });
+    if (statementTimeoutMs !== undefined) {
+      this.statementTimeoutMs = Math.max(0, Math.floor(statementTimeoutMs));
+    }
+
+    const primary = new Client(this.clientOpts(config, 'plasma'));
     await primary.connect();
     this.primary = primary;
 
-    // Grab the backend pid so the sideband can cancel it
+    // Grab the backend pid so control can cancel it
     const pidRes = await primary.query<{ pid: number }>('SELECT pg_backend_pid() AS pid');
     this.primaryBackendPid = pidRes.rows[0]?.pid ?? null;
 
-    // Sideband is a separate connection, used only for cancellation
-    const sideband = new Client({
-      host: config.host,
-      port: config.port,
-      database: config.database,
-      user: config.user,
-      password: config.password,
-      ssl: config.ssl ? { rejectUnauthorized: false } : false,
-      connectionTimeoutMillis: 10_000,
-      application_name: 'plasma-sideband',
-    });
-    await sideband.connect();
-    this.sideband = sideband;
+    // Control connection — cancel capacity only (U19)
+    const control = new Client(this.clientOpts(config, 'plasma-control'));
+    await control.connect();
+    this.control = control;
+
+    // Aux connection — AI / monitor execution budget, separate from cancel
+    const aux = new Client(this.clientOpts(config, 'plasma-aux'));
+    await aux.connect();
+    this.aux = aux;
+
+    await this.applyStatementTimeout();
 
     const res = await primary.query<{ version: string }>('SELECT version()');
     return res.rows[0]?.version ?? 'unknown';
@@ -70,10 +79,27 @@ export class PostgresDriver {
     this.txnState = 'none';
     this.primaryBackendPid = null;
     const p = this.primary;
-    const s = this.sideband;
+    const c = this.control;
+    const a = this.aux;
     this.primary = null;
-    this.sideband = null;
-    await Promise.allSettled([p?.end(), s?.end()]);
+    this.control = null;
+    this.aux = null;
+    await Promise.allSettled([p?.end(), c?.end(), a?.end()]);
+  }
+
+  /**
+   * Apply `queryTimeoutMs` as PostgreSQL `statement_timeout` on primary + aux.
+   * Control is left alone so cancel is never delayed by a session timeout (U20).
+   */
+  async setStatementTimeout(timeoutMs: number): Promise<void> {
+    this.statementTimeoutMs = Math.max(0, Math.floor(timeoutMs));
+    await this.applyStatementTimeout();
+  }
+
+  private async applyStatementTimeout(): Promise<void> {
+    const sql = formatStatementTimeoutSql(this.statementTimeoutMs);
+    if (this.primary) await this.primary.query(sql);
+    if (this.aux) await this.aux.query(sql);
   }
 
   async query(sql: string, params?: unknown[]): Promise<QueryResult> {
@@ -113,16 +139,15 @@ export class PostgresDriver {
   }
 
   /**
-   * Run a query on the sideband connection. Used by the live monitor
-   * (pg_stat_activity polling) and pg_terminate_backend so monitoring
-   * still works while a long-running query holds the primary client.
+   * Run a query on the aux connection (AI tools, live monitor,
+   * pg_terminate_backend). Never touches the control cancel client (U19).
    *
-   * Sideband never participates in the primary's transaction state.
+   * Aux never participates in the primary's transaction state.
    */
   async sidebandQuery(sql: string, params?: unknown[]): Promise<QueryResult> {
-    if (!this.sideband) throw new Error('not connected');
+    if (!this.aux) throw new Error('not connected');
     const start = Date.now();
-    const res = await this.sideband.query({
+    const res = await this.aux.query({
       text: sql,
       values: params,
       rowMode: 'array',
@@ -143,14 +168,12 @@ export class PostgresDriver {
 
   /**
    * Cancel an in-flight query on the primary connection by sending
-   * `pg_cancel_backend(pid)` from the sideband. This is the standard
-   * Postgres pattern — cancelling a query from the same client that's
-   * blocked on it is a chicken-and-egg problem.
+   * `pg_cancel_backend(pid)` from the dedicated control client (U19).
    */
   async cancelQuery(): Promise<void> {
-    if (!this.sideband || this.primaryBackendPid === null) return;
+    if (!this.control || this.primaryBackendPid === null) return;
     try {
-      await this.sideband.query('SELECT pg_cancel_backend($1)', [this.primaryBackendPid]);
+      await this.control.query('SELECT pg_cancel_backend($1)', [this.primaryBackendPid]);
     } catch (err) {
       // If cancellation itself fails, log but don't throw — the
       // primary will either finish naturally or time out.

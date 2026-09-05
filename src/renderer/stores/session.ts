@@ -548,6 +548,8 @@ interface SessionState {
   testConnection(config: ConnectionConfig): Promise<{ ok: boolean; message: string }>;
   connect(config: ConnectionConfig): Promise<void>;
   disconnect(): Promise<void>;
+  /** Clear local connection state after an unexpected worker restart (U20). */
+  handleWorkerReset(): void;
   refreshSchema(): Promise<void>;
   toggleSchema(name: string): void;
 
@@ -854,39 +856,45 @@ export const useSession = create<SessionState>((set, get) => ({
     try {
       await ipc.conn.disconnect();
     } finally {
-      set({
-        activeConfig: null,
-        serverVersion: null,
-        connectionState: 'idle',
-        schema: null,
-        expandedSchemas: new Set(),
-        activeTable: null,
-        txnState: 'none',
-        currentSchema: null,
-        availableRoles: [],
-        activeRole: null,
-        redisOverview: null,
-        redisKeys: null,
-        redisMatch: null,
-        osOverview: null,
-        activeRedisKey: null,
-        activeOsIndex: null,
-        redisBulkMode: false,
-        selectedRedisKeys: new Set<string>(),
-      });
-      // Clear all tabs' results since they reference a now-dead connection
-      set((state) => ({
-        tabs: state.tabs.map((t) => ({
-          ...t,
-          queryResult: null,
-          queryError: null,
-          page: 0,
-          sortColumn: null,
-          selectedCell: null,
-          selectedRows: new Set(),
-        })),
-      }));
+      get().handleWorkerReset();
     }
+  },
+
+  handleWorkerReset() {
+    set({
+      activeConfig: null,
+      serverVersion: null,
+      connectionState: 'idle',
+      connectionError: null,
+      schema: null,
+      expandedSchemas: new Set(),
+      activeTable: null,
+      txnState: 'none',
+      currentSchema: null,
+      availableRoles: [],
+      activeRole: null,
+      redisOverview: null,
+      redisKeys: null,
+      redisMatch: null,
+      osOverview: null,
+      activeRedisKey: null,
+      activeOsIndex: null,
+      redisBulkMode: false,
+      selectedRedisKeys: new Set<string>(),
+    });
+    // Clear all tabs' results since they reference a now-dead connection
+    set((state) => ({
+      tabs: state.tabs.map((t) => ({
+        ...t,
+        queryResult: null,
+        queryError: null,
+        queryRunState: 'idle' as const,
+        page: 0,
+        sortColumn: null,
+        selectedCell: null,
+        selectedRows: new Set(),
+      })),
+    }));
   },
 
   async refreshSchema() {
