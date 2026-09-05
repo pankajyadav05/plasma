@@ -15,7 +15,7 @@
     "dist:win": "electron-vite build && electron-builder --win --x64",
     "dist:mac": "electron-vite build && electron-builder --mac --arm64 --x64",
     "dist:dir": "electron-vite build && electron-builder --dir",
-    "postinstall": "electron-rebuild -f -w better-sqlite3",
+    "postinstall": "node scripts/postinstall.mjs",
     "prepare": "node scripts/build-icons.mjs",
     "build:icons": "node scripts/build-icons.mjs",
     "version:sync": "node scripts/sync-version.mjs",
@@ -92,6 +92,9 @@
       "esbuild",
       "@biomejs/biome",
       "better-sqlite3"
+    ],
+    "ignoredOptionalDependencies": [
+      "cpu-features"
     ]
   }
 }

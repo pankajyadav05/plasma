@@ -34,6 +34,9 @@ jobs:
       - name: Install
         run: pnpm install --frozen-lockfile
 
+      - name: Rebuild native deps for Electron
+        run: pnpm exec electron-builder install-app-deps
+
       - name: Build Windows
         run: pnpm run dist:win
 
@@ -66,6 +69,9 @@ jobs:
 
       - name: Install
         run: pnpm install --frozen-lockfile
+
+      - name: Rebuild native deps for Electron
+        run: pnpm exec electron-builder install-app-deps
 
       - name: Build macOS
         run: pnpm run dist:mac
