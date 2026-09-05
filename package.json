@@ -92,9 +92,6 @@
       "esbuild",
       "@biomejs/biome",
       "better-sqlite3"
-    ],
-    "ignoredOptionalDependencies": [
-      "cpu-features"
     ]
   }
 }
