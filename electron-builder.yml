@@ -105,13 +105,13 @@ dmg:
 
 # ── Auto-update (electron-updater) ────────────────────────────────────
 # Generic provider — `latest.yml` + the installer + its .blockmap live
-# at the same URL space (Vercel Blob, addRandomSuffix:false). Builder
+# at the same URL space (Cloudflare R2 public bucket). Builder
 # emits these manifest files alongside the artifacts; the upload
 # script ships them. Only the NSIS installer can self-update; the
 # portable EXE will surface the available-update event but the user
 # has to re-download manually.
 publish:
   - provider: generic
-    url: https://ci1uagtcki1vvf8z.public.blob.vercel-storage.com
+    url: https://pub-05a2064511bc41689f299b542b07b67f.r2.dev
     channel: latest
     useMultipleRangeRequest: false

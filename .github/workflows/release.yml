@@ -119,9 +119,13 @@ jobs:
       - name: Install
         run: pnpm install --frozen-lockfile
 
-      - name: Upload to Vercel Blob
+      - name: Upload to Cloudflare R2
         env:
-          BLOB_READ_WRITE_TOKEN: ${{ secrets.BLOB_READ_WRITE_TOKEN }}
+          R2_ACCOUNT_ID: 945bc8f64778fda12f098a60e0ed122f
+          R2_BUCKET: plasma
+          R2_PUBLIC_BASE_URL: https://pub-05a2064511bc41689f299b542b07b67f.r2.dev
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
         run: pnpm run release:upload
 
       - name: Create GitHub Release
