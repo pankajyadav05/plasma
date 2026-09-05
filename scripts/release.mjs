@@ -56,7 +56,10 @@ const siteBefore = readFileSync(sitePath, 'utf8');
 const siteAfter = siteBefore
   .replace(/(export const VERSION\s*=\s*')([^']+)(')/, `$1${next}$3`)
   .replace(/Plasma-Setup-\d+\.\d+\.\d+-x64\.exe/g, `Plasma-Setup-${next}-x64.exe`)
-  .replace(/Plasma-Portable-\d+\.\d+\.\d+-x64\.exe/g, `Plasma-Portable-${next}-x64.exe`);
+  .replace(/Plasma-Portable-\d+\.\d+\.\d+-x64\.exe/g, `Plasma-Portable-${next}-x64.exe`)
+  // macOS DMGs
+  .replace(/Plasma-\d+\.\d+\.\d+-arm64\.dmg/g, `Plasma-${next}-arm64.dmg`)
+  .replace(/Plasma-\d+\.\d+\.\d+-x64\.dmg/g, `Plasma-${next}-x64.dmg`);
 
 if (siteBefore !== siteAfter) {
   writeFileSync(sitePath, siteAfter);

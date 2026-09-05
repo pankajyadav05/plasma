@@ -29,7 +29,10 @@ const before = readFileSync(sitePath, 'utf8');
 const after = before
   .replace(/(export const VERSION\s*=\s*')([^']+)(')/, `$1${version}$3`)
   .replace(/Plasma-Setup-\d+\.\d+\.\d+-x64\.exe/g, `Plasma-Setup-${version}-x64.exe`)
-  .replace(/Plasma-Portable-\d+\.\d+\.\d+-x64\.exe/g, `Plasma-Portable-${version}-x64.exe`);
+  .replace(/Plasma-Portable-\d+\.\d+\.\d+-x64\.exe/g, `Plasma-Portable-${version}-x64.exe`)
+  // macOS DMGs
+  .replace(/Plasma-\d+\.\d+\.\d+-arm64\.dmg/g, `Plasma-${version}-arm64.dmg`)
+  .replace(/Plasma-\d+\.\d+\.\d+-x64\.dmg/g, `Plasma-${version}-x64.dmg`);
 
 if (before === after) {
   console.log(`[sync-version] site already at ${version}, nothing to patch`);
