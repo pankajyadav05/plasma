@@ -190,6 +190,18 @@ export interface QueryTab {
   queryResult: QueryResult | null;
   queryError: string | null;
   queryErrorSql: string | null;
+  /**
+   * Monotonic request generation for table-tab data queries. Bumped before
+   * each async data IPC so a late response can be dropped when filters /
+   * page / sort change supersede it (U23).
+   */
+  tableDataGeneration: number;
+  /**
+   * Monotonic request generation for table-tab count queries (separate from
+   * tableDataGeneration so page/sort refreshes do not strand an in-flight
+   * count).
+   */
+  tableCountGeneration: number;
   page: number;
   pageSize: number;
   selectedCell: { row: number; col: number } | null;
@@ -338,6 +350,8 @@ function createEmptyTab(pageSize: number, title = 'query-1.sql'): QueryTab {
     queryResult: null,
     queryError: null,
     queryErrorSql: null,
+    tableDataGeneration: 0,
+    tableCountGeneration: 0,
     page: 0,
     pageSize,
     sortColumn: null,
@@ -367,6 +381,8 @@ function createTableTab(pageSize: number, schemaName: string, tableName: string)
     queryResult: null,
     queryError: null,
     queryErrorSql: null,
+    tableDataGeneration: 0,
+    tableCountGeneration: 0,
     page: 0,
     pageSize,
     sortColumn: null,
@@ -2428,23 +2444,33 @@ async function runTableDataQuery(
     pageSize: tab.pageSize,
   });
 
+  // U23: bump per-tab data generation so a late response from a prior
+  // filter/page/sort request cannot overwrite newer results.
+  const generation = tab.tableDataGeneration + 1;
   patchTabById(set, tabId, {
     queryRunState: 'running',
     queryError: null,
     queryErrorSql: null,
     sql, // store for display / copy
+    tableDataGeneration: generation,
   });
+
+  const publishIfCurrent = (patch: Partial<QueryTab>) => {
+    const current = get().tabs.find((t) => t.id === tabId);
+    if (!current || current.tableDataGeneration !== generation) return;
+    patchTabById(set, tabId, patch);
+  };
 
   try {
     const result = await ipc.query.run(sql, params, { internal: true });
-    patchTabById(set, tabId, {
+    publishIfCurrent({
       queryResult: result,
       queryRunState: 'idle',
       selectedCell: null,
       selectedRows: new Set(),
     });
   } catch (err) {
-    patchTabById(set, tabId, {
+    publishIfCurrent({
       queryError: err instanceof Error ? err.message : String(err),
       queryErrorSql: sql,
       queryRunState: 'idle',
@@ -2477,7 +2503,10 @@ async function runTableCountQuery(
     typeof tableMeta.rowCountEstimate === 'number' &&
     tableMeta.rowCountEstimate >= ESTIMATED_COUNT_THRESHOLD;
 
-  patchTabById(set, tabId, { countLoading: true });
+  // U23: bump per-tab count generation so a late COUNT from a prior
+  // filter set cannot overwrite a newer total.
+  const generation = tab.tableCountGeneration + 1;
+  patchTabById(set, tabId, { countLoading: true, tableCountGeneration: generation });
 
   const { sql, params } = useEstimate
     ? buildEstimatedCountSql(tab.tableSchema, tab.tableName)
@@ -2487,17 +2516,23 @@ async function runTableCountQuery(
         filters: tab.filters,
       });
 
+  const publishIfCurrent = (patch: Partial<QueryTab>) => {
+    const current = get().tabs.find((t) => t.id === tabId);
+    if (!current || current.tableCountGeneration !== generation) return;
+    patchTabById(set, tabId, patch);
+  };
+
   try {
     const result = await ipc.query.run(sql, params, { internal: true });
     const raw = result.rows[0]?.[0];
     const count = typeof raw === 'string' ? Number.parseInt(raw, 10) : Number(raw);
-    patchTabById(set, tabId, {
+    publishIfCurrent({
       totalRowCount: Number.isFinite(count) ? count : null,
       totalRowCountIsEstimate: useEstimate,
       countLoading: false,
     });
   } catch {
-    patchTabById(set, tabId, { countLoading: false });
+    publishIfCurrent({ countLoading: false });
   }
 }
 
