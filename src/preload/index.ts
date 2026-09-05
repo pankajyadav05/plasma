@@ -118,6 +118,8 @@ const eventChannels = [
   'plasma:menu:toggleSidebar',
   'plasma:menu:toggleEditor',
   'plasma:menu:palette',
+  'plasma:menu:toggleAi',
+  'plasma:menu:cheatSheet',
   'plasma:menu:runQuery',
   'plasma:menu:cancelQuery',
   'plasma:menu:history',

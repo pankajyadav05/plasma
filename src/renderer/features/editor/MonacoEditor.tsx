@@ -1,4 +1,5 @@
 import type { OnChange, OnMount } from '@monaco-editor/react';
+import { binding, monacoKeybinding } from '@shared/keymap';
 import type * as MonacoType from 'monaco-editor';
 import { Suspense, lazy, useCallback, useEffect, useRef } from 'react';
 import { PLASMA_THEME_ID, applyMonacoTheme } from './paperTheme';
@@ -22,8 +23,8 @@ interface Props {
 
 /**
  * Monaco wrapper — registers the Plasma themes on first mount,
- * wires ⌘⏎ and ⌘J shortcuts, and applies the Paper Editor type
- * scale (JetBrains Mono at configurable size).
+ * wires keymap chords (run / toggle / format / ask-AI), and applies
+ * the Paper Editor type scale (JetBrains Mono at configurable size).
  */
 export function MonacoEditor({
   value,
@@ -56,20 +57,17 @@ export function MonacoEditor({
       applyMonacoTheme(monaco, theme);
       registerSqlCompletions(monaco);
 
-      // ⌘⏎ / Ctrl+Enter — run query
-      editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => {
+      // Chords from `@shared/keymap` so U24+ can register through the same module.
+      editor.addCommand(monacoKeybinding(monaco, binding('runQuery').chord), () => {
         onRunRef.current();
       });
-      // ⌘J / Ctrl+J — toggle drawer
-      editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyJ, () => {
+      editor.addCommand(monacoKeybinding(monaco, binding('toggleEditor').chord), () => {
         onToggleRef.current();
       });
-      // ⌘⇧F / Ctrl+Shift+F — format SQL
-      editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyF, () => {
+      editor.addCommand(monacoKeybinding(monaco, binding('formatSql').chord), () => {
         onFormatRef.current?.();
       });
-      // ⌘I / Ctrl+I — ask AI about the current selection (or whole doc)
-      editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyI, () => {
+      editor.addCommand(monacoKeybinding(monaco, binding('askAi').chord), () => {
         const sel = editor.getSelection();
         const text =
           sel && !sel.isEmpty()
@@ -77,7 +75,7 @@ export function MonacoEditor({
             : editor.getValue();
         onAskAiRef.current?.(text);
       });
-      // Esc — close drawer when focused
+      // Esc — close drawer when focused (not in KEYMAP: editor-local only)
       editor.addCommand(monaco.KeyCode.Escape, () => {
         onToggleRef.current();
       });
