@@ -18,13 +18,28 @@ export function getSetting<T>(key: string, fallback: T): T {
 }
 
 export function setSetting<T>(key: string, value: T): void {
-  const serialized = JSON.stringify(value);
-  getDb()
-    .prepare(
-      `INSERT INTO settings (key, value) VALUES (?, ?)
-         ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
-    )
-    .run(key, serialized);
+  setSettings({ [key]: value });
+}
+
+/**
+ * Persist one or more settings keys in a single SQLite transaction,
+ * reusing one prepared UPSERT. No-op when `entries` is empty.
+ */
+export function setSettings(entries: Record<string, unknown>): void {
+  const keys = Object.keys(entries);
+  if (keys.length === 0) return;
+
+  const db = getDb();
+  const stmt = db.prepare(
+    `INSERT INTO settings (key, value) VALUES (?, ?)
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+  );
+  const tx = db.transaction((pairs: Array<[string, string]>) => {
+    for (const [key, serialized] of pairs) {
+      stmt.run(key, serialized);
+    }
+  });
+  tx(keys.map((key) => [key, JSON.stringify(entries[key])] as [string, string]));
 }
 
 export function getAllSettings(): Record<string, unknown> {
@@ -41,3 +56,5 @@ export function getAllSettings(): Record<string, unknown> {
   }
   return out;
 }
+
+export { changedSettings, settingsValueEqual } from './settings-changed';

@@ -15,7 +15,7 @@ import { useUpdate } from '@/lib/use-update';
 import { useSession } from '@/stores/session';
 import type { Settings } from '@shared/protocol';
 import { Check, ChevronDown, Download, Loader2, Moon, RotateCw, Search, Sun } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 type ThemeName = Settings['themeName'];
 
@@ -315,11 +315,11 @@ export function SettingsBody() {
 
       <SectionTitle>AI (OpenRouter)</SectionTitle>
       <Field label="OpenRouter API key" htmlFor="openrouter-key">
-        <Input
+        <DebouncedSettingsInput
           id="openrouter-key"
           type="password"
           value={settings.openrouterApiKey}
-          onChange={(e) => void updateSettings({ openrouterApiKey: e.target.value })}
+          onCommit={(v) => void updateSettings({ openrouterApiKey: v })}
           placeholder="sk-or-…"
         />
         <p className="mt-1 font-display text-xs italic text-muted-foreground">
@@ -329,10 +329,10 @@ export function SettingsBody() {
       </Field>
 
       <Field label="Model" htmlFor="openrouter-model">
-        <Input
+        <DebouncedSettingsInput
           id="openrouter-model"
           value={settings.openrouterModel}
-          onChange={(e) => void updateSettings({ openrouterModel: e.target.value })}
+          onCommit={(v) => void updateSettings({ openrouterModel: v })}
           placeholder="anthropic/claude-sonnet-4.5"
         />
         <p className="mt-1 font-display text-xs italic text-muted-foreground">
@@ -362,6 +362,79 @@ export function SettingsBody() {
       <SectionTitle>About</SectionTitle>
       <UpdateField />
     </div>
+  );
+}
+
+
+/** Debounce delay for text settings (API key / model) — U18. */
+const TEXT_SETTING_DEBOUNCE_MS = 300;
+
+/**
+ * Locally-buffered text input that commits to settings after a short idle
+ * period (and on blur / unmount). Instant controls (checkboxes, selects)
+ * still call `updateSettings` directly; sidebar drag keeps pointer-up
+ * persistence in SidebarResizer.
+ */
+function DebouncedSettingsInput({
+  id,
+  value,
+  onCommit,
+  type = 'text',
+  placeholder,
+}: {
+  id: string;
+  value: string;
+  onCommit: (value: string) => void;
+  type?: string;
+  placeholder?: string;
+}) {
+  const [local, setLocal] = useState(value);
+  const localRef = useRef(local);
+  localRef.current = local;
+  const valueRef = useRef(value);
+  valueRef.current = value;
+  const onCommitRef = useRef(onCommit);
+  onCommitRef.current = onCommit;
+
+  // Adopt external updates (e.g. settings reload) without clobbering in-flight typing.
+  useEffect(() => {
+    setLocal(value);
+  }, [value]);
+
+  useEffect(() => {
+    if (local === value) return;
+    const timer = window.setTimeout(() => {
+      onCommitRef.current(local);
+    }, TEXT_SETTING_DEBOUNCE_MS);
+    return () => window.clearTimeout(timer);
+  }, [local, value]);
+
+  // Flush a pending edit if the field unmounts mid-debounce (sheet close).
+  useEffect(() => {
+    return () => {
+      const pending = localRef.current;
+      if (pending !== valueRef.current) {
+        onCommitRef.current(pending);
+      }
+    };
+  }, []);
+
+  const flush = useCallback(() => {
+    const pending = localRef.current;
+    if (pending !== valueRef.current) {
+      onCommitRef.current(pending);
+    }
+  }, []);
+
+  return (
+    <Input
+      id={id}
+      type={type}
+      value={local}
+      onChange={(e) => setLocal(e.target.value)}
+      onBlur={flush}
+      placeholder={placeholder}
+    />
   );
 }
 
