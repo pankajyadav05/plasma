@@ -312,7 +312,7 @@ export function RedisSidebar() {
           </div>
         )}
         {keys && keys.keys.length > 0 && (
-          <ul className="py-1">
+          <ul className="py-1" role="tree" aria-label="Redis keys">
             {[...tree.children.values()].map((node) => (
               <TreeNode
                 key={node.token}
@@ -420,7 +420,13 @@ function TreeNode({
   const isChecked = node.fullKey !== null && checked.has(node.fullKey);
 
   return (
-    <li className="leading-tight">
+    <li
+      className="leading-tight"
+      role="treeitem"
+      aria-level={depth + 1}
+      aria-selected={isActive}
+      aria-expanded={hasChildren ? open : undefined}
+    >
       {isLeaf && !hasChildren ? (
         <button
           type="button"
@@ -484,7 +490,7 @@ function TreeNode({
         </button>
       )}
       {open && hasChildren && (
-        <ul>
+        <ul role="group">
           {[...node.children.values()].map((child) => (
             <TreeNode
               key={child.token}

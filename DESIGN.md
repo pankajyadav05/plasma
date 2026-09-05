@@ -360,8 +360,14 @@ monaco.editor.defineTheme('paper-editor', {
 - Visible focus ring on every interactive element (2px `--accent` outline, 2px offset)
 - Tab order matches visual order, no `tabindex > 0`
 - Icon-only buttons get `aria-label`
-- Result grid keyboard-navigable (arrows, Enter to edit, Esc to commit, Tab to next cell)
-- Schema tree exposes ARIA `role="tree"` / `treeitem` with `aria-level` and `aria-expanded`
+- Result grid keyboard-navigable:
+  - Arrows move the selected cell
+  - Enter opens the row detail drawer (does **not** enter edit mode)
+  - F2 starts an inline edit when the grid is writable; double-click also edits
+  - Esc cancels an open edit, or clears the cell selection when not editing
+  - Tab / Shift+Tab move to the next / previous cell (commit first if editing)
+  - Space opens the cell detail viewer for the selected cell
+- Schema tree (Postgres entity list and Redis key tree) exposes ARIA `role="tree"` / `treeitem` with `aria-level`; expandable nodes also set `aria-expanded`
 - Color never the only signal (NULL has glyph + color, errors have icon + color, sort has caret + color)
 - `prefers-reduced-motion` clamps motion
 - Min hit target: 28×28px (desktop)
