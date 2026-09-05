@@ -21,11 +21,16 @@ import {
   type WorkerRequest,
   type WorkerResponse,
 } from '@shared/protocol';
+import { isSingleSqlStatement } from '@shared/sql-statements';
 import { BrowserWindow, app, ipcMain, nativeImage } from 'electron';
 import {
+  AI_TOOL_MAX_ROWS,
   cancelAiChat,
+  capAiToolJson,
+  isAiRowDataAllowed,
   isReadOnlyRedisCommand,
   isReadOnlySql,
+  serializeAiToolRows,
   setAiToolExecutor,
   startAiChat,
 } from './ai';
@@ -108,33 +113,45 @@ app.whenReady().then(async () => {
     }
   });
 
-  // AI tools dispatch by the active engine. Postgres uses the worker
-  // sideband connection so tool queries don't queue behind a long
-  // primary query; Redis routes through the read-only command list;
-  // OpenSearch hits search / SQL plugin.
+  // AI tools dispatch by the active engine. Postgres uses a dedicated
+  // read-only AI client (U04); Redis routes through the read-only
+  // command list; OpenSearch hits search / SQL plugin. Row-data tools
+  // require per-connection opt-in (U06) and are row/byte capped.
   setAiToolExecutor(async (name, args) => {
+    const settings = SettingsShape.parse(getAllSettings());
+    const allowRows = isAiRowDataAllowed(activeConnectionId, settings.connectionAiRowData);
+    if (!allowRows) {
+      return JSON.stringify({
+        error:
+          'rejected: AI row-data tools are disabled for this connection. Enable "Allow AI tools to read row data" in the connection dialog.',
+      });
+    }
+
     if (name === 'query_database') {
       if (activeEngine !== 'postgres') {
         return JSON.stringify({ error: 'no postgres connection' });
       }
       const sql = typeof args.sql === 'string' ? args.sql : '';
       if (!sql) return JSON.stringify({ error: 'missing sql arg' });
+      // Cheap pre-filter only — database-side READ ONLY is the real boundary.
       if (!isReadOnlySql(sql)) {
         return JSON.stringify({
           error: 'rejected: only SELECT / EXPLAIN / SHOW / WITH / VALUES / TABLE allowed',
         });
       }
-      try {
-        const res = await callWorker({ kind: 'sidebandQuery', sql }, 'queryResult');
-        const cols = res.result.columns.map((c) => c.name);
-        const rows = res.result.rows
-          .slice(0, 50)
-          .map((r) => Object.fromEntries(cols.map((cn, i) => [cn, r[i]])));
+      if (!isSingleSqlStatement(sql)) {
         return JSON.stringify({
-          rowCount: res.result.rowCount,
+          error: 'rejected: AI queries must be a single SQL statement',
+        });
+      }
+      try {
+        const res = await callWorker({ kind: 'aiQuery', sql }, 'queryResult');
+        const cols = res.result.columns.map((c) => c.name);
+        return serializeAiToolRows({
           columns: cols,
-          rows,
-          truncated: res.result.rows.length > 50,
+          rows: res.result.rows,
+          rowCount: res.result.rowCount,
+          maxRows: AI_TOOL_MAX_ROWS,
         });
       } catch (err) {
         return JSON.stringify({
@@ -157,11 +174,12 @@ app.whenReady().then(async () => {
       }
       try {
         const res = await callWorker({ kind: 'redisCommand', parts }, 'redisCommand');
-        return JSON.stringify({
+        return capAiToolJson({
           command: res.result.command,
           args: res.result.args,
           reply: res.result.reply,
           durationMs: res.result.durationMs,
+          capped: true,
         });
       } catch (err) {
         return JSON.stringify({
@@ -178,12 +196,17 @@ app.whenReady().then(async () => {
       const body = typeof args.body === 'string' ? args.body : '';
       if (!index || !body) return JSON.stringify({ error: 'index + body required' });
       try {
-        const res = await callWorker({ kind: 'osSearch', index, body, size: 50 }, 'osSearch');
-        return JSON.stringify({
+        const res = await callWorker(
+          { kind: 'osSearch', index, body, size: AI_TOOL_MAX_ROWS },
+          'osSearch',
+        );
+        return capAiToolJson({
           total: res.result.total,
           took: res.result.took,
-          hits: res.result.hits.slice(0, 50),
+          hits: res.result.hits.slice(0, AI_TOOL_MAX_ROWS),
           fields: res.result.fields,
+          truncated: res.result.hits.length > AI_TOOL_MAX_ROWS,
+          capped: { maxRows: AI_TOOL_MAX_ROWS },
         });
       } catch (err) {
         return JSON.stringify({
@@ -206,15 +229,13 @@ app.whenReady().then(async () => {
       }
       try {
         const res = await callWorker({ kind: 'osSql', query }, 'osSql');
-        const rowsObj = res.result.rows
-          .slice(0, 50)
-          .map((row) => Object.fromEntries(res.result.columns.map((c, i) => [c.name, row[i]])));
-        return JSON.stringify({
+        const cols = res.result.columns.map((c) => c.name);
+        return serializeAiToolRows({
+          columns: cols,
+          rows: res.result.rows,
           rowCount: res.result.rows.length,
-          columns: res.result.columns,
-          rows: rowsObj,
-          durationMs: res.result.durationMs,
-          truncated: res.result.rows.length > 50,
+          maxRows: AI_TOOL_MAX_ROWS,
+          extra: { durationMs: res.result.durationMs },
         });
       } catch (err) {
         return JSON.stringify({
@@ -497,7 +518,10 @@ function registerIpcHandlers() {
     // to Anthropic, so the key (sk-or-...) is the only thing that
     // really has to change.
     const apiKey = settings.openrouterApiKey || settings.claudeApiKey;
-    const result = await startAiChat(mainWindow, parsed, apiKey, settings.openrouterModel);
+    const allowRowData = isAiRowDataAllowed(activeConnectionId, settings.connectionAiRowData);
+    const result = await startAiChat(mainWindow, parsed, apiKey, settings.openrouterModel, {
+      allowRowData,
+    });
     if (!result.accepted && result.reason) {
       // Surface the failure as a stream event too, so the UI shows it
       // even if the renderer awaits the promise without checking the
