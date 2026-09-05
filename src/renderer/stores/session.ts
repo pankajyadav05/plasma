@@ -1,5 +1,6 @@
+import { getEditorCaret } from '@/lib/editor-run-context';
 import { ipc } from '@/lib/ipc';
-import { splitSqlStatements } from '@/lib/sql-split';
+import { resolveRunTarget, splitSqlStatements } from '@/lib/sql-split';
 import {
   type Filter,
   type TableSort,
@@ -190,6 +191,16 @@ export interface QueryTab {
   queryResult: QueryResult | null;
   queryError: string | null;
   queryErrorSql: string | null;
+  /**
+   * Character range in `sql` of the statement currently executing.
+   * Monaco paints a decoration over this span while `queryRunState === 'running'`.
+   */
+  queryRunningRange: { start: number; end: number } | null;
+  /**
+   * Character range in `sql` of the statement that last failed.
+   * Monaco paints an error marker over this span.
+   */
+  queryErrorRange: { start: number; end: number } | null;
   page: number;
   pageSize: number;
   selectedCell: { row: number; col: number } | null;
@@ -338,6 +349,8 @@ function createEmptyTab(pageSize: number, title = 'query-1.sql'): QueryTab {
     queryResult: null,
     queryError: null,
     queryErrorSql: null,
+    queryRunningRange: null,
+    queryErrorRange: null,
     page: 0,
     pageSize,
     sortColumn: null,
@@ -367,6 +380,8 @@ function createTableTab(pageSize: number, schemaName: string, tableName: string)
     queryResult: null,
     queryError: null,
     queryErrorSql: null,
+    queryRunningRange: null,
+    queryErrorRange: null,
     page: 0,
     pageSize,
     sortColumn: null,
@@ -580,7 +595,13 @@ interface SessionState {
 
   // Per-tab actions operate on the active tab by default
   setSql(sql: string): void;
-  runQuery(): Promise<void>;
+  /**
+   * Execute SQL for the active tab.
+   * - default / `{ all: false }`: selection if non-empty, else statement at cursor (U24)
+   * - `{ all: true }`: whole buffer (⌘⇧⏎)
+   * - `{ sql, base? }`: run this exact script (prod-gate resume); skips caret resolution
+   */
+  runQuery(opts?: { all?: boolean; sql?: string; base?: number }): Promise<void>;
   cancelQuery(): Promise<void>;
   openTable(schema: string, table: string): void;
   openForeignRow(refSchema: string, refTable: string, refColumn: string, value: unknown): void;
@@ -1196,7 +1217,7 @@ export const useSession = create<SessionState>((set, get) => ({
     patchActiveTab(set, get, { sql });
   },
 
-  async runQuery() {
+  async runQuery(opts?: { all?: boolean; sql?: string; base?: number }) {
     const state = get();
     const tab = activeTab(state);
     if (!tab) return;
@@ -1209,19 +1230,36 @@ export const useSession = create<SessionState>((set, get) => ({
       return;
     }
 
-    const sql = tab.sql.trim();
-    if (!sql) return;
+    // U24: ⌘⏎ = selection else statement-at-cursor; ⌘⇧⏎ = whole buffer.
+    // Menu Run without an editor caret falls back to the whole buffer.
+    // Prod-gate confirm passes `{ sql }` so the approved payload runs once.
+    let script: string;
+    let base: number;
+    if (opts?.sql != null) {
+      script = opts.sql;
+      base = opts.base ?? 0;
+      if (script.trim().length === 0) return;
+    } else {
+      const mode = opts?.all ? 'buffer' : 'smart';
+      const target = resolveRunTarget(tab.sql, mode, getEditorCaret());
+      if (!target) return;
+      script = target.sql;
+      base = target.base;
+    }
 
     // Prod gate: if active connection is tagged 'prod' and the script
     // includes any destructive statement, stash the SQL and prompt for
-    // confirmation. The user resumes via `confirmProdGate()`.
-    const connId = state.activeConfig?.id;
-    const tag = connId ? state.settings.connectionTags?.[connId] : undefined;
-    if (tag === 'prod' && state.prodGate === null) {
-      const stmts = splitSqlStatements(sql);
-      if (stmts.some(looksDestructive)) {
-        set({ prodGate: { sql } });
-        return;
+    // confirmation. The user resumes via `confirmProdGate()` with `{ sql }`,
+    // which skips this check so the approved payload executes once.
+    if (opts?.sql == null) {
+      const connId = state.activeConfig?.id;
+      const tag = connId ? state.settings.connectionTags?.[connId] : undefined;
+      if (tag === 'prod' && state.prodGate === null) {
+        const stmts = splitSqlStatements(script);
+        if (stmts.some((s) => looksDestructive(s.text))) {
+          set({ prodGate: { sql: script } });
+          return;
+        }
       }
     }
 
@@ -1229,34 +1267,47 @@ export const useSession = create<SessionState>((set, get) => ({
       queryRunState: 'running',
       queryError: null,
       queryErrorSql: null,
+      queryErrorRange: null,
+      queryRunningRange: null,
     });
     // Multi-statement scripts: split with a quote/comment-aware tokenizer
     // and run each separately. Last statement's QueryResult populates the
     // grid; failures stop execution and surface "stopped at N of M".
-    const statements = splitSqlStatements(sql);
+    // Offsets are remapped into the full tab buffer for Monaco decorations.
+    const statements = splitSqlStatements(script).map((s) => ({
+      text: s.text,
+      start: base + s.start,
+      end: base + s.end,
+    }));
     try {
       let lastResult: QueryResult | null = null;
       let anyDdl = false;
       for (let i = 0; i < statements.length; i++) {
-        const stmt = statements[i];
+        const stmt = statements[i]!;
+        patchActiveTab(set, get, {
+          queryRunningRange: { start: stmt.start, end: stmt.end },
+        });
         try {
-          lastResult = await ipc.query.run(stmt);
+          lastResult = await ipc.query.run(stmt.text);
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           const tag = statements.length > 1 ? ` (statement ${i + 1} of ${statements.length})` : '';
           patchActiveTab(set, get, {
             queryError: `${message}${tag}`,
-            queryErrorSql: stmt,
+            queryErrorSql: stmt.text,
+            queryErrorRange: { start: stmt.start, end: stmt.end },
+            queryRunningRange: null,
             queryRunState: 'idle',
           });
           if (anyDdl) void get().refreshSchema();
           return;
         }
-        if (looksLikeDdl(stmt)) anyDdl = true;
+        if (looksLikeDdl(stmt.text)) anyDdl = true;
       }
       patchActiveTab(set, get, {
         queryResult: lastResult,
         queryRunState: 'idle',
+        queryRunningRange: null,
         page: 0,
         sortColumn: null,
         selectedCell: null,
@@ -1268,7 +1319,12 @@ export const useSession = create<SessionState>((set, get) => ({
     } catch (err) {
       patchActiveTab(set, get, {
         queryError: err instanceof Error ? err.message : String(err),
-        queryErrorSql: sql,
+        queryErrorSql: script,
+        queryErrorRange:
+          statements.length > 0
+            ? { start: statements[0]!.start, end: statements[statements.length - 1]!.end }
+            : null,
+        queryRunningRange: null,
         queryRunState: 'idle',
       });
     }
@@ -2266,10 +2322,10 @@ export const useSession = create<SessionState>((set, get) => ({
     const gate = get().prodGate;
     if (!gate) return;
     set({ prodGate: null });
-    // Re-enter runQuery now that the gate is cleared. The SQL on the
-    // active tab still matches what we stashed — runQuery will see no
-    // gate set and proceed.
-    void get().runQuery();
+    // Re-enter runQuery with the captured payload so a selection/statement
+    // run does not re-resolve from a moved caret (and so the gate does not
+    // loop on the same destructive script — F10 / U11 lands the full fix).
+    void get().runQuery({ sql: gate.sql });
   },
 
   cancelProdGate() {

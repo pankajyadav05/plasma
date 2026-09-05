@@ -46,7 +46,12 @@ export function SqlCanvas({ expanded = false }: { expanded?: boolean }) {
   const handleAction = () => {
     if (running) void cancelQuery();
     else if (isTable) void refreshTable();
-    else void runQuery();
+    else void runQuery(); // toolbar Run = smart (selection / at cursor)
+  };
+
+  const handleRunAll = () => {
+    if (running || isTable) return;
+    void runQuery({ all: true });
   };
 
   return (
@@ -92,7 +97,11 @@ export function SqlCanvas({ expanded = false }: { expanded?: boolean }) {
           value={tab.sql}
           onChange={isTable ? () => {} : setSql}
           onRun={handleAction}
+          onRunAll={handleRunAll}
           onToggle={() => {}}
+          runningRange={tab.queryRunningRange}
+          errorRange={tab.queryErrorRange}
+          errorMessage={tab.queryError}
           theme={theme}
           fontSize={fontSize}
           readOnly={isTable}
