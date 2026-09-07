@@ -44,6 +44,10 @@ export function App() {
         >[0];
         session().aiApplyEvent(evt);
       }),
+      // Worker crash invalidates the live connection (U20).
+      window.plasmaEvents.on('plasma:worker:reset', () => {
+        session().handleWorkerReset();
+      }),
     ];
     return () => unsub.forEach((fn) => fn());
   }, []);

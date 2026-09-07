@@ -15,7 +15,6 @@ import {
 import type {
   AiMessage,
   ConnectionConfig,
-  ConnectionSshConfig,
   ConnectionEngine,
   HistoryEntry,
   OsOverview,
@@ -172,22 +171,7 @@ export interface PendingEdit {
   /** Visible row index at queue time, used for in-grid highlighting. */
   rowIndex: number;
   columnIndex: number;
-  /**
-   * Connection generation at queue time (U01). Commit refuses to write
-   * if the live generation no longer matches — even if the originating
-   * tab has since been closed.
-   */
-  connectionGen: number;
 }
-
-/**
- * Stashed disconnect / reconnect while buffered edits still exist.
- * The user must commit, discard, or cancel before the switch proceeds (U01).
- */
-export type ConnectionActionGate =
-  | { kind: 'disconnect' }
-  | { kind: 'connect'; config: ConnectionConfig }
-  | { kind: 'connectSaved'; id: string };
 
 export interface QueryTab {
   id: string;
@@ -206,17 +190,6 @@ export interface QueryTab {
   queryResult: QueryResult | null;
   queryError: string | null;
   queryErrorSql: string | null;
-  /**
-   * Monotonic request generation for SQL runs. Bumped before each async
-   * query IPC so a late response can be dropped if the tab was closed or a
-   * newer run superseded it (U03).
-   */
-  queryGeneration: number;
-  /**
-   * Monotonic request generation for SQL formatting (separate from
-   * queryGeneration so format cannot strand a running query).
-   */
-  formatGeneration: number;
   page: number;
   pageSize: number;
   selectedCell: { row: number; col: number } | null;
@@ -335,15 +308,11 @@ const DEFAULT_SETTINGS: Settings = {
   queryTimeoutMs: 0,
   telemetryEnabled: false,
   openrouterApiKey: '',
-  hasOpenrouterApiKey: false,
   openrouterModel: 'anthropic/claude-sonnet-4.5',
   claudeApiKey: '',
-  hasClaudeApiKey: false,
   transactionMode: false,
   connectionTags: {},
-  connectionAiRowData: {},
   connectionSsh: {},
-  sshKnownHosts: {},
   schemaSnapshots: [],
   favoriteSchemas: {},
   favoriteTables: {},
@@ -369,8 +338,6 @@ function createEmptyTab(pageSize: number, title = 'query-1.sql'): QueryTab {
     queryResult: null,
     queryError: null,
     queryErrorSql: null,
-    queryGeneration: 0,
-    formatGeneration: 0,
     page: 0,
     pageSize,
     sortColumn: null,
@@ -400,8 +367,6 @@ function createTableTab(pageSize: number, schemaName: string, tableName: string)
     queryResult: null,
     queryError: null,
     queryErrorSql: null,
-    queryGeneration: 0,
-    formatGeneration: 0,
     page: 0,
     pageSize,
     sortColumn: null,
@@ -478,13 +443,6 @@ interface SessionState {
   connectionError: string | null;
   serverVersion: string | null;
   txnState: TxnState;
-  /**
-   * Monotonic generation from the worker, bumped on every successful
-   * connect. Pending edits and in-flight query publishes bind to this (U01).
-   */
-  connectionGen: number;
-  /** Non-null while disconnect/connect is blocked on pending edits. */
-  connectionActionGate: ConnectionActionGate | null;
 
   // ── schema introspection ──
   schema: SchemaInfo | null;
@@ -587,12 +545,11 @@ interface SessionState {
   setHistoryOpen(open: boolean): void;
   requestDeleteConnection(id: string | null): void;
 
-  testConnection(
-    config: ConnectionConfig,
-    ssh?: ConnectionSshConfig | null,
-  ): Promise<{ ok: boolean; message: string }>;
+  testConnection(config: ConnectionConfig): Promise<{ ok: boolean; message: string }>;
   connect(config: ConnectionConfig): Promise<void>;
   disconnect(): Promise<void>;
+  /** Clear local connection state after an unexpected worker restart (U20). */
+  handleWorkerReset(): void;
   refreshSchema(): Promise<void>;
   toggleSchema(name: string): void;
 
@@ -723,9 +680,8 @@ interface SessionState {
   ): void;
 
   // SQL formatting (calls main → sql-formatter → back). Replaces the
-  // origin tab's SQL on success; no-op for table tabs (their SQL is
-  // compiled, not user-edited). Late responses are dropped if the tab
-  // closed or a newer request superseded the call (U03).
+  // active tab's SQL on success; no-op for table tabs (their SQL is
+  // compiled, not user-edited).
   formatActiveSql(): Promise<void>;
 
   // Pending edits (buffered inline-edit tray)
@@ -737,16 +693,9 @@ interface SessionState {
     connectionId: string,
     tag: 'prod' | 'staging' | 'dev' | 'local' | null,
   ): Promise<void>;
-  /** Per-connection opt-in for AI tools to egress capped row data (U06). */
-  setConnectionAiRowData(connectionId: string, allowed: boolean): Promise<void>;
   /** Resume a prod-gated runQuery after user confirms. */
   confirmProdGate(): void;
   cancelProdGate(): void;
-
-  // Connection-switch gate (pending edits)
-  /** Commit or discard pending edits, then proceed with the stashed switch. */
-  resolveConnectionAction(choice: 'commit' | 'discard'): Promise<void>;
-  cancelConnectionAction(): void;
 }
 
 const initialTab = createEmptyTab(DEFAULT_SETTINGS.defaultPageSize);
@@ -757,8 +706,6 @@ export const useSession = create<SessionState>((set, get) => ({
   connectionError: null,
   serverVersion: null,
   txnState: 'none',
-  connectionGen: 0,
-  connectionActionGate: null,
 
   schema: null,
   schemaLoading: false,
@@ -831,12 +778,9 @@ export const useSession = create<SessionState>((set, get) => ({
 
   // ── connection ──
 
-  async testConnection(config, ssh) {
+  async testConnection(config) {
     try {
-      // Pass candidate SSH through so the probe uses the dialog's
-      // in-progress bastion (including null = explicitly no tunnel).
-      // Never mutates live session state — main/worker isolate the probe.
-      const res = await ipc.conn.test(config, ssh);
+      const res = await ipc.conn.test(config);
       if (res.ok) {
         return { ok: true, message: `Connected · ${shortVersion(res.serverVersion)}` };
       }
@@ -847,27 +791,110 @@ export const useSession = create<SessionState>((set, get) => ({
   },
 
   async connect(config) {
-    if (get().pendingEdits.length > 0) {
-      set({ connectionActionGate: { kind: 'connect', config } });
-      return;
+    set({ connectionState: 'connecting', connectionError: null });
+    try {
+      const { serverVersion, engine } = await ipc.conn.connect(config);
+      const eff = (engine ?? config.engine ?? 'postgres') as ConnectionEngine;
+      set({
+        activeConfig: { ...config, engine: eff },
+        serverVersion,
+        connectionState: 'connected',
+        dialogOpen: false,
+        dialogPrefill: null,
+        activeTable: null,
+        txnState: 'none',
+        // Stale per-engine state from a prior connection.
+        redisOverview: null,
+        redisKeys: null,
+        redisMatch: null,
+        osOverview: null,
+        activeRedisKey: null,
+        activeOsIndex: null,
+      });
+      await get().loadSavedConnections();
+      await loadEngineOverview(set, get, eff);
+      if (eff === 'postgres') void get().loadAvailableRoles();
+    } catch (err) {
+      set({
+        connectionState: 'error',
+        connectionError: err instanceof Error ? err.message : String(err),
+      });
     }
-    await performConnect(set, get, config);
   },
 
   async connectSaved(id) {
-    if (get().pendingEdits.length > 0) {
-      set({ connectionActionGate: { kind: 'connectSaved', id } });
-      return;
+    set({ connectionState: 'connecting', connectionError: null });
+    try {
+      const { info, config } = await ipc.vault.connectById(id);
+      const eff = (info.engine ?? config.engine ?? 'postgres') as ConnectionEngine;
+      set({
+        activeConfig: { ...config, engine: eff, password: '' },
+        serverVersion: info.serverVersion,
+        connectionState: 'connected',
+        dialogOpen: false,
+        dialogPrefill: null,
+        activeTable: null,
+        txnState: 'none',
+        redisOverview: null,
+        redisKeys: null,
+        redisMatch: null,
+        osOverview: null,
+        activeRedisKey: null,
+        activeOsIndex: null,
+      });
+      await loadEngineOverview(set, get, eff);
+      if (eff === 'postgres') void get().loadAvailableRoles();
+    } catch (err) {
+      set({
+        connectionState: 'error',
+        connectionError: err instanceof Error ? err.message : String(err),
+      });
     }
-    await performConnectSaved(set, get, id);
   },
 
   async disconnect() {
-    if (get().pendingEdits.length > 0) {
-      set({ connectionActionGate: { kind: 'disconnect' } });
-      return;
+    try {
+      await ipc.conn.disconnect();
+    } finally {
+      get().handleWorkerReset();
     }
-    await performDisconnect(set, get);
+  },
+
+  handleWorkerReset() {
+    set({
+      activeConfig: null,
+      serverVersion: null,
+      connectionState: 'idle',
+      connectionError: null,
+      schema: null,
+      expandedSchemas: new Set(),
+      activeTable: null,
+      txnState: 'none',
+      currentSchema: null,
+      availableRoles: [],
+      activeRole: null,
+      redisOverview: null,
+      redisKeys: null,
+      redisMatch: null,
+      osOverview: null,
+      activeRedisKey: null,
+      activeOsIndex: null,
+      redisBulkMode: false,
+      selectedRedisKeys: new Set<string>(),
+    });
+    // Clear all tabs' results since they reference a now-dead connection
+    set((state) => ({
+      tabs: state.tabs.map((t) => ({
+        ...t,
+        queryResult: null,
+        queryError: null,
+        queryRunState: 'idle' as const,
+        page: 0,
+        sortColumn: null,
+        selectedCell: null,
+        selectedRows: new Set(),
+      })),
+    }));
   },
 
   async refreshSchema() {
@@ -1043,19 +1070,13 @@ export const useSession = create<SessionState>((set, get) => ({
   async bulkDeleteSelectedRedisKeys() {
     const keys = [...get().selectedRedisKeys];
     if (keys.length === 0) return;
-    let result: { deleted: string[]; failed: { key: string; error: string }[] };
     try {
-      result = await ipc.redis.bulkDelete(keys);
+      await ipc.redis.bulkDelete(keys);
     } catch (err) {
       console.error('[plasma] bulk delete failed', err);
       return;
     }
-    if (result.failed.length > 0) {
-      console.error('[plasma] bulk delete partial failures', result.failed);
-    }
-    // Only drop keys whose DEL command succeeded — failed keys stay visible.
-    const dropped = new Set(result.deleted);
-    const remainingSelected = new Set(result.failed.map((f) => f.key));
+    const dropped = new Set(keys);
     set((state) => ({
       redisKeys: state.redisKeys
         ? {
@@ -1066,8 +1087,8 @@ export const useSession = create<SessionState>((set, get) => ({
       tabs: state.tabs.filter(
         (t) => !(t.kind === 'redis-key' && t.redisKey && dropped.has(t.redisKey)),
       ),
-      selectedRedisKeys: remainingSelected,
-      redisBulkMode: remainingSelected.size > 0,
+      selectedRedisKeys: new Set(),
+      redisBulkMode: false,
     }));
   },
 
@@ -1212,39 +1233,11 @@ export const useSession = create<SessionState>((set, get) => ({
       }
     }
 
-    // U03 + U01: capture origin tab + query generation + connection
-    // generation before any await so results/errors publish only to that
-    // tab on the same connection (not whichever is active later).
-    const originTabId = tab.id;
-    const generation = tab.queryGeneration + 1;
-    const originConnGen = state.connectionGen;
-    patchTabById(set, originTabId, {
+    patchActiveTab(set, get, {
       queryRunState: 'running',
       queryError: null,
       queryErrorSql: null,
-      queryGeneration: generation,
     });
-
-    const publishOrigin = (patch: Partial<QueryTab>) => {
-      const current = get().tabs.find((t) => t.id === originTabId);
-      // Drop if the origin tab was closed or a newer request superseded it.
-      if (!current || current.queryGeneration !== generation) return;
-      // Drop result payload if the connection changed under us; still clear
-      // running so the origin tab does not stay stuck.
-      if (get().connectionGen !== originConnGen) {
-        if (patch.queryRunState === 'idle' || patch.queryError != null) {
-          patchTabById(set, originTabId, {
-            queryRunState: 'idle',
-            queryError:
-              patch.queryError ??
-              'connection changed while query was running — result discarded',
-          });
-        }
-        return;
-      }
-      patchTabById(set, originTabId, patch);
-    };
-
     // Multi-statement scripts: split with a quote/comment-aware tokenizer
     // and run each separately. Last statement's QueryResult populates the
     // grid; failures stop execution and surface "stopped at N of M".
@@ -1259,7 +1252,7 @@ export const useSession = create<SessionState>((set, get) => ({
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           const tag = statements.length > 1 ? ` (statement ${i + 1} of ${statements.length})` : '';
-          publishOrigin({
+          patchActiveTab(set, get, {
             queryError: `${message}${tag}`,
             queryErrorSql: stmt,
             queryRunState: 'idle',
@@ -1269,7 +1262,7 @@ export const useSession = create<SessionState>((set, get) => ({
         }
         if (looksLikeDdl(stmt)) anyDdl = true;
       }
-      publishOrigin({
+      patchActiveTab(set, get, {
         queryResult: lastResult,
         queryRunState: 'idle',
         page: 0,
@@ -1277,28 +1270,15 @@ export const useSession = create<SessionState>((set, get) => ({
         selectedCell: null,
         selectedRows: new Set(),
       });
-      // U05: worker may have auto-BEGUN under transactionMode — mirror
-      // that into the status-bar txn indicator.
-      if (get().settings.transactionMode && get().connectionGen === originConnGen) {
-        const last = statements[statements.length - 1]?.trim().toUpperCase() ?? '';
-        if (last.startsWith('COMMIT') || last.startsWith('ROLLBACK') || last.startsWith('ABORT')) {
-          set({ txnState: 'none' });
-        } else {
-          set({ txnState: 'active' });
-        }
-      }
       if (anyDdl) {
         void get().refreshSchema();
       }
     } catch (err) {
-      publishOrigin({
+      patchActiveTab(set, get, {
         queryError: err instanceof Error ? err.message : String(err),
         queryErrorSql: sql,
         queryRunState: 'idle',
       });
-      if (get().settings.transactionMode && get().connectionGen === originConnGen) {
-        set({ txnState: 'error' });
-      }
     }
   },
 
@@ -1582,9 +1562,6 @@ export const useSession = create<SessionState>((set, get) => ({
       throw new Error('table has no primary key — cannot edit rows safely');
     }
 
-    if (state.connectionGen <= 0) {
-      throw new Error('not connected — cannot queue edits');
-    }
     const oldValue = row[columnIndex];
     const edit: PendingEdit = {
       id: freshId(),
@@ -1597,7 +1574,6 @@ export const useSession = create<SessionState>((set, get) => ({
       newValue,
       rowIndex,
       columnIndex,
-      connectionGen: state.connectionGen,
     };
 
     // De-duplicate: replacing the same (tab, pk, column) with a fresh edit
@@ -2226,36 +2202,23 @@ export const useSession = create<SessionState>((set, get) => ({
     const state = get();
     const edits = state.pendingEdits;
     if (edits.length === 0) return;
-    // U01: every edit must still target the live connection generation.
-    const liveGen = state.connectionGen;
-    const mismatched = edits.filter((e) => e.connectionGen !== liveGen);
-    if (mismatched.length > 0 || liveGen <= 0) {
-      throw new Error(
-        'pending edits belong to a previous connection — discard them before committing',
-      );
-    }
     set({ pendingEditsBusy: true });
     try {
-      // U05: one worker request owns BEGIN/UPDATEs/COMMIT (or SAVEPOINT
-      // when a user transaction is already open). Never a sequence of
-      // unrelated IPC calls that can commit foreign work.
-      const updates = edits.map((e) => {
+      // Wrap in an explicit transaction so partial failures roll back.
+      await ipc.query.run('BEGIN', undefined, { internal: true });
+      for (const e of edits) {
         const { sql, params } = buildUpdateSql({
           schema: e.schema,
           table: e.table,
           set: { [e.column]: e.newValue },
           pkValues: e.pkValues,
         });
-        return { sql, params };
-      });
-      const res = await ipc.query.commitEditBatch({
-        connectionGen: liveGen,
-        updates,
-      });
-      set({ pendingEdits: [], txnState: res.state });
-      // Refresh every still-open tab that had pending edits. Edits whose
-      // origin tab was closed are preserved through commit (U01) but have
-      // nothing to refresh.
+        await ipc.query.run(sql, params, { internal: true });
+      }
+      await ipc.query.run('COMMIT', undefined, { internal: true });
+      set({ pendingEdits: [] });
+      // Refresh every tab that had pending edits — the server-side row
+      // could differ from our optimistic view (triggers, defaults, etc).
       const tabIds = new Set(edits.map((e) => e.tabId));
       for (const id of tabIds) {
         const tab = get().tabs.find((t) => t.id === id);
@@ -2263,6 +2226,13 @@ export const useSession = create<SessionState>((set, get) => ({
           void runTableDataQuery(set, get, id);
         }
       }
+    } catch (err) {
+      try {
+        await ipc.query.run('ROLLBACK', undefined, { internal: true });
+      } catch {
+        // already rolled back / connection lost — swallow
+      }
+      throw err;
     } finally {
       set({ pendingEditsBusy: false });
     }
@@ -2300,22 +2270,6 @@ export const useSession = create<SessionState>((set, get) => ({
     }
   },
 
-  async setConnectionAiRowData(connectionId, allowed) {
-    const current = get().settings.connectionAiRowData ?? {};
-    const next: Record<string, boolean> = { ...current };
-    if (allowed) {
-      next[connectionId] = true;
-    } else {
-      delete next[connectionId];
-    }
-    set({ settings: { ...get().settings, connectionAiRowData: next } });
-    try {
-      await ipc.settings.set({ connectionAiRowData: next });
-    } catch (err) {
-      console.error('[plasma] persist connectionAiRowData failed', err);
-    }
-  },
-
   confirmProdGate() {
     const gate = get().prodGate;
     if (!gate) return;
@@ -2330,51 +2284,16 @@ export const useSession = create<SessionState>((set, get) => ({
     set({ prodGate: null });
   },
 
-  // ── Connection-switch gate (pending edits) ──
-
-  async resolveConnectionAction(choice) {
-    const gate = get().connectionActionGate;
-    if (!gate) return;
-    if (choice === 'commit') {
-      await get().commitPendingEdits();
-    } else {
-      await get().revertPendingEdits();
-    }
-    // Clear gate before performing the action so a nested guard does not
-    // re-stash the same switch.
-    set({ connectionActionGate: null });
-    if (gate.kind === 'disconnect') {
-      await performDisconnect(set, get);
-    } else if (gate.kind === 'connect') {
-      await performConnect(set, get, gate.config);
-    } else {
-      await performConnectSaved(set, get, gate.id);
-    }
-  },
-
-  cancelConnectionAction() {
-    set({ connectionActionGate: null });
-  },
-
   // ── SQL formatting ──
 
   async formatActiveSql() {
     const tab = activeTab(get());
     if (!tab || tab.kind !== 'sql') return;
     if (!tab.sql.trim()) return;
-    // U03: format must write back to the origin tab, not the active one
-    // at completion time. Bump formatGeneration so a superseded format is
-    // dropped without interfering with an in-flight queryGeneration.
-    const originTabId = tab.id;
-    const originSql = tab.sql;
-    const generation = tab.formatGeneration + 1;
-    patchTabById(set, originTabId, { formatGeneration: generation });
     try {
-      const formatted = await ipc.sql.format(originSql);
-      const current = get().tabs.find((t) => t.id === originTabId);
-      if (!current || current.formatGeneration !== generation) return;
-      if (formatted && formatted !== current.sql) {
-        patchTabById(set, originTabId, { sql: formatted });
+      const formatted = await ipc.sql.format(tab.sql);
+      if (formatted && formatted !== tab.sql) {
+        patchActiveTab(set, get, { sql: formatted });
       }
     } catch (err) {
       console.error('[plasma] formatActiveSql failed', err);
@@ -2386,128 +2305,6 @@ export const useSession = create<SessionState>((set, get) => ({
 
 export function activeTab(state: SessionState): QueryTab | undefined {
   return state.tabs.find((t) => t.id === state.activeTabId);
-}
-
-type SessionSet = (
-  partial:
-    | Partial<SessionState>
-    | ((s: SessionState) => Partial<SessionState>),
-) => void;
-type SessionGet = () => SessionState;
-
-async function performConnect(
-  set: SessionSet,
-  get: SessionGet,
-  config: ConnectionConfig,
-): Promise<void> {
-  set({ connectionState: 'connecting', connectionError: null });
-  try {
-    const { serverVersion, engine, connectionGen } = await ipc.conn.connect(config);
-    const eff = (engine ?? config.engine ?? 'postgres') as ConnectionEngine;
-    set({
-      activeConfig: { ...config, engine: eff },
-      serverVersion,
-      connectionState: 'connected',
-      connectionGen,
-      dialogOpen: false,
-      dialogPrefill: null,
-      activeTable: null,
-      txnState: 'none',
-      pendingEdits: [],
-      // Stale per-engine state from a prior connection.
-      redisOverview: null,
-      redisKeys: null,
-      redisMatch: null,
-      osOverview: null,
-      activeRedisKey: null,
-      activeOsIndex: null,
-    });
-    await get().loadSavedConnections();
-    await loadEngineOverview(set, get, eff);
-    if (eff === 'postgres') void get().loadAvailableRoles();
-  } catch (err) {
-    set({
-      connectionState: 'error',
-      connectionError: err instanceof Error ? err.message : String(err),
-    });
-  }
-}
-
-async function performConnectSaved(
-  set: SessionSet,
-  get: SessionGet,
-  id: string,
-): Promise<void> {
-  set({ connectionState: 'connecting', connectionError: null });
-  try {
-    const { info, config } = await ipc.vault.connectById(id);
-    const eff = (info.engine ?? config.engine ?? 'postgres') as ConnectionEngine;
-    set({
-      activeConfig: { ...config, engine: eff, password: '' },
-      serverVersion: info.serverVersion,
-      connectionState: 'connected',
-      connectionGen: info.connectionGen,
-      dialogOpen: false,
-      dialogPrefill: null,
-      activeTable: null,
-      txnState: 'none',
-      pendingEdits: [],
-      redisOverview: null,
-      redisKeys: null,
-      redisMatch: null,
-      osOverview: null,
-      activeRedisKey: null,
-      activeOsIndex: null,
-    });
-    await loadEngineOverview(set, get, eff);
-    if (eff === 'postgres') void get().loadAvailableRoles();
-  } catch (err) {
-    set({
-      connectionState: 'error',
-      connectionError: err instanceof Error ? err.message : String(err),
-    });
-  }
-}
-
-async function performDisconnect(set: SessionSet, _get: SessionGet): Promise<void> {
-  try {
-    await ipc.conn.disconnect();
-  } finally {
-    set({
-      activeConfig: null,
-      serverVersion: null,
-      connectionState: 'idle',
-      connectionGen: 0,
-      schema: null,
-      expandedSchemas: new Set(),
-      activeTable: null,
-      txnState: 'none',
-      currentSchema: null,
-      availableRoles: [],
-      activeRole: null,
-      pendingEdits: [],
-      redisOverview: null,
-      redisKeys: null,
-      redisMatch: null,
-      osOverview: null,
-      activeRedisKey: null,
-      activeOsIndex: null,
-      redisBulkMode: false,
-      selectedRedisKeys: new Set<string>(),
-    });
-    // Clear all tabs' results since they reference a now-dead connection
-    set((state) => ({
-      tabs: state.tabs.map((t) => ({
-        ...t,
-        queryResult: null,
-        queryError: null,
-        page: 0,
-        sortColumn: null,
-        selectedCell: null,
-        selectedRows: new Set(),
-      })),
-    }));
-  }
 }
 
 function patchActiveTab(
@@ -2639,7 +2436,6 @@ async function runTableDataQuery(
     pageSize: tab.pageSize,
   });
 
-  const originConnGen = state.connectionGen;
   patchTabById(set, tabId, {
     queryRunState: 'running',
     queryError: null,
@@ -2649,17 +2445,6 @@ async function runTableDataQuery(
 
   try {
     const result = await ipc.query.run(sql, params, { internal: true });
-    // U01: drop stale results if the connection changed while in flight.
-    if (get().connectionGen !== originConnGen) {
-      const still = get().tabs.find((t) => t.id === tabId);
-      if (still) {
-        patchTabById(set, tabId, {
-          queryRunState: 'idle',
-          queryError: 'connection changed while query was running — result discarded',
-        });
-      }
-      return;
-    }
     patchTabById(set, tabId, {
       queryResult: result,
       queryRunState: 'idle',
@@ -2667,11 +2452,6 @@ async function runTableDataQuery(
       selectedRows: new Set(),
     });
   } catch (err) {
-    if (get().connectionGen !== originConnGen) {
-      const still = get().tabs.find((t) => t.id === tabId);
-      if (still) patchTabById(set, tabId, { queryRunState: 'idle' });
-      return;
-    }
     patchTabById(set, tabId, {
       queryError: err instanceof Error ? err.message : String(err),
       queryErrorSql: sql,

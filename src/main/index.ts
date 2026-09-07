@@ -7,8 +7,6 @@ import {
   ConnectionConfig,
   type ConnectionConfig as ConnectionConfigType,
   type ConnectionInfo,
-  ConnectionSshConfig,
-  type ConnectionSshConfig as ConnectionSshConfigType,
   type ConnectionTestResult,
   type HistoryEntry,
   IpcChannel,
@@ -23,16 +21,11 @@ import {
   type WorkerRequest,
   type WorkerResponse,
 } from '@shared/protocol';
-import { isSingleSqlStatement } from '@shared/sql-statements';
 import { BrowserWindow, app, ipcMain, nativeImage } from 'electron';
 import {
-  AI_TOOL_MAX_ROWS,
   cancelAiChat,
-  capAiToolJson,
-  isAiRowDataAllowed,
   isReadOnlyRedisCommand,
   isReadOnlySql,
-  serializeAiToolRows,
   setAiToolExecutor,
   startAiChat,
 } from './ai';
@@ -40,13 +33,12 @@ import { closeDb, getDb } from './db';
 import { clearHistory, listHistory, recordHistory } from './history';
 import { initLogger, logger } from './logger';
 import { buildAppMenu } from './menu';
-import { changedSettings, getAllSettings, setSettings } from './settings';
+import { getAllSettings, setSetting } from './settings';
 import { formatSql } from './sql-format';
 import { closeAllTunnels, closeTunnel, openTunnel } from './ssh-tunnel';
 import { disposeUpdater, initUpdater } from './updater';
 import {
   deleteConnection as vaultDelete,
-  getApiKey,
   getFullConnection as vaultGetFull,
   listConnections as vaultList,
   saveConnection as vaultSave,
@@ -66,8 +58,7 @@ let activeConnectionId: string | null = null;
 
 // Track the active engine so the AI tool executor can dispatch the
 // right tool call (sideband SQL vs Redis command vs OS search). Set
-// by establishLiveConnection, cleared on disconnect. Never touched by
-// ConnectionTest.
+// by ConnectionConnect / VaultConnectById, cleared on disconnect.
 let activeEngine: 'postgres' | 'redis' | 'opensearch' | null = null;
 
 // ─── App lifecycle ────────────────────────────────────────────────────
@@ -117,45 +108,43 @@ app.whenReady().then(async () => {
     }
   });
 
-  // AI tools dispatch by the active engine. Postgres uses a dedicated
-  // read-only AI client (U04); Redis routes through the read-only
-  // command list; OpenSearch hits search / SQL plugin. Row-data tools
-  // require per-connection opt-in (U06) and are row/byte capped.
-  setAiToolExecutor(async (name, args) => {
-    const settings = SettingsShape.parse(getAllSettings());
-    const allowRows = isAiRowDataAllowed(activeConnectionId, settings.connectionAiRowData);
-    if (!allowRows) {
-      return JSON.stringify({
-        error:
-          'rejected: AI row-data tools are disabled for this connection. Enable "Allow AI tools to read row data" in the connection dialog.',
-      });
-    }
+  // Worker crash after readiness invalidates the live connection — the
+  // respawned worker has no DB session (U20).
+  workerSupervisor.setCrashHandler(() => {
+    const id = activeConnectionId;
+    activeConnectionId = null;
+    activeEngine = null;
+    if (id) closeTunnel(id);
+    mainWindow?.webContents.send('plasma:worker:reset');
+  });
 
+  // AI tools dispatch by the active engine. Postgres uses the worker
+  // aux connection so tool queries don't queue behind a long primary
+  // query and never block cancel (U19); Redis routes through the
+  // read-only command list; OpenSearch hits search / SQL plugin.
+  setAiToolExecutor(async (name, args) => {
     if (name === 'query_database') {
       if (activeEngine !== 'postgres') {
         return JSON.stringify({ error: 'no postgres connection' });
       }
       const sql = typeof args.sql === 'string' ? args.sql : '';
       if (!sql) return JSON.stringify({ error: 'missing sql arg' });
-      // Cheap pre-filter only — database-side READ ONLY is the real boundary.
       if (!isReadOnlySql(sql)) {
         return JSON.stringify({
           error: 'rejected: only SELECT / EXPLAIN / SHOW / WITH / VALUES / TABLE allowed',
         });
       }
-      if (!isSingleSqlStatement(sql)) {
-        return JSON.stringify({
-          error: 'rejected: AI queries must be a single SQL statement',
-        });
-      }
       try {
-        const res = await callWorker({ kind: 'aiQuery', sql }, 'queryResult');
+        const res = await callWorker({ kind: 'sidebandQuery', sql }, 'queryResult');
         const cols = res.result.columns.map((c) => c.name);
-        return serializeAiToolRows({
-          columns: cols,
-          rows: res.result.rows,
+        const rows = res.result.rows
+          .slice(0, 50)
+          .map((r) => Object.fromEntries(cols.map((cn, i) => [cn, r[i]])));
+        return JSON.stringify({
           rowCount: res.result.rowCount,
-          maxRows: AI_TOOL_MAX_ROWS,
+          columns: cols,
+          rows,
+          truncated: res.result.rows.length > 50,
         });
       } catch (err) {
         return JSON.stringify({
@@ -178,12 +167,11 @@ app.whenReady().then(async () => {
       }
       try {
         const res = await callWorker({ kind: 'redisCommand', parts }, 'redisCommand');
-        return capAiToolJson({
+        return JSON.stringify({
           command: res.result.command,
           args: res.result.args,
           reply: res.result.reply,
           durationMs: res.result.durationMs,
-          capped: true,
         });
       } catch (err) {
         return JSON.stringify({
@@ -200,17 +188,12 @@ app.whenReady().then(async () => {
       const body = typeof args.body === 'string' ? args.body : '';
       if (!index || !body) return JSON.stringify({ error: 'index + body required' });
       try {
-        const res = await callWorker(
-          { kind: 'osSearch', index, body, size: AI_TOOL_MAX_ROWS },
-          'osSearch',
-        );
-        return capAiToolJson({
+        const res = await callWorker({ kind: 'osSearch', index, body, size: 50 }, 'osSearch');
+        return JSON.stringify({
           total: res.result.total,
           took: res.result.took,
-          hits: res.result.hits.slice(0, AI_TOOL_MAX_ROWS),
+          hits: res.result.hits.slice(0, 50),
           fields: res.result.fields,
-          truncated: res.result.hits.length > AI_TOOL_MAX_ROWS,
-          capped: { maxRows: AI_TOOL_MAX_ROWS },
         });
       } catch (err) {
         return JSON.stringify({
@@ -233,13 +216,15 @@ app.whenReady().then(async () => {
       }
       try {
         const res = await callWorker({ kind: 'osSql', query }, 'osSql');
-        const cols = res.result.columns.map((c) => c.name);
-        return serializeAiToolRows({
-          columns: cols,
-          rows: res.result.rows,
+        const rowsObj = res.result.rows
+          .slice(0, 50)
+          .map((row) => Object.fromEntries(res.result.columns.map((c, i) => [c.name, row[i]])));
+        return JSON.stringify({
           rowCount: res.result.rows.length,
-          maxRows: AI_TOOL_MAX_ROWS,
-          extra: { durationMs: res.result.durationMs },
+          columns: res.result.columns,
+          rows: rowsObj,
+          durationMs: res.result.durationMs,
+          truncated: res.result.rows.length > 50,
         });
       } catch (err) {
         return JSON.stringify({
@@ -304,52 +289,16 @@ async function callWorker<K extends WorkerResponse['kind']>(
   return res as Extract<WorkerResponse, { kind: K }>;
 }
 
-// ─── Live connection lifecycle (single ownership path) ────────────────
-//
-// Real connects (dialog Save+Connect and vault connect-by-id) share one
-// helper: SSH prep → worker connect → identity update → optional vault
-// persist. Identity updates MUST sit outside the non-fatal vaultSave try
-// so a storage failure cannot leave main thinking the old connection is
-// still active while the worker is on the new one.
-// "Test Connection" uses a separate path (testConnect + throwaway tunnel)
-// and never calls this helper.
+function currentQueryTimeoutMs(): number {
+  return SettingsShape.parse(getAllSettings()).queryTimeoutMs;
+}
 
-async function establishLiveConnection(
-  config: ConnectionConfigType,
-  opts: { persist: boolean },
-): Promise<{ serverVersion: string; engine: NonNullable<typeof activeEngine>; connectionGen: number }> {
-  const settings = SettingsShape.parse(getAllSettings());
-  const ssh = getFullSshConfig(config.id, settings.connectionSsh);
-  const effective = { ...config };
-  let openedTunnel = false;
-  if (ssh) {
-    const local = await openTunnel({
-      id: config.id,
-      ssh,
-      pgHost: config.host,
-      pgPort: config.port,
-    });
-    effective.host = local.host;
-    effective.port = local.port;
-    openedTunnel = true;
-  }
+/** Push queryTimeoutMs → PG statement_timeout on primary+aux (U20). */
+async function applyStatementTimeout(timeoutMs = currentQueryTimeoutMs()): Promise<void> {
   try {
-    const res = await callWorker({ kind: 'connect', config: effective }, 'connected');
-    // Successful worker connect → update identity immediately, before any
-    // non-fatal persistence work.
-    activeConnectionId = config.id;
-    activeEngine = res.engine;
-    if (opts.persist) {
-      try {
-        vaultSave(config);
-      } catch (err) {
-        logger.error('[plasma] vault save failed (non-fatal):', err);
-      }
-    }
-    return { serverVersion: res.serverVersion, engine: res.engine, connectionGen: res.connectionGen };
+    await callWorker({ kind: 'setStatementTimeout', timeoutMs }, 'statementTimeoutSet');
   } catch (err) {
-    if (openedTunnel) closeTunnel(config.id);
-    throw err;
+    logger.error('[plasma] failed to apply statement_timeout:', err);
   }
 }
 
@@ -373,8 +322,40 @@ function registerIpcHandlers() {
     IpcChannel.ConnectionConnect,
     async (_e, rawConfig: unknown): Promise<ConnectionInfo> => {
       const config = ConnectionConfig.parse(rawConfig);
-      const res = await establishLiveConnection(config, { persist: true });
-      return { serverVersion: res.serverVersion, engine: res.engine, connectionGen: res.connectionGen };
+      const settings = SettingsShape.parse(getAllSettings());
+      const ssh = settings.connectionSsh?.[config.id];
+      const effective = { ...config };
+      if (ssh) {
+        const local = await openTunnel({
+          id: config.id,
+          ssh,
+          pgHost: config.host,
+          pgPort: config.port,
+        });
+        effective.host = local.host;
+        effective.port = local.port;
+      }
+      try {
+        const res = await callWorker(
+          {
+            kind: 'connect',
+            config: effective,
+            statementTimeoutMs: currentQueryTimeoutMs(),
+          },
+          'connected',
+        );
+        try {
+          vaultSave(config);
+          activeConnectionId = config.id;
+          activeEngine = res.engine;
+        } catch (err) {
+          logger.error('[plasma] vault save failed (non-fatal):', err);
+        }
+        return { serverVersion: res.serverVersion, engine: res.engine };
+      } catch (err) {
+        if (ssh) closeTunnel(config.id);
+        throw err;
+      }
     },
   );
 
@@ -388,48 +369,23 @@ function registerIpcHandlers() {
 
   ipcMain.handle(
     IpcChannel.ConnectionTest,
-    async (_e, rawConfig: unknown, rawSsh?: unknown): Promise<ConnectionTestResult> => {
-      // Isolated probe: own SSH tunnel (throwaway id) + worker testConnect
-      // (throwaway driver). Never disconnectAll() on the live session and
-      // never mutate activeConnectionId / activeEngine.
-      let tunnelId: string | null = null;
+    async (_e, rawConfig: unknown): Promise<ConnectionTestResult> => {
       try {
         const config = ConnectionConfig.parse(rawConfig);
-        const engine = config.engine ?? 'postgres';
-        // Explicit ssh arg wins (including null = "no tunnel for this probe").
-        // When omitted, fall back to any saved bastion for this connection id
-        // so callers that only pass config still exercise SSH when configured.
-        let ssh: ConnectionSshConfigType | undefined;
-        if (rawSsh === null) {
-          ssh = undefined;
-        } else if (rawSsh !== undefined) {
-          ssh = ConnectionSshConfig.parse(rawSsh);
-        } else {
-          const settings = SettingsShape.parse(getAllSettings());
-          ssh = getFullSshConfig(config.id, settings.connectionSsh);
-        }
-        const effective = { ...config };
-        // OpenSearch is HTTPS — SSH tunnels are for raw TCP (pg/redis).
-        if (ssh && engine !== 'opensearch') {
-          tunnelId = `test:${randomUUID()}`;
-          const local = await openTunnel({
-            id: tunnelId,
-            ssh,
-            pgHost: config.host,
-            pgPort: config.port,
-          });
-          effective.host = local.host;
-          effective.port = local.port;
-        }
-        const res = await callWorker({ kind: 'testConnect', config: effective }, 'connected');
+        const res = await callWorker(
+          {
+            kind: 'connect',
+            config,
+            statementTimeoutMs: currentQueryTimeoutMs(),
+          },
+          'connected',
+        );
         return { ok: true, serverVersion: res.serverVersion, engine: res.engine };
       } catch (err) {
         return {
           ok: false,
           message: err instanceof Error ? err.message : String(err),
         };
-      } finally {
-        if (tunnelId) closeTunnel(tunnelId);
       }
     },
   );
@@ -456,14 +412,6 @@ function registerIpcHandlers() {
       if (typeof id !== 'string') throw new Error('id must be a string');
       const config = vaultGetFull(id);
       if (!config) throw new Error(`no saved connection with id ${id}`);
-<<<<<<< HEAD
-      const res = await establishLiveConnection(config, { persist: false });
-      const { password: _pwd, ...safeConfig } = config;
-      return {
-        info: { serverVersion: res.serverVersion, engine: res.engine },
-        config: safeConfig,
-      };
-=======
       const settings = SettingsShape.parse(getAllSettings());
       const ssh = settings.connectionSsh?.[id];
       const effective = { ...config };
@@ -473,33 +421,59 @@ function registerIpcHandlers() {
         effective.port = local.port;
       }
       try {
-        const res = await callWorker({ kind: 'connect', config: effective }, 'connected');
+        const res = await callWorker(
+          {
+            kind: 'connect',
+            config: effective,
+            statementTimeoutMs: currentQueryTimeoutMs(),
+          },
+          'connected',
+        );
         activeConnectionId = config.id;
         activeEngine = res.engine;
         const { password: _pwd, ...safeConfig } = config;
         return {
-          info: {
-            serverVersion: res.serverVersion,
-            engine: res.engine,
-            connectionGen: res.connectionGen,
-          },
+          info: { serverVersion: res.serverVersion, engine: res.engine },
           config: safeConfig,
         };
       } catch (err) {
         if (ssh) closeTunnel(id);
         throw err;
       }
->>>>>>> origin/feat/u01-u05-connection-gen-txn
-      const res = await establishLiveConnection(config, { persist: false });
-      const { password: _pwd, ...safeConfig } = config;
-      return {
-        info: { serverVersion: res.serverVersion, engine: res.engine, connectionGen: res.connectionGen },
-        config: safeConfig,
-      };
-      // the worker. Internal/plumbing queries never opt in.
-      const settings = SettingsShape.parse(getAllSettings());
-      const autoBegin = !internal && settings.transactionMode === true;
-      const res = await callWorker({ kind: 'query', sql, params, autoBegin }, 'queryResult');
+    },
+  );
+
+  ipcMain.handle(IpcChannel.VaultGetConfig, (_e, id: unknown): ConnectionConfigType | null => {
+    if (typeof id !== 'string') throw new Error('id must be a string');
+    // Returns the decrypted config including password — used only by
+    // the renderer's Edit flow so users don't need to re-type passwords.
+    return vaultGetFull(id);
+  });
+
+  // ── Query execution + history ──
+
+  ipcMain.handle(IpcChannel.QueryRun, async (_e, payload: unknown): Promise<QueryResult> => {
+    // Accept either a legacy string-only payload or { sql, params, internal }.
+    // `internal: true` skips history recording — used for Plasma's own
+    // plumbing queries (introspection, RLS lookup, count, table data,
+    // etc.) so the user-facing history list stays clean.
+    let sql: string;
+    let params: unknown[] | undefined;
+    let internal = false;
+    if (typeof payload === 'string') {
+      sql = payload;
+    } else if (payload && typeof payload === 'object' && 'sql' in payload) {
+      const p = payload as { sql: unknown; params?: unknown; internal?: unknown };
+      if (typeof p.sql !== 'string') throw new Error('sql must be a string');
+      sql = p.sql;
+      params = Array.isArray(p.params) ? p.params : undefined;
+      internal = p.internal === true;
+    } else {
+      throw new Error('invalid query payload');
+    }
+    const executedAt = Date.now();
+    try {
+      const res = await callWorker({ kind: 'query', sql, params }, 'queryResult');
       if (!internal) {
         try {
           recordHistory({
@@ -539,43 +513,6 @@ function registerIpcHandlers() {
     await callWorker({ kind: 'cancel' }, 'cancelled');
   });
 
-  ipcMain.handle(
-    IpcChannel.QueryCommitEditBatch,
-    async (
-      _e,
-      raw: unknown,
-    ): Promise<{ state: TxnState; applied: number }> => {
-      if (!raw || typeof raw !== 'object') throw new Error('invalid edit batch payload');
-      const p = raw as { connectionGen?: unknown; updates?: unknown };
-      if (typeof p.connectionGen !== 'number' || !Number.isFinite(p.connectionGen)) {
-        throw new Error('connectionGen must be a number');
-      }
-      if (!Array.isArray(p.updates) || p.updates.length === 0) {
-        throw new Error('updates must be a non-empty array');
-      }
-      const updates = p.updates.map((u, i) => {
-        if (!u || typeof u !== 'object') throw new Error(`updates[${i}] invalid`);
-        const row = u as { sql?: unknown; params?: unknown };
-        if (typeof row.sql !== 'string' || !row.sql) {
-          throw new Error(`updates[${i}].sql must be a non-empty string`);
-        }
-        return {
-          sql: row.sql,
-          params: Array.isArray(row.params) ? row.params : undefined,
-        };
-      });
-      const res = await callWorker(
-        {
-          kind: 'commitEditBatch',
-          connectionGen: p.connectionGen,
-          updates,
-        },
-        'editBatchResult',
-      );
-      return { state: res.state, applied: res.applied };
-    },
-  );
-
   ipcMain.handle(IpcChannel.QuerySideband, async (_e, payload: unknown): Promise<QueryResult> => {
     let sql: string;
     let params: unknown[] | undefined;
@@ -603,11 +540,8 @@ function registerIpcHandlers() {
     // touching settings — `claude-3-5-*` model ids on OpenRouter route
     // to Anthropic, so the key (sk-or-...) is the only thing that
     // really has to change.
-    const apiKey = getApiKey() || settings.openrouterApiKey || settings.claudeApiKey;
-    const allowRowData = isAiRowDataAllowed(activeConnectionId, settings.connectionAiRowData);
-    const result = await startAiChat(mainWindow, parsed, apiKey, settings.openrouterModel, {
-      allowRowData,
-    });
+    const apiKey = settings.openrouterApiKey || settings.claudeApiKey;
+    const result = await startAiChat(mainWindow, parsed, apiKey, settings.openrouterModel);
     if (!result.accepted && result.reason) {
       // Surface the failure as a stream event too, so the UI shows it
       // even if the renderer awaits the promise without checking the
@@ -652,17 +586,17 @@ function registerIpcHandlers() {
   ipcMain.handle(IpcChannel.SettingsSet, (_e, patch: unknown): Settings => {
     const prev = SettingsShape.parse(getAllSettings());
     const merged = SettingsShape.parse({ ...prev, ...(patch as Record<string, unknown>) });
-    // Persist only keys that actually changed, in one SQLite transaction
-    // (U18 / F14). Unrelated large blobs like connectionSsh stay untouched.
-    const changed = changedSettings(
-      prev as Record<string, unknown>,
-      merged as Record<string, unknown>,
-    );
-    setSettings(changed);
+    for (const [k, v] of Object.entries(merged)) {
+      setSetting(k, v);
+    }
     // Side effect: if theme changed, update the native window background +
     // title bar overlay so the native window controls follow suit.
     if (merged.theme !== prev.theme && mainWindow && !mainWindow.isDestroyed()) {
       applyThemeToWindow(mainWindow, merged.theme);
+    }
+    // Push queryTimeoutMs → PG statement_timeout while connected (U20).
+    if (merged.queryTimeoutMs !== prev.queryTimeoutMs && activeEngine === 'postgres') {
+      void applyStatementTimeout(merged.queryTimeoutMs);
     }
     return merged;
   });
@@ -762,9 +696,8 @@ function registerIpcHandlers() {
   ipcMain.handle(IpcChannel.RedisBulkDelete, async (_e, raw: unknown) => {
     if (!Array.isArray(raw)) throw new Error('keys must be an array');
     const keys = raw.map((k) => String(k));
-    if (keys.length === 0) return { deleted: [], failed: [] };
-    const res = await callWorker({ kind: 'redisBulkDelete', keys }, 'redisBulkDelete');
-    return res.result;
+    if (keys.length === 0) return;
+    await callWorker({ kind: 'redisBulkDelete', keys }, 'redisAck');
   });
 
   ipcMain.handle(IpcChannel.RedisWrite, async (_e, raw: unknown) => {

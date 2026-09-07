@@ -1,31 +1,26 @@
-import type { ConnectionConfig, QueryResult, SchemaInfo, TxnState } from "@shared/protocol";
-import { isSingleSqlStatement } from "@shared/sql-statements";
-import { buildNodeTlsOptions, insecureTlsWarning, resolveTls } from "@shared/tls";
+import type { ConnectionConfig, QueryResult, SchemaInfo, TxnState } from '@shared/protocol';
+import { formatStatementTimeoutSql } from '@shared/worker-policy';
 import pg from 'pg';
 
 const { Client } = pg;
 type ClientT = InstanceType<typeof Client>;
 
 /**
- * Postgres driver — wraps three `pg.Client` connections:
- *   1. `primary` — carries queries / transactions
- *   2. `sideband` — cheap second connection used for pg_cancel_backend +
- *      live monitor so cancellation works even while `primary` is mid-query
- *   3. `ai` — dedicated AI tool connection established with
- *      `default_transaction_read_only = on`; each AI query runs inside
- *      `SET TRANSACTION READ ONLY` as a single statement (U04)
+ * Postgres driver — wraps three `pg.Client` connections (U19):
+ *   1. `primary` — carries user queries / transactions
+ *   2. `control` — cancel only (`pg_cancel_backend`); never runs AI/monitor SQL
+ *   3. `aux` — AI tools + live monitor / terminate so they cannot block cancel
  *
  * Lives in the utilityProcess so a crashing query or a rogue network read
  * never blocks the main process or the renderer.
  */
 export class PostgresDriver {
   private primary: ClientT | null = null;
-  private sideband: ClientT | null = null;
-  private ai: ClientT | null = null;
+  private control: ClientT | null = null;
+  private aux: ClientT | null = null;
   private primaryBackendPid: number | null = null;
   private txnState: TxnState = 'none';
-  /** Mirrored from the worker's connection generation for write-boundary checks. */
-  private connectionGen = 0;
+  private statementTimeoutMs = 0;
 
   isConnected(): boolean {
     return this.primary !== null;
@@ -35,58 +30,8 @@ export class PostgresDriver {
     return this.txnState;
   }
 
-  getConnectionGen(): number {
-    return this.connectionGen;
-  }
-
-  /** Called by the worker after a successful connect bumps the generation. */
-  setConnectionGen(gen: number): void {
-    this.connectionGen = gen;
-  }
-
-  async connect(config: ConnectionConfig): Promise<string> {
-    // Hang up any previous clients first
-    await this.disconnect();
-
-    const ssl = buildNodeTlsOptions(config) ?? false;
-    if (resolveTls(config)?.mode === 'insecure') {
-      console.warn(insecureTlsWarning(config.host));
-    }
-
-    const primary = new Client({
-      host: config.host,
-      port: config.port,
-      database: config.database,
-      user: config.user,
-      password: config.password,
-      ssl,
-      connectionTimeoutMillis: 10_000,
-      application_name: 'plasma',
-    });
-    await primary.connect();
-    this.primary = primary;
-
-    // Grab the backend pid so the sideband can cancel it
-    const pidRes = await primary.query<{ pid: number }>('SELECT pg_backend_pid() AS pid');
-    this.primaryBackendPid = pidRes.rows[0]?.pid ?? null;
-
-    // Sideband is a separate connection, used only for cancellation
-    const sideband = new Client({
-      host: config.host,
-      port: config.port,
-      database: config.database,
-      user: config.user,
-      password: config.password,
-      ssl,
-      connectionTimeoutMillis: 10_000,
-      application_name: 'plasma-sideband',
-    });
-    await sideband.connect();
-    this.sideband = sideband;
-
-    // Dedicated AI client — same credentials, but session-default
-    // read-only so even a bypassed keyword filter cannot write.
-    const ai = new Client({
+  private clientOpts(config: ConnectionConfig, application_name: string) {
+    return {
       host: config.host,
       port: config.port,
       database: config.database,
@@ -94,176 +39,115 @@ export class PostgresDriver {
       password: config.password,
       ssl: config.ssl ? { rejectUnauthorized: false } : false,
       connectionTimeoutMillis: 10_000,
-      application_name: 'plasma-ai',
-    });
-    await ai.connect();
-    await ai.query('SET default_transaction_read_only = on');
-    this.ai = ai;
+      application_name,
+    };
+  }
 
-    if (config.readOnly) {
-      await primary.query("SET default_transaction_read_only = on");
-      await sideband.query("SET default_transaction_read_only = on");
+  async connect(config: ConnectionConfig, statementTimeoutMs?: number): Promise<string> {
+    // Hang up any previous clients first
+    await this.disconnect();
+
+    if (statementTimeoutMs !== undefined) {
+      this.statementTimeoutMs = Math.max(0, Math.floor(statementTimeoutMs));
     }
+
+    const primary = new Client(this.clientOpts(config, 'plasma'));
+    await primary.connect();
+    this.primary = primary;
+
+    // Grab the backend pid so control can cancel it
+    const pidRes = await primary.query<{ pid: number }>('SELECT pg_backend_pid() AS pid');
+    this.primaryBackendPid = pidRes.rows[0]?.pid ?? null;
+
+    // Control connection — cancel capacity only (U19)
+    const control = new Client(this.clientOpts(config, 'plasma-control'));
+    await control.connect();
+    this.control = control;
+
+    // Aux connection — AI / monitor execution budget, separate from cancel
+    const aux = new Client(this.clientOpts(config, 'plasma-aux'));
+    await aux.connect();
+    this.aux = aux;
+
+    await this.applyStatementTimeout();
+
     const res = await primary.query<{ version: string }>('SELECT version()');
     return res.rows[0]?.version ?? 'unknown';
   }
 
   async disconnect(): Promise<void> {
     this.txnState = 'none';
-    this.connectionGen = 0;
     this.primaryBackendPid = null;
     const p = this.primary;
-    const s = this.sideband;
-    const a = this.ai;
+    const c = this.control;
+    const a = this.aux;
     this.primary = null;
-    this.sideband = null;
-    this.ai = null;
-    await Promise.allSettled([p?.end(), s?.end(), a?.end()]);
+    this.control = null;
+    this.aux = null;
+    await Promise.allSettled([p?.end(), c?.end(), a?.end()]);
   }
 
-  async query(
-    sql: string,
-    params?: unknown[],
-    opts?: { autoBegin?: boolean },
-  ): Promise<QueryResult> {
+  /**
+   * Apply `queryTimeoutMs` as PostgreSQL `statement_timeout` on primary + aux.
+   * Control is left alone so cancel is never delayed by a session timeout (U20).
+   */
+  async setStatementTimeout(timeoutMs: number): Promise<void> {
+    this.statementTimeoutMs = Math.max(0, Math.floor(timeoutMs));
+    await this.applyStatementTimeout();
+  }
+
+  private async applyStatementTimeout(): Promise<void> {
+    const sql = formatStatementTimeoutSql(this.statementTimeoutMs);
+    if (this.primary) await this.primary.query(sql);
+    if (this.aux) await this.aux.query(sql);
+  }
+
+  async query(sql: string, params?: unknown[]): Promise<QueryResult> {
     if (!this.primary) throw new Error('not connected');
-
-    const upper = sql.trim().toUpperCase();
-    const isTxnControl =
-      upper.startsWith('BEGIN') ||
-      upper.startsWith('START TRANSACTION') ||
-      upper.startsWith('COMMIT') ||
-      upper.startsWith('ROLLBACK') ||
-      upper.startsWith('ABORT');
-
-    // U05: transactionMode → auto-BEGIN before user statements when idle.
-    // Never nest BEGIN while a user transaction is already open.
-    if (opts?.autoBegin && this.txnState === 'none' && !isTxnControl) {
-      await this.primary.query('BEGIN');
-      this.txnState = 'active';
-    }
 
     const start = Date.now();
-    try {
-      // rowMode:'array' returns positional tuples instead of objects —
-      // cheaper to serialize across IPC and handles duplicate column names.
-      const res = await this.primary.query({
-        text: sql,
-        values: params,
-        rowMode: 'array',
-      });
-      const durationMs = Date.now() - start;
+    // rowMode:'array' returns positional tuples instead of objects —
+    // cheaper to serialize across IPC and handles duplicate column names.
+    const res = await this.primary.query({
+      text: sql,
+      values: params,
+      rowMode: 'array',
+    });
+    const durationMs = Date.now() - start;
 
-      // BEGIN/COMMIT/ROLLBACK statements flow through this path too —
-      // update state if so. Auto-BEGIN above already set 'active'.
-      if (upper.startsWith('BEGIN') || upper.startsWith('START TRANSACTION')) {
-        this.txnState = 'active';
-      } else if (
-        upper.startsWith('COMMIT') ||
-        upper.startsWith('ROLLBACK') ||
-        upper.startsWith('ABORT')
-      ) {
-        this.txnState = 'none';
-      }
-
-      return {
-        columns: res.fields.map((f) => ({
-          name: f.name,
-          dataTypeID: f.dataTypeID,
-          dataTypeName: pgTypeName(f.dataTypeID),
-        })),
-        rows: res.rows as unknown[][],
-        rowCount: res.rowCount ?? res.rows.length,
-        durationMs,
-        command: res.command,
-      };
-    } catch (err) {
-      // A failed statement inside an open transaction leaves PG aborted
-      // until ROLLBACK — surface that so the status bar can prompt.
-      if (this.txnState === 'active') this.txnState = 'error';
-      throw err;
+    // Any query error would have thrown above. If we got here without an
+    // error but had been in an active txn, state stays 'active'. BEGIN/COMMIT/
+    // ROLLBACK statements flow through this path too — update state if so.
+    const upper = sql.trim().toUpperCase();
+    if (upper.startsWith('BEGIN') || upper.startsWith('START TRANSACTION')) {
+      this.txnState = 'active';
+    } else if (upper.startsWith('COMMIT') || upper.startsWith('ROLLBACK')) {
+      this.txnState = 'none';
     }
+
+    return {
+      columns: res.fields.map((f) => ({
+        name: f.name,
+        dataTypeID: f.dataTypeID,
+        dataTypeName: pgTypeName(f.dataTypeID),
+      })),
+      rows: res.rows as unknown[][],
+      rowCount: res.rowCount ?? res.rows.length,
+      durationMs,
+      command: res.command,
+    };
   }
 
   /**
-   * Execute a buffered edit batch under worker-owned transaction control
-   * (U01 + U05). Validates `expectedGen` against the live connection
-   * generation so edits queued for connection A cannot write to B.
+   * Run a query on the aux connection (AI tools, live monitor,
+   * pg_terminate_backend). Never touches the control cancel client (U19).
    *
-   * - No user txn open → BEGIN / UPDATEs / COMMIT
-   * - User txn already open → SAVEPOINT / UPDATEs / RELEASE (never nested
-   *   BEGIN that could COMMIT unrelated user work)
-   */
-  async commitEditBatch(
-    expectedGen: number,
-    updates: Array<{ sql: string; params?: unknown[] }>,
-  ): Promise<TxnState> {
-    if (!this.primary) throw new Error('not connected');
-    if (expectedGen !== this.connectionGen) {
-      throw new Error(
-        `connection generation mismatch: edit batch is for generation ${expectedGen}, current is ${this.connectionGen}`,
-      );
-    }
-    if (updates.length === 0) return this.txnState;
-
-    if (this.txnState === 'error') {
-      throw new Error(
-        'cannot commit edits while the current transaction is in an error state — rollback first',
-      );
-    }
-    const hadOpenTxn = this.txnState === 'active';
-    const savepoint = 'plasma_edit_batch';
-
-    try {
-      if (hadOpenTxn) {
-        await this.primary.query(`SAVEPOINT ${savepoint}`);
-      } else {
-        await this.primary.query('BEGIN');
-        this.txnState = 'active';
-      }
-
-      for (const u of updates) {
-        await this.primary.query({
-          text: u.sql,
-          values: u.params,
-          rowMode: 'array',
-        });
-      }
-
-      if (hadOpenTxn) {
-        await this.primary.query(`RELEASE SAVEPOINT ${savepoint}`);
-      } else {
-        await this.primary.query('COMMIT');
-        this.txnState = 'none';
-      }
-      return this.txnState;
-    } catch (err) {
-      try {
-        if (hadOpenTxn) {
-          await this.primary.query(`ROLLBACK TO SAVEPOINT ${savepoint}`);
-          await this.primary.query(`RELEASE SAVEPOINT ${savepoint}`);
-        } else if (this.primary) {
-          await this.primary.query('ROLLBACK');
-          this.txnState = 'none';
-        }
-      } catch {
-        this.txnState = 'error';
-      }
-      throw err;
-    }
-  }
-
-  /**
-   * Run a query on the sideband connection. Used by the live monitor
-   * (pg_stat_activity polling) and pg_terminate_backend so monitoring
-   * still works while a long-running query holds the primary client.
-   *
-   * Sideband never participates in the primary's transaction state.
+   * Aux never participates in the primary's transaction state.
    */
   async sidebandQuery(sql: string, params?: unknown[]): Promise<QueryResult> {
-    if (!this.sideband) throw new Error('not connected');
+    if (!this.aux) throw new Error('not connected');
     const start = Date.now();
-    const res = await this.sideband.query({
+    const res = await this.aux.query({
       text: sql,
       values: params,
       rowMode: 'array',
@@ -283,60 +167,13 @@ export class PostgresDriver {
   }
 
   /**
-   * Run a single read-only statement on the dedicated AI connection.
-   * Enforces database-side read-only via `SET TRANSACTION READ ONLY`
-   * (session already has `default_transaction_read_only = on`). Multi-
-   * statement payloads are rejected before any query runs.
-   */
-  async aiQuery(sql: string, params?: unknown[]): Promise<QueryResult> {
-    if (!this.ai) throw new Error('not connected');
-
-    if (!isSingleSqlStatement(sql)) {
-      throw new Error('rejected: AI queries must be a single SQL statement');
-    }
-
-    const start = Date.now();
-    try {
-      await this.ai.query('BEGIN');
-      await this.ai.query('SET TRANSACTION READ ONLY');
-      const res = await this.ai.query({
-        text: sql,
-        values: params,
-        rowMode: 'array',
-      });
-      await this.ai.query('COMMIT');
-      const durationMs = Date.now() - start;
-      return {
-        columns: res.fields.map((f) => ({
-          name: f.name,
-          dataTypeID: f.dataTypeID,
-          dataTypeName: pgTypeName(f.dataTypeID),
-        })),
-        rows: res.rows as unknown[][],
-        rowCount: res.rowCount ?? res.rows.length,
-        durationMs,
-        command: res.command,
-      };
-    } catch (err) {
-      try {
-        await this.ai.query('ROLLBACK');
-      } catch {
-        // ignore rollback errors — connection may already be aborted
-      }
-      throw err;
-    }
-  }
-
-  /**
    * Cancel an in-flight query on the primary connection by sending
-   * `pg_cancel_backend(pid)` from the sideband. This is the standard
-   * Postgres pattern — cancelling a query from the same client that's
-   * blocked on it is a chicken-and-egg problem.
+   * `pg_cancel_backend(pid)` from the dedicated control client (U19).
    */
   async cancelQuery(): Promise<void> {
-    if (!this.sideband || this.primaryBackendPid === null) return;
+    if (!this.control || this.primaryBackendPid === null) return;
     try {
-      await this.sideband.query('SELECT pg_cancel_backend($1)', [this.primaryBackendPid]);
+      await this.control.query('SELECT pg_cancel_backend($1)', [this.primaryBackendPid]);
     } catch (err) {
       // If cancellation itself fails, log but don't throw — the
       // primary will either finish naturally or time out.
