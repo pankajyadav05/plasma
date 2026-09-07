@@ -197,7 +197,7 @@ function QueryPanel() {
   const formatActiveSql = useSession((s) => s.formatActiveSql);
   const theme = useSession((s) => s.settings.theme);
   const fontSize = useSession((s) => s.settings.editorFontSize);
-  const apiKey = useSession((s) => s.settings.openrouterApiKey || s.settings.claudeApiKey);
+  const hasApiKey = useSession((s) => Boolean(s.settings.hasOpenrouterApiKey || s.settings.hasClaudeApiKey || s.settings.openrouterApiKey || s.settings.claudeApiKey));
 
   if (!tab) {
     return <PanelEmpty title="No active tab" hint="Open a table or write a query." />;
@@ -218,7 +218,7 @@ function QueryPanel() {
   return (
     <div className="flex h-full flex-col">
       <PanelHeader title={tab.title} hint={isTable ? 'table' : undefined} onClose={close}>
-        {!isTable && apiKey.trim().length > 0 && (
+        {!isTable && hasApiKey && (
           <Button
             variant="ghost"
             size="sm"

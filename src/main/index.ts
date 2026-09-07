@@ -46,6 +46,7 @@ import { closeAllTunnels, closeTunnel, openTunnel } from './ssh-tunnel';
 import { disposeUpdater, initUpdater } from './updater';
 import {
   deleteConnection as vaultDelete,
+  getApiKey,
   getFullConnection as vaultGetFull,
   listConnections as vaultList,
   saveConnection as vaultSave,
@@ -318,7 +319,7 @@ async function establishLiveConnection(
   opts: { persist: boolean },
 ): Promise<{ serverVersion: string; engine: NonNullable<typeof activeEngine> }> {
   const settings = SettingsShape.parse(getAllSettings());
-  const ssh = settings.connectionSsh?.[config.id];
+  const ssh = getFullSshConfig(config.id, settings.connectionSsh);
   const effective = { ...config };
   let openedTunnel = false;
   if (ssh) {
@@ -405,7 +406,7 @@ function registerIpcHandlers() {
           ssh = ConnectionSshConfig.parse(rawSsh);
         } else {
           const settings = SettingsShape.parse(getAllSettings());
-          ssh = settings.connectionSsh?.[config.id];
+          ssh = getFullSshConfig(config.id, settings.connectionSsh);
         }
         const effective = { ...config };
         // OpenSearch is HTTPS — SSH tunnels are for raw TCP (pg/redis).
@@ -561,7 +562,7 @@ function registerIpcHandlers() {
     // touching settings — `claude-3-5-*` model ids on OpenRouter route
     // to Anthropic, so the key (sk-or-...) is the only thing that
     // really has to change.
-    const apiKey = settings.openrouterApiKey || settings.claudeApiKey;
+    const apiKey = getApiKey() || settings.openrouterApiKey || settings.claudeApiKey;
     const allowRowData = isAiRowDataAllowed(activeConnectionId, settings.connectionAiRowData);
     const result = await startAiChat(mainWindow, parsed, apiKey, settings.openrouterModel, {
       allowRowData,

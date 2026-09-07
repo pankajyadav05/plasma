@@ -3,21 +3,25 @@ import { dirname, join } from 'node:path';
 import Database from 'better-sqlite3';
 import { app } from 'electron';
 import { logger } from './logger';
+import { ensureSecretsTable, migratePlaintextSettingsSecrets } from './vault';
 
 /**
- * Local SQLite store for connections, query history, and settings.
+ * Local SQLite store for connections, query history, settings, and secrets.
  *
  * File location: `userData/plasma.db`
- * Encryption: passwords are encrypted via Electron `safeStorage` at
- * the vault layer; SQLite itself is not encrypted. Non-password metadata
- * is stored in plaintext (host, port, db name). Full-row encryption is
- * a future enhancement (audit item #62).
+ * Encryption: passwords + SSH/API secrets via Electron `safeStorage` at
+ * the vault layer; SQLite itself is not encrypted. Non-secret metadata
+ * is stored in plaintext (host, port, db name).
  *
  * Schema is versioned via PRAGMA user_version so we can run forward
  * migrations safely in later releases.
+ *
+ * v3 (U07): `secrets` table + migrate plaintext SSH/API keys out of
+ * settings; WAL checkpoint + VACUUM so old plaintext bytes are gone.
+ * v4 is reserved for U25 (open_tabs) — do not bump past 3 here.
  */
 
-const CURRENT_SCHEMA_VERSION = 2;
+const CURRENT_SCHEMA_VERSION = 3;
 
 let db: Database.Database | null = null;
 
@@ -100,8 +104,21 @@ function migrate(d: Database.Database): void {
       ALTER TABLE connections
         ADD COLUMN engine TEXT NOT NULL DEFAULT 'postgres';
     `);
+    d.pragma('user_version = 2');
+  }
+
+  if (currentVersion < 3) {
+    logger.info('[plasma] migrating to schema version 3 (encrypted secrets vault)');
+    ensureSecretsTable(d);
+    migratePlaintextSettingsSecrets(d);
+    // Flush WAL pages that may still hold pre-migration plaintext, then
+    // VACUUM so freelist copies of those pages are rewritten.
+    d.pragma('wal_checkpoint(TRUNCATE)');
+    d.exec('VACUUM');
     d.pragma(`user_version = ${CURRENT_SCHEMA_VERSION}`);
+    logger.info('[plasma] schema v3 migration complete (secrets encrypted, WAL checkpointed, vacuumed)');
   }
 
   // Future migrations go here, each bumping user_version.
+  // U25 owns schema v4 (open_tabs) — do not add it in U07.
 }
