@@ -35,6 +35,7 @@ const api: PlasmaAPI = {
             internal: opts?.internal === true,
           })
         : ipcRenderer.invoke(IpcChannel.QueryRun, sql),
+    commitEditBatch: (req) => ipcRenderer.invoke(IpcChannel.QueryCommitEditBatch, req),
     cancel: () => ipcRenderer.invoke(IpcChannel.QueryCancel),
     sideband: (sql, params) =>
       params

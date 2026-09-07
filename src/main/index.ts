@@ -317,7 +317,7 @@ async function callWorker<K extends WorkerResponse['kind']>(
 async function establishLiveConnection(
   config: ConnectionConfigType,
   opts: { persist: boolean },
-): Promise<{ serverVersion: string; engine: NonNullable<typeof activeEngine> }> {
+): Promise<{ serverVersion: string; engine: NonNullable<typeof activeEngine>; connectionGen: number }> {
   const settings = SettingsShape.parse(getAllSettings());
   const ssh = getFullSshConfig(config.id, settings.connectionSsh);
   const effective = { ...config };
@@ -346,7 +346,7 @@ async function establishLiveConnection(
         logger.error('[plasma] vault save failed (non-fatal):', err);
       }
     }
-    return { serverVersion: res.serverVersion, engine: res.engine };
+    return { serverVersion: res.serverVersion, engine: res.engine, connectionGen: res.connectionGen };
   } catch (err) {
     if (openedTunnel) closeTunnel(config.id);
     throw err;
@@ -374,7 +374,7 @@ function registerIpcHandlers() {
     async (_e, rawConfig: unknown): Promise<ConnectionInfo> => {
       const config = ConnectionConfig.parse(rawConfig);
       const res = await establishLiveConnection(config, { persist: true });
-      return { serverVersion: res.serverVersion, engine: res.engine };
+      return { serverVersion: res.serverVersion, engine: res.engine, connectionGen: res.connectionGen };
     },
   );
 
@@ -456,46 +456,50 @@ function registerIpcHandlers() {
       if (typeof id !== 'string') throw new Error('id must be a string');
       const config = vaultGetFull(id);
       if (!config) throw new Error(`no saved connection with id ${id}`);
+<<<<<<< HEAD
       const res = await establishLiveConnection(config, { persist: false });
       const { password: _pwd, ...safeConfig } = config;
       return {
         info: { serverVersion: res.serverVersion, engine: res.engine },
         config: safeConfig,
       };
-    },
-  );
-
-  ipcMain.handle(IpcChannel.VaultGetConfig, (_e, id: unknown): ConnectionConfigType | null => {
-    if (typeof id !== 'string') throw new Error('id must be a string');
-    // Returns the decrypted config including password — used only by
-    // the renderer's Edit flow so users don't need to re-type passwords.
-    return vaultGetFull(id);
-  });
-
-  // ── Query execution + history ──
-
-  ipcMain.handle(IpcChannel.QueryRun, async (_e, payload: unknown): Promise<QueryResult> => {
-    // Accept either a legacy string-only payload or { sql, params, internal }.
-    // `internal: true` skips history recording — used for Plasma's own
-    // plumbing queries (introspection, RLS lookup, count, table data,
-    // etc.) so the user-facing history list stays clean.
-    let sql: string;
-    let params: unknown[] | undefined;
-    let internal = false;
-    if (typeof payload === 'string') {
-      sql = payload;
-    } else if (payload && typeof payload === 'object' && 'sql' in payload) {
-      const p = payload as { sql: unknown; params?: unknown; internal?: unknown };
-      if (typeof p.sql !== 'string') throw new Error('sql must be a string');
-      sql = p.sql;
-      params = Array.isArray(p.params) ? p.params : undefined;
-      internal = p.internal === true;
-    } else {
-      throw new Error('invalid query payload');
-    }
-    const executedAt = Date.now();
-    try {
-      const res = await callWorker({ kind: 'query', sql, params }, 'queryResult');
+=======
+      const settings = SettingsShape.parse(getAllSettings());
+      const ssh = settings.connectionSsh?.[id];
+      const effective = { ...config };
+      if (ssh) {
+        const local = await openTunnel({ id, ssh, pgHost: config.host, pgPort: config.port });
+        effective.host = local.host;
+        effective.port = local.port;
+      }
+      try {
+        const res = await callWorker({ kind: 'connect', config: effective }, 'connected');
+        activeConnectionId = config.id;
+        activeEngine = res.engine;
+        const { password: _pwd, ...safeConfig } = config;
+        return {
+          info: {
+            serverVersion: res.serverVersion,
+            engine: res.engine,
+            connectionGen: res.connectionGen,
+          },
+          config: safeConfig,
+        };
+      } catch (err) {
+        if (ssh) closeTunnel(id);
+        throw err;
+      }
+>>>>>>> origin/feat/u01-u05-connection-gen-txn
+      const res = await establishLiveConnection(config, { persist: false });
+      const { password: _pwd, ...safeConfig } = config;
+      return {
+        info: { serverVersion: res.serverVersion, engine: res.engine, connectionGen: res.connectionGen },
+        config: safeConfig,
+      };
+      // the worker. Internal/plumbing queries never opt in.
+      const settings = SettingsShape.parse(getAllSettings());
+      const autoBegin = !internal && settings.transactionMode === true;
+      const res = await callWorker({ kind: 'query', sql, params, autoBegin }, 'queryResult');
       if (!internal) {
         try {
           recordHistory({
@@ -534,6 +538,43 @@ function registerIpcHandlers() {
   ipcMain.handle(IpcChannel.QueryCancel, async (): Promise<void> => {
     await callWorker({ kind: 'cancel' }, 'cancelled');
   });
+
+  ipcMain.handle(
+    IpcChannel.QueryCommitEditBatch,
+    async (
+      _e,
+      raw: unknown,
+    ): Promise<{ state: TxnState; applied: number }> => {
+      if (!raw || typeof raw !== 'object') throw new Error('invalid edit batch payload');
+      const p = raw as { connectionGen?: unknown; updates?: unknown };
+      if (typeof p.connectionGen !== 'number' || !Number.isFinite(p.connectionGen)) {
+        throw new Error('connectionGen must be a number');
+      }
+      if (!Array.isArray(p.updates) || p.updates.length === 0) {
+        throw new Error('updates must be a non-empty array');
+      }
+      const updates = p.updates.map((u, i) => {
+        if (!u || typeof u !== 'object') throw new Error(`updates[${i}] invalid`);
+        const row = u as { sql?: unknown; params?: unknown };
+        if (typeof row.sql !== 'string' || !row.sql) {
+          throw new Error(`updates[${i}].sql must be a non-empty string`);
+        }
+        return {
+          sql: row.sql,
+          params: Array.isArray(row.params) ? row.params : undefined,
+        };
+      });
+      const res = await callWorker(
+        {
+          kind: 'commitEditBatch',
+          connectionGen: p.connectionGen,
+          updates,
+        },
+        'editBatchResult',
+      );
+      return { state: res.state, applied: res.applied };
+    },
+  );
 
   ipcMain.handle(IpcChannel.QuerySideband, async (_e, payload: unknown): Promise<QueryResult> => {
     let sql: string;
