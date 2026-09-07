@@ -9,7 +9,7 @@
  *
  * Does:
  *   1. Bumps package.json version (in-place, preserves formatting)
- *   2. Patches site/lib/version.ts (VERSION + asset URLs)
+ *   2. Patches site/lib/version.ts (VERSION + asset URLs) via shared sync
  *   3. Stages both files with git
  *
  * Does NOT:
@@ -22,6 +22,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
+import { syncSiteVersion } from './lib/sync-site-version.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = resolve(__dirname, '..');
@@ -50,19 +51,10 @@ const updatedPkg = pkgRaw.replace(
 writeFileSync(pkgPath, updatedPkg);
 console.log(`[release] package.json ${pkg.version} → ${next}`);
 
-// ── 2. Sync site/lib/version.ts ───────────────────────────────────────
+// ── 2. Sync site/lib/version.ts (shared with sync-version.mjs) ────────
 const sitePath = resolve(root, 'site/lib/version.ts');
-const siteBefore = readFileSync(sitePath, 'utf8');
-const siteAfter = siteBefore
-  .replace(/(export const VERSION\s*=\s*')([^']+)(')/, `$1${next}$3`)
-  .replace(/Plasma-Setup-\d+\.\d+\.\d+-x64\.exe/g, `Plasma-Setup-${next}-x64.exe`)
-  .replace(/Plasma-Portable-\d+\.\d+\.\d+-x64\.exe/g, `Plasma-Portable-${next}-x64.exe`)
-  // macOS DMGs
-  .replace(/Plasma-\d+\.\d+\.\d+-arm64\.dmg/g, `Plasma-${next}-arm64.dmg`)
-  .replace(/Plasma-\d+\.\d+\.\d+-x64\.dmg/g, `Plasma-${next}-x64.dmg`);
-
-if (siteBefore !== siteAfter) {
-  writeFileSync(sitePath, siteAfter);
+const { changed } = syncSiteVersion(sitePath, next);
+if (changed) {
   console.log(`[release] site/lib/version.ts → ${next}`);
 } else {
   console.log(`[release] site/lib/version.ts already at ${next}`);
