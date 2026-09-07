@@ -648,8 +648,9 @@ function registerIpcHandlers() {
   ipcMain.handle(IpcChannel.RedisBulkDelete, async (_e, raw: unknown) => {
     if (!Array.isArray(raw)) throw new Error('keys must be an array');
     const keys = raw.map((k) => String(k));
-    if (keys.length === 0) return;
-    await callWorker({ kind: 'redisBulkDelete', keys }, 'redisAck');
+    if (keys.length === 0) return { deleted: [], failed: [] };
+    const res = await callWorker({ kind: 'redisBulkDelete', keys }, 'redisBulkDelete');
+    return res.result;
   });
 
   ipcMain.handle(IpcChannel.RedisWrite, async (_e, raw: unknown) => {

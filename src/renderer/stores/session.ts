@@ -1062,13 +1062,19 @@ export const useSession = create<SessionState>((set, get) => ({
   async bulkDeleteSelectedRedisKeys() {
     const keys = [...get().selectedRedisKeys];
     if (keys.length === 0) return;
+    let result: { deleted: string[]; failed: { key: string; error: string }[] };
     try {
-      await ipc.redis.bulkDelete(keys);
+      result = await ipc.redis.bulkDelete(keys);
     } catch (err) {
       console.error('[plasma] bulk delete failed', err);
       return;
     }
-    const dropped = new Set(keys);
+    if (result.failed.length > 0) {
+      console.error('[plasma] bulk delete partial failures', result.failed);
+    }
+    // Only drop keys whose DEL command succeeded — failed keys stay visible.
+    const dropped = new Set(result.deleted);
+    const remainingSelected = new Set(result.failed.map((f) => f.key));
     set((state) => ({
       redisKeys: state.redisKeys
         ? {
@@ -1079,8 +1085,8 @@ export const useSession = create<SessionState>((set, get) => ({
       tabs: state.tabs.filter(
         (t) => !(t.kind === 'redis-key' && t.redisKey && dropped.has(t.redisKey)),
       ),
-      selectedRedisKeys: new Set(),
-      redisBulkMode: false,
+      selectedRedisKeys: remainingSelected,
+      redisBulkMode: remainingSelected.size > 0,
     }));
   },
 

@@ -2,6 +2,7 @@ import type {
   ConnectionConfig,
   RedisAnalyzeResult,
   RedisAnalyzeSample,
+  RedisBulkDeleteResult,
   RedisCommandResult,
   RedisKeyMeta,
   RedisKeyValue,
@@ -13,6 +14,11 @@ import type {
   RedisWriteOp,
 } from '@shared/protocol';
 import Redis, { type RedisOptions } from 'ioredis';
+import {
+  classifyBulkDelete,
+  readAnalyzeMeta,
+  readScanMeta,
+} from './redis-pipeline';
 
 type RedisClient = InstanceType<typeof Redis>;
 
@@ -154,14 +160,13 @@ export class RedisDriver {
 
     const out: RedisKeyMeta[] = [];
     for (let i = 0; i < keys.length; i++) {
-      const typeRes = results[i * 2];
-      const ttlRes = results[i * 2 + 1];
-      const type = (typeRes?.[1] ?? 'unknown') as string;
-      const pttl = Number(ttlRes?.[1] ?? -1);
+      const meta = readScanMeta(results[i * 2], results[i * 2 + 1]);
+      const pttl = meta.pttl;
       out.push({
         key: keys[i],
-        type: normalizeType(type),
-        ttlMs: pttl >= 0 ? pttl : null,
+        type: normalizeType(meta.typeRaw),
+        // null = no expiry OR ttl command error (unavailable), never invent a TTL.
+        ttlMs: pttl != null && pttl >= 0 ? pttl : null,
         sizeBytes: null,
       });
     }
@@ -277,15 +282,17 @@ export class RedisDriver {
     }
   }
 
-  async bulkDelete(keys: string[]): Promise<void> {
+  async bulkDelete(keys: string[]): Promise<RedisBulkDeleteResult> {
     if (!this.client) throw new Error('not connected');
-    if (keys.length === 0) return;
+    if (keys.length === 0) return { deleted: [], failed: [] };
     // Pipelining DEL one-key-per-command is faster than DEL k1 k2 ... kN
     // on cluster setups where the slot routing differs; ioredis handles
-    // both gracefully.
+    // both gracefully. Inspect per-command [err, res] tuples so ACL /
+    // OOM failures are not reported as successful deletes.
     const pipe = this.client.pipeline();
     for (const k of keys) pipe.del(k);
-    await pipe.exec();
+    const results = (await pipe.exec()) ?? [];
+    return classifyBulkDelete(keys, results);
   }
 
   async write(op: RedisWriteOp): Promise<void> {
@@ -360,35 +367,40 @@ export class RedisDriver {
       }
       const results = (await pipe.exec()) ?? [];
       for (let i = 0; i < keys.length; i++) {
-        const typeRaw = (results[i * 3]?.[1] ?? 'unknown') as string;
-        const pttl = Number(results[i * 3 + 1]?.[1] ?? -1);
-        const bytes = Number(results[i * 3 + 2]?.[1] ?? 0);
+        const meta = readAnalyzeMeta(
+          results[i * 3],
+          results[i * 3 + 1],
+          results[i * 3 + 2],
+        );
+        const pttl = meta.pttl;
         samples.push({
           key: keys[i],
-          type: normalizeType(typeRaw),
-          bytes: Number.isFinite(bytes) ? bytes : 0,
-          ttlMs: pttl >= 0 ? pttl : null,
+          type: normalizeType(meta.typeRaw),
+          // null distinguishes unavailable MEMORY USAGE from a true 0-byte key.
+          bytes: meta.bytes,
+          ttlMs: pttl != null && pttl >= 0 ? pttl : null,
         });
       }
       scanned += keys.length;
       if (scanned >= opts.sampleCap) break;
     } while (cursor !== '0');
 
-    samples.sort((a, b) => b.bytes - a.bytes);
-    const totalBytes = samples.reduce((acc, s) => acc + s.bytes, 0);
+    samples.sort((a, b) => (b.bytes ?? -1) - (a.bytes ?? -1));
+    const totalBytes = samples.reduce((acc, s) => acc + (s.bytes ?? 0), 0);
 
     const byTypeMap = new Map<RedisValueType, { count: number; bytes: number }>();
     const byPrefixMap = new Map<string, { count: number; bytes: number }>();
     for (const s of samples) {
+      const known = s.bytes ?? 0;
       const t = byTypeMap.get(s.type) ?? { count: 0, bytes: 0 };
       t.count += 1;
-      t.bytes += s.bytes;
+      t.bytes += known;
       byTypeMap.set(s.type, t);
 
       const prefix = s.key.split(':')[0] ?? s.key;
       const p = byPrefixMap.get(prefix) ?? { count: 0, bytes: 0 };
       p.count += 1;
-      p.bytes += s.bytes;
+      p.bytes += known;
       byPrefixMap.set(prefix, p);
     }
 

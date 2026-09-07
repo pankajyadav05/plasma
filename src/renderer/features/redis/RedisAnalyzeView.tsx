@@ -125,7 +125,7 @@ function Body({
         <Kpi label="Total bytes" value={fmtBytes(result.totalBytes)} />
         <Kpi
           label="Biggest key"
-          value={biggest ? fmtBytes(biggest.bytes) : '—'}
+          value={biggest && biggest.bytes != null ? fmtBytes(biggest.bytes) : '—'}
           sub={biggest?.key}
         />
       </div>
@@ -180,7 +180,7 @@ function Body({
                     </button>
                   </td>
                   <td className="px-3 py-1 align-top text-muted-foreground">{s.type}</td>
-                  <td className="px-3 py-1 text-right align-top">{fmtBytes(s.bytes)}</td>
+                  <td className="px-3 py-1 text-right align-top">{s.bytes === null ? '—' : fmtBytes(s.bytes)}</td>
                   <td className="px-3 py-1 text-right align-top text-muted-foreground">
                     {s.ttlMs === null ? '—' : `${(s.ttlMs / 1000).toFixed(1)}s`}
                   </td>
