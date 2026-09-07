@@ -22,12 +22,16 @@ files:
 asarUnpack:
   - "**/node_modules/better-sqlite3/**"
 
-# Rebuild native modules against Electron's ABI on package. Required for
-# better-sqlite3; already handled at install time by the postinstall hook,
-# but doing it again here keeps CI packaging honest.
+# Rebuild native modules against Electron's ABI, per target arch, at package
+# time. Required for better-sqlite3: a single node_modules can only hold one
+# arch's binary, and macOS ships both arm64 and x64 from one build — so the
+# rebuild MUST happen during packaging (electron-builder stages node_modules
+# per arch and rebuilds against each target). The postinstall hook only
+# covers the local dev ABI; `install-app-deps` in CI would rebuild just the
+# host arch and leave the other arch's package broken.
 nodeGypRebuild: false
 buildDependenciesFromSource: false
-npmRebuild: false
+npmRebuild: true
 
 win:
   target:

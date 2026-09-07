@@ -102,9 +102,10 @@ jobs:
       - name: Install
         run: pnpm install --frozen-lockfile
 
-      - name: Rebuild native deps for Electron
-        run: pnpm exec electron-builder install-app-deps
-
+      # No `install-app-deps` here: it would only rebuild the host arch while
+      # dist:mac packages arm64 AND x64. electron-builder.yml sets
+      # npmRebuild: true, so packaging rebuilds better-sqlite3 against each
+      # target arch's Electron ABI itself.
       - name: Build macOS
         run: pnpm run dist:mac
 
@@ -115,8 +116,79 @@ jobs:
           path: release/*
           if-no-files-found: error
 
+  # Launch each packaged arch on a real Mac runner and prove the app boots
+  # and opens its SQLite database. This is the end-to-end guard for the
+  # per-arch native rebuild above: if better-sqlite3's bundled .node binary
+  # mismatches the arch, the app crashes before plasma.db ever appears.
+  # macos-latest is Apple Silicon; the x64 app runs under Rosetta 2
+  # (preinstalled on GitHub's arm64 images).
+  smoke-macos:
+    needs: [build-macos]
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [arm64, x64]
+    runs-on: macos-latest
+    steps:
+      - name: Download macOS artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: macos-release
+          path: release
+
+      - name: Unpack Plasma.app (${{ matrix.arch }})
+        run: |
+          ZIP=$(ls release/Plasma-*-${{ matrix.arch }}.zip)
+          echo "Unpacking $ZIP"
+          ditto -x -k "$ZIP" "smoke-${{ matrix.arch }}"
+          xattr -cr "smoke-${{ matrix.arch }}/Plasma.app" || true
+
+      - name: Launch app and verify plasma.db
+        run: |
+          APP="smoke-${{ matrix.arch }}/Plasma.app/Contents/MacOS/Plasma"
+          USER_DATA="$HOME/Library/Application Support/Plasma"
+          DB="$USER_DATA/plasma.db"
+          rm -rf "$USER_DATA"
+
+          "$APP" &
+          APP_PID=$!
+
+          # db.ts opens userData/plasma.db and runs migrations at startup.
+          # Poll until the connections table exists (migrations complete).
+          READY=""
+          for i in $(seq 1 90); do
+            if [ -f "$DB" ] && sqlite3 "$DB" ".tables" 2>/dev/null | grep -q connections; then
+              READY=1
+              break
+            fi
+            if ! kill -0 "$APP_PID" 2>/dev/null; then
+              echo "::error::Plasma exited before opening plasma.db"
+              break
+            fi
+            sleep 1
+          done
+
+          if [ -z "$READY" ]; then
+            echo "::error::plasma.db was not created and migrated within 90s of launch"
+            kill "$APP_PID" 2>/dev/null || true
+            exit 1
+          fi
+
+          # Prove the file is a healthy SQLite database, opened by the app's
+          # own bundled better-sqlite3 build.
+          sqlite3 "$DB" "PRAGMA integrity_check;" | grep -q '^ok$'
+          echo "integrity_check: ok"
+          echo "tables: $(sqlite3 "$DB" '.tables')"
+          kill "$APP_PID" 2>/dev/null || true
+
+      - name: Dump app log
+        if: always()
+        run: |
+          LOG="$HOME/Library/Logs/Plasma/main.log"
+          if [ -f "$LOG" ]; then cat "$LOG"; else echo "no app log at $LOG"; fi
+
   publish:
-    needs: [build-windows, build-macos]
+    needs: [build-windows, build-macos, smoke-macos]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
