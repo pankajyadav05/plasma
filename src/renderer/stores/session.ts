@@ -328,6 +328,7 @@ const DEFAULT_SETTINGS: Settings = {
   connectionTags: {},
   connectionAiRowData: {},
   connectionSsh: {},
+  sshKnownHosts: {},
   schemaSnapshots: [],
   favoriteSchemas: {},
   favoriteTables: {},

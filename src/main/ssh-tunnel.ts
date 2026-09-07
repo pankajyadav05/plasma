@@ -1,12 +1,18 @@
 import { type Server, createServer } from 'node:net';
-import type { Settings } from '@shared/protocol';
+import { SettingsShape, type Settings } from '@shared/protocol';
 import { Client as SshClient } from 'ssh2';
 import { logger } from './logger';
+import { getAllSettings, setSetting } from './settings';
+import {
+  evaluateHostKey,
+  type KnownHostsStore,
+  rememberHostKey,
+} from './ssh-known-hosts';
 
 /**
  * SSH tunnel manager. One tunnel per connection id. When a worker
  * connect is requested for a tagged connection, we:
- *   1. Open an ssh2 connection to the bastion
+ *   1. Open an ssh2 connection to the bastion (with host-key verification)
  *   2. Bind a local TCP server on a random port
  *   3. For each accepted local socket, ask ssh2 to `forwardOut` to the
  *      target host/port and pipe the streams together
@@ -15,6 +21,9 @@ import { logger } from './logger';
  *
  * Tunnel teardown closes both the local server AND the ssh client so a
  * disconnect leaves no dangling sockets.
+ *
+ * U08: host keys are checked against the `sshKnownHosts` settings store.
+ * First use prompts via `hostKeyPrompt` (TOFU); mismatches refuse.
  */
 
 type TunnelKey = string;
@@ -40,6 +49,74 @@ export interface TunnelTarget {
   pgPort: number;
 }
 
+export type HostKeyPrompt = (info: {
+  host: string;
+  port: number;
+  fingerprint: string;
+}) => Promise<boolean>;
+
+/** Injected from main so unit tests / non-Electron callers can stub prompts. */
+let hostKeyPrompt: HostKeyPrompt = async () => false;
+
+export function setHostKeyPrompt(fn: HostKeyPrompt): void {
+  hostKeyPrompt = fn;
+}
+
+function loadKnownHosts(): KnownHostsStore {
+  return SettingsShape.parse(getAllSettings()).sshKnownHosts ?? {};
+}
+
+function persistKnownHosts(store: KnownHostsStore): void {
+  setSetting('sshKnownHosts', store);
+}
+
+function attachHostVerifier(
+  opts: Parameters<SshClient['connect']>[0],
+  host: string,
+  port: number,
+): void {
+  opts.hostVerifier = (key: Buffer, verify: (valid: boolean) => void) => {
+    void (async () => {
+      try {
+        const store = loadKnownHosts();
+        const decision = evaluateHostKey(store, host, port, key);
+        if (decision.kind === 'match') {
+          verify(true);
+          return;
+        }
+        if (decision.kind === 'mismatch') {
+          logger.error(
+            '[plasma-ssh] host key mismatch',
+            `${host}:${port}`,
+            'presented',
+            decision.fingerprint,
+            'expected',
+            decision.expectedFingerprint,
+          );
+          verify(false);
+          return;
+        }
+        // First use — prompt, then remember on accept.
+        const ok = await hostKeyPrompt({
+          host,
+          port,
+          fingerprint: decision.fingerprint,
+        });
+        if (!ok) {
+          verify(false);
+          return;
+        }
+        persistKnownHosts(rememberHostKey(store, host, port, key));
+        logger.info('[plasma-ssh] remembered host key', `${host}:${port}`, decision.fingerprint);
+        verify(true);
+      } catch (err) {
+        logger.error('[plasma-ssh] hostVerifier failed:', err);
+        verify(false);
+      }
+    })();
+  };
+}
+
 export async function openTunnel(target: TunnelTarget): Promise<{ host: string; port: number }> {
   const cached = tunnels.get(target.id);
   if (cached) {
@@ -57,6 +134,7 @@ export async function openTunnel(target: TunnelTarget): Promise<{ host: string; 
       username: target.ssh.user,
       readyTimeout: 15_000,
     };
+    attachHostVerifier(opts, target.ssh.host, target.ssh.port);
     if (target.ssh.privateKey) {
       opts.privateKey = target.ssh.privateKey;
       if (target.ssh.passphrase) opts.passphrase = target.ssh.passphrase;
