@@ -42,6 +42,9 @@ const api: PlasmaAPI = {
         ? ipcRenderer.invoke(IpcChannel.QuerySideband, { sql, params })
         : ipcRenderer.invoke(IpcChannel.QuerySideband, sql),
   },
+  export: {
+    save: (req) => ipcRenderer.invoke(IpcChannel.ExportSave, req),
+  },
   redis: {
     overview: () => ipcRenderer.invoke(IpcChannel.RedisOverview),
     scan: (opts) => ipcRenderer.invoke(IpcChannel.RedisScan, opts ?? {}),

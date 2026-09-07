@@ -396,6 +396,37 @@ export const QueryResult = z.object({
 });
 export type QueryResult = z.infer<typeof QueryResult>;
 
+/** Result export formats (U16). */
+export const ExportFormat = z.enum(['csv', 'json', 'sql']);
+export type ExportFormat = z.infer<typeof ExportFormat>;
+
+export const ExportSaveRequest = z.object({
+  format: ExportFormat,
+  /** Suggested filename stem or full name for the save dialog. */
+  defaultPath: z.string().min(1),
+  columns: z.array(ColumnMeta),
+  /**
+   * In-memory rows (selection or capped result). Omit when `sql` is set
+   * so the worker re-queries unboundedly for full-result export.
+   */
+  rows: z.array(z.array(z.unknown())).optional(),
+  /** When set (and rows omitted), worker streams an unbounded query to file. */
+  sql: z.string().optional(),
+  params: z.array(z.unknown()).optional(),
+});
+export type ExportSaveRequest = z.infer<typeof ExportSaveRequest>;
+
+export const ExportSaveResult = z.discriminatedUnion('ok', [
+  z.object({
+    ok: z.literal(true),
+    filePath: z.string(),
+    rowCount: z.number().int().nonnegative(),
+    bytesWritten: z.number().int().nonnegative(),
+  }),
+  z.object({ ok: z.literal(false), canceled: z.literal(true) }),
+]);
+export type ExportSaveResult = z.infer<typeof ExportSaveResult>;
+
 /**
  * Lightweight chunk event for cursor streaming (U15 step 2).
  * `rows` is validated as an array only — no per-cell Zod walk.
@@ -628,6 +659,23 @@ export const WorkerRequest = z.discriminatedUnion('kind', [
     /** Optional KQL/Lucene-style filter clause to scope the stats. */
     queryString: z.string().optional(),
   }),
+  // ── Export (U16) ──
+  z.object({
+    kind: z.literal('exportRows'),
+    id: z.string(),
+    format: ExportFormat,
+    filePath: z.string().min(1),
+    columns: z.array(ColumnMeta),
+    rows: z.array(z.array(z.unknown())),
+  }),
+  z.object({
+    kind: z.literal('exportQuery'),
+    id: z.string(),
+    format: ExportFormat,
+    filePath: z.string().min(1),
+    sql: z.string().min(1),
+    params: z.array(z.unknown()).optional(),
+  }),
 ]);
 export type WorkerRequest = z.infer<typeof WorkerRequest>;
 
@@ -690,12 +738,13 @@ export const WorkerResponse = z.discriminatedUnion('kind', [
     acknowledged: z.boolean(),
   }),
   z.object({ kind: z.literal('osFieldStats'), id: z.string(), stats: z.array(OsFieldStats) }),
-  /**
-   * Postgres NOTICE broadcast — not request-correlated. The id is a
-   * constant `'notice-event'` sentinel so the supervisor can route it
-   * to a separate handler instead of trying to resolve a pending promise.
-   */
-  z.object({ kind: z.literal('pgNotice'), id: z.string(), notice: PgNotice }),
+  z.object({
+    kind: z.literal('exportDone'),
+    id: z.string(),
+    filePath: z.string(),
+    rowCount: z.number().int().nonnegative(),
+    bytesWritten: z.number().int().nonnegative(),
+  }),
 ]);
 export type WorkerResponse = z.infer<typeof WorkerResponse>;
 
@@ -1093,6 +1142,8 @@ export const IpcChannel = {
   // Dev sanity checks
   PingMain: 'plasma:ping:main',
   PingWorker: 'plasma:ping:worker',
+  /** Worker/main-backed incremental result export (U16). */
+  ExportSave: 'plasma:export:save',
 } as const;
 
 // ─── Auto-update ─────────────────────────────────────────────────────
@@ -1240,6 +1291,13 @@ export interface PlasmaAPI {
     maximizeToggle(): Promise<void>;
     close(): Promise<void>;
     isMaximized(): Promise<boolean>;
+  };
+  export: {
+    /**
+     * Show a save dialog and stream CSV/JSON/SQL to disk via worker/main (U16).
+     * Prefer `sql` (omit rows) when the on-screen result is truncated.
+     */
+    save(req: ExportSaveRequest): Promise<ExportSaveResult>;
   };
   update: {
     /** Trigger an explicit check now. Returns the status post-check. */

@@ -9,7 +9,7 @@ import {
 import { OpenSearchDriver } from './drivers/opensearch';
 import { PostgresDriver } from './drivers/postgres';
 import { RedisDriver } from './drivers/redis';
-import { runIsolatedTestConnect } from './test-connect';
+import { writeExportFile, writeExportRows } from './export-file';
 
 /**
  * DB worker — runs in an Electron utilityProcess.
@@ -236,6 +236,22 @@ process.parentPort.on('message', async (evt: Electron.MessageEvent) => {
         if (activeEngine !== 'postgres') return unsupported(req.id, 'rollbackTxn');
         const state = await pg.rollbackTransaction();
         send({ kind: 'txnState', id: req.id, state });
+        break;
+      }
+
+      case "exportRows": {
+        if (activeEngine !== "postgres") return unsupported(req.id, "exportRows");
+        const result = await writeExportRows({ filePath: req.filePath, format: req.format, columns: req.columns, rows: req.rows });
+        send({ kind: "exportDone", id: req.id, filePath: req.filePath, ...result });
+        break;
+      }
+      case "exportQuery": {
+        if (activeEngine !== "postgres") return unsupported(req.id, "exportQuery");
+        const batches = pg.streamQueryForExport(req.sql, req.params);
+        const first = await batches.next();
+        const columns = first.done ? [] : first.value.columns;
+        const result = await writeExportFile({ filePath: req.filePath, format: req.format, columns, batches: (async function* () { if (!first.done) yield first.value.rows; for await (const batch of batches) yield batch.rows; })() });
+        send({ kind: "exportDone", id: req.id, filePath: req.filePath, ...result });
         break;
       }
 
