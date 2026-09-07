@@ -8,6 +8,7 @@ import {
 import { OpenSearchDriver } from './drivers/opensearch';
 import { PostgresDriver } from './drivers/postgres';
 import { RedisDriver } from './drivers/redis';
+import { runIsolatedTestConnect } from './test-connect';
 
 /**
  * DB worker — runs in an Electron utilityProcess.
@@ -86,6 +87,13 @@ process.parentPort.on('message', async (evt: Electron.MessageEvent) => {
           serverVersion = await os.connect(req.config);
         }
         activeEngine = engine;
+        send({ kind: 'connected', id: req.id, serverVersion, engine });
+        break;
+      }
+      case 'testConnect': {
+        // Isolated probe — throwaway driver, never disconnectAll() on
+        // the live session. activeEngine stays untouched.
+        const { serverVersion, engine } = await runIsolatedTestConnect(req.config);
         send({ kind: 'connected', id: req.id, serverVersion, engine });
         break;
       }

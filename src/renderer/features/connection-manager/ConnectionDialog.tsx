@@ -141,7 +141,14 @@ export function ConnectionDialog() {
 
   const handleTest = async () => {
     setTest({ kind: 'testing' });
-    const res = await testConnection(form);
+    // Forward the candidate SSH form (not only saved settings) so Test
+    // exercises the same bastion the eventual Connect would use. Pass
+    // null when SSH is off so main does not fall back to a stale saved
+    // tunnel for this connection id.
+    const sshSupported = engine !== 'opensearch';
+    const candidateSsh =
+      sshSupported && useSsh && ssh.host && ssh.user ? ssh : null;
+    const res = await testConnection(form, candidateSsh);
     setTest(res.ok ? { kind: 'ok', message: res.message } : { kind: 'fail', message: res.message });
   };
 
