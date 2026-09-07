@@ -248,6 +248,38 @@ export class PostgresDriver {
     }
   }
 
+
+  /**
+   * Unbounded cursor stream for worker-backed export (U16).
+   * Does not apply display caps — yields batches until the server is done.
+   * Caller must not retain all batches in memory.
+   */
+  async *streamQueryForExport(
+    sql: string,
+    params?: unknown[],
+  ): AsyncGenerator<{ columns: QueryResult["columns"]; rows: unknown[][] }, void, void> {
+    if (!this.primary) throw new Error("not connected");
+    const cursor = this.primary.query(new Cursor(sql, params ?? [], { rowMode: "array" }));
+    let columns: QueryResult["columns"] = [];
+    try {
+      while (true) {
+        const batch = await readCursorBatch(cursor, RESULT_CURSOR_CHUNK);
+        if (columns.length === 0 && batch.fields.length > 0) {
+          columns = batch.fields.map((f) => ({
+            name: f.name,
+            dataTypeID: f.dataTypeID,
+            dataTypeName: pgTypeName(f.dataTypeID),
+          }));
+        }
+        if (batch.rows.length === 0) break;
+        yield { columns, rows: batch.rows };
+        if (batch.rows.length < RESULT_CURSOR_CHUNK) break;
+      }
+    } finally {
+      await closeCursor(cursor);
+    }
+  }
+
   // ── Explicit transaction control (used by the Txn UI in the renderer) ──
 
   async beginTransaction(): Promise<TxnState> {

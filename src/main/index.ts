@@ -8,6 +8,8 @@ import {
   type ConnectionConfig as ConnectionConfigType,
   type ConnectionInfo,
   type ConnectionTestResult,
+  ExportSaveRequest,
+  type ExportSaveResult,
   type HistoryEntry,
   IpcChannel,
   type PingRequest,
@@ -21,7 +23,7 @@ import {
   type WorkerRequest,
   type WorkerResponse,
 } from '@shared/protocol';
-import { BrowserWindow, app, ipcMain, nativeImage } from 'electron';
+import { BrowserWindow, app, dialog, ipcMain, nativeImage } from 'electron';
 import {
   cancelAiChat,
   isReadOnlyRedisCommand,
@@ -489,6 +491,16 @@ function registerIpcHandlers() {
     }
     const res = await callWorker({ kind: 'sidebandQuery', sql, params, revision: ++queryRequestRevision }, 'queryResult');
     return res.result;
+  });
+
+  ipcMain.handle(IpcChannel.ExportSave, async (_e, raw: unknown): Promise<ExportSaveResult> => {
+    const req = ExportSaveRequest.parse(raw);
+    const extension = req.format;
+    const defaultPath = req.defaultPath.toLowerCase().endsWith("." .concat(extension)) ? req.defaultPath : req.defaultPath .concat(".", extension);
+    const picked = await dialog.showSaveDialog({ defaultPath, filters: [{ name: extension.toUpperCase(), extensions: [extension] }] });
+    if (picked.canceled || !picked.filePath) return { ok: false, canceled: true };
+    const res = await callWorker(req.rows ? { kind: "exportRows", format: req.format, filePath: picked.filePath, columns: req.columns, rows: req.rows } : { kind: "exportQuery", format: req.format, filePath: picked.filePath, sql: req.sql!, params: req.params }, "exportDone");
+    return { ok: true, filePath: res.filePath, rowCount: res.rowCount, bytesWritten: res.bytesWritten };
   });
 
   // ── AI (OpenRouter) ──

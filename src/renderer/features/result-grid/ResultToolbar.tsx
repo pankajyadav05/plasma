@@ -7,7 +7,7 @@ import { MockDataDialog } from '@/features/mock-data/MockDataDialog';
 import { PgVectorDialog } from '@/features/pgvector/PgVectorDialog';
 import { PostGisDialog } from '@/features/postgis/PostGisDialog';
 import { cn } from '@/lib/cn';
-import { type ExportFormat, copyResultToClipboard, exportResult, pickRows } from '@/lib/export';
+import { type ExportFormat, copyResultToClipboard, pickRows } from '@/lib/export';
 import { formatDuration } from '@/lib/format';
 import { useActiveTab, useSession } from '@/stores/session';
 import type { QueryResult } from '@shared/protocol';
@@ -64,7 +64,7 @@ export function ResultToolbar() {
       const current = useSession.getState();
       const activeT = current.tabs.find((t) => t.id === current.activeTabId);
       if (!activeT?.queryResult) return;
-      exportResult(activeT.queryResult, detail.kind, activeT.title.replace(/\.sql$/i, ''));
+      void window.plasma.export.save({ format: detail.kind, defaultPath: activeT.title.replace(/.sql$/i, ''), columns: activeT.queryResult.columns, rows: activeT.queryResult.rows });
     };
     window.addEventListener('plasma:export', handler);
     return () => window.removeEventListener('plasma:export', handler);
@@ -414,7 +414,7 @@ function ExportRow({
   };
 
   const handleDownload = () => {
-    exportResult(result, format, filename);
+    void window.plasma.export.save({ format, defaultPath: filename, columns: result.columns, rows: result.rows });
     onClose();
   };
 
