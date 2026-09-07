@@ -331,7 +331,7 @@ function registerIpcHandlers() {
       const config = ConnectionConfig.parse(rawConfig);
       const settings = SettingsShape.parse(getAllSettings());
       const ssh = settings.connectionSsh?.[config.id];
-      const effective = { ...config };
+      const effective = { ...config, readOnly: config.readOnly ?? false };
       if (ssh) {
         const local = await openTunnel({
           id: config.id,
@@ -421,7 +421,7 @@ function registerIpcHandlers() {
       if (!config) throw new Error(`no saved connection with id ${id}`);
       const settings = SettingsShape.parse(getAllSettings());
       const ssh = settings.connectionSsh?.[id];
-      const effective = { ...config };
+      const effective = { ...config, readOnly: config.readOnly ?? false };
       if (ssh) {
         const local = await openTunnel({ id, ssh, pgHost: config.host, pgPort: config.port });
         effective.host = local.host;

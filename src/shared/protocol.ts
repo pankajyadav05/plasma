@@ -40,6 +40,10 @@ export type AppMeta = z.infer<typeof AppMeta>;
  */
 export const ConnectionEngine = z.enum(['postgres', 'redis', 'opensearch']);
 export type ConnectionEngine = z.infer<typeof ConnectionEngine>;
+export const TlsMode = z.enum(['verify-full', 'verify-ca', 'insecure']);
+export type TlsMode = z.infer<typeof TlsMode>;
+export const ConnectionTls = z.object({ mode: TlsMode.default('verify-full'), ca: z.string().optional(), servername: z.string().optional() });
+export type ConnectionTls = z.infer<typeof ConnectionTls>;
 
 export const ConnectionConfig = z.object({
   id: z.string(),
@@ -54,15 +58,18 @@ export const ConnectionConfig = z.object({
   password: z.string(),
   /** Postgres SSL / Redis TLS / OpenSearch HTTPS. */
   ssl: z.boolean().default(false),
+  tls: ConnectionTls.optional(),
+  readOnly: z.boolean().default(false),
 });
-export type ConnectionConfig = z.infer<typeof ConnectionConfig>;
+export type ConnectionConfig = Omit<z.infer<typeof ConnectionConfig>, 'readOnly'> & { readOnly?: boolean };
 
 export const SavedConnection = ConnectionConfig.omit({ password: true });
-export type SavedConnection = z.infer<typeof SavedConnection>;
+export type SavedConnection = Omit<z.infer<typeof SavedConnection>, 'readOnly'> & { readOnly?: boolean };
 
 export const ConnectionInfo = z.object({
   serverVersion: z.string(),
   engine: ConnectionEngine.default('postgres'),
+  connectionGen: z.number().int().nonnegative().optional(),
 });
 export type ConnectionInfo = z.infer<typeof ConnectionInfo>;
 
@@ -75,6 +82,8 @@ export const ConnectionTestResult = z.discriminatedUnion('ok', [
   z.object({ ok: z.literal(false), message: z.string() }),
 ]);
 export type ConnectionTestResult = z.infer<typeof ConnectionTestResult>;
+export const ConnectionSshConfig = z.object({ host: z.string().min(1), port: z.number().int().positive().max(65535).default(22), user: z.string().min(1), password: z.string().default(''), privateKey: z.string().default(''), passphrase: z.string().default('') });
+export type ConnectionSshConfig = z.infer<typeof ConnectionSshConfig>;
 
 // ─── Redis types ─────────────────────────────────────────────────────
 
@@ -191,6 +200,10 @@ export const RedisAnalyzeResult = z.object({
   ),
 });
 export type RedisAnalyzeResult = z.infer<typeof RedisAnalyzeResult>;
+export const RedisBulkDeleteFailure = z.object({ key: z.string(), error: z.string() });
+export type RedisBulkDeleteFailure = z.infer<typeof RedisBulkDeleteFailure>;
+export const RedisBulkDeleteResult = z.object({ deleted: z.array(z.string()), failed: z.array(RedisBulkDeleteFailure) });
+export type RedisBulkDeleteResult = z.infer<typeof RedisBulkDeleteResult>;
 
 export const RedisSlowlogEntry = z.object({
   id: z.number().int(),
@@ -392,7 +405,8 @@ export const QueryResult = z.object({
    * True when the worker stopped early due to row/byte caps (U15).
    * `rows` is then a prefix; `rowCount` is rows retained (not a server total).
    */
-  truncated: z.boolean().default(false),
+  truncated: z.boolean().optional(),
+  notices: z.array(PgNotice).optional(),
 });
 export type QueryResult = z.infer<typeof QueryResult>;
 
@@ -446,7 +460,8 @@ export const QueryChunk = z.object({
   /** 0-based index of this chunk within the request. */
   chunkIndex: z.number().int().nonnegative(),
   done: z.boolean().default(false),
-  truncated: z.boolean().default(false),
+  truncated: z.boolean().optional(),
+  notices: z.array(PgNotice).optional(),
 });
 export type QueryChunk = z.infer<typeof QueryChunk>;
 
@@ -539,6 +554,7 @@ export const WorkerRequest = z.discriminatedUnion('kind', [
     /** Applied as PG statement_timeout after connect (U20). */
     statementTimeoutMs: z.number().int().nonnegative().optional(),
   }),
+  z.object({ kind: z.literal('testConnect'), id: z.string(), config: ConnectionConfig }),
   z.object({ kind: z.literal('disconnect'), id: z.string() }),
   z.object({
     kind: z.literal('query'),
@@ -553,6 +569,7 @@ export const WorkerRequest = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('beginTxn'), id: z.string() }),
   z.object({ kind: z.literal('commitTxn'), id: z.string() }),
   z.object({ kind: z.literal('rollbackTxn'), id: z.string() }),
+  z.object({ kind: z.literal('commitEditBatch'), id: z.string(), connectionGen: z.number().int().nonnegative(), updates: z.array(z.object({ sql: z.string().min(1), params: z.array(z.unknown()).optional() })).min(1) }),
   // Aux query — runs on the dedicated aux connection (AI/monitor) so it
   // never shares a session with cancel. Cancel uses a separate control
   // client (U19).
@@ -563,6 +580,7 @@ export const WorkerRequest = z.discriminatedUnion('kind', [
     params: z.array(z.unknown()).optional(),
     revision: z.number().int().nonnegative().optional(),
   }),
+  z.object({ kind: z.literal('aiQuery'), id: z.string(), sql: z.string(), params: z.array(z.unknown()).optional() }),
   // Apply PG statement_timeout on primary + aux (U20). 0 disables.
   z.object({
     kind: z.literal('setStatementTimeout'),
@@ -707,6 +725,7 @@ export const WorkerResponse = z.discriminatedUnion('kind', [
     id: z.string(),
     serverVersion: z.string(),
     engine: ConnectionEngine.default('postgres'),
+  connectionGen: z.number().int().nonnegative().optional(),
   }),
   z.object({ kind: z.literal('disconnected'), id: z.string() }),
   z.object({ kind: z.literal('queryResult'), id: z.string(), result: QueryResult }),
@@ -716,12 +735,14 @@ export const WorkerResponse = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('statementTimeoutSet'), id: z.string() }),
   z.object({ kind: z.literal('schemaInfo'), id: z.string(), info: SchemaInfo }),
   z.object({ kind: z.literal('txnState'), id: z.string(), state: TxnState }),
+  z.object({ kind: z.literal('editBatchResult'), id: z.string(), state: TxnState, applied: z.number().int().nonnegative() }),
   z.object({ kind: z.literal('error'), id: z.string(), message: z.string() }),
   z.object({ kind: z.literal('redisScan'), id: z.string(), result: RedisScanResult }),
   z.object({ kind: z.literal('redisKey'), id: z.string(), result: RedisKeyValue }),
   z.object({ kind: z.literal('redisOverview'), id: z.string(), info: RedisOverview }),
   z.object({ kind: z.literal('redisCommand'), id: z.string(), result: RedisCommandResult }),
   z.object({ kind: z.literal('redisAck'), id: z.string() }),
+  z.object({ kind: z.literal('redisBulkDelete'), id: z.string(), result: RedisBulkDeleteResult }),
   z.object({ kind: z.literal('redisAnalyze'), id: z.string(), result: RedisAnalyzeResult }),
   z.object({ kind: z.literal('redisSlowlog'), id: z.string(), entries: z.array(RedisSlowlogEntry) }),
   /**
@@ -754,6 +775,7 @@ export const WorkerResponse = z.discriminatedUnion('kind', [
     acknowledged: z.boolean(),
   }),
   z.object({ kind: z.literal('osFieldStats'), id: z.string(), stats: z.array(OsFieldStats) }),
+  z.object({ kind: z.literal('pgNotice'), id: z.string(), notice: PgNotice }),
   z.object({
     kind: z.literal('exportDone'),
     id: z.string(),
@@ -813,6 +835,7 @@ export const SettingsShape = z.object({
   editorHeightPx: z.number().int().min(120).max(1200).default(280),
   defaultPageSize: z.number().int().positive().default(50),
   queryTimeoutMs: z.number().int().nonnegative().default(0), // 0 = no timeout
+  telemetryEnabled: z.boolean().optional(),
   /**
    * AI provider config. Plasma uses OpenRouter as the unified gateway —
    * one key gives access to Claude, GPT, Gemini, Qwen, etc. Key stored
@@ -820,9 +843,11 @@ export const SettingsShape = z.object({
    * OpenRouter keys are revocable + scoped, unlike a personal API key.
    */
   openrouterApiKey: z.string().default(''),
+  hasOpenrouterApiKey: z.boolean().optional(),
   openrouterModel: z.string().default('anthropic/claude-sonnet-4.5'),
   /** Legacy field kept for backwards compat with v0.0.10 settings rows. */
   claudeApiKey: z.string().default(''),
+  hasClaudeApiKey: z.boolean().optional(),
   transactionMode: z.boolean().default(false),
   /**
    * Per-connection environment tag. Drives the status-bar color (green
@@ -839,6 +864,7 @@ export const SettingsShape = z.object({
    * local connection. Keys are NOT encrypted at rest yet — TODO move
    * to safeStorage on next schema bump.
    */
+  connectionAiRowData: z.record(z.string(), z.boolean()).optional(),
   connectionSsh: z
     .record(
       z.string(),
@@ -850,9 +876,13 @@ export const SettingsShape = z.object({
         password: z.string().default(''),
         privateKey: z.string().default(''),
         passphrase: z.string().default(''),
+        hasPassword: z.boolean().optional(),
+        hasPrivateKey: z.boolean().optional(),
+        hasPassphrase: z.boolean().optional(),
       }),
     )
     .default({}),
+  sshKnownHosts: z.record(z.string(), z.object({ host: z.string(), port: z.number().int().positive().max(65535), key: z.string().min(1), type: z.string().optional(), addedAt: z.number().int().nonnegative() })).optional(),
   /**
    * Schema snapshots used by the diff tool. Keyed by snapshot id; the
    * payload holds the connection it came from, a user label, the
@@ -1116,6 +1146,8 @@ export const IpcChannel = {
   RedisPubsubEvent: 'plasma:redis:pubsub',
   /** Cursor-stream query chunks (U15). Payload is QueryChunk. */
   QueryChunkEvent: 'plasma:query:chunk',
+  QueryCommitEditBatch: 'plasma:query:commitEditBatch',
+  PgNoticeEvent: 'plasma:pg:notice',
   // OpenSearch ops
   OsOverview: 'plasma:os:overview',
   OsMapping: 'plasma:os:mapping',
@@ -1201,7 +1233,7 @@ export interface PlasmaAPI {
   conn: {
     connect(config: ConnectionConfig): Promise<ConnectionInfo>;
     disconnect(): Promise<void>;
-    test(config: ConnectionConfig): Promise<ConnectionTestResult>;
+    test(config: ConnectionConfig, ssh?: ConnectionSshConfig | null): Promise<ConnectionTestResult>;
     introspect(): Promise<SchemaInfo>;
   };
   vault: {
@@ -1224,6 +1256,7 @@ export interface PlasmaAPI {
      *   table definition). User-written queries should leave this off.
      */
     run(sql: string, params?: unknown[], opts?: { internal?: boolean }): Promise<QueryResult>;
+    commitEditBatch(req: { connectionGen: number; updates: Array<{ sql: string; params?: unknown[] }> }): Promise<{ state: TxnState; applied: number }>;
     cancel(): Promise<void>;
     /**
      * Run a query on the worker's sideband connection — never recorded
@@ -1247,7 +1280,7 @@ export interface PlasmaAPI {
     command(parts: string[]): Promise<RedisCommandResult>;
     analyze(opts?: { sampleCap?: number; match?: string }): Promise<RedisAnalyzeResult>;
     slowlog(limit?: number): Promise<RedisSlowlogEntry[]>;
-    bulkDelete(keys: string[]): Promise<void>;
+    bulkDelete(keys: string[]): Promise<RedisBulkDeleteResult>;
     write(op: RedisWriteOp): Promise<void>;
     subscribe(channel: string, pattern?: boolean): Promise<void>;
     unsubscribe(channel: string, pattern?: boolean): Promise<void>;

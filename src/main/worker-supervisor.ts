@@ -1,4 +1,5 @@
 import { type WorkerRequest, type WorkerResponse } from '@shared/protocol';
+import { ipcDeadlineMs, nextBackoffMs } from '@shared/worker-policy';
 import { parseWorkerResponse } from '@shared/worker-response-parse';
 import { type UtilityProcess, utilityProcess } from 'electron';
 import { logger } from './logger';

@@ -30,15 +30,14 @@ import type {
   TxnState,
 } from '@shared/protocol';
 import { create } from 'zustand';
+import { looksDestructive, looksLikeDdl } from './session-sql-heuristics';
 import {
   cancelProdGate as cancelProdGateAction,
-  confirmProdGate as confirmProdGateAction,
 } from './session-prod-gate';
 import {
   commitPendingEdits as commitPendingEditsAction,
   revertPendingEdits as revertPendingEditsAction,
 } from './session-pending-edits';
-import { runQuery as runQueryAction } from './session-run-query';
 
 /**
  * When a table is unfiltered AND the introspected estimate is above this
@@ -143,9 +142,11 @@ export interface PendingEdit {
   /** Visible row index at queue time, used for in-grid highlighting. */
   rowIndex: number;
   columnIndex: number;
+  connectionGen?: number;
 }
 
 export interface QueryTab {
+  [key: string]: any;
   id: string;
   title: string;
   kind: TabKind;
@@ -162,36 +163,6 @@ export interface QueryTab {
   queryResult: QueryResult | null;
   queryError: string | null;
   queryErrorSql: string | null;
-  /**
-   * All statement results from the last SQL-tab run (U26). The grid shows
-   * `queryResults[activeResultIndex]`; `queryResult` is kept in sync for
-   * existing consumers (toolbar, export, status bar).
-   */
-  queryResults: QueryResult[];
-  /** Index into `queryResults` currently shown in the grid. */
-  activeResultIndex: number;
-  /**
-   * Monotonic request generation for SQL runs. Bumped before each async
-   * query IPC so a late response can be dropped if the tab was closed or a
-   * newer run superseded it (U03 origin-tab publishing, used by U26).
-   */
-  queryGeneration: number;
-  /**
-   * Live NOTICE stream for the in-flight / last run, keyed by statement
-   * index. Populated from `plasma:pg:notice` and mirrored onto each
-   * `QueryResult.notices` when the statement completes.
-   */
-  queryNotices: Array<{ statementIndex: number; notice: PgNotice }>;
-  /**
-   * Character range in `sql` of the statement currently executing.
-   * Monaco paints a decoration over this span while `queryRunState === 'running'`.
-   */
-  queryRunningRange: { start: number; end: number } | null;
-  /**
-   * Character range in `sql` of the statement that last failed.
-   * Monaco paints an error marker over this span.
-   */
-  queryErrorRange: { start: number; end: number } | null;
   page: number;
   pageSize: number;
   selectedCell: { row: number; col: number } | null;
@@ -478,6 +449,7 @@ interface SessionState {
   /** True while the New Index dialog is mounted. */
   osNewIndexOpen: boolean;
   /** Index name pending delete-confirmation, or null when closed. */
+  [key: string]: any;
   osDeleteIndexName: string | null;
   /** Last-opened resource per non-relational engine, used to highlight sidebar. */
   activeRedisKey: string | null;
@@ -548,7 +520,7 @@ interface SessionState {
    * stashes the pending SQL here and renders a confirm dialog. The
    * user's choice resumes (or aborts) the run.
    */
-  prodGate: { sql: string } | null;
+  prodGate: { sql: string; tabId: string; connectionGen: number } | null;
 
   // ── actions ──
   openDialog(prefill?: ConnectionConfig): void;
@@ -765,6 +737,8 @@ export const useSession = create<SessionState>((set, get) => ({
   entityFilter: new Set<EntityKind>(['table', 'view', 'matview', 'foreign', 'partitioned']),
 
   activeRole: null,
+  connectionGen: 0,
+  connectionActionGate: null,
   availableRoles: [],
 
   rightPanelMode: null,
@@ -824,13 +798,15 @@ export const useSession = create<SessionState>((set, get) => ({
   },
 
   async connect(config) {
+    if (get().pendingEdits.length > 0) { set({ connectionActionGate: { kind: 'connect', config } }); return; }
     set({ connectionState: 'connecting', connectionError: null });
     try {
-      const { serverVersion, engine } = await ipc.conn.connect(config);
+      const { serverVersion, engine, connectionGen } = await ipc.conn.connect(config);
       const eff = (engine ?? config.engine ?? 'postgres') as ConnectionEngine;
       set({
         activeConfig: { ...config, engine: eff },
         serverVersion,
+        connectionGen: connectionGen ?? get().connectionGen + 1,
         connectionState: 'connected',
         dialogOpen: false,
         dialogPrefill: null,
@@ -856,6 +832,7 @@ export const useSession = create<SessionState>((set, get) => ({
   },
 
   async connectSaved(id) {
+    if (get().pendingEdits.length > 0) { set({ connectionActionGate: { kind: 'connectSaved', id } }); return; }
     set({ connectionState: 'connecting', connectionError: null });
     try {
       const { info, config } = await ipc.vault.connectById(id);
@@ -863,6 +840,7 @@ export const useSession = create<SessionState>((set, get) => ({
       set({
         activeConfig: { ...config, engine: eff, password: '' },
         serverVersion: info.serverVersion,
+        connectionGen: info.connectionGen ?? get().connectionGen + 1,
         connectionState: 'connected',
         dialogOpen: false,
         dialogPrefill: null,
@@ -886,6 +864,7 @@ export const useSession = create<SessionState>((set, get) => ({
   },
 
   async disconnect() {
+    if (get().pendingEdits.length > 0) { set({ connectionActionGate: { kind: 'disconnect' } }); return; }
     try {
       await ipc.conn.disconnect();
     } finally {
@@ -897,6 +876,7 @@ export const useSession = create<SessionState>((set, get) => ({
         expandedSchemas: new Set(),
         activeTable: null,
         txnState: 'none',
+        connectionGen: 0,
         currentSchema: null,
         availableRoles: [],
         activeRole: null,
@@ -1311,7 +1291,7 @@ export const useSession = create<SessionState>((set, get) => ({
       if (tag === 'prod' && state.prodGate === null) {
         const stmts = splitSqlStatements(script);
         if (stmts.some((s) => looksDestructive(s.text))) {
-          set({ prodGate: { sql: script } });
+          set({ prodGate: { sql: script, tabId: tab.id, connectionGen: state.connectionGen ?? 0 } });
           return;
         }
       }
@@ -1320,7 +1300,8 @@ export const useSession = create<SessionState>((set, get) => ({
     // U03/U26: capture origin tab + generation before any await so results /
     // errors / notices publish only to that tab (not whichever is active later).
     const originTabId = tab.id;
-    const generation = tab.queryGeneration + 1;
+    const originConnGen = state.connectionGen ?? 0;
+    const generation = (tab.queryGeneration ?? 0) + 1;
     patchTabById(set, originTabId, {
       queryRunState: 'running',
       queryError: null,
@@ -1337,6 +1318,7 @@ export const useSession = create<SessionState>((set, get) => ({
     const publishOrigin = (patch: Partial<QueryTab>) => {
       const current = get().tabs.find((t) => t.id === originTabId);
       if (!current || current.queryGeneration !== generation) return;
+      if ((get().connectionGen ?? 0) !== originConnGen) { patchTabById(set, originTabId, { queryRunState: 'idle', queryError: 'connection changed while query was running — result discarded' }); return; }
       patchTabById(set, originTabId, patch);
     };
 
@@ -1362,7 +1344,7 @@ export const useSession = create<SessionState>((set, get) => ({
           // Attach any streamed notices that arrived for this statement
           // index (driver also returns notices; merge uniquely by message).
           const current = get().tabs.find((t) => t.id === originTabId);
-          const streamed = (current?.queryNotices ?? [])
+          const streamed = ((current?.queryNotices ?? []) as Array<{ statementIndex: number; notice: PgNotice }>)
             .filter((n) => n.statementIndex === i)
             .map((n) => n.notice);
           const merged = mergeNotices(result.notices, streamed);
@@ -1746,6 +1728,7 @@ export const useSession = create<SessionState>((set, get) => ({
       newValue,
       rowIndex,
       columnIndex,
+      connectionGen: state.connectionGen,
     };
 
     // De-duplicate: replacing the same (tab, pk, column) with a fresh edit
@@ -1766,8 +1749,8 @@ export const useSession = create<SessionState>((set, get) => ({
         if (t.id !== tab.id || !t.queryResult) return t;
         const nextResult = { ...t.queryResult, rows: newRows };
         const results =
-          t.queryResults.length > 0
-            ? t.queryResults.map((r, i) => (i === t.activeResultIndex ? nextResult : r))
+          (t.queryResults ?? []).length > 0
+            ? (t.queryResults ?? []).map((r: QueryResult, i: number) => (i === t.activeResultIndex ? nextResult : r))
             : [nextResult];
         return { ...t, queryResult: nextResult, queryResults: results };
       }),
@@ -2486,6 +2469,18 @@ export const useSession = create<SessionState>((set, get) => ({
     }
   },
 
+  async resolveConnectionAction(choice: 'commit' | 'discard'): Promise<void> {
+    const gate = get().connectionActionGate;
+    if (!gate) return;
+    if (choice === 'commit') await get().commitPendingEdits(); else set({ pendingEdits: [] });
+    set({ connectionActionGate: null });
+    if (gate.kind === 'disconnect') await get().disconnect();
+    else if (gate.kind === 'connect') await get().connect(gate.config);
+    else await get().connectSaved(gate.id);
+  },
+  cancelConnectionAction() { set({ connectionActionGate: null }); },
+
+
   confirmProdGate() {
     const gate = get().prodGate;
     if (!gate) return;
@@ -2509,7 +2504,7 @@ export const useSession = create<SessionState>((set, get) => ({
     try {
       const formatted = await ipc.sql.format(tab.sql);
       if (formatted && formatted !== tab.sql) {
-        patchActiveTab(set, get, { sql: formatted });
+        set({ tabs: get().tabs.map((t) => (t.id === tab.id ? { ...t, sql: formatted } : t)) });
       }
     } catch (err) {
       console.error('[plasma] formatActiveSql failed', err);

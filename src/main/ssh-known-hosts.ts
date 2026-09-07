@@ -1,8 +1,8 @@
 import { createHash } from 'node:crypto';
 import type { Settings } from '@shared/protocol';
 
-export type KnownHostEntry = Settings['sshKnownHosts'][string];
-export type KnownHostsStore = Settings['sshKnownHosts'];
+export type KnownHostsStore = NonNullable<Settings['sshKnownHosts']>;
+export type KnownHostEntry = KnownHostsStore[string];
 
 export function knownHostKey(host: string, port: number): string {
   return `${host}:${port}`;

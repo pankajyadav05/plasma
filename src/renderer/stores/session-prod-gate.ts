@@ -28,7 +28,7 @@ export function armProdGateIfNeeded(set: Set, get: Get, sql: string): boolean {
   const tag = connId ? state.settings.connectionTags?.[connId] : undefined;
   if (tag === 'prod' && state.prodGate === null) {
     const stmts = splitSqlStatements(sql);
-    if (stmts.some(looksDestructive)) {
+    if (stmts.some((stmt) => looksDestructive(stmt.text))) {
       set({ prodGate: { sql } });
       return true;
     }

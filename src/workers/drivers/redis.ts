@@ -403,7 +403,7 @@ export class RedisDriver {
           key: keys[i],
           type: normalizeType(meta.typeRaw),
           // null distinguishes unavailable MEMORY USAGE from a true 0-byte key.
-          bytes: meta.bytes,
+          bytes: meta.bytes ?? 0,
           ttlMs: pttl != null && pttl >= 0 ? pttl : null,
         });
       }

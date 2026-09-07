@@ -1,4 +1,4 @@
-import type { ConnectionConfig, QueryResult, SchemaInfo, TxnState } from '@shared/protocol';
+import type { ConnectionConfig, PgNotice, QueryResult, SchemaInfo, TxnState } from '@shared/protocol';
 import {
   RESULT_CURSOR_CHUNK,
   appendBoundedRows,
@@ -6,9 +6,13 @@ import {
 } from '@shared/result-bounds';
 import pg from 'pg';
 import Cursor from 'pg-cursor';
+import { formatStatementTimeoutSql } from '@shared/worker-policy';
+import { isSingleSqlStatement } from '@shared/sql-statements';
 
 const { Client } = pg;
 type ClientT = InstanceType<typeof Client>;
+interface PgNoticeRaw { message?: string; severity?: string; name?: string; code?: string; detail?: string; hint?: string; where?: string; }
+function toPgNotice(n: PgNoticeRaw): PgNotice { return { message: n.message ?? '', severity: n.severity || n.name || undefined, code: n.code || undefined, detail: n.detail || undefined, hint: n.hint || undefined, where: n.where || undefined }; }
 
 export type QueryChunkHandler = (chunk: {
   rows: unknown[][];
@@ -68,6 +72,8 @@ export class PostgresDriver {
   private aux: ClientT | null = null;
   private primaryBackendPid: number | null = null;
   private txnState: TxnState = 'none';
+  private statementTimeoutMs = 0;
+  private connectionGen = 0;
   /** Notices accumulated for the in-flight primary query (U26). */
   private pendingNotices: PgNotice[] = [];
   /** Optional fan-out so the worker can stream notices over the event channel. */
@@ -145,7 +151,8 @@ export class PostgresDriver {
     this.primaryBackendPid = null;
     this.pendingNotices = [];
     const p = this.primary;
-    const s = this.sideband;
+    const c = this.control;
+    const a = this.aux;
     if (p) p.removeListener('notice', this.handleNotice);
     this.primary = null;
     this.control = null;
@@ -191,7 +198,7 @@ export class PostgresDriver {
       this.txnState = 'none';
     }
 
-    return { ...result, durationMs };
+    return { ...result, durationMs, notices: notices.length > 0 ? notices : undefined };
   }
 
   /**
@@ -201,9 +208,9 @@ export class PostgresDriver {
    * Aux never participates in the primary's transaction state.
    */
   async sidebandQuery(sql: string, params?: unknown[], opts?: QueryOpts): Promise<QueryResult> {
-    if (!this.sideband) throw new Error('not connected');
+    if (!this.aux) throw new Error('not connected');
     const start = Date.now();
-    const result = await this.runBounded(this.sideband, sql, params, opts);
+    const result = await this.runBounded(this.aux, sql, params, opts);
     return { ...result, durationMs: Date.now() - start };
   }
 
@@ -344,6 +351,39 @@ export class PostgresDriver {
     await this.primary.query('ROLLBACK');
     this.txnState = 'none';
     return this.txnState;
+  }
+
+  setConnectionGen(gen: number): void { this.connectionGen = gen; }
+
+  async commitEditBatch(expectedGen: number, updates: Array<{ sql: string; params?: unknown[] }>): Promise<TxnState> {
+    if (!this.primary) throw new Error("not connected");
+    if (expectedGen !== this.connectionGen) throw new Error(`connection generation mismatch: edit batch is for generation ${expectedGen}, current is ${this.connectionGen}`);
+    const savepoint = this.txnState === "active";
+    if (savepoint) await this.primary.query("SAVEPOINT plasma_edit_batch"); else await this.primary.query("BEGIN");
+    try {
+      for (const update of updates) await this.primary.query({ text: update.sql, values: update.params });
+      if (savepoint) await this.primary.query("RELEASE SAVEPOINT plasma_edit_batch"); else await this.primary.query("COMMIT");
+      return this.txnState;
+    } catch (err) {
+      try { await this.primary.query(savepoint ? "ROLLBACK TO SAVEPOINT plasma_edit_batch" : "ROLLBACK"); } catch {}
+      throw err;
+    }
+  }
+
+  async aiQuery(sql: string, params?: unknown[]): Promise<QueryResult> {
+    if (!this.aux) throw new Error("not connected");
+    if (!isSingleSqlStatement(sql)) throw new Error("rejected: AI queries must be a single SQL statement");
+    const start = Date.now();
+    try {
+      await this.aux.query("BEGIN");
+      await this.aux.query("SET TRANSACTION READ ONLY");
+      const result = await this.runBounded(this.aux, sql, params);
+      await this.aux.query("COMMIT");
+      return { ...result, durationMs: Date.now() - start };
+    } catch (err) {
+      try { await this.aux.query("ROLLBACK"); } catch {}
+      throw err;
+    }
   }
 
   async introspect(): Promise<SchemaInfo> {
