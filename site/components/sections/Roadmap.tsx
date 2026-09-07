@@ -8,7 +8,7 @@ interface Item {
   status: Status;
   title: string;
   body: string;
-  ref?: string; // GH issue
+  ref?: string; // version tag or note
   eta?: string;
   pulse?: boolean;
 }
@@ -17,9 +17,8 @@ const ITEMS: Item[] = [
   // NOW
   {
     status: 'now',
-    title: 'macOS build',
-    body: 'Universal2 dmg, signed + notarized. Same Tauri shell, same theme files.',
-    ref: '#42',
+    title: 'macOS signing + notarization',
+    body: 'Universal2 dmg already ships via CI (unsigned). Apple Developer ID signing and notarization still to land. Same Electron shell, same theme files.',
     eta: 'q3·2026',
     pulse: true,
   },
@@ -27,7 +26,6 @@ const ITEMS: Item[] = [
     status: 'now',
     title: 'EXPLAIN tree polish',
     body: 'Hot-path heatmap, copy-as-text, share-as-link.',
-    ref: '#58',
     eta: 'q3·2026',
     pulse: true,
   },
@@ -35,7 +33,6 @@ const ITEMS: Item[] = [
     status: 'now',
     title: 'Multi-tab pin sync',
     body: 'Per-connection pinned tabs sync across machines via local file or your own gist.',
-    ref: '#67',
     eta: 'q3·2026',
   },
 
@@ -44,21 +41,18 @@ const ITEMS: Item[] = [
     status: 'next',
     title: 'Linux build',
     body: 'AppImage + deb + rpm. AUR maintained by community.',
-    ref: '#43',
     eta: 'q4·2026',
   },
   {
     status: 'next',
     title: 'Vector schema-aware AI',
     body: 'pgvector + chroma + lance — AI that understands your embeddings, not just your tables.',
-    ref: '#71',
     eta: 'q4·2026',
   },
   {
     status: 'next',
     title: 'Saved query library',
     body: 'Per-connection scratchpad of queries with notes. Optional sync.',
-    ref: '#73',
   },
 
   // MAYBE
@@ -66,19 +60,16 @@ const ITEMS: Item[] = [
     status: 'maybe',
     title: 'MongoDB · MySQL · Clickhouse',
     body: 'Each adds a test matrix and a parser. Will follow real demand.',
-    ref: '#80',
   },
   {
     status: 'maybe',
     title: 'Web build (read-only)',
     body: 'Browser-based viewer for shared queries / EXPLAIN snapshots. Read-only by design.',
-    ref: '#82',
   },
   {
     status: 'maybe',
     title: 'Local agent (loopback only)',
     body: 'Background watcher for slow queries. Off by default; runs only on localhost.',
-    ref: '#85',
   },
 
   // DONE
@@ -120,8 +111,9 @@ const COLUMNS: { id: Status; label: string; color: string; dot: string }[] = [
 ];
 
 /**
- * Roadmap Lighthouse — four columns, real items, GitHub-linked.
+ * Roadmap Lighthouse — four columns, real items.
  * Asymmetric stagger; pulse dot on NOW items. No marketing speak.
+ * Issue numbers omitted until they exist as real GitHub issues.
  */
 export function Roadmap() {
   return (
@@ -145,8 +137,8 @@ export function Roadmap() {
                 <span className="text-plasma">right now</span>.
               </h2>
               <p className="mt-4 text-fg/70 max-w-[60ch] font-sans text-[16px] leading-relaxed">
-                A real roadmap, not a wishlist. Tap an item to read the issue
-                that scoped it. Anything in <span className="text-fg">Maybe</span>{' '}
+                A real roadmap, not a wishlist. Items move as we ship.
+                Anything in <span className="text-fg">Maybe</span>{' '}
                 will move only if you tell us it should.
               </p>
             </div>
