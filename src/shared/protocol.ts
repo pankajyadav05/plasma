@@ -388,10 +388,36 @@ export const QueryResult = z.object({
   rowCount: z.number().int(),
   durationMs: z.number(),
   command: z.string().optional(),
-  /** Notices captured while this statement ran (U26). */
-  notices: z.array(PgNotice).optional(),
+  /**
+   * True when the worker stopped early due to row/byte caps (U15).
+   * `rows` is then a prefix; `rowCount` is rows retained (not a server total).
+   */
+  truncated: z.boolean().default(false),
 });
 export type QueryResult = z.infer<typeof QueryResult>;
+
+/**
+ * Lightweight chunk event for cursor streaming (U15 step 2).
+ * `rows` is validated as an array only — no per-cell Zod walk.
+ */
+export const QueryChunk = z.object({
+  kind: z.literal('queryChunk'),
+  /** Correlates to the in-flight query request id. */
+  id: z.string(),
+  /** Monotonic revision from the requester; stale chunks are dropped. */
+  revision: z.number().int().nonnegative(),
+  /** Present on the first chunk of a result set. */
+  columns: z.array(ColumnMeta).optional(),
+  rows: z.custom<unknown[][]>(
+    (v) => Array.isArray(v) && (v.length === 0 || Array.isArray((v as unknown[])[0])),
+    { message: 'rows must be an array of arrays' },
+  ),
+  /** 0-based index of this chunk within the request. */
+  chunkIndex: z.number().int().nonnegative(),
+  done: z.boolean().default(false),
+  truncated: z.boolean().default(false),
+});
+export type QueryChunk = z.infer<typeof QueryChunk>;
 
 // ─── Schema introspection ────────────────────────────────────────────
 
@@ -472,6 +498,8 @@ export const WorkerRequest = z.discriminatedUnion('kind', [
     id: z.string(),
     sql: z.string(),
     params: z.array(z.unknown()).optional(),
+    /** Request revision for chunk events (U15); stale chunks are ignored. */
+    revision: z.number().int().nonnegative().optional(),
   }),
   z.object({ kind: z.literal('cancel'), id: z.string() }),
   z.object({ kind: z.literal('introspect'), id: z.string() }),
@@ -486,6 +514,7 @@ export const WorkerRequest = z.discriminatedUnion('kind', [
     id: z.string(),
     sql: z.string(),
     params: z.array(z.unknown()).optional(),
+    revision: z.number().int().nonnegative().optional(),
   }),
   // Apply PG statement_timeout on primary + aux (U20). 0 disables.
   z.object({
@@ -637,6 +666,12 @@ export const WorkerResponse = z.discriminatedUnion('kind', [
    * to a separate handler instead of trying to resolve a pending promise.
    */
   z.object({ kind: z.literal('redisPubsub'), id: z.string(), message: RedisPubsubMessage }),
+  /**
+   * Cursor-stream chunk broadcast — not the final queryResult.
+   * Supervisor routes by kind to the broadcast handler (like redisPubsub).
+   * `id` is the originating request id so the renderer can apply revision checks.
+   */
+  QueryChunk,
   z.object({ kind: z.literal('osOverview'), id: z.string(), info: OsOverview }),
   z.object({ kind: z.literal('osMapping'), id: z.string(), root: OsMappingNode }),
   z.object({ kind: z.literal('osSearch'), id: z.string(), result: OsSearchResult }),
@@ -1015,8 +1050,8 @@ export const IpcChannel = {
   RedisUnsubscribe: 'plasma:redis:unsubscribe',
   /** Renderer-facing event channel for streamed pub/sub messages. */
   RedisPubsubEvent: 'plasma:redis:pubsub',
-  /** Renderer-facing event channel for streamed Postgres NOTICEs (U26). */
-  PgNoticeEvent: 'plasma:pg:notice',
+  /** Cursor-stream query chunks (U15). Payload is QueryChunk. */
+  QueryChunkEvent: 'plasma:query:chunk',
   // OpenSearch ops
   OsOverview: 'plasma:os:overview',
   OsMapping: 'plasma:os:mapping',

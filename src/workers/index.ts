@@ -140,10 +140,25 @@ process.parentPort.on('message', async (evt: Electron.MessageEvent) => {
       // ── Postgres-only ──
       case 'query': {
         if (activeEngine !== 'postgres') return unsupported(req.id, 'query');
-        const result = await pg.query(req.sql, req.params, {
-          autoBegin: req.autoBegin === true,
-        });
-        send({ kind: 'queryResult', id: req.id, result });
+        {
+          const revision = req.revision ?? 0;
+          const result = await pg.query(req.sql, req.params, {
+            revision,
+            onChunk: (chunk) => {
+              send({
+                kind: 'queryChunk',
+                id: req.id,
+                revision,
+                columns: chunk.columns,
+                rows: chunk.rows,
+                chunkIndex: chunk.chunkIndex,
+                done: chunk.done,
+                truncated: chunk.truncated,
+              });
+            },
+          });
+          send({ kind: 'queryResult', id: req.id, result });
+        }
         break;
       }
       case 'commitEditBatch': {
@@ -159,8 +174,25 @@ process.parentPort.on('message', async (evt: Electron.MessageEvent) => {
       }
       case 'sidebandQuery': {
         if (activeEngine !== 'postgres') return unsupported(req.id, 'sidebandQuery');
-        const result = await pg.sidebandQuery(req.sql, req.params);
-        send({ kind: 'queryResult', id: req.id, result });
+        {
+          const revision = req.revision ?? 0;
+          const result = await pg.sidebandQuery(req.sql, req.params, {
+            revision,
+            onChunk: (chunk) => {
+              send({
+                kind: 'queryChunk',
+                id: req.id,
+                revision,
+                columns: chunk.columns,
+                rows: chunk.rows,
+                chunkIndex: chunk.chunkIndex,
+                done: chunk.done,
+                truncated: chunk.truncated,
+              });
+            },
+          });
+          send({ kind: 'queryResult', id: req.id, result });
+        }
         break;
       }
       case 'aiQuery': {

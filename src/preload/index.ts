@@ -129,7 +129,7 @@ const eventChannels = [
   'plasma:update:status',
   'plasma:ai:event',
   'plasma:redis:pubsub',
-  'plasma:pg:notice',
+  'plasma:query:chunk',
 ] as const;
 type EventChannel = (typeof eventChannels)[number];
 
