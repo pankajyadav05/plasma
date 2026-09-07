@@ -89,6 +89,9 @@ export const ConnectionSshConfig = z.object({
   password: z.string().default(''),
   privateKey: z.string().default(''),
   passphrase: z.string().default(''),
+  hasPassword: z.boolean().optional(),
+  hasPrivateKey: z.boolean().optional(),
+  hasPassphrase: z.boolean().optional(),
 });
 export type ConnectionSshConfig = z.infer<typeof ConnectionSshConfig>;
 
