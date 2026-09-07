@@ -10,6 +10,11 @@ import type {
   OsSearchResult,
   OsSqlResult,
 } from '@shared/protocol';
+import {
+  buildFieldStatsAggs,
+  isMissingSqlEndpointError,
+  readFieldStat,
+} from './opensearch-helpers';
 
 /**
  * OpenSearch driver — wraps the official @opensearch-project/opensearch
@@ -214,7 +219,10 @@ export class OpenSearchDriver {
         path: '/_plugins/_sql',
         body,
       });
-    } catch {
+    } catch (err) {
+      // Only the missing-plugin 404 should fall back to legacy `/_sql`.
+      // Auth failures, invalid SQL, timeouts, etc. must keep their original error.
+      if (!isMissingSqlEndpointError(err)) throw err;
       res = await this.client.transport.request({
         method: 'POST',
         path: '/_sql',
@@ -363,11 +371,9 @@ export class OpenSearchDriver {
       Object.assign(props, v.mappings?.properties ?? {});
     }
 
-    const aggs: Record<string, unknown> = {};
-    for (const f of opts.fields) {
-      aggs[`card_${safeKey(f)}`] = { cardinality: { field: f } };
-      aggs[`top_${safeKey(f)}`] = { terms: { field: f, size: 10 } };
-    }
+    // Request-local index IDs (card_0 / top_0 …) — never collide across
+    // fields whose lossy-sanitized names would match (user.id vs user_id).
+    const aggs = buildFieldStatsAggs(opts.fields);
 
     const body: Record<string, unknown> = {
       size: 0,
@@ -389,34 +395,11 @@ export class OpenSearchDriver {
     }
 
     const aggData = raw.aggregations ?? {};
-    return opts.fields.map((f) => {
-      const cardKey = `card_${safeKey(f)}`;
-      const topKey = `top_${safeKey(f)}`;
-      const card = aggData[cardKey] as { value?: number } | undefined;
-      const top = aggData[topKey] as
-        | { buckets?: Array<{ key: unknown; doc_count: number }> }
-        | undefined;
+    return opts.fields.map((f, i) => {
       const type = props[f]?.type ?? null;
-      return {
-        field: f,
-        type,
-        cardinality: card && typeof card.value === 'number' ? Math.round(card.value) : null,
-        topValues: (top?.buckets ?? []).map((b) => ({
-          value: String(b.key),
-          count: b.doc_count,
-        })),
-        isTime: type === 'date' || type === 'date_nanos',
-      };
+      return readFieldStat(f, i, aggData, type);
     });
   }
-}
-
-/**
- * Sanitize a field name into something safe for an aggregation alias —
- * dots and special chars in field paths break agg key references.
- */
-function safeKey(field: string): string {
-  return field.replace(/[^a-zA-Z0-9]/g, '_');
 }
 
 function buildMappingChildren(props: Record<string, unknown>): OsMappingNode[] {
