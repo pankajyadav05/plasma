@@ -106,6 +106,59 @@ describe('buildDataSql', () => {
     expect(built.sql).toContain('WHERE "email"::text LIKE $1');
     expect(built.params).toEqual(['%a@b.co%']);
   });
+
+  it('preserves bigint operands that exceed Number.MAX_SAFE_INTEGER', () => {
+    const bigint = '9007199254740993';
+    const built = buildDataSql(
+      input({
+        filters: [filter({ column: 'id', op: '=', value: bigint })],
+      }),
+    );
+    expect(built.sql).toContain('WHERE "id" = $1');
+    expect(built.params).toEqual([bigint]);
+    expect(typeof built.params[0]).toBe('string');
+    // Would round to 9007199254740992 if coerced via Number.
+    expect(built.params[0]).not.toBe(Number(bigint));
+  });
+
+  it('preserves high-precision numeric operands without float rounding', () => {
+    const numeric = '1.0000000000000001';
+    const built = buildDataSql(
+      input({
+        filters: [filter({ column: 'amount', op: '=', value: numeric })],
+      }),
+    );
+    expect(built.params).toEqual([numeric]);
+    expect(typeof built.params[0]).toBe('string');
+    // Number(numeric) === 1 in IEEE-754 double.
+    expect(built.params[0]).not.toBe(Number(numeric));
+  });
+
+  it('preserves zero-padded text identifiers as exact strings', () => {
+    const code = '00123';
+    const built = buildDataSql(
+      input({
+        filters: [filter({ column: 'code', op: '=', value: code })],
+      }),
+    );
+    expect(built.params).toEqual([code]);
+    expect(typeof built.params[0]).toBe('string');
+    // Number/parseInt would yield 123 and drop leading zeros.
+    expect(built.params[0]).not.toBe(123);
+  });
+
+  it('does not coerce boolean-looking filter strings', () => {
+    const built = buildDataSql(
+      input({
+        filters: [
+          filter({ column: 'active', op: '=', value: 'true' }),
+          filter({ column: 'flag', op: '!=', value: 'false' }),
+        ],
+      }),
+    );
+    expect(built.params).toEqual(['true', 'false']);
+    expect(built.params.every((p) => typeof p === 'string')).toBe(true);
+  });
 });
 
 describe('buildCountSql', () => {

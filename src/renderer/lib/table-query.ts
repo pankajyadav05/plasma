@@ -71,7 +71,10 @@ function buildFilterClauses(filters: Filter[], addParam: (value: unknown) => str
       case '<':
       case '>=':
       case '<=':
-        clauses.push(`${col} ${f.op} ${addParam(coerceValue(f.value))}`);
+        // Keep exact user strings — JS Number/boolean coercion rounds
+        // bigints, drops numeric precision, and strips leading zeros.
+        // PostgreSQL infers the parameter type from the column.
+        clauses.push(`${col} ${f.op} ${addParam(f.value)}`);
         break;
       case 'LIKE':
       case 'ILIKE':
@@ -86,21 +89,6 @@ function buildFilterClauses(filters: Filter[], addParam: (value: unknown) => str
     }
   }
   return clauses;
-}
-
-/**
- * Try to coerce the string value to its intended Postgres type. Numbers
- * become numbers; 'true'/'false' become booleans; anything else stays
- * as a string and relies on pg's implicit conversion.
- */
-function coerceValue(raw: string): unknown {
-  const trimmed = raw.trim();
-  if (trimmed === '') return '';
-  if (trimmed === 'true') return true;
-  if (trimmed === 'false') return false;
-  if (/^-?\d+$/.test(trimmed)) return Number.parseInt(trimmed, 10);
-  if (/^-?\d+\.\d+$/.test(trimmed)) return Number.parseFloat(trimmed);
-  return raw;
 }
 
 /**
