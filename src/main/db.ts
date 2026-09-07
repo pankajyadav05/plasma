@@ -123,3 +123,9 @@ function migrate(d: Database.Database): void {
   // U25 owns schema v4 (open_tabs) — do not add it in U07.
   ensureReadOnlyColumn(d);
 }
+
+function ensureReadOnlyColumn(d: Database.Database): void {
+  const cols = d.prepare("PRAGMA table_info(connections)").all() as Array<{ name: string }>;
+  if (cols.some((c) => c.name === "read_only")) return;
+  d.exec("ALTER TABLE connections ADD COLUMN read_only INTEGER NOT NULL DEFAULT 0");
+}
