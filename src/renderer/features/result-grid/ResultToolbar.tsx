@@ -205,7 +205,7 @@ export function ResultToolbar() {
             title={
               tab.queryResults.length > 1
                 ? `Statement ${tab.activeResultIndex + 1} · ${tab.queryResult.durationMs.toLocaleString()} ms` +
-                  ` · total ${tab.queryResults.reduce((s, r) => s + r.durationMs, 0).toLocaleString()} ms`
+                  ` · total ${tab.queryResults.reduce((s: number, r: QueryResult) => s + r.durationMs, 0).toLocaleString()} ms`
                 : `Query duration · ${tab.queryResult.durationMs.toLocaleString()} ms`
             }
           >

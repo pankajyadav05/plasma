@@ -90,19 +90,19 @@ export async function runQuery(set: Set, get: Get, deps: RunQueryDeps): Promise<
     for (let i = 0; i < statements.length; i++) {
       const stmt = statements[i];
       try {
-        lastResult = await ipc.query.run(stmt);
+        lastResult = await ipc.query.run(stmt.text);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         const tag = statements.length > 1 ? ` (statement ${i + 1} of ${statements.length})` : '';
         publishOrigin({
           queryError: `${message}${tag}`,
-          queryErrorSql: stmt,
+          queryErrorSql: stmt.text,
           queryRunState: 'idle',
         });
         if (anyDdl) void get().refreshSchema();
         return;
       }
-      if (looksLikeDdl(stmt)) anyDdl = true;
+      if (looksLikeDdl(stmt.text)) anyDdl = true;
     }
     publishOrigin({
       queryResult: lastResult,
@@ -115,7 +115,7 @@ export async function runQuery(set: Set, get: Get, deps: RunQueryDeps): Promise<
     // U05: worker may have auto-BEGUN under transactionMode — mirror
     // that into the status-bar txn indicator.
     if (get().settings.transactionMode && get().connectionGen === originConnGen) {
-      const last = statements[statements.length - 1]?.trim().toUpperCase() ?? '';
+      const last = statements[statements.length - 1]?.text.trim().toUpperCase() ?? '';
       if (last.startsWith('COMMIT') || last.startsWith('ROLLBACK') || last.startsWith('ABORT')) {
         set({ txnState: 'none' });
       } else {

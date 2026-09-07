@@ -10,6 +10,7 @@ import { OpenSearchDriver } from './drivers/opensearch';
 import { PostgresDriver } from './drivers/postgres';
 import { RedisDriver } from './drivers/redis';
 import { writeExportFile, writeExportRows } from './export-file';
+import { runIsolatedTestConnect } from './test-connect';
 
 /**
  * DB worker — runs in an Electron utilityProcess.

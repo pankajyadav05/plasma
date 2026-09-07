@@ -232,6 +232,7 @@ export function listConnections(): SavedConnection[] {
     database: r.database,
     user: r.user,
     ssl: Boolean(r.ssl),
+    readOnly: Boolean(r.read_only),
   }));
 }
 
@@ -318,6 +319,7 @@ export function getFullConnection(id: string): ConnectionConfig | null {
     database: row.database,
     user: row.user,
     ssl: Boolean(row.ssl),
+    readOnly: Boolean(row.read_only),
     password: decryptString(row.password_ciphertext),
   };
 }

@@ -5,9 +5,6 @@ function texts(sql: string): string[] {
   return splitSqlStatements(sql).map((s) => s.text);
 }
 
-function texts(sql: string): string[] {
-  return splitSqlStatements(sql).map((s) => s.text);
-}
 
 describe('splitSqlStatements', () => {
   it('splits on semicolons and strips the terminator', () => {

@@ -18,9 +18,9 @@ export function ResultMessagesStrip() {
   const setActiveResultIndex = useSession((s) => s.setActiveResultIndex);
   const cycleActiveResult = useSession((s) => s.cycleActiveResult);
 
-  const results = tab?.queryResults ?? [];
+  const results: QueryResult[] = tab?.queryResults ?? [];
   const active = tab?.activeResultIndex ?? 0;
-  const streamingNotices = tab?.queryNotices ?? [];
+  const streamingNotices: Array<{ statementIndex: number; notice: PgNotice }> = tab?.queryNotices ?? [];
   const isSql = tab?.kind === 'sql';
 
   // ⌥← / ⌥→ cycle statements while focus is outside Monaco (Monaco owns
