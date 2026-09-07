@@ -21,10 +21,10 @@ import { logger } from './logger';
  * runs "explain selection" while a longer NL→SQL is still streaming).
  *
  * Tool use: the model can call `query_database(sql)` to read live data
- * from the connected Postgres. We only allow read-only SELECT/EXPLAIN/
- * SHOW so the model can't accidentally mutate state. Each tool round
- * non-streams to collect tool_calls, then the next round streams again.
- * Bounded by MAX_TOOL_ROUNDS so a misbehaving model can't loop forever.
+ * from the connected Postgres when the connection opts in (U06). Keyword
+ * `isReadOnlySql` is only a cheap pre-filter — the worker runs AI SQL on a
+ * dedicated read-only client (U04). Each tool round streams to collect
+ * tool_calls, then the next round continues. Bounded by MAX_TOOL_ROUNDS.
  */
 
 const ENDPOINT = 'https://openrouter.ai/api/v1/chat/completions';
@@ -32,7 +32,112 @@ const REFERER = 'https://plasma.sh';
 const TITLE = 'Plasma';
 const MAX_TOOL_ROUNDS = 5;
 
+/** Hard caps on AI tool result egress (U06). */
+export const AI_TOOL_MAX_ROWS = 50;
+export const AI_TOOL_MAX_BYTES = 32_768;
+
 const inflight = new Map<string, AbortController>();
+
+export type AiChatOptions = {
+  /** When false (default), tools that egress row data are not offered. */
+  allowRowData?: boolean;
+  /** Injectable fetch for regression tests that capture the request body. */
+  fetchImpl?: typeof fetch;
+};
+
+/**
+ * Per-connection opt-in for AI row-data tools. Missing / false → denied.
+ * Prod-tagged connections stay denied unless explicitly opted in.
+ */
+export function isAiRowDataAllowed(
+  connectionId: string | null | undefined,
+  connectionAiRowData: Record<string, boolean> | undefined,
+): boolean {
+  if (!connectionId) return false;
+  return connectionAiRowData?.[connectionId] === true;
+}
+
+/**
+ * Serialize tool rows with row + byte caps. Always labels truncation so
+ * the model (and any captured OpenRouter body) can see the policy.
+ */
+export function serializeAiToolRows(input: {
+  columns: string[];
+  rows: unknown[][];
+  rowCount: number;
+  maxRows?: number;
+  maxBytes?: number;
+  extra?: Record<string, unknown>;
+}): string {
+  const maxRows = input.maxRows ?? AI_TOOL_MAX_ROWS;
+  const maxBytes = input.maxBytes ?? AI_TOOL_MAX_BYTES;
+  let take = Math.min(input.rows.length, maxRows);
+  let truncated = input.rows.length > take || input.rowCount > take;
+
+  const build = (n: number) => {
+    const rows = input.rows
+      .slice(0, n)
+      .map((r) => Object.fromEntries(input.columns.map((cn, i) => [cn, r[i]])));
+    return JSON.stringify({
+      ...input.extra,
+      rowCount: input.rowCount,
+      columns: input.columns,
+      rows,
+      truncated: truncated || input.rows.length > n,
+      capped: { maxRows, maxBytes },
+    });
+  };
+
+  let json = build(take);
+  while (json.length > maxBytes && take > 0) {
+    take = Math.max(0, Math.floor(take / 2));
+    truncated = true;
+    json = build(take);
+  }
+  if (json.length > maxBytes) {
+    return JSON.stringify({
+      error: 'tool result exceeded byte cap',
+      capped: { maxRows, maxBytes },
+      truncated: true,
+    });
+  }
+  return json;
+}
+
+/** Cap an arbitrary JSON-serializable tool payload by UTF-8 byte length. */
+export function capAiToolJson(
+  value: unknown,
+  maxBytes: number = AI_TOOL_MAX_BYTES,
+): string {
+  const json = JSON.stringify(value);
+  if (json.length <= maxBytes) return json;
+  return JSON.stringify({
+    error: 'tool result exceeded byte cap',
+    capped: { maxBytes },
+    truncated: true,
+    preview: json.slice(0, Math.min(512, maxBytes)),
+  });
+}
+
+/**
+ * Build the OpenRouter chat-completions request body for one round.
+ * Exported so tests can assert tools / message history without a network.
+ */
+export function buildOpenRouterBody(args: {
+  model: string;
+  messages: unknown[];
+  maxTokens?: number;
+  tools?: readonly unknown[] | null;
+  stream?: boolean;
+}): string {
+  return JSON.stringify({
+    model: args.model,
+    messages: args.messages,
+    stream: args.stream ?? true,
+    max_tokens: args.maxTokens,
+    tools: args.tools && args.tools.length > 0 ? args.tools : undefined,
+  });
+}
 
 export type AiToolExecutor = (name: string, args: Record<string, unknown>) => Promise<string>;
 
@@ -209,6 +314,7 @@ export async function startAiChat(
   req: AiChatRequest,
   apiKey: string,
   defaultModel: string,
+  options: AiChatOptions = {},
 ): Promise<{ accepted: boolean; reason?: string }> {
   if (!apiKey || apiKey.trim().length === 0) {
     return { accepted: false, reason: 'no OpenRouter API key configured' };
@@ -227,7 +333,7 @@ export async function startAiChat(
 
   // Fire the SSE pump asynchronously — caller awaits the queueing only,
   // not the full completion.
-  void pump(win, req, apiKey, defaultModel, controller);
+  void pump(win, req, apiKey, defaultModel, controller, options);
   return { accepted: true };
 }
 
@@ -245,6 +351,7 @@ async function pump(
   apiKey: string,
   defaultModel: string,
   controller: AbortController,
+  options: AiChatOptions = {},
 ): Promise<void> {
   const send = (evt: AiChatEvent) => {
     if (!win.isDestroyed()) {
@@ -276,7 +383,10 @@ async function pump(
     req.engineContext,
   );
   const model = req.model?.trim() ? req.model : defaultModel;
-  const tools = toolsForEngine(engine);
+  // U06: only offer row-data tools when the active connection opted in.
+  const allowRowData = options.allowRowData === true;
+  const tools = allowRowData ? toolsForEngine(engine) : [];
+  const fetchImpl = options.fetchImpl ?? fetch;
 
   try {
     for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
@@ -284,15 +394,18 @@ async function pump(
       // Stream the final round (when we want text streaming for UX).
       // For tool-call rounds we still stream so partial deltas appear
       // for any text the model emits before/after tool calls.
-      const body = JSON.stringify({
+      const body = buildOpenRouterBody({
         model,
         messages,
+        maxTokens: req.maxTokens,
+        tools:
+          toolExecutor && allowRowData && !isLastAllowedRound && tools.length > 0
+            ? tools
+            : null,
         stream: true,
-        max_tokens: req.maxTokens,
-        tools: toolExecutor && !isLastAllowedRound ? tools : undefined,
       });
 
-      const res = await fetch(ENDPOINT, {
+      const res = await fetchImpl(ENDPOINT, {
         method: 'POST',
         signal: controller.signal,
         headers: {
@@ -512,9 +625,11 @@ function compactSchema(schema: SchemaInfo): string {
 }
 
 /**
- * Read-only check for tool-driven queries. Allow EXPLAIN / SELECT / SHOW
- * / WITH (CTE for SELECT) / VALUES. Reject anything else even when
- * embedded after a leading comment.
+ * Cheap pre-filter for tool-driven queries (U04). Allow EXPLAIN / SELECT /
+ * SHOW / WITH / VALUES / TABLE. Not a safety boundary — the dedicated AI
+ * client enforces `SET TRANSACTION READ ONLY` and rejects multi-statement
+ * SQL. CTEs wrapping DELETE / EXPLAIN ANALYZE mutations can still pass
+ * this predicate.
  */
 export function isReadOnlySql(sql: string): boolean {
   const stripped = sql

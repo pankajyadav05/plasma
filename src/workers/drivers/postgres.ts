@@ -1,14 +1,18 @@
 import type { ConnectionConfig, QueryResult, SchemaInfo, TxnState } from '@shared/protocol';
+import { isSingleSqlStatement } from '@shared/sql-statements';
 import pg from 'pg';
 
 const { Client } = pg;
 type ClientT = InstanceType<typeof Client>;
 
 /**
- * Postgres driver — wraps two `pg.Client` connections:
+ * Postgres driver — wraps three `pg.Client` connections:
  *   1. `primary` — carries queries / transactions
- *   2. `sideband` — cheap second connection used only for pg_cancel_backend,
- *      so that cancellation works even while `primary` is mid-query
+ *   2. `sideband` — cheap second connection used for pg_cancel_backend +
+ *      live monitor so cancellation works even while `primary` is mid-query
+ *   3. `ai` — dedicated AI tool connection established with
+ *      `default_transaction_read_only = on`; each AI query runs inside
+ *      `SET TRANSACTION READ ONLY` as a single statement (U04)
  *
  * Lives in the utilityProcess so a crashing query or a rogue network read
  * never blocks the main process or the renderer.
@@ -16,6 +20,7 @@ type ClientT = InstanceType<typeof Client>;
 export class PostgresDriver {
   private primary: ClientT | null = null;
   private sideband: ClientT | null = null;
+  private ai: ClientT | null = null;
   private primaryBackendPid: number | null = null;
   private txnState: TxnState = 'none';
 
@@ -62,6 +67,22 @@ export class PostgresDriver {
     await sideband.connect();
     this.sideband = sideband;
 
+    // Dedicated AI client — same credentials, but session-default
+    // read-only so even a bypassed keyword filter cannot write.
+    const ai = new Client({
+      host: config.host,
+      port: config.port,
+      database: config.database,
+      user: config.user,
+      password: config.password,
+      ssl: config.ssl ? { rejectUnauthorized: false } : false,
+      connectionTimeoutMillis: 10_000,
+      application_name: 'plasma-ai',
+    });
+    await ai.connect();
+    await ai.query('SET default_transaction_read_only = on');
+    this.ai = ai;
+
     const res = await primary.query<{ version: string }>('SELECT version()');
     return res.rows[0]?.version ?? 'unknown';
   }
@@ -71,9 +92,11 @@ export class PostgresDriver {
     this.primaryBackendPid = null;
     const p = this.primary;
     const s = this.sideband;
+    const a = this.ai;
     this.primary = null;
     this.sideband = null;
-    await Promise.allSettled([p?.end(), s?.end()]);
+    this.ai = null;
+    await Promise.allSettled([p?.end(), s?.end(), a?.end()]);
   }
 
   async query(sql: string, params?: unknown[]): Promise<QueryResult> {
@@ -139,6 +162,51 @@ export class PostgresDriver {
       durationMs,
       command: res.command,
     };
+  }
+
+  /**
+   * Run a single read-only statement on the dedicated AI connection.
+   * Enforces database-side read-only via `SET TRANSACTION READ ONLY`
+   * (session already has `default_transaction_read_only = on`). Multi-
+   * statement payloads are rejected before any query runs.
+   */
+  async aiQuery(sql: string, params?: unknown[]): Promise<QueryResult> {
+    if (!this.ai) throw new Error('not connected');
+
+    if (!isSingleSqlStatement(sql)) {
+      throw new Error('rejected: AI queries must be a single SQL statement');
+    }
+
+    const start = Date.now();
+    try {
+      await this.ai.query('BEGIN');
+      await this.ai.query('SET TRANSACTION READ ONLY');
+      const res = await this.ai.query({
+        text: sql,
+        values: params,
+        rowMode: 'array',
+      });
+      await this.ai.query('COMMIT');
+      const durationMs = Date.now() - start;
+      return {
+        columns: res.fields.map((f) => ({
+          name: f.name,
+          dataTypeID: f.dataTypeID,
+          dataTypeName: pgTypeName(f.dataTypeID),
+        })),
+        rows: res.rows as unknown[][],
+        rowCount: res.rowCount ?? res.rows.length,
+        durationMs,
+        command: res.command,
+      };
+    } catch (err) {
+      try {
+        await this.ai.query('ROLLBACK');
+      } catch {
+        // ignore rollback errors — connection may already be aborted
+      }
+      throw err;
+    }
   }
 
   /**

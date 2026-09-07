@@ -28,6 +28,11 @@ export function AiPanel() {
   const addTab = useSession((s) => s.addTab);
   const apiKey = useSession((s) => s.settings.openrouterApiKey || s.settings.claudeApiKey);
   const model = useSession((s) => s.settings.openrouterModel);
+  const allowAiRowData = useSession((s) => {
+    const id = s.activeConfig?.id;
+    if (!id) return false;
+    return s.settings.connectionAiRowData?.[id] === true;
+  });
   const tab = useActiveTab();
 
   const [draft, setDraft] = useState('');
@@ -159,7 +164,9 @@ export function AiPanel() {
           )}
         </div>
         <p className="mt-1.5 px-1 font-display text-[10px] italic text-muted-foreground">
-          Schema sent as system prompt. Row data never leaves your machine.
+          {allowAiRowData
+            ? 'Schema + capped tool row samples may be sent to OpenRouter when tools run.'
+            : 'Schema sent as system prompt. Enable "Allow AI tools to read row data" on this connection to let tools send capped row samples.'}
         </p>
       </div>
     </div>
