@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { splitSqlStatements } from './sql-split';
+import { resolveRunTarget, splitSqlStatements, statementAtOffset } from './sql-split';
+
+function texts(sql: string): string[] {
+  return splitSqlStatements(sql).map((s) => s.text);
+}
 
 function texts(sql: string): string[] {
   return splitSqlStatements(sql).map((s) => s.text);
@@ -52,17 +56,11 @@ describe('splitSqlStatements', () => {
 
   it('matches dollar quotes by tag, not by the bare delimiter', () => {
     const sql = 'DO $body$ SELECT $$inner; text$$; $body$; SELECT 1';
-    expect(texts(sql)).toEqual([
-      'DO $body$ SELECT $$inner; text$$; $body$',
-      'SELECT 1',
-    ]);
+    expect(texts(sql)).toEqual(['DO $body$ SELECT $$inner; text$$; $body$', 'SELECT 1']);
   });
 
   it('treats an unterminated dollar quote as a single trailing statement', () => {
-    expect(texts('SELECT 1; DO $$ BEGIN; RETURN;')).toEqual([
-      'SELECT 1',
-      'DO $$ BEGIN; RETURN;',
-    ]);
+    expect(texts('SELECT 1; DO $$ BEGIN; RETURN;')).toEqual(['SELECT 1', 'DO $$ BEGIN; RETURN;']);
   });
 
   it('ignores semicolons inside line comments', () => {
@@ -118,5 +116,64 @@ describe('splitSqlStatements', () => {
     for (const s of out) {
       expect(sql.slice(s.start, s.end)).toBe(s.text);
     }
+  });
+});
+
+describe('statementAtOffset', () => {
+  it('returns the statement containing the cursor', () => {
+    const sql = 'SELECT 1;  SELECT 2';
+    expect(statementAtOffset(sql, 0)?.text).toBe('SELECT 1');
+    expect(statementAtOffset(sql, 7)?.text).toBe('SELECT 1');
+    expect(statementAtOffset(sql, 11)?.text).toBe('SELECT 2');
+    expect(statementAtOffset(sql, 18)?.text).toBe('SELECT 2');
+  });
+
+  it('picks the following statement when the cursor is in a gap', () => {
+    const sql = 'SELECT 1;  SELECT 2';
+    // offset 9 is the space after `;`
+    expect(statementAtOffset(sql, 9)?.text).toBe('SELECT 2');
+  });
+
+  it('returns undefined for an empty buffer', () => {
+    expect(statementAtOffset('   \n', 0)).toBeUndefined();
+  });
+});
+
+describe('resolveRunTarget', () => {
+  const buffer = 'SELECT 1;  SELECT 2;  SELECT 3';
+
+  it('smart mode uses a non-empty selection', () => {
+    const target = resolveRunTarget(buffer, 'smart', {
+      cursorOffset: 0,
+      selectionStart: 11,
+      selectionEnd: 19,
+    });
+    expect(target).toEqual({ sql: 'SELECT 2', base: 11 });
+  });
+
+  it('smart mode falls back to statement under cursor', () => {
+    const target = resolveRunTarget(buffer, 'smart', {
+      cursorOffset: 12,
+      selectionStart: 12,
+      selectionEnd: 12,
+    });
+    expect(target).toEqual({ sql: 'SELECT 2', base: 11 });
+  });
+
+  it('buffer mode always returns the whole buffer', () => {
+    const target = resolveRunTarget(buffer, 'buffer', {
+      cursorOffset: 12,
+      selectionStart: 11,
+      selectionEnd: 19,
+    });
+    expect(target).toEqual({ sql: buffer, base: 0 });
+  });
+
+  it('smart mode without caret falls back to whole buffer', () => {
+    expect(resolveRunTarget(buffer, 'smart', null)).toEqual({ sql: buffer, base: 0 });
+  });
+
+  it('returns null for an empty buffer', () => {
+    expect(resolveRunTarget('  \n', 'buffer', null)).toBeNull();
   });
 });

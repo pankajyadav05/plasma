@@ -21,7 +21,7 @@
 ## Shipped 2026-05-06
 
 ### Round 1 (5)
-- **AI sidecar (OpenRouter)** — `src/main/ai.ts`, `src/renderer/features/ai/AiPanel.tsx`. ⌘K toggle, schema as system prompt, ⌘I asks AI about Monaco selection, code-block Insert/Run.
+- **AI sidecar (OpenRouter)** — `src/main/ai.ts`, `src/renderer/features/ai/AiPanel.tsx`. ⌘L toggle, schema as system prompt, ⌘I asks AI about Monaco selection, code-block Insert/Run.
 - **SQL formatter** — `src/main/sql-format.ts`. ⌘⇧F + toolbar/right-rail Format buttons.
 - **EXPLAIN ANALYZE viewer** — `src/renderer/features/explain/ExplainDialog.tsx`. Collapsible plan tree, hot-node highlighting, mis-estimate flagging.
 - **Charts** — `src/renderer/features/chart/ChartDialog.tsx`. Bar/line/area, native SVG.
@@ -46,16 +46,27 @@
 
 ## Global shortcuts cheat sheet
 
+Canonical source: `src/shared/keymap.ts` (native menu, DOM listeners, Monaco, and the ⌘/ dialog all read it). ⌘K = command palette per DESIGN.md §8.2/§8.8; AI panel is ⌘L.
+
 | Keys | Action |
 |---|---|
-| ⌘K | Toggle AI panel |
-| ⌘I (in editor) | Ask AI about selection |
-| ⌘⇧F (in editor) | Format SQL |
+| ⌘K | Command palette |
+| ⌘L | Toggle AI panel |
+| ⌘/ | Keyboard shortcuts cheat-sheet |
+| ⌘T | New query tab |
+| ⌘W | Close tab |
+| ⌘⏎ | Run selection / statement at cursor |
+| ⌘⇧⏎ | Run all (whole buffer) |
+| ⌘. | Cancel query |
+| ⌘H | Query history |
+| ⌘⇧E | Export results as CSV |
+| ⌘B | Toggle sidebar |
+| ⌘J | Toggle query editor |
 | ⌘⇧G | Codegen dialog |
 | ⌘⇧N | Notebook dialog |
 | ⌘⇧D | Schema diff |
-| ⌘J | Toggle right-rail query panel |
-| ⌘B | Toggle sidebar |
+| ⌘⇧F (in editor) | Format SQL |
+| ⌘I (in editor) | Ask AI about selection |
 | Esc | Close monitor / settings / history canvases |
 
 ## Known limits — Redis / OpenSearch

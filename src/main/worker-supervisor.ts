@@ -27,7 +27,7 @@ import { logger } from './logger';
  * routes them to a registered handler instead of trying to resolve a
  * pending promise.
  */
-export type WorkerBroadcast = Extract<WorkerResponse, { kind: 'redisPubsub' }>;
+export type WorkerBroadcast = Extract<WorkerResponse, { kind: 'redisPubsub' | 'pgNotice' }>;
 
 export class WorkerSupervisor {
   private proc: UtilityProcess | null = null;
@@ -132,16 +132,9 @@ export class WorkerSupervisor {
         return;
       }
       const data = parsed.data;
-
-      if (data.kind === 'ready') {
-        this.readyWait?.resolve();
-        this.readyWait = null;
-        return;
-      }
-
-      // Broadcast events (currently only redisPubsub) aren't request-
+      // Broadcast events (redisPubsub, pgNotice) aren't request-
       // correlated — fan them out to whoever subscribed.
-      if (data.kind === 'redisPubsub') {
+      if (data.kind === 'redisPubsub' || data.kind === 'pgNotice') {
         this.broadcastHandler?.(data);
         return;
       }

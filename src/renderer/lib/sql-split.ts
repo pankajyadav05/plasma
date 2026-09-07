@@ -147,3 +147,73 @@ export function splitSqlStatements(sql: string): SqlStatement[] {
   pushSlice(start, N);
   return out;
 }
+
+/**
+ * Find the statement under a cursor offset into `sql`.
+ * - If the offset falls inside a statement's `[start, end]`, return it.
+ * - If the offset is in a gap (whitespace / `;` between statements),
+ *   return the following statement when one exists, else the previous.
+ * - Empty buffer → undefined.
+ */
+export function statementAtOffset(sql: string, offset: number): SqlStatement | undefined {
+  const stmts = splitSqlStatements(sql);
+  if (stmts.length === 0) return undefined;
+  const clamped = Math.max(0, Math.min(offset, sql.length));
+  for (const s of stmts) {
+    if (clamped >= s.start && clamped <= s.end) return s;
+  }
+  for (const s of stmts) {
+    if (clamped < s.start) return s;
+  }
+  return stmts[stmts.length - 1];
+}
+
+export interface EditorCaret {
+  /** Cursor offset into the buffer (UTF-16 code units, Monaco-compatible). */
+  cursorOffset: number;
+  /** Selection range; empty when collapsed. */
+  selectionStart: number;
+  selectionEnd: number;
+}
+
+export type RunMode = 'smart' | 'buffer';
+
+export interface RunTarget {
+  /** Script text to execute (may contain multiple statements). */
+  sql: string;
+  /**
+   * Offset of `sql` within the full editor buffer. Statement offsets from
+   * splitting `sql` are remapped by adding `base` for decorations/markers.
+   */
+  base: number;
+}
+
+/**
+ * Resolve what ⌘⏎ / ⌘⇧⏎ should execute.
+ * - `buffer`: whole editor contents (⌘⇧⏎).
+ * - `smart`: non-empty selection, else statement under cursor (⌘⏎).
+ *   Falls back to the whole buffer when no caret context is available
+ *   (e.g. menu invoke while the editor is unfocused).
+ */
+export function resolveRunTarget(
+  buffer: string,
+  mode: RunMode,
+  caret: EditorCaret | null,
+): RunTarget | null {
+  if (mode === 'buffer' || !caret) {
+    if (buffer.trim().length === 0) return null;
+    return { sql: buffer, base: 0 };
+  }
+
+  const selStart = Math.min(caret.selectionStart, caret.selectionEnd);
+  const selEnd = Math.max(caret.selectionStart, caret.selectionEnd);
+  if (selEnd > selStart) {
+    const selected = buffer.slice(selStart, selEnd);
+    if (selected.trim().length === 0) return null;
+    return { sql: selected, base: selStart };
+  }
+
+  const stmt = statementAtOffset(buffer, caret.cursorOffset);
+  if (!stmt) return null;
+  return { sql: stmt.text, base: stmt.start };
+}
