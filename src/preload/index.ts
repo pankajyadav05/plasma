@@ -77,6 +77,7 @@ const api: PlasmaAPI = {
   },
   history: {
     list: (opts) => ipcRenderer.invoke(IpcChannel.HistoryList, opts ?? {}),
+    latest: (opts) => ipcRenderer.invoke(IpcChannel.HistoryLatest, opts ?? {}),
     clear: () => ipcRenderer.invoke(IpcChannel.HistoryClear),
   },
   settings: {

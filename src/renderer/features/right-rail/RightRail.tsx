@@ -195,6 +195,7 @@ function QueryPanel() {
   const connectionState = useSession((s) => s.connectionState);
   const setMode = useSession((s) => s.setRightPanelMode);
   const formatActiveSql = useSession((s) => s.formatActiveSql);
+  const recallPreviousHistory = useSession((s) => s.recallPreviousHistory);
   const theme = useSession((s) => s.settings.theme);
   const fontSize = useSession((s) => s.settings.editorFontSize);
   const apiKey = useSession((s) => s.settings.openrouterApiKey || s.settings.claudeApiKey);
@@ -298,6 +299,7 @@ function QueryPanel() {
                   }
                 }
           }
+          onRecallPrevious={isTable ? undefined : () => void recallPreviousHistory()}
         />
       </div>
     </div>

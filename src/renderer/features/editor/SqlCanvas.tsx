@@ -24,6 +24,7 @@ export function SqlCanvas({ expanded = false }: { expanded?: boolean }) {
   const formatActiveSql = useSession((s) => s.formatActiveSql);
   const setRightPanelMode = useSession((s) => s.setRightPanelMode);
   const aiAsk = useSession((s) => s.aiAsk);
+  const recallPreviousHistory = useSession((s) => s.recallPreviousHistory);
   const theme = useSession((s) => s.settings.theme);
   const fontSize = useSession((s) => s.settings.editorFontSize);
   const editorHeightPx = useSession((s) => s.settings.editorHeightPx);
@@ -108,6 +109,7 @@ export function SqlCanvas({ expanded = false }: { expanded?: boolean }) {
                   if (seed) void aiAsk(seed);
                 }
           }
+          onRecallPrevious={isTable ? undefined : () => void recallPreviousHistory()}
         />
       </div>
     </div>
