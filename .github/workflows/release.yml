@@ -17,9 +17,6 @@ jobs:
   verify:
     name: Typecheck + tests
     runs-on: ubuntu-latest
-    env:
-      # Pure Node checks — no packaged app is launched in this job.
-      ELECTRON_SKIP_BINARY_DOWNLOAD: 1
     steps:
       - name: Checkout
         uses: actions/checkout@v4
