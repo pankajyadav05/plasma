@@ -59,10 +59,6 @@ export class RedisDriver {
   /** Captured connect config — needed to spin up the subscriber lazily. */
   private connectConfig: ConnectionConfig | null = null;
 
-  isConnected(): boolean {
-    return this.client !== null;
-  }
-
   async connect(config: ConnectionConfig): Promise<string> {
     await this.disconnect();
 
@@ -101,10 +97,6 @@ export class RedisDriver {
         // best-effort
       }
     }
-  }
-
-  getOverview(): RedisOverview | null {
-    return this.overview;
   }
 
   async refreshOverview(): Promise<RedisOverview> {
