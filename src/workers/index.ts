@@ -1,6 +1,7 @@
 /// <reference types="electron" />
 import {
   type ConnectionEngine,
+  type PgNotice,
   type RedisPubsubMessage,
   WorkerRequest,
   type WorkerResponse,
@@ -8,7 +9,7 @@ import {
 import { OpenSearchDriver } from './drivers/opensearch';
 import { PostgresDriver } from './drivers/postgres';
 import { RedisDriver } from './drivers/redis';
-import { runIsolatedTestConnect } from './test-connect';
+import { writeExportFile, writeExportRows } from './export-file';
 
 /**
  * DB worker — runs in an Electron utilityProcess.
@@ -30,6 +31,8 @@ const redis = new RedisDriver();
 const os = new OpenSearchDriver();
 
 let activeEngine: ConnectionEngine | null = null;
+/** Bumped on every successful connect; edit batches must match (U01). */
+let connectionGen = 0;
 
 function send(res: WorkerResponse): void {
   process.parentPort.postMessage(res);
@@ -40,6 +43,11 @@ function send(res: WorkerResponse): void {
 // route it to its broadcast handler.
 redis.setPubsubListener((message: RedisPubsubMessage) => {
   send({ kind: 'redisPubsub', id: 'pubsub-event', message });
+});
+
+// U26: stream Postgres NOTICE / RAISE NOTICE to main → renderer.
+pg.setNoticeListener((notice: PgNotice) => {
+  send({ kind: 'pgNotice', id: 'notice-event', notice });
 });
 
 function unsupported(id: string, op: string): void {
@@ -53,14 +61,26 @@ function unsupported(id: string, op: string): void {
 async function disconnectAll(): Promise<void> {
   await Promise.allSettled([pg.disconnect(), redis.disconnect(), os.disconnect()]);
   activeEngine = null;
+  // Keep connectionGen as-is until the next connect bumps it — stale
+  // edit batches still fail the write-boundary check because pg's
+  // mirrored gen is cleared to 0 on disconnect.
 }
 
 process.parentPort.on('message', async (evt: Electron.MessageEvent) => {
   const parsed = WorkerRequest.safeParse(evt.data);
   if (!parsed.success) {
+    // Preserve the caller's correlation id when present so the supervisor
+    // can settle the original pending promise (U20).
+    const rawId =
+      evt.data &&
+      typeof evt.data === 'object' &&
+      'id' in evt.data &&
+      typeof (evt.data as { id: unknown }).id === 'string'
+        ? (evt.data as { id: string }).id
+        : 'unknown';
     send({
       kind: 'error',
-      id: 'unknown',
+      id: rawId,
       message: `invalid request: ${parsed.error.message}`,
     });
     return;
@@ -80,14 +100,22 @@ process.parentPort.on('message', async (evt: Electron.MessageEvent) => {
         const engine = req.config.engine ?? 'postgres';
         let serverVersion = '';
         if (engine === 'postgres') {
-          serverVersion = await pg.connect(req.config);
+          serverVersion = await pg.connect(req.config, req.statementTimeoutMs);
         } else if (engine === 'redis') {
           serverVersion = await redis.connect(req.config);
         } else if (engine === 'opensearch') {
           serverVersion = await os.connect(req.config);
         }
         activeEngine = engine;
-        send({ kind: 'connected', id: req.id, serverVersion, engine });
+        connectionGen += 1;
+        if (engine === 'postgres') pg.setConnectionGen(connectionGen);
+        send({
+          kind: 'connected',
+          id: req.id,
+          serverVersion,
+          engine,
+          connectionGen,
+        });
         break;
       }
       case 'testConnect': {
@@ -95,6 +123,13 @@ process.parentPort.on('message', async (evt: Electron.MessageEvent) => {
         // the live session. activeEngine stays untouched.
         const { serverVersion, engine } = await runIsolatedTestConnect(req.config);
         send({ kind: 'connected', id: req.id, serverVersion, engine });
+        break;
+      }
+      case 'setStatementTimeout': {
+        if (activeEngine === 'postgres') {
+          await pg.setStatementTimeout(req.timeoutMs);
+        }
+        send({ kind: 'statementTimeoutSet', id: req.id });
         break;
       }
       case 'disconnect':
@@ -105,14 +140,59 @@ process.parentPort.on('message', async (evt: Electron.MessageEvent) => {
       // ── Postgres-only ──
       case 'query': {
         if (activeEngine !== 'postgres') return unsupported(req.id, 'query');
-        const result = await pg.query(req.sql, req.params);
-        send({ kind: 'queryResult', id: req.id, result });
+        {
+          const revision = req.revision ?? 0;
+          const result = await pg.query(req.sql, req.params, {
+            revision,
+            onChunk: (chunk) => {
+              send({
+                kind: 'queryChunk',
+                id: req.id,
+                revision,
+                columns: chunk.columns,
+                rows: chunk.rows,
+                chunkIndex: chunk.chunkIndex,
+                done: chunk.done,
+                truncated: chunk.truncated,
+              });
+            },
+          });
+          send({ kind: 'queryResult', id: req.id, result });
+        }
+        break;
+      }
+      case 'commitEditBatch': {
+        if (activeEngine !== 'postgres') return unsupported(req.id, 'commitEditBatch');
+        const state = await pg.commitEditBatch(req.connectionGen, req.updates);
+        send({
+          kind: 'editBatchResult',
+          id: req.id,
+          state,
+          applied: req.updates.length,
+        });
         break;
       }
       case 'sidebandQuery': {
         if (activeEngine !== 'postgres') return unsupported(req.id, 'sidebandQuery');
-        const result = await pg.sidebandQuery(req.sql, req.params);
-        send({ kind: 'queryResult', id: req.id, result });
+        {
+          const revision = req.revision ?? 0;
+          const result = await pg.sidebandQuery(req.sql, req.params, {
+            revision,
+            onChunk: (chunk) => {
+              send({
+                kind: 'queryChunk',
+                id: req.id,
+                revision,
+                columns: chunk.columns,
+                rows: chunk.rows,
+                chunkIndex: chunk.chunkIndex,
+                done: chunk.done,
+                truncated: chunk.truncated,
+              });
+            },
+          });
+          send({ kind: 'queryResult', id: req.id, result });
+        }
         break;
       }
       case 'aiQuery': {
@@ -156,6 +236,22 @@ process.parentPort.on('message', async (evt: Electron.MessageEvent) => {
         if (activeEngine !== 'postgres') return unsupported(req.id, 'rollbackTxn');
         const state = await pg.rollbackTransaction();
         send({ kind: 'txnState', id: req.id, state });
+        break;
+      }
+
+      case "exportRows": {
+        if (activeEngine !== "postgres") return unsupported(req.id, "exportRows");
+        const result = await writeExportRows({ filePath: req.filePath, format: req.format, columns: req.columns, rows: req.rows });
+        send({ kind: "exportDone", id: req.id, filePath: req.filePath, ...result });
+        break;
+      }
+      case "exportQuery": {
+        if (activeEngine !== "postgres") return unsupported(req.id, "exportQuery");
+        const batches = pg.streamQueryForExport(req.sql, req.params);
+        const first = await batches.next();
+        const columns = first.done ? [] : first.value.columns;
+        const result = await writeExportFile({ filePath: req.filePath, format: req.format, columns, batches: (async function* () { if (!first.done) yield first.value.rows; for await (const batch of batches) yield batch.rows; })() });
+        send({ kind: "exportDone", id: req.id, filePath: req.filePath, ...result });
         break;
       }
 
@@ -314,7 +410,11 @@ process.parentPort.on('message', async (evt: Electron.MessageEvent) => {
 
 process.on('uncaughtException', (err) => {
   console.error('[plasma-worker] uncaught:', err);
-  // Fall through — let the parent see the stderr and decide to restart.
+  // Installing this handler suppresses Node's default fatal exit; exit
+  // explicitly so the supervisor can restart (U20).
+  process.exit(1);
 });
 
+// Readiness handshake for the supervisor (U20).
+send({ kind: 'ready', id: 'boot' });
 console.log('plasma db worker ready');

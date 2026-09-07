@@ -29,6 +29,10 @@ export function App() {
       window.plasmaEvents.on('plasma:menu:toggleEditor', () => session().toggleEditor()),
       window.plasmaEvents.on('plasma:menu:palette', () => session().togglePalette()),
       window.plasmaEvents.on('plasma:menu:runQuery', () => void session().runQuery()),
+      window.plasmaEvents.on(
+        'plasma:menu:runQueryAll',
+        () => void session().runQuery({ all: true }),
+      ),
       window.plasmaEvents.on('plasma:menu:cancelQuery', () => void session().cancelQuery()),
       window.plasmaEvents.on('plasma:menu:history', () => {
         session().setHistoryOpen(true);
@@ -44,8 +48,17 @@ export function App() {
         >[0];
         session().aiApplyEvent(evt);
       }),
+      // U26: stream Postgres NOTICE / RAISE NOTICE into the origin tab.
+      window.plasmaEvents.on('plasma:pg:notice', (...args: unknown[]) => {
+        const notice = args[0] as Parameters<
+          ReturnType<typeof useSession.getState>['appendPgNotice']
+        >[0];
+        session().appendPgNotice(notice);
+      }),
     ];
-    return () => unsub.forEach((fn) => fn());
+    return () => {
+      for (const fn of unsub) fn();
+    };
   }, []);
 
   return (

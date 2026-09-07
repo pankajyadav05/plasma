@@ -76,22 +76,6 @@ export const ConnectionTestResult = z.discriminatedUnion('ok', [
 ]);
 export type ConnectionTestResult = z.infer<typeof ConnectionTestResult>;
 
-/**
- * SSH bastion config for a connection. Used both in Settings.connectionSsh
- * and as an optional candidate payload on ConnectionTest so "Test" can
- * exercise tunnels that have not been persisted yet.
- */
-export const ConnectionSshConfig = z.object({
-  host: z.string().min(1),
-  port: z.number().int().positive().max(65535).default(22),
-  user: z.string().min(1),
-  /** Either password OR privateKey must be supplied (privateKey wins). */
-  password: z.string().default(''),
-  privateKey: z.string().default(''),
-  passphrase: z.string().default(''),
-});
-export type ConnectionSshConfig = z.infer<typeof ConnectionSshConfig>;
-
 // ─── Redis types ─────────────────────────────────────────────────────
 
 /**
@@ -177,8 +161,7 @@ export type RedisOverview = z.infer<typeof RedisOverview>;
 export const RedisAnalyzeSample = z.object({
   key: z.string(),
   type: RedisValueType,
-  /** null when MEMORY USAGE failed / was ACL-blocked — not the same as 0. */
-  bytes: z.number().int().nullable(),
+  bytes: z.number().int(),
   ttlMs: z.number().int().nullable(),
 });
 export type RedisAnalyzeSample = z.infer<typeof RedisAnalyzeSample>;
@@ -208,19 +191,6 @@ export const RedisAnalyzeResult = z.object({
   ),
 });
 export type RedisAnalyzeResult = z.infer<typeof RedisAnalyzeResult>;
-
-export const RedisBulkDeleteFailure = z.object({
-  key: z.string(),
-  error: z.string(),
-});
-export type RedisBulkDeleteFailure = z.infer<typeof RedisBulkDeleteFailure>;
-
-/** Partial-success result for pipelined DEL — never treat command errors as ack. */
-export const RedisBulkDeleteResult = z.object({
-  deleted: z.array(z.string()),
-  failed: z.array(RedisBulkDeleteFailure),
-});
-export type RedisBulkDeleteResult = z.infer<typeof RedisBulkDeleteResult>;
 
 export const RedisSlowlogEntry = z.object({
   id: z.number().int(),
@@ -401,14 +371,84 @@ export const ColumnMeta = z.object({
 });
 export type ColumnMeta = z.infer<typeof ColumnMeta>;
 
+/** Postgres NOTICE / RAISE NOTICE (and WARNING) payload from `pg`. */
+export const PgNotice = z.object({
+  message: z.string(),
+  severity: z.string().optional(),
+  code: z.string().optional(),
+  detail: z.string().optional(),
+  hint: z.string().optional(),
+  where: z.string().optional(),
+});
+export type PgNotice = z.infer<typeof PgNotice>;
+
 export const QueryResult = z.object({
   columns: z.array(ColumnMeta),
   rows: z.array(z.array(z.unknown())),
   rowCount: z.number().int(),
   durationMs: z.number(),
   command: z.string().optional(),
+  /**
+   * True when the worker stopped early due to row/byte caps (U15).
+   * `rows` is then a prefix; `rowCount` is rows retained (not a server total).
+   */
+  truncated: z.boolean().default(false),
 });
 export type QueryResult = z.infer<typeof QueryResult>;
+
+/** Result export formats (U16). */
+export const ExportFormat = z.enum(['csv', 'json', 'sql']);
+export type ExportFormat = z.infer<typeof ExportFormat>;
+
+export const ExportSaveRequest = z.object({
+  format: ExportFormat,
+  /** Suggested filename stem or full name for the save dialog. */
+  defaultPath: z.string().min(1),
+  columns: z.array(ColumnMeta),
+  /**
+   * In-memory rows (selection or capped result). Omit when `sql` is set
+   * so the worker re-queries unboundedly for full-result export.
+   */
+  rows: z.array(z.array(z.unknown())).optional(),
+  /** When set (and rows omitted), worker streams an unbounded query to file. */
+  sql: z.string().optional(),
+  params: z.array(z.unknown()).optional(),
+});
+export type ExportSaveRequest = z.infer<typeof ExportSaveRequest>;
+
+export const ExportSaveResult = z.discriminatedUnion('ok', [
+  z.object({
+    ok: z.literal(true),
+    filePath: z.string(),
+    rowCount: z.number().int().nonnegative(),
+    bytesWritten: z.number().int().nonnegative(),
+  }),
+  z.object({ ok: z.literal(false), canceled: z.literal(true) }),
+]);
+export type ExportSaveResult = z.infer<typeof ExportSaveResult>;
+
+/**
+ * Lightweight chunk event for cursor streaming (U15 step 2).
+ * `rows` is validated as an array only — no per-cell Zod walk.
+ */
+export const QueryChunk = z.object({
+  kind: z.literal('queryChunk'),
+  /** Correlates to the in-flight query request id. */
+  id: z.string(),
+  /** Monotonic revision from the requester; stale chunks are dropped. */
+  revision: z.number().int().nonnegative(),
+  /** Present on the first chunk of a result set. */
+  columns: z.array(ColumnMeta).optional(),
+  rows: z.custom<unknown[][]>(
+    (v) => Array.isArray(v) && (v.length === 0 || Array.isArray((v as unknown[])[0])),
+    { message: 'rows must be an array of arrays' },
+  ),
+  /** 0-based index of this chunk within the request. */
+  chunkIndex: z.number().int().nonnegative(),
+  done: z.boolean().default(false),
+  truncated: z.boolean().default(false),
+});
+export type QueryChunk = z.infer<typeof QueryChunk>;
 
 // ─── Schema introspection ────────────────────────────────────────────
 
@@ -492,41 +532,42 @@ export type TxnState = z.infer<typeof TxnState>;
 
 export const WorkerRequest = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('ping'), id: z.string(), message: z.string() }),
-  z.object({ kind: z.literal('connect'), id: z.string(), config: ConnectionConfig }),
-  /**
-   * Throwaway connect used by "Test Connection". Must NOT call
-   * disconnectAll() or mutate the live activeEngine — the worker spins
-   * up an isolated driver, probes it, and disposes in finally.
-   */
-  z.object({ kind: z.literal('testConnect'), id: z.string(), config: ConnectionConfig }),
+  z.object({
+    kind: z.literal('connect'),
+    id: z.string(),
+    config: ConnectionConfig,
+    /** Applied as PG statement_timeout after connect (U20). */
+    statementTimeoutMs: z.number().int().nonnegative().optional(),
+  }),
   z.object({ kind: z.literal('disconnect'), id: z.string() }),
   z.object({
     kind: z.literal('query'),
     id: z.string(),
     sql: z.string(),
     params: z.array(z.unknown()).optional(),
+    /** Request revision for chunk events (U15); stale chunks are ignored. */
+    revision: z.number().int().nonnegative().optional(),
   }),
   z.object({ kind: z.literal('cancel'), id: z.string() }),
   z.object({ kind: z.literal('introspect'), id: z.string() }),
   z.object({ kind: z.literal('beginTxn'), id: z.string() }),
   z.object({ kind: z.literal('commitTxn'), id: z.string() }),
   z.object({ kind: z.literal('rollbackTxn'), id: z.string() }),
-  // Sideband query — runs on the second connection so it doesn't queue
-  // behind a long-running query on `primary`. Used for live monitor +
-  // pg_terminate_backend calls.
+  // Aux query — runs on the dedicated aux connection (AI/monitor) so it
+  // never shares a session with cancel. Cancel uses a separate control
+  // client (U19).
   z.object({
     kind: z.literal('sidebandQuery'),
     id: z.string(),
     sql: z.string(),
     params: z.array(z.unknown()).optional(),
+    revision: z.number().int().nonnegative().optional(),
   }),
-  // AI tool query — dedicated read-only client (U04). Never shares the
-  // sideband cancel connection's transaction / workload budget.
+  // Apply PG statement_timeout on primary + aux (U20). 0 disables.
   z.object({
-    kind: z.literal('aiQuery'),
+    kind: z.literal('setStatementTimeout'),
     id: z.string(),
-    sql: z.string(),
-    params: z.array(z.unknown()).optional(),
+    timeoutMs: z.number().int().nonnegative(),
   }),
   // ── Redis ops ──
   z.object({
@@ -634,6 +675,23 @@ export const WorkerRequest = z.discriminatedUnion('kind', [
     /** Optional KQL/Lucene-style filter clause to scope the stats. */
     queryString: z.string().optional(),
   }),
+  // ── Export (U16) ──
+  z.object({
+    kind: z.literal('exportRows'),
+    id: z.string(),
+    format: ExportFormat,
+    filePath: z.string().min(1),
+    columns: z.array(ColumnMeta),
+    rows: z.array(z.array(z.unknown())),
+  }),
+  z.object({
+    kind: z.literal('exportQuery'),
+    id: z.string(),
+    format: ExportFormat,
+    filePath: z.string().min(1),
+    sql: z.string().min(1),
+    params: z.array(z.unknown()).optional(),
+  }),
 ]);
 export type WorkerRequest = z.infer<typeof WorkerRequest>;
 
@@ -653,6 +711,9 @@ export const WorkerResponse = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('disconnected'), id: z.string() }),
   z.object({ kind: z.literal('queryResult'), id: z.string(), result: QueryResult }),
   z.object({ kind: z.literal('cancelled'), id: z.string() }),
+  /** Worker process finished bootstrapping and can accept requests (U20). */
+  z.object({ kind: z.literal('ready'), id: z.string() }),
+  z.object({ kind: z.literal('statementTimeoutSet'), id: z.string() }),
   z.object({ kind: z.literal('schemaInfo'), id: z.string(), info: SchemaInfo }),
   z.object({ kind: z.literal('txnState'), id: z.string(), state: TxnState }),
   z.object({ kind: z.literal('error'), id: z.string(), message: z.string() }),
@@ -661,11 +722,6 @@ export const WorkerResponse = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('redisOverview'), id: z.string(), info: RedisOverview }),
   z.object({ kind: z.literal('redisCommand'), id: z.string(), result: RedisCommandResult }),
   z.object({ kind: z.literal('redisAck'), id: z.string() }),
-  z.object({
-    kind: z.literal('redisBulkDelete'),
-    id: z.string(),
-    result: RedisBulkDeleteResult,
-  }),
   z.object({ kind: z.literal('redisAnalyze'), id: z.string(), result: RedisAnalyzeResult }),
   z.object({ kind: z.literal('redisSlowlog'), id: z.string(), entries: z.array(RedisSlowlogEntry) }),
   /**
@@ -674,6 +730,12 @@ export const WorkerResponse = z.discriminatedUnion('kind', [
    * to a separate handler instead of trying to resolve a pending promise.
    */
   z.object({ kind: z.literal('redisPubsub'), id: z.string(), message: RedisPubsubMessage }),
+  /**
+   * Cursor-stream chunk broadcast — not the final queryResult.
+   * Supervisor routes by kind to the broadcast handler (like redisPubsub).
+   * `id` is the originating request id so the renderer can apply revision checks.
+   */
+  QueryChunk,
   z.object({ kind: z.literal('osOverview'), id: z.string(), info: OsOverview }),
   z.object({ kind: z.literal('osMapping'), id: z.string(), root: OsMappingNode }),
   z.object({ kind: z.literal('osSearch'), id: z.string(), result: OsSearchResult }),
@@ -692,6 +754,13 @@ export const WorkerResponse = z.discriminatedUnion('kind', [
     acknowledged: z.boolean(),
   }),
   z.object({ kind: z.literal('osFieldStats'), id: z.string(), stats: z.array(OsFieldStats) }),
+  z.object({
+    kind: z.literal('exportDone'),
+    id: z.string(),
+    filePath: z.string(),
+    rowCount: z.number().int().nonnegative(),
+    bytesWritten: z.number().int().nonnegative(),
+  }),
 ]);
 export type WorkerResponse = z.infer<typeof WorkerResponse>;
 
@@ -764,20 +833,26 @@ export const SettingsShape = z.object({
    */
   connectionTags: z.record(z.string(), z.enum(['prod', 'staging', 'dev', 'local'])).default({}),
   /**
-   * Per-connection opt-in for AI tools to read and egress row data
-   * (U06). Default off for every connection — including prod-tagged
-   * ones. When false/absent, AI tools that would serialize row samples
-   * are refused and omitted from the OpenRouter tool list.
-   */
-  connectionAiRowData: z.record(z.string(), z.boolean()).default({}),
-  /**
    * Per-connection SSH tunnel config. When set, main opens an ssh2
    * tunnel before the Postgres client connects and routes traffic
    * through localhost:<random>. Worker is unaware — it sees a normal
    * local connection. Keys are NOT encrypted at rest yet — TODO move
    * to safeStorage on next schema bump.
    */
-  connectionSsh: z.record(z.string(), ConnectionSshConfig).default({}),
+  connectionSsh: z
+    .record(
+      z.string(),
+      z.object({
+        host: z.string().min(1),
+        port: z.number().int().positive().max(65535).default(22),
+        user: z.string().min(1),
+        /** Either password OR privateKey must be supplied (privateKey wins). */
+        password: z.string().default(''),
+        privateKey: z.string().default(''),
+        passphrase: z.string().default(''),
+      }),
+    )
+    .default({}),
   /**
    * Schema snapshots used by the diff tool. Keyed by snapshot id; the
    * payload holds the connection it came from, a user label, the
@@ -1019,7 +1094,7 @@ export const IpcChannel = {
   QueryRun: 'plasma:query:run',
   QueryCancel: 'plasma:query:cancel',
   /**
-   * Run a query on the worker's sideband connection. Used by the live
+   * Run a query on the worker's aux connection (AI/monitor). Used by the live
    * monitor + pg_terminate_backend so a long-running primary query
    * doesn't block the activity refresh.
    */
@@ -1039,6 +1114,8 @@ export const IpcChannel = {
   RedisUnsubscribe: 'plasma:redis:unsubscribe',
   /** Renderer-facing event channel for streamed pub/sub messages. */
   RedisPubsubEvent: 'plasma:redis:pubsub',
+  /** Cursor-stream query chunks (U15). Payload is QueryChunk. */
+  QueryChunkEvent: 'plasma:query:chunk',
   // OpenSearch ops
   OsOverview: 'plasma:os:overview',
   OsMapping: 'plasma:os:mapping',
@@ -1081,6 +1158,8 @@ export const IpcChannel = {
   // Dev sanity checks
   PingMain: 'plasma:ping:main',
   PingWorker: 'plasma:ping:worker',
+  /** Worker/main-backed incremental result export (U16). */
+  ExportSave: 'plasma:export:save',
 } as const;
 
 // ─── Auto-update ─────────────────────────────────────────────────────
@@ -1122,15 +1201,7 @@ export interface PlasmaAPI {
   conn: {
     connect(config: ConnectionConfig): Promise<ConnectionInfo>;
     disconnect(): Promise<void>;
-    /**
-     * Probe a candidate config without touching the live session.
-     * Optional `ssh` is the candidate bastion (null/undefined = no tunnel).
-     * Pass the dialog's in-progress SSH form so unsaved tunnels are tested.
-     */
-    test(
-      config: ConnectionConfig,
-      ssh?: ConnectionSshConfig | null,
-    ): Promise<ConnectionTestResult>;
+    test(config: ConnectionConfig): Promise<ConnectionTestResult>;
     introspect(): Promise<SchemaInfo>;
   };
   vault: {
@@ -1176,7 +1247,7 @@ export interface PlasmaAPI {
     command(parts: string[]): Promise<RedisCommandResult>;
     analyze(opts?: { sampleCap?: number; match?: string }): Promise<RedisAnalyzeResult>;
     slowlog(limit?: number): Promise<RedisSlowlogEntry[]>;
-    bulkDelete(keys: string[]): Promise<RedisBulkDeleteResult>;
+    bulkDelete(keys: string[]): Promise<void>;
     write(op: RedisWriteOp): Promise<void>;
     subscribe(channel: string, pattern?: boolean): Promise<void>;
     unsubscribe(channel: string, pattern?: boolean): Promise<void>;
@@ -1238,6 +1309,13 @@ export interface PlasmaAPI {
     maximizeToggle(): Promise<void>;
     close(): Promise<void>;
     isMaximized(): Promise<boolean>;
+  };
+  export: {
+    /**
+     * Show a save dialog and stream CSV/JSON/SQL to disk via worker/main (U16).
+     * Prefer `sql` (omit rows) when the on-screen result is truncated.
+     */
+    save(req: ExportSaveRequest): Promise<ExportSaveResult>;
   };
   update: {
     /** Trigger an explicit check now. Returns the status post-check. */

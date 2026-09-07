@@ -159,7 +159,7 @@ export function RightRail() {
               title={
                 disabled
                   ? `${it.label} — open a table tab first`
-                  : `${it.label} (${it.mode === 'query' ? kbd('J') : 'click'})`
+                  : `${it.label} (${it.mode === 'query' ? kbd('J') : it.mode === 'ai' ? kbd('L') : 'click'})`
               }
               className={cn(
                 'relative grid h-9 w-9 cursor-pointer place-items-center rounded-md transition-colors duration-150',
@@ -198,7 +198,7 @@ function QueryPanel() {
   const recallPreviousHistory = useSession((s) => s.recallPreviousHistory);
   const theme = useSession((s) => s.settings.theme);
   const fontSize = useSession((s) => s.settings.editorFontSize);
-  const apiKey = useSession((s) => s.settings.openrouterApiKey || s.settings.claudeApiKey);
+  const hasApiKey = useSession((s) => Boolean(s.settings.hasOpenrouterApiKey || s.settings.hasClaudeApiKey || s.settings.openrouterApiKey || s.settings.claudeApiKey));
 
   if (!tab) {
     return <PanelEmpty title="No active tab" hint="Open a table or write a query." />;
@@ -214,17 +214,22 @@ function QueryPanel() {
     else void runQuery();
   };
 
+  const handleRunAll = () => {
+    if (running || isTable) return;
+    void runQuery({ all: true });
+  };
+
   const close = () => setMode(null);
 
   return (
     <div className="flex h-full flex-col">
       <PanelHeader title={tab.title} hint={isTable ? 'table' : undefined} onClose={close}>
-        {!isTable && apiKey.trim().length > 0 && (
+        {!isTable && hasApiKey && (
           <Button
             variant="ghost"
             size="sm"
             className="font-display italic text-muted-foreground"
-            title="Open AI assistant (⌘K)"
+            title={`Open AI assistant (${kbd('L')})`}
             onClick={() => setMode('ai')}
           >
             <Sparkles className="h-3.5 w-3.5 text-primary" />
@@ -236,7 +241,7 @@ function QueryPanel() {
             variant="ghost"
             size="icon-xs"
             onClick={() => void formatActiveSql()}
-            title="Format SQL (⌘⇧F)"
+            title={`Format SQL (${kbd('⇧F')})`}
             aria-label="Format SQL"
           >
             <Wand2 />
@@ -281,7 +286,11 @@ function QueryPanel() {
           value={tab.sql}
           onChange={isTable ? NOOP : setSql}
           onRun={handleAction}
+          onRunAll={handleRunAll}
           onToggle={close}
+          runningRange={tab.queryRunningRange}
+          errorRange={tab.queryErrorRange}
+          errorMessage={tab.queryError}
           theme={theme}
           fontSize={fontSize}
           readOnly={isTable}

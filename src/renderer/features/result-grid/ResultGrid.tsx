@@ -30,25 +30,12 @@ import {
 import { type RowDetail, RowDetailSheet } from './RowDetailSheet';
 import { SqlHomePanel } from './SqlHomePanel';
 import { TableDefinitionView } from './TableDefinitionView';
+import { computeRowWindow } from './windowed-rows';
 
 // Stable empty Set used as a fallback when the active tab is null. Using
 // a module-level singleton keeps the useEffect dependency reference-stable
 // across renders so we don't trip the sticky-column re-measure loop.
 const EMPTY_STICKY_SET: ReadonlySet<string> = new Set();
-
-/**
- * Hard cap on rows we hand to React for the table body. The grid uses a
- * pure DOM `<table>` with sticky headers + sticky columns; rendering
- * 100k+ rows blows the layout engine. The PaginationBar already keeps
- * normal page sizes (50/100/250/500/1000) safe — this cap is the floor
- * for users who set pageSize=10000 or stream-fed tabs that bypass paging.
- *
- * Rows beyond this cap are simply not rendered; a footer banner surfaces
- * the truncation. Full viewport-aware virtualization (windowed render
- * with absolute positioning) is the next step — TODO once the existing
- * keyboard nav code can map cell coords to a visible window.
- */
-const MAX_DOM_ROWS = 1500;
 
 /**
  * Paginated + sortable result grid with keyboard navigation and cell copy.
@@ -60,7 +47,9 @@ const MAX_DOM_ROWS = 1500;
  *  - Ctrl/Cmd+C copies the selected cell value
  *  - Long cells truncate with a native tooltip on hover
  *
- * Virtualization is still M3 — this renders all rows in the active page.
+ * U15: worker results are row/byte-capped (`truncated` flag). The tbody
+ * uses scroll-windowed rendering (replacing MAX_DOM_ROWS) so large
+ * pageSize values do not mount thousands of DOM nodes.
  */
 export function ResultGrid() {
   const tab = useActiveTab();
@@ -70,6 +59,7 @@ export function ResultGrid() {
   const setSelectedRows = useSession((s) => s.setSelectedRows);
   const setColumnWidth = useSession((s) => s.setColumnWidth);
   const editMode = useSession((s) => s.editMode);
+  const connectionReadOnly = useSession((s) => Boolean(s.activeConfig?.readOnly));
   const updateCell = useSession((s) => s.updateCell);
   const deleteRow = useSession((s) => s.deleteRow);
   const schema = useSession((s) => s.schema);
@@ -133,6 +123,7 @@ export function ResultGrid() {
   const writable = Boolean(
     isTableTab &&
       editMode &&
+      !connectionReadOnly &&
       tab?.tableSchema &&
       tab?.tableName &&
       schema?.columns.some(
@@ -166,7 +157,7 @@ export function ResultGrid() {
     }
   };
 
-  // Compute display rows (U14).
+  // Compute display rows (U14 + U15).
   //
   // Table tabs: the server already returned the sorted + paginated
   // slice, so we render all rows as-is.
@@ -191,6 +182,35 @@ export function ResultGrid() {
   }, [tab?.kind, tab?.queryResult, tab?.page, tab?.pageSize, sortedSqlRows]);
 
   const containerRef = useRef<HTMLDivElement>(null);
+  const [scrollTop, setScrollTop] = useState(0);
+  const [viewportHeight, setViewportHeight] = useState(400);
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const onScroll = () => setScrollTop(el.scrollTop);
+    const ro = new ResizeObserver((entries) => {
+      const h = entries[0]?.contentRect.height;
+      if (typeof h === 'number' && h > 0) setViewportHeight(h);
+    });
+    el.addEventListener('scroll', onScroll, { passive: true });
+    ro.observe(el);
+    setScrollTop(el.scrollTop);
+    setViewportHeight(el.clientHeight || 400);
+    return () => {
+      el.removeEventListener('scroll', onScroll);
+      ro.disconnect();
+    };
+  }, [tab?.queryResult]);
+
+  const rowWindow = useMemo(
+    () => computeRowWindow(displayRows.length, scrollTop, viewportHeight),
+    [displayRows.length, scrollTop, viewportHeight],
+  );
+  const windowedRows = useMemo(
+    () => displayRows.slice(rowWindow.start, rowWindow.end),
+    [displayRows, rowWindow.start, rowWindow.end],
+  );
 
   // Foreign-key lookup for the current table tab. Keyed by column name,
   // since FK click-through is only supported on table tabs where each
@@ -805,7 +825,13 @@ export function ResultGrid() {
           </tr>
         </thead>
         <tbody>
-          {displayRows.slice(0, MAX_DOM_ROWS).map((entry, visibleRow) => {
+          {rowWindow.topPadPx > 0 && (
+            <tr aria-hidden="true" style={{ height: rowWindow.topPadPx }}>
+              <td colSpan={visibleColumns.length + (writable ? 2 : 1)} />
+            </tr>
+          )}
+          {windowedRows.map((entry, windowIdx) => {
+            const visibleRow = rowWindow.start + windowIdx;
             const rowSelected = tab.selectedCell?.row === visibleRow;
             const rowChecked = tab.selectedRows.has(entry.originalIndex);
             return (
@@ -981,15 +1007,20 @@ export function ResultGrid() {
               </tr>
             );
           })}
-          {displayRows.length > MAX_DOM_ROWS && (
+          {rowWindow.bottomPadPx > 0 && (
+            <tr aria-hidden="true" style={{ height: rowWindow.bottomPadPx }}>
+              <td colSpan={visibleColumns.length + (writable ? 2 : 1)} />
+            </tr>
+          )}
+          {tab.queryResult.truncated && (
             <tr>
               <td
                 colSpan={visibleColumns.length + (writable ? 2 : 1)}
                 className="border-t border-amber-500/40 bg-amber-500/10 px-3 py-2 font-display text-xs italic text-foreground"
               >
-                Rendering first {MAX_DOM_ROWS.toLocaleString()} of{' '}
-                {displayRows.length.toLocaleString()} rows. Use the page controls below — or LIMIT
-                in your query — to see the rest.
+                Result truncated at {tab.queryResult.rows.length.toLocaleString()} rows (worker
+                row/byte cap). Add a LIMIT — or export via a future incremental path — for the full
+                set.
               </td>
             </tr>
           )}

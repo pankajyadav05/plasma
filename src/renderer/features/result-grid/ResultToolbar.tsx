@@ -7,7 +7,7 @@ import { MockDataDialog } from '@/features/mock-data/MockDataDialog';
 import { PgVectorDialog } from '@/features/pgvector/PgVectorDialog';
 import { PostGisDialog } from '@/features/postgis/PostGisDialog';
 import { cn } from '@/lib/cn';
-import { type ExportFormat, copyResultToClipboard, exportResult, pickRows } from '@/lib/export';
+import { type ExportFormat, copyResultToClipboard, pickRows } from '@/lib/export';
 import { formatDuration } from '@/lib/format';
 import { useActiveTab, useSession } from '@/stores/session';
 import type { QueryResult } from '@shared/protocol';
@@ -48,6 +48,7 @@ export function ResultToolbar() {
   const refreshTable = useSession((s) => s.refreshTable);
   const runQuery = useSession((s) => s.runQuery);
   const editMode = useSession((s) => s.editMode);
+  const connectionReadOnly = useSession((s) => Boolean(s.activeConfig?.readOnly));
   const formatActiveSql = useSession((s) => s.formatActiveSql);
   const [exportOpen, setExportOpen] = useState(false);
   const [insertOpen, setInsertOpen] = useState(false);
@@ -64,7 +65,7 @@ export function ResultToolbar() {
       const current = useSession.getState();
       const activeT = current.tabs.find((t) => t.id === current.activeTabId);
       if (!activeT?.queryResult) return;
-      exportResult(activeT.queryResult, detail.kind, activeT.title.replace(/\.sql$/i, ''));
+      void window.plasma.export.save({ format: detail.kind, defaultPath: activeT.title.replace(/.sql$/i, ''), columns: activeT.queryResult.columns, rows: activeT.queryResult.rows });
     };
     window.addEventListener('plasma:export', handler);
     return () => window.removeEventListener('plasma:export', handler);
@@ -191,16 +192,29 @@ export function ResultToolbar() {
       {hasResult && tab.queryResult && (
         <>
           <Separator orientation="vertical" className="h-4" />
+          {tab.queryResults.length > 1 && (
+            <span
+              className="tabular-nums text-[11px] text-muted-foreground"
+              title="Active statement result — use ⌥←/→ or the messages strip to switch"
+            >
+              {tab.activeResultIndex + 1}/{tab.queryResults.length}
+            </span>
+          )}
           <span
             className="tabular-nums text-xs text-muted-foreground"
-            title={`Query duration · ${tab.queryResult.durationMs.toLocaleString()} ms`}
+            title={
+              tab.queryResults.length > 1
+                ? `Statement ${tab.activeResultIndex + 1} · ${tab.queryResult.durationMs.toLocaleString()} ms` +
+                  ` · total ${tab.queryResults.reduce((s, r) => s + r.durationMs, 0).toLocaleString()} ms`
+                : `Query duration · ${tab.queryResult.durationMs.toLocaleString()} ms`
+            }
           >
             {formatDuration(tab.queryResult.durationMs)}
           </span>
         </>
       )}
 
-      {isTable && editMode && (
+      {isTable && editMode && !connectionReadOnly && (
         <>
           <Separator orientation="vertical" className="h-4" />
           <Button
@@ -414,7 +428,7 @@ function ExportRow({
   };
 
   const handleDownload = () => {
-    exportResult(result, format, filename);
+    void window.plasma.export.save({ format, defaultPath: filename, columns: result.columns, rows: result.rows });
     onClose();
   };
 

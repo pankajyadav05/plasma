@@ -34,7 +34,7 @@ export function FilterRow() {
   const tab = useActiveTab();
   const schema = useSession((s) => s.schema);
   const removeFilter = useSession((s) => s.removeFilter);
-  const claudeApiKey = useSession((s) => s.settings.claudeApiKey);
+  const hasAiKey = useSession((s) => Boolean(s.settings.hasOpenrouterApiKey || s.settings.hasClaudeApiKey || s.settings.openrouterApiKey || s.settings.claudeApiKey));
 
   const columnNames = useMemo(() => {
     if (!tab || tab.kind !== 'table' || !tab.tableSchema || !tab.tableName) return [];
@@ -59,7 +59,7 @@ export function FilterRow() {
     <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border bg-background px-3">
       {/* Search-style trigger only shows when no filters are applied —
           once chips exist, "Add more filters" handles new additions. */}
-      {!hasFilters && <FilterTrigger teaser={teaser} hasAi={Boolean(claudeApiKey)} />}
+      {!hasFilters && <FilterTrigger teaser={teaser} hasAi={hasAiKey} />}
 
       <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
         {tab.filters.map((f) => (

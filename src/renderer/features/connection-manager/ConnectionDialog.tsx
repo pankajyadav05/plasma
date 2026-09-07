@@ -11,6 +11,7 @@ import {
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useSession } from '@/stores/session';
+import { suggestReadOnlyForTag } from '@shared/connection-readonly';
 import type { ConnectionConfig, ConnectionEngine } from '@shared/protocol';
 import { Boxes, Database, Layers, Loader2, Play, Trash2 } from 'lucide-react';
 import { useState } from 'react';
@@ -70,6 +71,7 @@ function freshConfig(engine: ConnectionEngine = 'postgres'): ConnectionConfig {
     user: d.user,
     password: '',
     ssl: d.ssl,
+    readOnly: false,
   };
 }
 
@@ -93,17 +95,12 @@ export function ConnectionDialog() {
   const engine = (form.engine ?? 'postgres') as ConnectionEngine;
   const isEditing = Boolean(dialogPrefill);
   const setConnectionTag = useSession((s) => s.setConnectionTag);
-  const setConnectionAiRowData = useSession((s) => s.setConnectionAiRowData);
   const initialTag = useSession((s) =>
     dialogPrefill ? s.settings.connectionTags?.[dialogPrefill.id] : undefined,
   );
   const [tag, setTag] = useState<'prod' | 'staging' | 'dev' | 'local' | null>(
     initialTag ?? null,
   );
-  const initialAiRowData = useSession((s) =>
-    dialogPrefill ? s.settings.connectionAiRowData?.[dialogPrefill.id] === true : false,
-  );
-  const [allowAiRowData, setAllowAiRowData] = useState(initialAiRowData);
 
   const initialSsh = useSession((s) =>
     dialogPrefill ? s.settings.connectionSsh?.[dialogPrefill.id] : undefined,
@@ -146,21 +143,13 @@ export function ConnectionDialog() {
 
   const handleTest = async () => {
     setTest({ kind: 'testing' });
-    // Forward the candidate SSH form (not only saved settings) so Test
-    // exercises the same bastion the eventual Connect would use. Pass
-    // null when SSH is off so main does not fall back to a stale saved
-    // tunnel for this connection id.
-    const sshSupported = engine !== 'opensearch';
-    const candidateSsh =
-      sshSupported && useSsh && ssh.host && ssh.user ? ssh : null;
-    const res = await testConnection(form, candidateSsh);
+    const res = await testConnection(form);
     setTest(res.ok ? { kind: 'ok', message: res.message } : { kind: 'fail', message: res.message });
   };
 
   const handleConnect = async (e: React.FormEvent) => {
     e.preventDefault();
     void setConnectionTag(form.id, tag);
-    void setConnectionAiRowData(form.id, allowAiRowData);
     const nextSshMap = { ...(allSsh ?? {}) };
     // SSH tunnels make sense for postgres + redis (raw TCP). OpenSearch
     // is HTTPS — most clusters terminate TLS at a public endpoint, so
@@ -404,7 +393,16 @@ export function ConnectionDialog() {
                     key={t}
                     type="button"
                     aria-pressed={tag === t}
-                    onClick={() => setTag(tag === t ? null : t)}
+                    onClick={() => {
+                      const next = tag === t ? null : t;
+                      setTag(next);
+                      // Prod suggests read-only by default (U28). User can
+                      // still uncheck the box after selecting prod.
+                      if (suggestReadOnlyForTag(next) && !form.readOnly) {
+                        setForm({ ...form, readOnly: true });
+                        setTest({ kind: 'idle' });
+                      }
+                    }}
                     className={
                       tag === t
                         ? `rounded-md px-3 py-1.5 text-xs font-semibold uppercase tracking-wider ${TAG_ACTIVE_CLASS[t]}`
@@ -414,27 +412,27 @@ export function ConnectionDialog() {
                     {t}
                   </button>
                 ))}
+                <span className="mx-1 h-4 w-px bg-border" aria-hidden />
+                <div className="flex items-center gap-2">
+                  <Checkbox
+                    id="conn-readonly"
+                    checked={Boolean(form.readOnly)}
+                    onCheckedChange={(v) => update('readOnly', Boolean(v))}
+                  />
+                  <label
+                    htmlFor="conn-readonly"
+                    className="cursor-pointer text-xs font-semibold uppercase tracking-wider text-foreground"
+                  >
+                    Read-only
+                  </label>
+                </div>
               </div>
               <p className="mt-1 font-display text-xs italic text-muted-foreground">
                 "prod" tag colors the status bar red and gates DELETE / TRUNCATE / DROP behind a
-                confirm dialog.
-              </p>
-            </Field>
-
-            <Field label="AI tools">
-              <div className="flex items-center gap-3">
-                <Checkbox
-                  id="allow-ai-row-data"
-                  checked={allowAiRowData}
-                  onCheckedChange={(v) => setAllowAiRowData(Boolean(v))}
-                />
-                <label htmlFor="allow-ai-row-data" className="cursor-pointer text-sm text-foreground">
-                  Allow AI tools to read row data
-                </label>
-              </div>
-              <p className="mt-1 font-display text-xs italic text-muted-foreground">
-                Off by default (including prod). When enabled, AI tools may send capped row
-                samples to OpenRouter. Schema is always eligible as a system prompt.
+                confirm dialog. Read-only sets{' '}
+                <span className="font-mono not-italic">default_transaction_read_only</span> on
+                connect and hides edit affordances
+                {tag === 'prod' ? ' — suggested for prod' : ''}.
               </p>
             </Field>
 

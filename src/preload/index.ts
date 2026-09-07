@@ -35,11 +35,15 @@ const api: PlasmaAPI = {
             internal: opts?.internal === true,
           })
         : ipcRenderer.invoke(IpcChannel.QueryRun, sql),
+    commitEditBatch: (req) => ipcRenderer.invoke(IpcChannel.QueryCommitEditBatch, req),
     cancel: () => ipcRenderer.invoke(IpcChannel.QueryCancel),
     sideband: (sql, params) =>
       params
         ? ipcRenderer.invoke(IpcChannel.QuerySideband, { sql, params })
         : ipcRenderer.invoke(IpcChannel.QuerySideband, sql),
+  },
+  export: {
+    save: (req) => ipcRenderer.invoke(IpcChannel.ExportSave, req),
   },
   redis: {
     overview: () => ipcRenderer.invoke(IpcChannel.RedisOverview),
@@ -119,13 +123,17 @@ const eventChannels = [
   'plasma:menu:toggleSidebar',
   'plasma:menu:toggleEditor',
   'plasma:menu:palette',
+  'plasma:menu:toggleAi',
+  'plasma:menu:cheatSheet',
   'plasma:menu:runQuery',
+  'plasma:menu:runQueryAll',
   'plasma:menu:cancelQuery',
   'plasma:menu:history',
   'plasma:window:maximizedChanged',
   'plasma:update:status',
   'plasma:ai:event',
   'plasma:redis:pubsub',
+  'plasma:query:chunk',
 ] as const;
 type EventChannel = (typeof eventChannels)[number];
 

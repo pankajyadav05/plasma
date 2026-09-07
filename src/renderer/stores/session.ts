@@ -1,5 +1,6 @@
+import { getEditorCaret } from '@/lib/editor-run-context';
 import { ipc } from '@/lib/ipc';
-import { splitSqlStatements } from '@/lib/sql-split';
+import { resolveRunTarget, splitSqlStatements } from '@/lib/sql-split';
 import {
   type Filter,
   type TableSort,
@@ -10,16 +11,15 @@ import {
   buildInsertSql,
   buildRlsCountSql,
   buildRolesSql,
-  buildUpdateSql,
 } from '@/lib/table-query';
 import type {
   AiMessage,
   ConnectionConfig,
-  ConnectionSshConfig,
   ConnectionEngine,
   HistoryEntry,
   HistoryListOpts,
   OsOverview,
+  PgNotice,
   QueryResult,
   RedisOverview,
   RedisScanResult,
@@ -30,6 +30,15 @@ import type {
   TxnState,
 } from '@shared/protocol';
 import { create } from 'zustand';
+import {
+  cancelProdGate as cancelProdGateAction,
+  confirmProdGate as confirmProdGateAction,
+} from './session-prod-gate';
+import {
+  commitPendingEdits as commitPendingEditsAction,
+  revertPendingEdits as revertPendingEditsAction,
+} from './session-pending-edits';
+import { runQuery as runQueryAction } from './session-run-query';
 
 /**
  * When a table is unfiltered AND the introspected estimate is above this
@@ -50,9 +59,11 @@ const ESTIMATED_COUNT_THRESHOLD = 1_000_000;
  *     tabs doesn't lose scroll/selection context.
  *   - Settings mirrored into the store from the main-process SQLite store
  *     on boot, and persisted via `updateSettings`.
- *   - Flat action surface — no slices yet, since every piece touches
- *     every other piece. Split if this file crosses ~500 lines.
+ *   - Action ownership for runQuery / confirmProdGate / commitPendingEdits
+ *     lives in sibling modules (U39): session-run-query, session-prod-gate,
+ *     session-pending-edits. This file composes them into the store.
  */
+
 
 export type ConnectionState = 'idle' | 'connecting' | 'connected' | 'error';
 export type QueryRunState = 'idle' | 'running';
@@ -94,47 +105,6 @@ export interface AiTurn extends AiMessage {
   streaming?: boolean;
   /** Server-side error captured for this turn, if any. */
   error?: string;
-}
-
-/**
- * Cheap heuristic for "destructive" SQL — anything that could destroy
- * or rewrite data without trivial recovery. Used by the prod gate so
- * accidental DELETE/TRUNCATE/DROP on a production-tagged connection
- * trips a confirm dialog. UPDATE without a WHERE clause counts. We
- * strip leading comments / whitespace before checking.
- */
-function looksDestructive(sql: string): boolean {
-  const stripped = sql
-    .replace(/\/\*[\s\S]*?\*\//g, '')
-    .replace(/^\s*--.*$/gm, '')
-    .trim();
-  const lower = stripped.toLowerCase();
-  if (/^(drop|truncate)\b/.test(lower)) return true;
-  if (/^delete\b/.test(lower)) return true;
-  // UPDATE without WHERE — we eyeball for the keyword and reject
-  // statements that DON'T contain a `where` token after `update`.
-  if (/^update\b/.test(lower) && !/\bwhere\b/.test(lower)) return true;
-  // ALTER TABLE … DROP COLUMN / DROP CONSTRAINT
-  if (/^alter\b.*\bdrop\b/.test(lower)) return true;
-  return false;
-}
-
-/**
- * Cheap heuristic for DDL detection. We strip leading comments/whitespace
- * and look for a top-level keyword that implies the schema graph has
- * changed. Not a parser — false positives on DML containing the word
- * `create` inside a string literal are acceptable (worst case is one
- * extra introspect call).
- */
-function looksLikeDdl(sql: string): boolean {
-  const stripped = sql
-    .replace(/\/\*[\s\S]*?\*\//g, '')
-    .replace(/^\s*--.*$/gm, '')
-    .trim()
-    .toLowerCase();
-  return /^(create|alter|drop|rename|truncate|comment|grant|revoke|vacuum|reindex|cluster)\b/.test(
-    stripped,
-  );
 }
 
 /**
@@ -193,16 +163,35 @@ export interface QueryTab {
   queryError: string | null;
   queryErrorSql: string | null;
   /**
+   * All statement results from the last SQL-tab run (U26). The grid shows
+   * `queryResults[activeResultIndex]`; `queryResult` is kept in sync for
+   * existing consumers (toolbar, export, status bar).
+   */
+  queryResults: QueryResult[];
+  /** Index into `queryResults` currently shown in the grid. */
+  activeResultIndex: number;
+  /**
    * Monotonic request generation for SQL runs. Bumped before each async
    * query IPC so a late response can be dropped if the tab was closed or a
-   * newer run superseded it (U03).
+   * newer run superseded it (U03 origin-tab publishing, used by U26).
    */
   queryGeneration: number;
   /**
-   * Monotonic request generation for SQL formatting (separate from
-   * queryGeneration so format cannot strand a running query).
+   * Live NOTICE stream for the in-flight / last run, keyed by statement
+   * index. Populated from `plasma:pg:notice` and mirrored onto each
+   * `QueryResult.notices` when the statement completes.
    */
-  formatGeneration: number;
+  queryNotices: Array<{ statementIndex: number; notice: PgNotice }>;
+  /**
+   * Character range in `sql` of the statement currently executing.
+   * Monaco paints a decoration over this span while `queryRunState === 'running'`.
+   */
+  queryRunningRange: { start: number; end: number } | null;
+  /**
+   * Character range in `sql` of the statement that last failed.
+   * Monaco paints an error marker over this span.
+   */
+  queryErrorRange: { start: number; end: number } | null;
   page: number;
   pageSize: number;
   selectedCell: { row: number; col: number } | null;
@@ -324,7 +313,6 @@ const DEFAULT_SETTINGS: Settings = {
   claudeApiKey: '',
   transactionMode: false,
   connectionTags: {},
-  connectionAiRowData: {},
   connectionSsh: {},
   schemaSnapshots: [],
   favoriteSchemas: {},
@@ -351,8 +339,12 @@ function createEmptyTab(pageSize: number, title = 'query-1.sql'): QueryTab {
     queryResult: null,
     queryError: null,
     queryErrorSql: null,
+    queryResults: [],
+    activeResultIndex: 0,
     queryGeneration: 0,
-    formatGeneration: 0,
+    queryNotices: [],
+    queryRunningRange: null,
+    queryErrorRange: null,
     page: 0,
     pageSize,
     sortColumn: null,
@@ -382,8 +374,12 @@ function createTableTab(pageSize: number, schemaName: string, tableName: string)
     queryResult: null,
     queryError: null,
     queryErrorSql: null,
+    queryResults: [],
+    activeResultIndex: 0,
     queryGeneration: 0,
-    formatGeneration: 0,
+    queryNotices: [],
+    queryRunningRange: null,
+    queryErrorRange: null,
     page: 0,
     pageSize,
     sortColumn: null,
@@ -564,12 +560,11 @@ interface SessionState {
   setHistoryOpen(open: boolean): void;
   requestDeleteConnection(id: string | null): void;
 
-  testConnection(
-    config: ConnectionConfig,
-    ssh?: ConnectionSshConfig | null,
-  ): Promise<{ ok: boolean; message: string }>;
+  testConnection(config: ConnectionConfig): Promise<{ ok: boolean; message: string }>;
   connect(config: ConnectionConfig): Promise<void>;
   disconnect(): Promise<void>;
+  /** Clear local connection state after an unexpected worker restart (U20). */
+  handleWorkerReset(): void;
   refreshSchema(): Promise<void>;
   toggleSchema(name: string): void;
 
@@ -602,7 +597,19 @@ interface SessionState {
 
   // Per-tab actions operate on the active tab by default
   setSql(sql: string): void;
-  runQuery(): Promise<void>;
+  /**
+   * Execute SQL for the active tab.
+   * - default / `{ all: false }`: selection if non-empty, else statement at cursor (U24)
+   * - `{ all: true }`: whole buffer (⌘⇧⏎)
+   * - `{ sql, base? }`: run this exact script (prod-gate resume); skips caret resolution
+   */
+  runQuery(opts?: { all?: boolean; sql?: string; base?: number }): Promise<void>;
+  /** Switch the grid to another statement result from the last multi-result run (U26). */
+  setActiveResultIndex(index: number): void;
+  /** ⌥← / ⌥→ — cycle the statement switcher. */
+  cycleActiveResult(delta: -1 | 1): void;
+  /** Append a streamed Postgres NOTICE to the origin tab of the in-flight run. */
+  appendPgNotice(notice: PgNotice): void;
   cancelQuery(): Promise<void>;
   openTable(schema: string, table: string): void;
   openForeignRow(refSchema: string, refTable: string, refColumn: string, value: unknown): void;
@@ -705,9 +712,8 @@ interface SessionState {
   ): void;
 
   // SQL formatting (calls main → sql-formatter → back). Replaces the
-  // origin tab's SQL on success; no-op for table tabs (their SQL is
-  // compiled, not user-edited). Late responses are dropped if the tab
-  // closed or a newer request superseded the call (U03).
+  // active tab's SQL on success; no-op for table tabs (their SQL is
+  // compiled, not user-edited).
   formatActiveSql(): Promise<void>;
 
   // Pending edits (buffered inline-edit tray)
@@ -719,8 +725,6 @@ interface SessionState {
     connectionId: string,
     tag: 'prod' | 'staging' | 'dev' | 'local' | null,
   ): Promise<void>;
-  /** Per-connection opt-in for AI tools to egress capped row data (U06). */
-  setConnectionAiRowData(connectionId: string, allowed: boolean): Promise<void>;
   /** Resume a prod-gated runQuery after user confirms. */
   confirmProdGate(): void;
   cancelProdGate(): void;
@@ -807,12 +811,9 @@ export const useSession = create<SessionState>((set, get) => ({
 
   // ── connection ──
 
-  async testConnection(config, ssh) {
+  async testConnection(config) {
     try {
-      // Pass candidate SSH through so the probe uses the dialog's
-      // in-progress bastion (including null = explicitly no tunnel).
-      // Never mutates live session state — main/worker isolate the probe.
-      const res = await ipc.conn.test(config, ssh);
+      const res = await ipc.conn.test(config);
       if (res.ok) {
         return { ok: true, message: `Connected · ${shortVersion(res.serverVersion)}` };
       }
@@ -913,6 +914,9 @@ export const useSession = create<SessionState>((set, get) => ({
         tabs: state.tabs.map((t) => ({
           ...t,
           queryResult: null,
+          queryResults: [],
+          activeResultIndex: 0,
+          queryNotices: [],
           queryError: null,
           page: 0,
           sortColumn: null,
@@ -921,6 +925,43 @@ export const useSession = create<SessionState>((set, get) => ({
         })),
       }));
     }
+  },
+
+  handleWorkerReset() {
+    set({
+      activeConfig: null,
+      serverVersion: null,
+      connectionState: 'idle',
+      connectionError: null,
+      schema: null,
+      expandedSchemas: new Set(),
+      activeTable: null,
+      txnState: 'none',
+      currentSchema: null,
+      availableRoles: [],
+      activeRole: null,
+      redisOverview: null,
+      redisKeys: null,
+      redisMatch: null,
+      osOverview: null,
+      activeRedisKey: null,
+      activeOsIndex: null,
+      redisBulkMode: false,
+      selectedRedisKeys: new Set<string>(),
+    });
+    // Clear all tabs' results since they reference a now-dead connection
+    set((state) => ({
+      tabs: state.tabs.map((t) => ({
+        ...t,
+        queryResult: null,
+        queryError: null,
+        queryRunState: 'idle' as const,
+        page: 0,
+        sortColumn: null,
+        selectedCell: null,
+        selectedRows: new Set(),
+      })),
+    }));
   },
 
   async refreshSchema() {
@@ -1096,19 +1137,13 @@ export const useSession = create<SessionState>((set, get) => ({
   async bulkDeleteSelectedRedisKeys() {
     const keys = [...get().selectedRedisKeys];
     if (keys.length === 0) return;
-    let result: { deleted: string[]; failed: { key: string; error: string }[] };
     try {
-      result = await ipc.redis.bulkDelete(keys);
+      await ipc.redis.bulkDelete(keys);
     } catch (err) {
       console.error('[plasma] bulk delete failed', err);
       return;
     }
-    if (result.failed.length > 0) {
-      console.error('[plasma] bulk delete partial failures', result.failed);
-    }
-    // Only drop keys whose DEL command succeeded — failed keys stay visible.
-    const dropped = new Set(result.deleted);
-    const remainingSelected = new Set(result.failed.map((f) => f.key));
+    const dropped = new Set(keys);
     set((state) => ({
       redisKeys: state.redisKeys
         ? {
@@ -1119,8 +1154,8 @@ export const useSession = create<SessionState>((set, get) => ({
       tabs: state.tabs.filter(
         (t) => !(t.kind === 'redis-key' && t.redisKey && dropped.has(t.redisKey)),
       ),
-      selectedRedisKeys: remainingSelected,
-      redisBulkMode: remainingSelected.size > 0,
+      selectedRedisKeys: new Set(),
+      redisBulkMode: false,
     }));
   },
 
@@ -1236,7 +1271,7 @@ export const useSession = create<SessionState>((set, get) => ({
     patchActiveTab(set, get, { sql });
   },
 
-  async runQuery() {
+  async runQuery(opts?: { all?: boolean; sql?: string; base?: number }) {
     const state = get();
     const tab = activeTab(state);
     if (!tab) return;
@@ -1249,67 +1284,117 @@ export const useSession = create<SessionState>((set, get) => ({
       return;
     }
 
-    const sql = tab.sql.trim();
-    if (!sql) return;
+    // U24: ⌘⏎ = selection else statement-at-cursor; ⌘⇧⏎ = whole buffer.
+    // Menu Run without an editor caret falls back to the whole buffer.
+    // Prod-gate confirm passes `{ sql }` so the approved payload runs once.
+    let script: string;
+    let base: number;
+    if (opts?.sql != null) {
+      script = opts.sql;
+      base = opts.base ?? 0;
+      if (script.trim().length === 0) return;
+    } else {
+      const mode = opts?.all ? 'buffer' : 'smart';
+      const target = resolveRunTarget(tab.sql, mode, getEditorCaret());
+      if (!target) return;
+      script = target.sql;
+      base = target.base;
+    }
 
     // Prod gate: if active connection is tagged 'prod' and the script
     // includes any destructive statement, stash the SQL and prompt for
-    // confirmation. The user resumes via `confirmProdGate()`.
-    const connId = state.activeConfig?.id;
-    const tag = connId ? state.settings.connectionTags?.[connId] : undefined;
-    if (tag === 'prod' && state.prodGate === null) {
-      const stmts = splitSqlStatements(sql);
-      if (stmts.some(looksDestructive)) {
-        set({ prodGate: { sql } });
-        return;
+    // confirmation. The user resumes via `confirmProdGate()` with `{ sql }`,
+    // which skips this check so the approved payload executes once.
+    if (opts?.sql == null) {
+      const connId = state.activeConfig?.id;
+      const tag = connId ? state.settings.connectionTags?.[connId] : undefined;
+      if (tag === 'prod' && state.prodGate === null) {
+        const stmts = splitSqlStatements(script);
+        if (stmts.some((s) => looksDestructive(s.text))) {
+          set({ prodGate: { sql: script } });
+          return;
+        }
       }
     }
 
-    // U03: capture origin tab + generation before any await so results /
-    // errors publish only to that tab (not whichever is active later).
+    // U03/U26: capture origin tab + generation before any await so results /
+    // errors / notices publish only to that tab (not whichever is active later).
     const originTabId = tab.id;
     const generation = tab.queryGeneration + 1;
     patchTabById(set, originTabId, {
       queryRunState: 'running',
       queryError: null,
       queryErrorSql: null,
+      queryErrorRange: null,
+      queryRunningRange: null,
       queryGeneration: generation,
+      queryResults: [],
+      activeResultIndex: 0,
+      queryResult: null,
+      queryNotices: [],
     });
 
     const publishOrigin = (patch: Partial<QueryTab>) => {
       const current = get().tabs.find((t) => t.id === originTabId);
-      // Drop if the origin tab was closed or a newer request superseded it.
       if (!current || current.queryGeneration !== generation) return;
       patchTabById(set, originTabId, patch);
     };
 
     // Multi-statement scripts: split with a quote/comment-aware tokenizer
-    // and run each separately. Last statement's QueryResult populates the
-    // grid; failures stop execution and surface "stopped at N of M".
-    const statements = splitSqlStatements(sql);
+    // and run each separately. Collect every QueryResult for the statement
+    // switcher / messages strip (U26). Failures stop execution and surface
+    // "stopped at N of M". Offsets remap into the full tab buffer for Monaco.
+    const statements = splitSqlStatements(script).map((s) => ({
+      text: s.text,
+      start: base + s.start,
+      end: base + s.end,
+    }));
     try {
-      let lastResult: QueryResult | null = null;
+      const results: QueryResult[] = [];
       let anyDdl = false;
       for (let i = 0; i < statements.length; i++) {
-        const stmt = statements[i];
+        const stmt = statements[i]!;
+        publishOrigin({
+          queryRunningRange: { start: stmt.start, end: stmt.end },
+        });
         try {
-          lastResult = await ipc.query.run(stmt);
+          const result = await ipc.query.run(stmt.text);
+          // Attach any streamed notices that arrived for this statement
+          // index (driver also returns notices; merge uniquely by message).
+          const current = get().tabs.find((t) => t.id === originTabId);
+          const streamed = (current?.queryNotices ?? [])
+            .filter((n) => n.statementIndex === i)
+            .map((n) => n.notice);
+          const merged = mergeNotices(result.notices, streamed);
+          results.push(merged.length > 0 ? { ...result, notices: merged } : result);
+          // Progressive reveal: keep the latest result visible while the rest run.
+          publishOrigin({
+            ...resultPatch(results, defaultActiveResultIndex(results)),
+            page: 0,
+            sortColumn: null,
+            selectedCell: null,
+            selectedRows: new Set(),
+          });
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           const tag = statements.length > 1 ? ` (statement ${i + 1} of ${statements.length})` : '';
           publishOrigin({
+            ...resultPatch(results, defaultActiveResultIndex(results)),
             queryError: `${message}${tag}`,
-            queryErrorSql: stmt,
+            queryErrorSql: stmt.text,
+            queryErrorRange: { start: stmt.start, end: stmt.end },
+            queryRunningRange: null,
             queryRunState: 'idle',
           });
           if (anyDdl) void get().refreshSchema();
           return;
         }
-        if (looksLikeDdl(stmt)) anyDdl = true;
+        if (looksLikeDdl(stmt.text)) anyDdl = true;
       }
       publishOrigin({
-        queryResult: lastResult,
+        ...resultPatch(results, defaultActiveResultIndex(results)),
         queryRunState: 'idle',
+        queryRunningRange: null,
         page: 0,
         sortColumn: null,
         selectedCell: null,
@@ -1321,10 +1406,52 @@ export const useSession = create<SessionState>((set, get) => ({
     } catch (err) {
       publishOrigin({
         queryError: err instanceof Error ? err.message : String(err),
-        queryErrorSql: sql,
+        queryErrorSql: script,
+        queryErrorRange:
+          statements.length > 0
+            ? { start: statements[0]!.start, end: statements[statements.length - 1]!.end }
+            : null,
+        queryRunningRange: null,
         queryRunState: 'idle',
       });
     }
+  },
+
+  setActiveResultIndex(index) {
+    const tab = activeTab(get());
+    if (!tab || tab.queryResults.length === 0) return;
+    const clamped = Math.max(0, Math.min(index, tab.queryResults.length - 1));
+    if (clamped === tab.activeResultIndex) return;
+    patchActiveTab(set, get, {
+      ...resultPatch(tab.queryResults, clamped),
+      page: 0,
+      sortColumn: null,
+      selectedCell: null,
+      selectedRows: new Set(),
+    });
+  },
+
+  cycleActiveResult(delta) {
+    const tab = activeTab(get());
+    if (!tab || tab.queryResults.length <= 1) return;
+    const next =
+      (tab.activeResultIndex + delta + tab.queryResults.length) % tab.queryResults.length;
+    get().setActiveResultIndex(next);
+  },
+
+  appendPgNotice(notice) {
+    // Attach to the tab that is currently running a SQL script. Prefer a
+    // running tab over the active one so a focus change mid-run still lands
+    // notices on the origin (U03 + U26).
+    const state = get();
+    const running =
+      state.tabs.find((t) => t.queryRunState === 'running' && t.kind === 'sql') ??
+      activeTab(state);
+    if (!running || running.kind !== 'sql') return;
+    const statementIndex = running.queryResults.length; // next / in-flight index
+    patchTabById(set, running.id, {
+      queryNotices: [...running.queryNotices, { statementIndex, notice }],
+    });
   },
 
   async cancelQuery() {
@@ -1635,11 +1762,15 @@ export const useSession = create<SessionState>((set, get) => ({
 
     set({
       pendingEdits: [...dedupedExisting, edit],
-      tabs: state.tabs.map((t) =>
-        t.id === tab.id && t.queryResult
-          ? { ...t, queryResult: { ...t.queryResult, rows: newRows } }
-          : t,
-      ),
+      tabs: state.tabs.map((t) => {
+        if (t.id !== tab.id || !t.queryResult) return t;
+        const nextResult = { ...t.queryResult, rows: newRows };
+        const results =
+          t.queryResults.length > 0
+            ? t.queryResults.map((r, i) => (i === t.activeResultIndex ? nextResult : r))
+            : [nextResult];
+        return { ...t, queryResult: nextResult, queryResults: results };
+      }),
     });
   },
 
@@ -2327,59 +2458,14 @@ export const useSession = create<SessionState>((set, get) => ({
   },
 
   // ── Pending edits (buffered inline-edit tray) ──
+  // Ownership: session-pending-edits.ts (U39)
 
   async commitPendingEdits() {
-    const state = get();
-    const edits = state.pendingEdits;
-    if (edits.length === 0) return;
-    set({ pendingEditsBusy: true });
-    try {
-      // Wrap in an explicit transaction so partial failures roll back.
-      await ipc.query.run('BEGIN', undefined, { internal: true });
-      for (const e of edits) {
-        const { sql, params } = buildUpdateSql({
-          schema: e.schema,
-          table: e.table,
-          set: { [e.column]: e.newValue },
-          pkValues: e.pkValues,
-        });
-        await ipc.query.run(sql, params, { internal: true });
-      }
-      await ipc.query.run('COMMIT', undefined, { internal: true });
-      set({ pendingEdits: [] });
-      // Refresh every tab that had pending edits — the server-side row
-      // could differ from our optimistic view (triggers, defaults, etc).
-      const tabIds = new Set(edits.map((e) => e.tabId));
-      for (const id of tabIds) {
-        const tab = get().tabs.find((t) => t.id === id);
-        if (tab && tab.kind === 'table') {
-          void runTableDataQuery(set, get, id);
-        }
-      }
-    } catch (err) {
-      try {
-        await ipc.query.run('ROLLBACK', undefined, { internal: true });
-      } catch {
-        // already rolled back / connection lost — swallow
-      }
-      throw err;
-    } finally {
-      set({ pendingEditsBusy: false });
-    }
+    await commitPendingEditsAction(set, get, { runTableDataQuery });
   },
 
   async revertPendingEdits() {
-    const state = get();
-    const tabIds = new Set(state.pendingEdits.map((e) => e.tabId));
-    set({ pendingEdits: [] });
-    // Re-run the data query for each affected tab so the optimistic
-    // mirrored cells reset to their server values.
-    for (const id of tabIds) {
-      const tab = get().tabs.find((t) => t.id === id);
-      if (tab && tab.kind === 'table') {
-        void runTableDataQuery(set, get, id);
-      }
-    }
+    await revertPendingEditsAction(set, get, { runTableDataQuery });
   },
 
   // ── Prod gate ──
@@ -2400,34 +2486,18 @@ export const useSession = create<SessionState>((set, get) => ({
     }
   },
 
-  async setConnectionAiRowData(connectionId, allowed) {
-    const current = get().settings.connectionAiRowData ?? {};
-    const next: Record<string, boolean> = { ...current };
-    if (allowed) {
-      next[connectionId] = true;
-    } else {
-      delete next[connectionId];
-    }
-    set({ settings: { ...get().settings, connectionAiRowData: next } });
-    try {
-      await ipc.settings.set({ connectionAiRowData: next });
-    } catch (err) {
-      console.error('[plasma] persist connectionAiRowData failed', err);
-    }
-  },
-
   confirmProdGate() {
     const gate = get().prodGate;
     if (!gate) return;
     set({ prodGate: null });
-    // Re-enter runQuery now that the gate is cleared. The SQL on the
-    // active tab still matches what we stashed — runQuery will see no
-    // gate set and proceed.
-    void get().runQuery();
+    // Re-enter runQuery with the captured payload so a selection/statement
+    // run does not re-resolve from a moved caret (and so the gate does not
+    // loop on the same destructive script — F10 / U11 lands the full fix).
+    void get().runQuery({ sql: gate.sql });
   },
 
   cancelProdGate() {
-    set({ prodGate: null });
+    cancelProdGateAction(set);
   },
 
   // ── SQL formatting ──
@@ -2436,19 +2506,10 @@ export const useSession = create<SessionState>((set, get) => ({
     const tab = activeTab(get());
     if (!tab || tab.kind !== 'sql') return;
     if (!tab.sql.trim()) return;
-    // U03: format must write back to the origin tab, not the active one
-    // at completion time. Bump formatGeneration so a superseded format is
-    // dropped without interfering with an in-flight queryGeneration.
-    const originTabId = tab.id;
-    const originSql = tab.sql;
-    const generation = tab.formatGeneration + 1;
-    patchTabById(set, originTabId, { formatGeneration: generation });
     try {
-      const formatted = await ipc.sql.format(originSql);
-      const current = get().tabs.find((t) => t.id === originTabId);
-      if (!current || current.formatGeneration !== generation) return;
-      if (formatted && formatted !== current.sql) {
-        patchTabById(set, originTabId, { sql: formatted });
+      const formatted = await ipc.sql.format(tab.sql);
+      if (formatted && formatted !== tab.sql) {
+        patchActiveTab(set, get, { sql: formatted });
       }
     } catch (err) {
       console.error('[plasma] formatActiveSql failed', err);
@@ -2556,6 +2617,46 @@ function loadTableColumnStateInto(
   };
 }
 
+
+/** Prefer the last result that has columns (a SELECT); else the last result. */
+function defaultActiveResultIndex(results: QueryResult[]): number {
+  if (results.length === 0) return 0;
+  for (let i = results.length - 1; i >= 0; i--) {
+    if ((results[i]?.columns.length ?? 0) > 0) return i;
+  }
+  return results.length - 1;
+}
+
+function resultPatch(
+  results: QueryResult[],
+  activeIndex: number,
+): Pick<QueryTab, 'queryResults' | 'activeResultIndex' | 'queryResult'> {
+  if (results.length === 0) {
+    return { queryResults: [], activeResultIndex: 0, queryResult: null };
+  }
+  const idx = Math.max(0, Math.min(activeIndex, results.length - 1));
+  return {
+    queryResults: results,
+    activeResultIndex: idx,
+    queryResult: results[idx] ?? null,
+  };
+}
+
+function mergeNotices(
+  a: PgNotice[] | undefined,
+  b: PgNotice[] | undefined,
+): PgNotice[] {
+  const out: PgNotice[] = [];
+  const seen = new Set<string>();
+  for (const n of [...(a ?? []), ...(b ?? [])]) {
+    const key = `${n.severity ?? ''}|${n.code ?? ''}|${n.message}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(n);
+  }
+  return out;
+}
+
 function patchTabById(
   set: (fn: (s: SessionState) => Partial<SessionState>) => void,
   tabId: string,
@@ -2601,10 +2702,11 @@ async function runTableDataQuery(
   try {
     const result = await ipc.query.run(sql, params, { internal: true });
     patchTabById(set, tabId, {
-      queryResult: result,
+      ...resultPatch([result], 0),
       queryRunState: 'idle',
       selectedCell: null,
       selectedRows: new Set(),
+      queryNotices: [],
     });
   } catch (err) {
     patchTabById(set, tabId, {
