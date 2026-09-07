@@ -21,6 +21,10 @@ import { useMemo, useState } from 'react';
  *   - Schema picker (dropdown at top)
  *   - Filter row (search + entity-type filter)
  *   - Flat entity list (tables + views + matviews) for the selected schema
+ *
+ * Exposed as an ARIA role="tree" with treeitem / aria-level so the
+ * DESIGN.md section 9 accessibility floor is met even though the visual
+ * layout is a single-level list (schema selection lives in the topbar).
  */
 export function EntityList() {
   const activeConfig = useSession((s) => s.activeConfig);
@@ -107,8 +111,12 @@ export function EntityList() {
         </div>
       </div>
 
-      {/* ── Entity list ── */}
-      <div className="min-h-0 flex-1 overflow-y-auto py-1">
+      {/* ── Entity list (ARIA tree — DESIGN.md §9 / U38) ── */}
+      <div
+        className="min-h-0 flex-1 overflow-y-auto py-1"
+        role="tree"
+        aria-label={effectiveSchema ? `Tables in ${effectiveSchema}` : 'Tables'}
+      >
         {entities.length === 0 && (
           <div className="px-4 py-3 font-display text-sm italic text-muted-foreground">
             {search ? `no entities match "${search}"` : 'empty'}
@@ -225,6 +233,9 @@ function EntityRow({
 
   return (
     <div
+      role="treeitem"
+      aria-level={1}
+      aria-selected={active}
       className={cn(
         'group/row cv-row-28 relative mx-2 flex h-7 items-stretch rounded-md transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground',
         active && 'bg-sidebar-accent text-sidebar-accent-foreground',

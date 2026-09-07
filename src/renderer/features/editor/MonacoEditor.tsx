@@ -64,6 +64,7 @@ export function MonacoEditor({
   const onToggleRef = useRef(onToggle);
   const onFormatRef = useRef(onFormat);
   const onAskAiRef = useRef(onAskAi);
+  const onRecallPreviousRef = useRef(onRecallPrevious);
   useEffect(() => {
     onRunRef.current = onRun;
     onRunAllRef.current = onRunAll;

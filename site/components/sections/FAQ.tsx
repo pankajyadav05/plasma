@@ -5,8 +5,8 @@ import { Reveal } from '@/components/reveal';
 
 const QUESTIONS: { q: string; a: string }[] = [
   {
-    q: 'Why Windows only — for now?',
-    a: 'I shipped on the OS I use every day, so the polish is real instead of theoretical. macOS and Linux builds are in flight. The codebase is portable; the gating is signing, packaging, and the time to do them properly.',
+    q: 'Windows and macOS — what about Linux?',
+    a: 'Windows and macOS builds ship today (macOS is unsigned until we land Apple Developer ID signing + notarization). Linux packaging is next. The codebase is portable; the gating is signing, packaging, and the time to do them properly.',
   },
   {
     q: 'Where does the AI run? What does it see?',

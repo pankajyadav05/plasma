@@ -507,6 +507,22 @@ export const HistoryEntry = z.object({
 });
 export type HistoryEntry = z.infer<typeof HistoryEntry>;
 
+/** Server-side history list filters (U35). */
+export const HistoryStatusFacet = z.enum(['all', 'ok', 'error']);
+export type HistoryStatusFacet = z.infer<typeof HistoryStatusFacet>;
+
+export const HistoryDurationFacet = z.enum(['all', 'fast', 'medium', 'slow']);
+export type HistoryDurationFacet = z.infer<typeof HistoryDurationFacet>;
+
+export const HistoryListOpts = z.object({
+  limit: z.number().int().positive().max(5000).optional(),
+  connectionId: z.string().optional(),
+  search: z.string().optional(),
+  status: HistoryStatusFacet.optional(),
+  duration: HistoryDurationFacet.optional(),
+});
+export type HistoryListOpts = z.infer<typeof HistoryListOpts>;
+
 // ─── Transaction state ───────────────────────────────────────────────
 
 export const TxnState = z.enum(['none', 'active', 'error']);
@@ -797,7 +813,6 @@ export const SettingsShape = z.object({
   editorHeightPx: z.number().int().min(120).max(1200).default(280),
   defaultPageSize: z.number().int().positive().default(50),
   queryTimeoutMs: z.number().int().nonnegative().default(0), // 0 = no timeout
-  telemetryEnabled: z.boolean().default(false),
   /**
    * AI provider config. Plasma uses OpenRouter as the unified gateway —
    * one key gives access to Claude, GPT, Gemini, Qwen, etc. Key stored
@@ -1116,6 +1131,7 @@ export const IpcChannel = {
   VaultConnectById: 'plasma:vault:connectById',
   VaultGetConfig: 'plasma:vault:getConfig',
   HistoryList: 'plasma:history:list',
+  HistoryLatest: 'plasma:history:latest',
   HistoryClear: 'plasma:history:clear',
   SettingsGet: 'plasma:settings:get',
   SettingsSet: 'plasma:settings:set',
@@ -1270,7 +1286,9 @@ export interface PlasmaAPI {
     format(sql: string): Promise<string>;
   };
   history: {
-    list(opts?: { limit?: number; connectionId?: string }): Promise<HistoryEntry[]>;
+    list(opts?: HistoryListOpts): Promise<HistoryEntry[]>;
+    /** Most recent entry for ⌘↑ recall (empty editor). */
+    latest(opts?: { connectionId?: string }): Promise<HistoryEntry | null>;
     clear(): Promise<void>;
   };
   settings: {
