@@ -67,6 +67,7 @@ export function ResultGrid() {
   const setSelectedRows = useSession((s) => s.setSelectedRows);
   const setColumnWidth = useSession((s) => s.setColumnWidth);
   const editMode = useSession((s) => s.editMode);
+  const connectionReadOnly = useSession((s) => Boolean(s.activeConfig?.readOnly));
   const updateCell = useSession((s) => s.updateCell);
   const deleteRow = useSession((s) => s.deleteRow);
   const schema = useSession((s) => s.schema);
@@ -130,6 +131,7 @@ export function ResultGrid() {
   const writable = Boolean(
     isTableTab &&
       editMode &&
+      !connectionReadOnly &&
       tab?.tableSchema &&
       tab?.tableName &&
       schema?.columns.some(

@@ -72,6 +72,7 @@ export const ConnectionConfig = z.object({
   password: z.string(),
   /** Postgres SSL / Redis TLS / OpenSearch HTTPS. */
   ssl: z.boolean().default(false),
+  readOnly: z.boolean().default(false),
   /**
    * TLS verification details when `ssl` is true. Omitted/`undefined`
    * defaults to verify-full (rejectUnauthorized: true). Does not replace

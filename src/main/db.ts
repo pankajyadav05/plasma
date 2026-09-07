@@ -121,4 +121,5 @@ function migrate(d: Database.Database): void {
 
   // Future migrations go here, each bumping user_version.
   // U25 owns schema v4 (open_tabs) — do not add it in U07.
+  ensureReadOnlyColumn(d);
 }

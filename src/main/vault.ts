@@ -50,6 +50,7 @@ interface ConnectionRow {
   database: string;
   user: string;
   ssl: number;
+  read_only: number;
   password_ciphertext: Buffer;
   created_at: number;
   updated_at: number;

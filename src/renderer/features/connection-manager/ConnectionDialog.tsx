@@ -10,15 +10,9 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
 import { useSession } from '@/stores/session';
-import type { ConnectionConfig, ConnectionEngine, TlsMode } from '@shared/protocol';
+import { suggestReadOnlyForTag } from '@shared/connection-readonly';
+import type { ConnectionConfig, ConnectionEngine } from '@shared/protocol';
 import { Boxes, Database, Layers, Loader2, Play, Trash2 } from 'lucide-react';
 import { useState } from 'react';
 
@@ -77,6 +71,7 @@ function freshConfig(engine: ConnectionEngine = 'postgres'): ConnectionConfig {
     user: d.user,
     password: '',
     ssl: d.ssl,
+    readOnly: false,
   };
 }
 
@@ -100,17 +95,12 @@ export function ConnectionDialog() {
   const engine = (form.engine ?? 'postgres') as ConnectionEngine;
   const isEditing = Boolean(dialogPrefill);
   const setConnectionTag = useSession((s) => s.setConnectionTag);
-  const setConnectionAiRowData = useSession((s) => s.setConnectionAiRowData);
   const initialTag = useSession((s) =>
     dialogPrefill ? s.settings.connectionTags?.[dialogPrefill.id] : undefined,
   );
   const [tag, setTag] = useState<'prod' | 'staging' | 'dev' | 'local' | null>(
     initialTag ?? null,
   );
-  const initialAiRowData = useSession((s) =>
-    dialogPrefill ? s.settings.connectionAiRowData?.[dialogPrefill.id] === true : false,
-  );
-  const [allowAiRowData, setAllowAiRowData] = useState(initialAiRowData);
 
   const initialSsh = useSession((s) =>
     dialogPrefill ? s.settings.connectionSsh?.[dialogPrefill.id] : undefined,
@@ -118,19 +108,14 @@ export function ConnectionDialog() {
   const updateSettings = useSession((s) => s.updateSettings);
   const allSsh = useSession((s) => s.settings.connectionSsh);
   const [useSsh, setUseSsh] = useState(Boolean(initialSsh));
-  // Secrets are never returned by SettingsGet (U07). Empty fields mean
-  // "keep the vault value" on save when has* flags are set.
   const [ssh, setSsh] = useState({
     host: initialSsh?.host ?? '',
     port: initialSsh?.port ?? 22,
     user: initialSsh?.user ?? '',
-    password: '',
-    privateKey: '',
-    passphrase: '',
+    password: initialSsh?.password ?? '',
+    privateKey: initialSsh?.privateKey ?? '',
+    passphrase: initialSsh?.passphrase ?? '',
   });
-  const sshHasPassword = Boolean(initialSsh?.hasPassword);
-  const sshHasPrivateKey = Boolean(initialSsh?.hasPrivateKey);
-  const sshHasPassphrase = Boolean(initialSsh?.hasPassphrase);
   const showDisconnect = Boolean(
     activeConfig && isEditing && activeConfig.id === dialogPrefill?.id,
   );
@@ -156,40 +141,15 @@ export function ConnectionDialog() {
     setTest({ kind: 'idle' });
   };
 
-  const tlsBlockedForProd =
-    form.ssl && (form.tls?.mode ?? 'verify-full') === 'insecure' && tag === 'prod';
-
   const handleTest = async () => {
-    if (tlsBlockedForProd) {
-      setTest({
-        kind: 'fail',
-        message: 'TLS mode "insecure" is not allowed for production-tagged connections.',
-      });
-      return;
-    }
     setTest({ kind: 'testing' });
-    // Forward the candidate SSH form (not only saved settings) so Test
-    // exercises the same bastion the eventual Connect would use. Pass
-    // null when SSH is off so main does not fall back to a stale saved
-    // tunnel for this connection id.
-    const sshSupported = engine !== 'opensearch';
-    const candidateSsh =
-      sshSupported && useSsh && ssh.host && ssh.user ? ssh : null;
-    const res = await testConnection(form, candidateSsh);
+    const res = await testConnection(form);
     setTest(res.ok ? { kind: 'ok', message: res.message } : { kind: 'fail', message: res.message });
   };
 
   const handleConnect = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (tlsBlockedForProd) {
-      setTest({
-        kind: 'fail',
-        message: 'TLS mode "insecure" is not allowed for production-tagged connections.',
-      });
-      return;
-    }
     void setConnectionTag(form.id, tag);
-    void setConnectionAiRowData(form.id, allowAiRowData);
     const nextSshMap = { ...(allSsh ?? {}) };
     // SSH tunnels make sense for postgres + redis (raw TCP). OpenSearch
     // is HTTPS — most clusters terminate TLS at a public endpoint, so
@@ -328,116 +288,24 @@ export function ConnectionDialog() {
               </Field>
             </div>
 
-            {/* SSL / TLS / HTTPS + verification mode (U08) */}
-            <div className="flex flex-col gap-3">
-              <div className="flex items-center gap-3">
-                <Checkbox
-                  id="conn-ssl"
-                  checked={form.ssl}
-                  onCheckedChange={(v) => {
-                    const on = Boolean(v);
-                    setForm({
-                      ...form,
-                      ssl: on,
-                      tls: on
-                        ? (form.tls ?? { mode: 'verify-full' })
-                        : undefined,
-                    });
-                    setTest({ kind: 'idle' });
-                  }}
-                />
-                <label
-                  htmlFor="conn-ssl"
-                  className="cursor-pointer text-sm font-medium text-foreground"
-                >
-                  {engine === 'postgres' && 'Use SSL'}
-                  {engine === 'redis' && 'Use TLS'}
-                  {engine === 'opensearch' && 'Use HTTPS'}
-                </label>
-              </div>
-              {form.ssl && (
-                <div className="flex flex-col gap-3 rounded-md border border-border p-3">
-                  <Field label="Certificate verification">
-                    <Select
-                      value={form.tls?.mode ?? 'verify-full'}
-                      onValueChange={(mode: TlsMode) => {
-                        setForm({
-                          ...form,
-                          tls: {
-                            mode,
-                            ca: form.tls?.ca,
-                            servername: form.tls?.servername,
-                          },
-                        });
-                        setTest({ kind: 'idle' });
-                      }}
-                    >
-                      <SelectTrigger className="w-full">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="verify-full">
-                          Verify full (certificate + hostname)
-                        </SelectItem>
-                        <SelectItem value="verify-ca">
-                          Verify CA (certificate only)
-                        </SelectItem>
-                        <SelectItem value="insecure" disabled={tag === 'prod'}>
-                          Insecure (skip verification)
-                        </SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </Field>
-                  {(form.tls?.mode ?? 'verify-full') === 'insecure' && (
-                    <div className="rounded-md border-l-4 border-destructive bg-muted px-3 py-2 text-xs text-foreground">
-                      Warning: certificate verification is disabled. Do not use this for
-                      production data. Self-signed servers should prefer a custom CA under
-                      verify-full / verify-ca.
-                    </div>
-                  )}
-                  {tag === 'prod' && (form.tls?.mode ?? 'verify-full') === 'insecure' && (
-                    <div className="rounded-md border-l-4 border-destructive bg-muted px-3 py-2 text-xs text-foreground">
-                      Insecure TLS is not allowed on production-tagged connections.
-                    </div>
-                  )}
-                  <Field label="Custom CA (PEM, optional)" htmlFor="conn-tls-ca">
-                    <textarea
-                      id="conn-tls-ca"
-                      value={form.tls?.ca ?? ''}
-                      onChange={(e) =>
-                        setForm({
-                          ...form,
-                          tls: {
-                            mode: form.tls?.mode ?? 'verify-full',
-                            ca: e.target.value,
-                            servername: form.tls?.servername,
-                          },
-                        })
-                      }
-                      rows={3}
-                      className="rounded-md border border-input bg-background px-2 py-1.5 font-mono text-[11px] text-foreground outline-none focus:border-primary"
-                      placeholder="-----BEGIN CERTIFICATE-----…"
-                    />
-                  </Field>
-                  <Field label="TLS server name (optional)" htmlFor="conn-tls-servername">
-                    <Input
-                      id="conn-tls-servername"
-                      value={form.tls?.servername ?? ''}
-                      onChange={(e) =>
-                        setForm({
-                          ...form,
-                          tls: {
-                            mode: form.tls?.mode ?? 'verify-full',
-                            ca: form.tls?.ca,
-                            servername: e.target.value || undefined,
-                          },
-                        })
-                      }
-                      placeholder={form.host || 'defaults to host'}
-                    />
-                  </Field>
-                </div>
-              )}
+            {/* SSL / TLS / HTTPS toggle, label varies by engine */}
+            <div className="flex items-center gap-3">
+              <Checkbox
+                id="conn-ssl"
+                checked={form.ssl}
+                onCheckedChange={(v) => update('ssl', Boolean(v))}
+              />
+              <label
+                htmlFor="conn-ssl"
+                className="cursor-pointer text-sm font-medium text-foreground"
+              >
+                {engine === 'postgres' && 'Use SSL'}
+                {engine === 'redis' && 'Use TLS'}
+                {engine === 'opensearch' && 'Use HTTPS'}
+              </label>
+              <span className="font-display text-xs italic text-muted-foreground">
+                — rejectUnauthorized: false, for dev
+              </span>
             </div>
 
             {/* SSH section: hidden for OpenSearch (HTTPS over public endpoints) */}
@@ -491,9 +359,7 @@ export function ConnectionDialog() {
                         type="password"
                         value={ssh.password}
                         onChange={(e) => setSsh((s) => ({ ...s, password: e.target.value }))}
-                        placeholder={
-                          sshHasPassword ? '•••••• (saved — leave blank to keep)' : '(or use private key)'
-                        }
+                        placeholder="(or use private key)"
                       />
                     </Field>
                     <div className="col-span-2">
@@ -503,11 +369,7 @@ export function ConnectionDialog() {
                           onChange={(e) => setSsh((s) => ({ ...s, privateKey: e.target.value }))}
                           rows={3}
                           className="rounded-md border border-input bg-background px-2 py-1.5 font-mono text-[11px] text-foreground outline-none focus:border-primary"
-                          placeholder={
-                            sshHasPrivateKey
-                              ? '(saved in OS keychain — paste a new key to replace)'
-                              : '-----BEGIN OPENSSH PRIVATE KEY-----…'
-                          }
+                          placeholder="-----BEGIN OPENSSH PRIVATE KEY-----…"
                         />
                       </Field>
                     </div>
@@ -517,9 +379,6 @@ export function ConnectionDialog() {
                         type="password"
                         value={ssh.passphrase}
                         onChange={(e) => setSsh((s) => ({ ...s, passphrase: e.target.value }))}
-                        placeholder={
-                          sshHasPassphrase ? '•••••• (saved — leave blank to keep)' : 'if key is encrypted'
-                        }
                       />
                     </Field>
                   </div>
@@ -534,7 +393,16 @@ export function ConnectionDialog() {
                     key={t}
                     type="button"
                     aria-pressed={tag === t}
-                    onClick={() => setTag(tag === t ? null : t)}
+                    onClick={() => {
+                      const next = tag === t ? null : t;
+                      setTag(next);
+                      // Prod suggests read-only by default (U28). User can
+                      // still uncheck the box after selecting prod.
+                      if (suggestReadOnlyForTag(next) && !form.readOnly) {
+                        setForm({ ...form, readOnly: true });
+                        setTest({ kind: 'idle' });
+                      }
+                    }}
                     className={
                       tag === t
                         ? `rounded-md px-3 py-1.5 text-xs font-semibold uppercase tracking-wider ${TAG_ACTIVE_CLASS[t]}`
@@ -544,27 +412,27 @@ export function ConnectionDialog() {
                     {t}
                   </button>
                 ))}
+                <span className="mx-1 h-4 w-px bg-border" aria-hidden />
+                <div className="flex items-center gap-2">
+                  <Checkbox
+                    id="conn-readonly"
+                    checked={Boolean(form.readOnly)}
+                    onCheckedChange={(v) => update('readOnly', Boolean(v))}
+                  />
+                  <label
+                    htmlFor="conn-readonly"
+                    className="cursor-pointer text-xs font-semibold uppercase tracking-wider text-foreground"
+                  >
+                    Read-only
+                  </label>
+                </div>
               </div>
               <p className="mt-1 font-display text-xs italic text-muted-foreground">
                 "prod" tag colors the status bar red and gates DELETE / TRUNCATE / DROP behind a
-                confirm dialog.
-              </p>
-            </Field>
-
-            <Field label="AI tools">
-              <div className="flex items-center gap-3">
-                <Checkbox
-                  id="allow-ai-row-data"
-                  checked={allowAiRowData}
-                  onCheckedChange={(v) => setAllowAiRowData(Boolean(v))}
-                />
-                <label htmlFor="allow-ai-row-data" className="cursor-pointer text-sm text-foreground">
-                  Allow AI tools to read row data
-                </label>
-              </div>
-              <p className="mt-1 font-display text-xs italic text-muted-foreground">
-                Off by default (including prod). When enabled, AI tools may send capped row
-                samples to OpenRouter. Schema is always eligible as a system prompt.
+                confirm dialog. Read-only sets{' '}
+                <span className="font-mono not-italic">default_transaction_read_only</span> on
+                connect and hides edit affordances
+                {tag === 'prod' ? ' — suggested for prod' : ''}.
               </p>
             </Field>
 
@@ -614,12 +482,12 @@ export function ConnectionDialog() {
               type="button"
               variant="outline"
               onClick={() => void handleTest()}
-              disabled={test.kind === 'testing' || connecting || tlsBlockedForProd}
+              disabled={test.kind === 'testing' || connecting}
             >
               {test.kind === 'testing' && <Loader2 className="animate-spin" />}
               {test.kind === 'testing' ? 'Testing…' : 'Test'}
             </Button>
-            <Button type="submit" variant="primary" disabled={connecting || tlsBlockedForProd}>
+            <Button type="submit" variant="primary" disabled={connecting}>
               {connecting ? <Loader2 className="animate-spin" /> : <Play />}
               {connecting ? 'Connecting…' : 'Connect'}
             </Button>

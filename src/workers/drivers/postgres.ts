@@ -100,6 +100,10 @@ export class PostgresDriver {
     await ai.query('SET default_transaction_read_only = on');
     this.ai = ai;
 
+    if (config.readOnly) {
+      await primary.query("SET default_transaction_read_only = on");
+      await sideband.query("SET default_transaction_read_only = on");
+    }
     const res = await primary.query<{ version: string }>('SELECT version()');
     return res.rows[0]?.version ?? 'unknown';
   }

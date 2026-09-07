@@ -48,6 +48,7 @@ export function ResultToolbar() {
   const refreshTable = useSession((s) => s.refreshTable);
   const runQuery = useSession((s) => s.runQuery);
   const editMode = useSession((s) => s.editMode);
+  const connectionReadOnly = useSession((s) => Boolean(s.activeConfig?.readOnly));
   const formatActiveSql = useSession((s) => s.formatActiveSql);
   const [exportOpen, setExportOpen] = useState(false);
   const [insertOpen, setInsertOpen] = useState(false);
@@ -200,7 +201,7 @@ export function ResultToolbar() {
         </>
       )}
 
-      {isTable && editMode && (
+      {isTable && editMode && !connectionReadOnly && (
         <>
           <Separator orientation="vertical" className="h-4" />
           <Button
