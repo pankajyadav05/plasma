@@ -51,6 +51,18 @@ checks.
 
 Requires repo secrets `R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY`. macOS builds are currently **unsigned** (`identity: null`).
 
+`release:upload` reads the public feed back after uploading and fails the
+job unless `latest.yml` / `latest-mac.yml` advertise the shipped version and
+every file they reference is fetchable. Check a live feed any time with
+`pnpm release:verify` (no credentials needed).
+
+**Never change `publish.url` in `electron-builder.yml` without keeping the
+old base alive.** That URL is baked into each installer as `app-update.yml`;
+already-installed builds poll it forever. Moving the base from Vercel Blob to
+R2 stranded every 0.0.15 install on a frozen manifest that still reports
+0.0.15 as the latest version — those users can only be recovered by
+downloading a new build by hand.
+
 ## Project layout
 
 ```
