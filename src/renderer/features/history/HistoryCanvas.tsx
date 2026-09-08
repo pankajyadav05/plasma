@@ -1,6 +1,6 @@
 import { Button } from '@/components/ui/button';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
-import { kbd } from '@/lib/platform';
+import { Tooltip } from '@/components/ui/tooltip';
 import { useSession } from '@/stores/session';
 import { Trash2, X } from 'lucide-react';
 import { useState } from 'react';
@@ -42,15 +42,16 @@ export function HistoryCanvas() {
               <Trash2 />
               Clear
             </Button>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              onClick={() => setCanvasMode('database')}
-              aria-label="Close history"
-              title={`Close (${kbd('Esc')})`}
-            >
-              <X />
-            </Button>
+            <Tooltip label="Close" shortcut="Esc">
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                onClick={() => setCanvasMode('database')}
+                aria-label="Close history"
+              >
+                <X />
+              </Button>
+            </Tooltip>
           </div>
         </header>
 
