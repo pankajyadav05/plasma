@@ -125,6 +125,15 @@ export class WorkerSupervisor {
         this.broadcastHandler?.(data);
         return;
       }
+      // Readiness is not request-correlated: the worker posts it at boot
+      // under a sentinel id, so settle the handshake here instead of
+      // looking for a pending request (U20).
+      if (data.kind === 'ready') {
+        const wait = this.readyWait;
+        this.readyWait = null;
+        wait?.resolve();
+        return;
+      }
       const entry = this.pending.get(data.id);
       if (entry) {
         this.pending.delete(data.id);

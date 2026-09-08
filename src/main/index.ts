@@ -261,6 +261,14 @@ app.whenReady().then(async () => {
       mainWindow = createMainWindow();
     }
   });
+}).catch((err) => {
+  // Anything thrown during boot (native module ABI mismatch, DB migration,
+  // worker ready timeout) used to surface only as an unhandled rejection:
+  // the process stayed alive with no window and no cause anywhere. Log it
+  // to main.log + stderr and exit non-zero so launchers fail fast.
+  logger.error('[plasma] boot failed — no window created', err);
+  console.error('[plasma] boot failed:', err instanceof Error ? err.stack || err.message : err);
+  app.exit(1);
 });
 
 app.on('window-all-closed', () => {
