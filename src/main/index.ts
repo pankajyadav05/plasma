@@ -39,6 +39,7 @@ import { buildAppMenu } from './menu';
 import { getAllSettings, setSetting } from './settings';
 import { formatSql } from './sql-format';
 import { closeAllTunnels, closeTunnel, openTunnel } from './ssh-tunnel';
+import { registerE2EHooks } from './e2e-hooks';
 import { disposeUpdater, initUpdater } from './updater';
 import {
   deleteConnection as vaultDelete,
@@ -76,8 +77,15 @@ if (process.platform === 'win32') {
   app.setAppUserModelId('sh.plasma.app');
 }
 
+// E2E / agent isolation: redirect userData before any getPath('userData') use
+// (logger, plasma.db). No-op when unset so production paths are unchanged.
+if (process.env.PLASMA_USER_DATA) {
+  app.setPath('userData', process.env.PLASMA_USER_DATA);
+}
+
 app.whenReady().then(async () => {
   initLogger();
+  registerE2EHooks(() => workerSupervisor);
   logger.info('[plasma] app ready, version', app.getVersion());
 
   // On macOS, set the dock icon explicitly. BrowserWindow `icon` alone

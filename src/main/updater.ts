@@ -53,6 +53,17 @@ export function getLastUpdateStatus(): UpdateStatus {
 }
 
 export function initUpdater(window: BrowserWindow): void {
+  // Packaged E2E / agent runs must not hit the R2 updater feed.
+  if (process.env.PLASMA_DISABLE_UPDATER === '1') {
+    logger.info('[updater] skipped — PLASMA_DISABLE_UPDATER=1');
+    ipcMain.handle('plasma:update:check', async () => lastStatus);
+    ipcMain.handle('plasma:update:install', () => {
+      // no-op when updater disabled
+    });
+    ipcMain.handle('plasma:update:status', () => lastStatus);
+    return;
+  }
+
   // Dev builds don't have a real signed installer — `electron-updater`
   // throws on missing dev-app-update.yml otherwise. Skip the live polling
   // path but still register stub IPC handlers so the renderer's

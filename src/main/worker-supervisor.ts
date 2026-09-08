@@ -252,6 +252,17 @@ export class WorkerSupervisor {
     });
   }
 
+
+  /** E2E only — pid of the current utility-process child, or null. */
+  workerPid(): number | null {
+    return this.proc?.pid ?? null;
+  }
+
+  /** E2E only — SIGKILL the worker so restart / reset paths can be tested. */
+  killWorkerForE2E(): void {
+    this.proc?.kill();
+  }
+
   stop(): void {
     this.shuttingDown = true;
     this.clearStableTimer();

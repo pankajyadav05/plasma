@@ -481,13 +481,14 @@ export function ConnectionDialog() {
             <Button
               type="button"
               variant="outline"
+              data-testid="conn-test"
               onClick={() => void handleTest()}
               disabled={test.kind === 'testing' || connecting}
             >
               {test.kind === 'testing' && <Loader2 className="animate-spin" />}
               {test.kind === 'testing' ? 'Testing…' : 'Test'}
             </Button>
-            <Button type="submit" variant="primary" disabled={connecting}>
+            <Button type="submit" variant="primary" data-testid="conn-connect" disabled={connecting}>
               {connecting ? <Loader2 className="animate-spin" /> : <Play />}
               {connecting ? 'Connecting…' : 'Connect'}
             </Button>

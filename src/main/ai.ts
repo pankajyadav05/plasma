@@ -27,7 +27,8 @@ import { logger } from './logger';
  * tool_calls, then the next round continues. Bounded by MAX_TOOL_ROUNDS.
  */
 
-const ENDPOINT = 'https://openrouter.ai/api/v1/chat/completions';
+const ENDPOINT =
+  process.env.PLASMA_AI_ENDPOINT ?? 'https://openrouter.ai/api/v1/chat/completions';
 const REFERER = 'https://plasma.sh';
 const TITLE = 'Plasma';
 const MAX_TOOL_ROUNDS = 5;

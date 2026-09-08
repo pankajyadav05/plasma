@@ -35,7 +35,12 @@
     "test:watch": "vitest",
     "lint": "biome check src",
     "lint:fix": "biome check --write src",
-    "format": "biome format --write src"
+    "format": "biome format --write src",
+    "test:e2e": "playwright test -c e2e/playwright.config.ts",
+    "test:e2e:ipc": "playwright test -c e2e/playwright.config.ts --project=ipc",
+    "e2e:fixtures:up": "docker compose -f e2e/compose.yml up -d --wait",
+    "e2e:fixtures:down": "docker compose -f e2e/compose.yml down -v",
+    "e2e:local": "bash e2e/scripts/run-local.sh"
   },
   "dependencies": {
     "@monaco-editor/react": "^4.6.0",
@@ -70,6 +75,7 @@
   "devDependencies": {
     "@biomejs/biome": "^1.9.4",
     "@electron/rebuild": "^3.7.1",
+    "@playwright/test": "1.49.1",
     "@resvg/resvg-js": "^2.6.2",
     "@tailwindcss/postcss": "^4.2.2",
     "@types/better-sqlite3": "^7.6.12",
