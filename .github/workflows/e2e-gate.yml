@@ -76,6 +76,11 @@ jobs:
           node-version: 20
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      # `postinstall` skips electron-rebuild on CI, so better-sqlite3 is still
+      # built for the runner's Node ABI. The app under test runs on Electron's
+      # ABI — same rebuild release.yml does before packaging.
+      - name: Rebuild native deps for Electron
+        run: pnpm exec electron-builder install-app-deps
       - name: Download out/
         uses: actions/download-artifact@v4
         with:
