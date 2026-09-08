@@ -39,6 +39,7 @@ import { buildAppMenu } from './menu';
 import { getAllSettings, setSetting } from './settings';
 import { formatSql } from './sql-format';
 import { closeAllTunnels, closeTunnel, openTunnel } from './ssh-tunnel';
+import { registerE2EHooks } from './e2e-hooks';
 import { disposeUpdater, initUpdater } from './updater';
 import {
   deleteConnection as vaultDelete,
@@ -76,8 +77,15 @@ if (process.platform === 'win32') {
   app.setAppUserModelId('sh.plasma.app');
 }
 
+// E2E / agent isolation: redirect userData before any getPath('userData') use
+// (logger, plasma.db). No-op when unset so production paths are unchanged.
+if (process.env.PLASMA_USER_DATA) {
+  app.setPath('userData', process.env.PLASMA_USER_DATA);
+}
+
 app.whenReady().then(async () => {
   initLogger();
+  registerE2EHooks(() => workerSupervisor);
   logger.info('[plasma] app ready, version', app.getVersion());
 
   // On macOS, set the dock icon explicitly. BrowserWindow `icon` alone
@@ -112,6 +120,8 @@ app.whenReady().then(async () => {
       mainWindow?.webContents.send('plasma:redis:pubsub', evt.message);
     } else if (evt.kind === 'queryChunk') {
       mainWindow?.webContents.send('plasma:query:chunk', evt);
+    } else if (evt.kind === 'pgNotice') {
+      mainWindow?.webContents.send('plasma:pg:notice', evt.notice);
     }
   });
 
@@ -253,6 +263,14 @@ app.whenReady().then(async () => {
       mainWindow = createMainWindow();
     }
   });
+}).catch((err) => {
+  // Anything thrown during boot (native module ABI mismatch, DB migration,
+  // worker ready timeout) used to surface only as an unhandled rejection:
+  // the process stayed alive with no window and no cause anywhere. Log it
+  // to main.log + stderr and exit non-zero so launchers fail fast.
+  logger.error('[plasma] boot failed — no window created', err);
+  console.error('[plasma] boot failed:', err instanceof Error ? err.stack || err.message : err);
+  app.exit(1);
 });
 
 app.on('window-all-closed', () => {

@@ -47,16 +47,28 @@ export function StatusBar() {
           ? 'bg-destructive'
           : 'bg-muted-foreground';
 
+  const engineLabel = activeConfig?.engine ?? null;
+
   return (
-    <footer className="flex h-7 shrink-0 items-center gap-0 border-t bg-background px-4 text-xs text-muted-foreground">
+    <footer
+      className="flex h-7 shrink-0 items-center gap-0 border-t bg-background px-4 text-xs text-muted-foreground"
+      data-testid="status-bar"
+    >
       <Seg first>
         <span className={`inline-block h-2 w-2 rounded-full ${dotClass}`} />
-        {stateLabel}
+        <span data-testid="status-connection">{stateLabel}</span>
       </Seg>
       {activeConfig && (
         <>
           <Sep />
-          <Seg>{activeConfig.name}</Seg>
+          <Seg>
+            <span data-testid="status-connection-name">{activeConfig.name}</span>
+          </Seg>
+          {engineLabel && (
+            <Seg>
+              <span data-testid="status-engine">{engineLabel}</span>
+            </Seg>
+          )}
           {connTag && (
             <Seg>
               <span
@@ -104,7 +116,7 @@ export function StatusBar() {
         <>
           <Sep />
           <Seg>
-            <span className="font-semibold text-primary">txn active</span>
+            <span className="font-semibold text-primary" data-testid="status-txn">txn active</span>
             <Button
               variant="ghost"
               size="xs"

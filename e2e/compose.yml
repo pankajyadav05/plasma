@@ -1,0 +1,22 @@
+# Plasma E2E fixture stack (week-1: Postgres only).
+# Pin images by digest when promoting beyond week-1 (gate rule G6).
+# Local: docker compose -f e2e/compose.yml up -d --wait
+# CI: same; GitHub-hosted runners have Docker. If Docker is unavailable
+# in an environment, skip the ipc project and run store-level L1 probes.
+services:
+  pg:
+    image: postgres:16.6-alpine
+    container_name: plasma-e2e-pg
+    environment:
+      POSTGRES_USER: plasma
+      POSTGRES_PASSWORD: plasma
+      POSTGRES_DB: plasma_e2e
+    ports:
+      - "55432:5432"
+    volumes:
+      - ./seed/pg.sql:/docker-entrypoint-initdb.d/01-seed.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U plasma -d plasma_e2e"]
+      interval: 2s
+      timeout: 5s
+      retries: 30

@@ -26,7 +26,7 @@ import { logger } from './logger';
  */
 export type WorkerBroadcast = Extract<
   WorkerResponse,
-  { kind: 'redisPubsub' } | { kind: 'queryChunk' }
+  { kind: 'redisPubsub' } | { kind: 'queryChunk' } | { kind: 'pgNotice' }
 >;
 
 export class WorkerSupervisor {
@@ -119,10 +119,19 @@ export class WorkerSupervisor {
         return;
       }
       const data = parsed.data;
-      // Broadcast events aren't request-correlated final responses —
-      // fan them out to whoever subscribed (redis pubsub + query chunks).
-      if (data.kind === 'redisPubsub' || data.kind === 'queryChunk') {
+      // Broadcast events aren't request-correlated final responses — fan them
+      // out to whoever subscribed (redis pubsub, query chunks, pg notices).
+      if (data.kind === 'redisPubsub' || data.kind === 'queryChunk' || data.kind === 'pgNotice') {
         this.broadcastHandler?.(data);
+        return;
+      }
+      // Readiness is not request-correlated: the worker posts it at boot
+      // under a sentinel id, so settle the handshake here instead of
+      // looking for a pending request (U20).
+      if (data.kind === 'ready') {
+        const wait = this.readyWait;
+        this.readyWait = null;
+        wait?.resolve();
         return;
       }
       const entry = this.pending.get(data.id);
@@ -250,6 +259,17 @@ export class WorkerSupervisor {
       this.pending.set(req.id, { resolve, timer });
       this.proc?.postMessage(req);
     });
+  }
+
+
+  /** E2E only — pid of the current utility-process child, or null. */
+  workerPid(): number | null {
+    return this.proc?.pid ?? null;
+  }
+
+  /** E2E only — SIGKILL the worker so restart / reset paths can be tested. */
+  killWorkerForE2E(): void {
+    this.proc?.kill();
   }
 
   stop(): void {

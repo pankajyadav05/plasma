@@ -1,3 +1,7 @@
+/**
+ * Pure AI policy unit tests — imports `./ai-policy` so the suite never
+ * loads Electron (CI skips the Electron binary download).
+ */
 import { describe, expect, it } from 'vitest';
 import {
   AI_TOOL_MAX_BYTES,
@@ -6,7 +10,7 @@ import {
   isAiRowDataAllowed,
   isReadOnlySql,
   serializeAiToolRows,
-} from './ai';
+} from './ai-policy';
 
 describe('isAiRowDataAllowed (U06)', () => {
   it('defaults off for missing connection and missing map entry', () => {

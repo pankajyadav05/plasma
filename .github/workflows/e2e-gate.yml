@@ -1,0 +1,107 @@
+name: E2E gate
+
+on:
+  pull_request:
+  push:
+    branches: [main, release-main]
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: Optional commit SHA to check out
+        required: false
+
+concurrency:
+  group: e2e-gate-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.sha || github.sha }}
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - name: Install
+        run: pnpm install --frozen-lockfile
+      - name: Typecheck
+        run: pnpm run typecheck
+      - name: Unit tests
+        run: pnpm run test
+
+  build-dev:
+    name: build-dev
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.sha || github.sha }}
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Build (electron-vite)
+        run: pnpm run build
+      - name: Upload out/
+        uses: actions/upload-artifact@v4
+        with:
+          name: plasma-out
+          path: out/
+          retention-days: 5
+
+  e2e-ipc:
+    name: e2e-ipc
+    needs: [build-dev]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.sha || github.sha }}
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # `postinstall` skips electron-rebuild on CI, so better-sqlite3 is still
+      # built for the runner's Node ABI. The app under test runs on Electron's
+      # ABI — same rebuild release.yml does before packaging.
+      - name: Rebuild native deps for Electron
+        run: pnpm exec electron-builder install-app-deps
+      - name: Download out/
+        uses: actions/download-artifact@v4
+        with:
+          name: plasma-out
+          path: out/
+      - name: Install Playwright (with Electron deps)
+        run: pnpm exec playwright install --with-deps
+      - name: Start Postgres fixture
+        run: bash e2e/scripts/ci-fixtures.sh
+      - name: Run L1 IPC suite
+        run: xvfb-run -a pnpm run test:e2e
+      - name: Dump compose logs on failure
+        if: failure()
+        run: bash e2e/scripts/ci-fixture-logs.sh
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            e2e/playwright-report
+            e2e/test-results
+          retention-days: 90
+          if-no-files-found: ignore
