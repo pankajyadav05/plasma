@@ -120,6 +120,8 @@ app.whenReady().then(async () => {
       mainWindow?.webContents.send('plasma:redis:pubsub', evt.message);
     } else if (evt.kind === 'queryChunk') {
       mainWindow?.webContents.send('plasma:query:chunk', evt);
+    } else if (evt.kind === 'pgNotice') {
+      mainWindow?.webContents.send('plasma:pg:notice', evt.notice);
     }
   });
 

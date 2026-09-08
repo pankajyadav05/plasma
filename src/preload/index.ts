@@ -1,5 +1,6 @@
 import { IpcChannel, type PlasmaAPI, type Platform } from '@shared/protocol';
 import { contextBridge, ipcRenderer } from 'electron';
+import { type EventChannel, eventChannels } from './event-channels';
 
 /**
  * Preload — the ONLY place contextBridge is called.
@@ -115,28 +116,6 @@ contextBridge.exposeInMainWorld('plasma', api);
 // Expose a thin subscription layer for main-process → renderer menu events
 // (separate from invoke-based RPC). Renderer components listen via
 // `window.plasmaEvents.on('plasma:menu:runQuery', handler)`.
-const eventChannels = [
-  'plasma:menu:newTab',
-  'plasma:menu:closeTab',
-  'plasma:menu:exportCsv',
-  'plasma:menu:exportJson',
-  'plasma:menu:toggleSidebar',
-  'plasma:menu:toggleEditor',
-  'plasma:menu:palette',
-  'plasma:menu:toggleAi',
-  'plasma:menu:cheatSheet',
-  'plasma:menu:runQuery',
-  'plasma:menu:runQueryAll',
-  'plasma:menu:cancelQuery',
-  'plasma:menu:history',
-  'plasma:window:maximizedChanged',
-  'plasma:update:status',
-  'plasma:ai:event',
-  'plasma:redis:pubsub',
-  'plasma:query:chunk',
-] as const;
-type EventChannel = (typeof eventChannels)[number];
-
 contextBridge.exposeInMainWorld('plasmaEvents', {
   on(channel: EventChannel, handler: (...args: unknown[]) => void): () => void {
     if (!eventChannels.includes(channel)) {
