@@ -23,6 +23,7 @@
     "release:minor": "node scripts/release.mjs minor",
     "release:major": "node scripts/release.mjs major",
     "release:upload": "node scripts/upload-release.mjs",
+    "release:verify": "node scripts/upload-release.mjs --verify-only",
     "release:ship": "pnpm run dist:win && pnpm run release:upload",
     "ship:patch": "node scripts/ship.mjs patch",
     "ship:minor": "node scripts/ship.mjs minor",

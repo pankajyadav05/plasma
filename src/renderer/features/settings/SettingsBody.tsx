@@ -11,6 +11,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { cn } from '@/lib/cn';
+import { describeUpdateStatus } from '@/lib/update-status';
 import { useUpdate } from '@/lib/use-update';
 import { useSession } from '@/stores/session';
 import type { Settings } from '@shared/protocol';
@@ -608,7 +609,7 @@ function UpdateField() {
     }
   };
 
-  const statusLine = describeStatus(status);
+  const statusLine = describeUpdateStatus(status, appVersion);
 
   return (
     <div className="flex flex-col gap-3 rounded-md border border-border bg-muted/40 p-4">
@@ -643,29 +644,4 @@ function UpdateField() {
       <p className="font-display text-xs italic text-muted-foreground">{statusLine}</p>
     </div>
   );
-}
-
-function describeStatus(status: ReturnType<typeof useUpdate>['status']): string {
-  switch (status.kind) {
-    case 'idle':
-      return 'Click "Check for updates" to fetch the latest manifest.';
-    case 'checking':
-      return 'Checking for updates…';
-    case 'not-available':
-      return `You are on the latest version (v${status.version}).`;
-    case 'available':
-      return `Update v${status.version} found — downloading in the background.`;
-    case 'downloading':
-      return `Downloading update — ${Math.round(status.percent)}% (${formatBytes(status.bytesPerSecond)}/s)`;
-    case 'downloaded':
-      return `Update v${status.version} downloaded — restart to install.`;
-    case 'error':
-      return `Update check failed: ${status.message}`;
-  }
-}
-
-function formatBytes(n: number): string {
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
-  return `${(n / 1024 / 1024).toFixed(1)} MB`;
 }

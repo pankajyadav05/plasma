@@ -15,8 +15,13 @@
  *   - R2_PUBLIC_BASE_URL (https://pub-05a2064511bc41689f299b542b07b67f.r2.dev)
  *   - R2_ENDPOINT (https://{accountId}.r2.cloudflarestorage.com)
  *
+ * After uploading (or with --verify-only, on its own) it reads the public
+ * feed back and fails unless latest.yml / latest-mac.yml advertise this
+ * version and every file they reference is fetchable.
+ *
  * Usage:
  *   pnpm run release:upload
+ *   pnpm run release:verify   # no credentials needed; read-only check
  */
 
 import { createHash, createHmac } from 'node:crypto';
@@ -47,9 +52,13 @@ if (existsSync(envPath)) {
   }
 }
 
+// `--verify-only` skips the uploads and just asserts that the public feed
+// serves this version — usable without R2 credentials (read-only HTTP).
+const verifyOnly = process.argv.includes('--verify-only');
+
 const accessKeyId = process.env.R2_ACCESS_KEY_ID;
 const secretAccessKey = process.env.R2_SECRET_ACCESS_KEY;
-if (!accessKeyId || !secretAccessKey) {
+if (!verifyOnly && (!accessKeyId || !secretAccessKey)) {
   console.error('[upload] R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY not set');
   console.error('[upload] add to .env.local or export in shell');
   console.error(
@@ -128,7 +137,7 @@ const releaseDir = resolve(root, 'release');
 const requiredMissing = artifacts.filter(
   (a) => a.required && !existsSync(resolve(releaseDir, a.name)),
 );
-if (requiredMissing.length > 0) {
+if (!verifyOnly && requiredMissing.length > 0) {
   console.error('[upload] missing required Windows artifacts in release/:');
   for (const m of requiredMissing) console.error(`  - ${m.name}`);
   console.error('[upload] run `pnpm run dist:win` first');
@@ -138,14 +147,14 @@ if (requiredMissing.length > 0) {
 const optionalMissing = artifacts.filter(
   (a) => !a.required && !existsSync(resolve(releaseDir, a.name)),
 );
-if (optionalMissing.length > 0) {
+if (!verifyOnly && optionalMissing.length > 0) {
   console.log('[upload] skipping missing Mac artifacts (Windows-only upload?):');
   for (const m of optionalMissing) console.log(`  - ${m.name}`);
 }
 
-const toUpload = artifacts.filter((a) =>
-  existsSync(resolve(releaseDir, a.name)),
-);
+const toUpload = verifyOnly
+  ? []
+  : artifacts.filter((a) => existsSync(resolve(releaseDir, a.name)));
 
 const fmtMB = (bytes) => `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 
@@ -166,6 +175,19 @@ function amzDate(d = new Date()) {
 }
 
 /**
+ * Cache policy. `latest.yml` / `latest-mac.yml` are mutable pointers
+ * rewritten under the same key every release, so every intermediary must
+ * revalidate — a cached manifest tells clients an old build is current.
+ * Binaries carry the version in their key and never change.
+ * @param {string} key
+ */
+function cacheControlFor(key) {
+  return key.endsWith('.yml')
+    ? 'no-cache, must-revalidate'
+    : 'public, max-age=31536000, immutable';
+}
+
+/**
  * PutObject to R2 with SigV4. Overwrites existing keys (stable public URLs).
  * @param {string} key
  * @param {Buffer} body
@@ -180,6 +202,7 @@ async function putObject(key, body, contentType) {
   const payloadHash = sha256Hex(body);
 
   const headers = {
+    'cache-control': cacheControlFor(key),
     host,
     'content-type': contentType,
     'x-amz-content-sha256': payloadHash,
@@ -251,12 +274,78 @@ for (const { name, contentType } of toUpload) {
   console.log(`[upload] ↪ ${url}`);
 }
 
+// ── Post-publish gate ────────────────────────────────────────────────
+// A release is only shipped when the *public* feed says so. Every stuck
+// updater so far was silent: the manifest on the CDN kept advertising an
+// older version (publish job never ran, upload partially failed, feed URL
+// abandoned) while the tag, the GitHub release and the site all looked
+// fine. Read the feed back over plain HTTP and fail loudly if it does not
+// serve this version, with every file it references actually present.
+
+/**
+ * @param {string} name manifest key (`latest.yml` / `latest-mac.yml`)
+ * @returns {Promise<string[]>} problems found; empty means healthy
+ */
+async function verifyManifest(name) {
+  const problems = [];
+  // Cache-buster: electron-updater appends one too, so this mirrors what
+  // a real client fetches rather than whatever an edge cache holds.
+  const url = `${publicBase}/${name}?noCache=${Date.now()}`;
+  const res = await fetch(url, { headers: { 'cache-control': 'no-cache' } });
+  if (!res.ok) {
+    return [`${name}: HTTP ${res.status} ${res.statusText}`];
+  }
+  const body = await res.text();
+
+  const declared = body.match(/^version:\s*['"]?([^'"\s]+)/m)?.[1];
+  if (declared !== version) {
+    problems.push(`${name}: advertises version ${declared ?? '(none)'}, expected ${version}`);
+  }
+
+  const referenced = [...body.matchAll(/^\s*-\s*url:\s*(\S+)\s*$/gm)].map((m) => m[1]);
+  if (referenced.length === 0) {
+    problems.push(`${name}: lists no files`);
+  }
+  for (const file of referenced) {
+    const fileUrl = /^https?:/.test(file) ? file : `${publicBase}/${file}`;
+    const head = await fetch(fileUrl, { method: 'HEAD' });
+    if (!head.ok) {
+      problems.push(`${name}: references ${file} — HTTP ${head.status}`);
+    }
+  }
+  return problems;
+}
+
+// Windows manifest always. Mac manifest whenever it was part of this
+// publish, or always in --verify-only mode (CI publishes both platforms;
+// a Windows-only local ship deliberately leaves latest-mac.yml behind).
+const manifests = ['latest.yml'];
+if (verifyOnly || toUpload.some((a) => a.name === 'latest-mac.yml')) {
+  manifests.push('latest-mac.yml');
+}
+
 console.log('');
-console.log('[upload] done. verify the site download links match:');
+const problems = [];
+for (const name of manifests) {
+  console.log(`[verify] ${publicBase}/${name} …`);
+  problems.push(...(await verifyManifest(name)));
+}
+
+if (problems.length > 0) {
+  console.error('');
+  console.error(`[verify] update feed is NOT serving ${version}:`);
+  for (const p of problems) console.error(`  - ${p}`);
+  console.error('[verify] clients will keep reporting the previous version as latest');
+  process.exit(1);
+}
+
+console.log('');
+console.log(`[verify] feed serves ${version} — ${manifests.join(', ')} healthy`);
+console.log('[upload] done. site download links:');
 console.log(`  ${publicBase}/Plasma-Setup-${version}-x64.exe`);
 console.log(`  ${publicBase}/Plasma-Portable-${version}-x64.exe`);
 console.log(`  ${publicBase}/latest.yml          ← Win auto-update`);
-if (toUpload.some((a) => a.name === 'latest-mac.yml')) {
+if (manifests.includes('latest-mac.yml')) {
   console.log(`  ${publicBase}/Plasma-${version}-arm64.dmg`);
   console.log(`  ${publicBase}/latest-mac.yml    ← Mac auto-update`);
 }
