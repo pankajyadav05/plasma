@@ -25,6 +25,8 @@ export function describeUpdateStatus(status: UpdateStatus, appVersion: string): 
     }
     case 'available':
       return `Update v${status.version} found — downloading in the background.`;
+    case 'available-manual':
+      return `Update v${status.version} is available, but this macOS build is unsigned and cannot install itself — download the .dmg and replace Plasma in /Applications.`;
     case 'downloading':
       return `Downloading update — ${Math.round(status.percent)}% (${formatBytes(status.bytesPerSecond)}/s)`;
     case 'downloaded':

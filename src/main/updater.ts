@@ -1,22 +1,37 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import type { BrowserWindow } from 'electron';
-import { app, ipcMain } from 'electron';
+import { app, ipcMain, shell } from 'electron';
 import electronUpdater, { type UpdateInfo, type ProgressInfo } from 'electron-updater';
 import { logger } from './logger';
+import { type MacSignatureKind, classifyMacAppSignature } from './mac-signature';
+import { macDownloadUrl, parseFeedBaseUrl } from './update-feed';
 
 const { autoUpdater } = electronUpdater;
 
 /**
  * Auto-update wiring. Uses electron-updater + a generic provider
- * (configured in electron-builder.yml) that points at the same Vercel
- * Blob URL space hosting the installer. Only the NSIS installer can
- * self-update; the portable EXE will see the available-update event
- * but the user has to re-download manually.
+ * (configured in electron-builder.yml) that points at the R2 URL space
+ * hosting the installers. Only the NSIS installer can self-update; the
+ * portable EXE will see the available-update event but the user has to
+ * re-download manually.
+ *
+ * macOS installs go through Squirrel.Mac, which refuses any update whose
+ * bundle does not satisfy the *installed* app's designated requirement.
+ * Releases here are unsigned (`identity: null`), so that can never hold —
+ * ShipIt rejected the payload with "code has no resources but signature
+ * indicates they must be present" and the renderer showed the raw error.
+ * When `mac-signature.ts` reports anything but a certificate-backed
+ * signature the updater switches to manual mode: still poll and report new
+ * versions, but never download 110 MB Squirrel will throw away, and hand
+ * the user the .dmg instead. See docs/mac-auto-update.md.
  *
  * Status flow surfaced to the renderer:
  *
  *   idle → checking → available → downloading (with progress)
  *                              → not-available
  *                              → error
+ *                              → available-manual (macOS, unsigned build)
  *                  → downloaded (ready to install on next quit)
  */
 
@@ -33,6 +48,7 @@ export type UpdateStatus =
       total: number;
     }
   | { kind: 'downloaded'; version: string; releaseNotes?: string | null }
+  | { kind: 'available-manual'; version: string; downloadUrl: string }
   | { kind: 'error'; message: string };
 
 let lastStatus: UpdateStatus = { kind: 'idle' };
@@ -50,6 +66,27 @@ function broadcast(window: BrowserWindow | null, status: UpdateStatus) {
 
 export function getLastUpdateStatus(): UpdateStatus {
   return lastStatus;
+}
+
+let feedBase: string | null | undefined;
+
+/**
+ * Feed base URL out of the packaged `app-update.yml` — the bucket this build
+ * was published to, and therefore where its .dmg sits. Read once, lazily; a
+ * build whose manifest is unreadable falls back to the download page.
+ */
+function feedBaseUrl(): string | null {
+  if (feedBase === undefined) {
+    try {
+      feedBase = parseFeedBaseUrl(
+        readFileSync(join(process.resourcesPath, 'app-update.yml'), 'utf8'),
+      );
+    } catch (err) {
+      logger.warn('[updater] could not read app-update.yml', err);
+      feedBase = null;
+    }
+  }
+  return feedBase;
 }
 
 export function initUpdater(window: BrowserWindow): void {
@@ -79,8 +116,21 @@ export function initUpdater(window: BrowserWindow): void {
     return;
   }
 
-  autoUpdater.autoDownload = true; // pull installer in the background
-  autoUpdater.autoInstallOnAppQuit = true; // swap on next quit
+  // Squirrel.Mac validates every downloaded bundle against the installed
+  // app's designated requirement, so an unsigned or ad-hoc macOS build can
+  // never install its own updates (mac-signature.ts spells out why). Decide
+  // that once per launch: no background download, no quitAndInstall.
+  const macSignature: MacSignatureKind | null =
+    process.platform === 'darwin' ? classifyMacAppSignature(app.getPath('exe')) : null;
+  const canSelfInstall = macSignature === null || macSignature === 'certificate';
+  if (!canSelfInstall) {
+    logger.warn(
+      `[updater] macOS bundle signature=${macSignature} — Squirrel cannot install updates, falling back to manual download`,
+    );
+  }
+
+  autoUpdater.autoDownload = canSelfInstall; // pull installer in the background
+  autoUpdater.autoInstallOnAppQuit = canSelfInstall; // swap on next quit
   autoUpdater.allowPrerelease = false;
   autoUpdater.allowDowngrade = false;
 
@@ -100,6 +150,14 @@ export function initUpdater(window: BrowserWindow): void {
   });
 
   autoUpdater.on('update-available', (info: UpdateInfo) => {
+    if (!canSelfInstall) {
+      broadcast(window, {
+        kind: 'available-manual',
+        version: info.version,
+        downloadUrl: macDownloadUrl(feedBaseUrl(), info.version, process.arch),
+      });
+      return;
+    }
     const releaseNotes =
       typeof info.releaseNotes === 'string'
         ? info.releaseNotes
@@ -146,9 +204,17 @@ export function initUpdater(window: BrowserWindow): void {
     return lastStatus;
   });
 
-  ipcMain.handle('plasma:update:install', () => {
-    // Only valid after `update-downloaded`. Falls through harmlessly
-    // otherwise — electron-updater will just no-op.
+  ipcMain.handle('plasma:update:install', async () => {
+    // Unsigned macOS build: there is nothing to install — Squirrel would
+    // reject the bundle — so hand the user the .dmg for this version.
+    if (lastStatus.kind === 'available-manual') {
+      await shell.openExternal(lastStatus.downloadUrl);
+      return;
+    }
+    if (lastStatus.kind !== 'downloaded') {
+      logger.warn(`[updater] install requested with status=${lastStatus.kind} — ignored`);
+      return;
+    }
     autoUpdater.quitAndInstall(false, true);
   });
 

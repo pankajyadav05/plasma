@@ -49,7 +49,12 @@ checks.
 2. Run `pnpm ship:patch` (or `ship:minor` / `ship:major`) — bumps version, tags `v*`, pushes.
 3. The Release GitHub Action builds Windows + macOS, uploads to Cloudflare R2, and creates a GitHub Release.
 
-Requires repo secrets `R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY`. macOS builds are currently **unsigned** (`identity: null`).
+Requires repo secrets `R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY`. macOS builds
+are **unsigned** (`identity: null`), so they cannot auto-install updates —
+Squirrel.Mac rejects any bundle that does not satisfy the installed app's
+designated requirement. The app detects that and offers a manual .dmg download
+instead; see [docs/mac-auto-update.md](docs/mac-auto-update.md) for the
+diagnosis and the steps to enable signed auto-update.
 
 `release:upload` reads the public feed back after uploading and fails the
 job unless `latest.yml` / `latest-mac.yml` advertise the shipped version and
