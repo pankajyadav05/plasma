@@ -1,5 +1,7 @@
 import { Button } from '@/components/ui/button';
+import { Tooltip } from '@/components/ui/tooltip';
 import { cn } from '@/lib/cn';
+import { kbd } from '@/lib/platform';
 import { type AiTurn, useActiveTab, useSession } from '@/stores/session';
 import { Loader2, Send, Sparkles, Square, Trash2 } from 'lucide-react';
 import { type KeyboardEvent, useEffect, useRef, useState } from 'react';
@@ -105,15 +107,16 @@ export function AiPanel() {
             <Trash2 />
           </Button>
         )}
-        <Button
-          variant="ghost"
-          size="icon-xs"
-          onClick={() => setMode(null)}
-          aria-label="Close panel"
-          title="Close"
-        >
-          <span className="text-base leading-none">×</span>
-        </Button>
+        <Tooltip label="Close panel" shortcut={kbd('L')}>
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            onClick={() => setMode(null)}
+            aria-label="Close panel"
+          >
+            <span className="text-base leading-none">×</span>
+          </Button>
+        </Tooltip>
       </div>
 
       <div ref={scrollerRef} className="min-h-0 flex-1 overflow-y-auto px-3 py-3">

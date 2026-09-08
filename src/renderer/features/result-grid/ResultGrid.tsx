@@ -1,6 +1,7 @@
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
+import { Tooltip } from '@/components/ui/tooltip';
 import { BrandMark } from '@/features/app-shell/BrandMark';
 import { cn } from '@/lib/cn';
 import { copyCellToClipboard } from '@/lib/export';
@@ -705,18 +706,19 @@ export function ResultGrid() {
             >
               <ChevronDown className="h-3 w-3" />
             </button>
-            <button
-              type="button"
-              onClick={() => {
-                setSearchOpen(false);
-                setSearchQuery('');
-              }}
-              className="grid h-5 w-5 place-items-center rounded-sm text-muted-foreground hover:text-foreground"
-              aria-label="Close search"
-              title="Close (Esc)"
-            >
-              <X className="h-3 w-3" />
-            </button>
+            <Tooltip label="Close" shortcut="Esc">
+              <button
+                type="button"
+                onClick={() => {
+                  setSearchOpen(false);
+                  setSearchQuery('');
+                }}
+                className="grid h-5 w-5 place-items-center rounded-sm text-muted-foreground hover:text-foreground"
+                aria-label="Close search"
+              >
+                <X className="h-3 w-3" />
+              </button>
+            </Tooltip>
           </div>
         </div>
       )}

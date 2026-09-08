@@ -1,6 +1,7 @@
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
+import { Tooltip } from '@/components/ui/tooltip';
 import { cn } from '@/lib/cn';
 import { ipc } from '@/lib/ipc';
 import { useSession } from '@/stores/session';
@@ -183,15 +184,16 @@ export function MonitorCanvas() {
         >
           {paused ? <Play /> : <Pause />}
         </Button>
-        <Button
-          variant="ghost"
-          size="icon-xs"
-          onClick={() => setCanvasMode('database')}
-          title="Close monitor"
-          aria-label="Close"
-        >
-          <X />
-        </Button>
+        <Tooltip label="Close monitor" shortcut="Esc">
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            onClick={() => setCanvasMode('database')}
+            aria-label="Close"
+          >
+            <X />
+          </Button>
+        </Tooltip>
       </div>
 
       {error && (

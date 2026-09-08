@@ -1,5 +1,5 @@
 import { Button } from '@/components/ui/button';
-import { kbd } from '@/lib/platform';
+import { Tooltip } from '@/components/ui/tooltip';
 import { useSession } from '@/stores/session';
 import { X } from 'lucide-react';
 import { SettingsBody } from './SettingsBody';
@@ -22,15 +22,16 @@ export function SettingsCanvas() {
                 Preferences persist in the local SQLite store.
               </p>
             </div>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              onClick={() => setCanvasMode('database')}
-              aria-label="Close settings"
-              title={`Close (${kbd('Esc')})`}
-            >
-              <X />
-            </Button>
+            <Tooltip label="Close" shortcut="Esc">
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                onClick={() => setCanvasMode('database')}
+                aria-label="Close settings"
+              >
+                <X />
+              </Button>
+            </Tooltip>
           </header>
           <SettingsBody />
         </div>

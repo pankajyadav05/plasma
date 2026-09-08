@@ -1,5 +1,6 @@
 import { Button } from '@/components/ui/button';
 import { Kbd } from '@/components/ui/kbd';
+import { Tooltip } from '@/components/ui/tooltip';
 import { AiPanel } from '@/features/ai/AiPanel';
 import { MonacoEditor } from '@/features/editor/MonacoEditor';
 import { cn } from '@/lib/cn';
@@ -844,15 +845,11 @@ function PanelHeader({
       <div className="flex-1" />
       {children}
       {onClose && (
-        <Button
-          variant="ghost"
-          size="icon-xs"
-          onClick={onClose}
-          aria-label="Close panel"
-          title="Close"
-        >
-          <X />
-        </Button>
+        <Tooltip label="Close panel">
+          <Button variant="ghost" size="icon-xs" onClick={onClose} aria-label="Close panel">
+            <X />
+          </Button>
+        </Tooltip>
       )}
     </div>
   );
