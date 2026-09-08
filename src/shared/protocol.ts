@@ -1245,6 +1245,13 @@ export type UpdateStatus =
       total: number;
     }
   | { kind: 'downloaded'; version: string; releaseNotes?: string | null }
+  /**
+   * macOS only: a new version exists but this build cannot install it —
+   * Squirrel.Mac rejects updates that do not satisfy the installed app's
+   * designated requirement, which unsigned releases never do. `downloadUrl`
+   * points at the .dmg for `version`. See docs/mac-auto-update.md.
+   */
+  | { kind: 'available-manual'; version: string; downloadUrl: string }
   | { kind: 'error'; message: string };
 
 // ─── Ping (dev sanity check) ─────────────────────────────────────────
@@ -1389,7 +1396,10 @@ export interface PlasmaAPI {
   update: {
     /** Trigger an explicit check now. Returns the status post-check. */
     check(): Promise<UpdateStatus>;
-    /** Install the downloaded update + restart. No-op unless status is `downloaded`. */
+    /**
+     * Install the downloaded update + restart. On `available-manual` it opens
+     * the .dmg download instead; no-op for every other status.
+     */
     install(): Promise<void>;
     /** Read the most recent status snapshot (no network). */
     status(): Promise<UpdateStatus>;

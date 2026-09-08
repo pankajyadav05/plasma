@@ -70,13 +70,16 @@ portable:
 # the keychain. Trade-off: Gatekeeper will quarantine the .app on first
 # launch — users right-click → Open, or run
 #   xattr -cr /Applications/Plasma.app
-# To ship signed + notarized builds, replace `identity: null` with the
-# Developer ID Application string and add notarize config (see
-# https://www.electron.build/code-signing-mac).
 #
-# Auto-update on macOS requires a signed build — without signing,
-# electron-updater will surface the "available" event but the install
-# step will fail. The renderer's update UI handles the error gracefully.
+# It also means macOS auto-update CANNOT install: Squirrel.Mac validates
+# each download against the designated requirement of the installed app,
+# and an unsigned (or ad-hoc) bundle has no requirement a later release
+# can satisfy — it failed with "code has no resources but signature
+# indicates they must be present". The app detects this at launch
+# (src/main/mac-signature.ts) and offers a manual .dmg download instead
+# of downloading a payload ShipIt rejects. `hardenedRuntime` below only
+# takes effect once signing is enabled; docs/mac-auto-update.md has the
+# switch-over steps (Developer ID + notarization).
 mac:
   target:
     - target: dmg

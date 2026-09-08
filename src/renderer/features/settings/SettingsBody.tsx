@@ -625,6 +625,16 @@ function UpdateField() {
             <Download />
             Restart & install v{status.version}
           </Button>
+        ) : status.kind === 'available-manual' ? (
+          <Button
+            variant="primary"
+            size="sm"
+            onClick={() => void install()}
+            title="Opens the .dmg in your browser — unsigned macOS builds cannot self-install"
+          >
+            <Download />
+            Download v{status.version}
+          </Button>
         ) : (
           <Button
             variant="outline"

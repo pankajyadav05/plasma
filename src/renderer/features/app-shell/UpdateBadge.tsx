@@ -64,5 +64,20 @@ export function UpdateBadge() {
     );
   }
 
+  if (status.kind === 'available-manual') {
+    return (
+      <Button
+        variant="ghost"
+        size="xs"
+        onClick={() => void install()}
+        title={`Download Plasma v${status.version} — unsigned macOS builds cannot self-install`}
+        className="border border-primary text-primary"
+      >
+        <Download className="h-3 w-3" />
+        update v{status.version} · download
+      </Button>
+    );
+  }
+
   return null;
 }
