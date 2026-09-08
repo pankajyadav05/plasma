@@ -1,6 +1,7 @@
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { AppShell } from '@/features/app-shell/AppShell';
 import { useSession } from '@/stores/session';
+import { ConnectionRecovered } from '@shared/protocol';
 import { useEffect } from 'react';
 
 export function App() {
@@ -54,6 +55,15 @@ export function App() {
           ReturnType<typeof useSession.getState>['appendPgNotice']
         >[0];
         session().appendPgNotice(notice);
+      }),
+      // U20: the worker died and came back with no DB session — stop
+      // claiming to be connected so the user gets the connect screen.
+      window.plasmaEvents.on('plasma:worker:reset', () => session().handleWorkerReset()),
+      // U27: main rebuilt the session after a network/VPN drop. Adopt the
+      // new connection generation so edit + result guards stay honest.
+      window.plasmaEvents.on('plasma:conn:recovered', (...args: unknown[]) => {
+        const parsed = ConnectionRecovered.safeParse(args[0]);
+        if (parsed.success) session().handleConnectionRecovered(parsed.data);
       }),
     ];
     return () => {

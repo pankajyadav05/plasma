@@ -90,6 +90,8 @@ Canonical source: `src/shared/keymap.ts` (native menu, DOM listeners, Monaco, an
 - **AI tool use** — single-round only emits one `query_database` tool. Add `list_tables` + `describe_table` once we have the round-trip telemetry to size their context cost.
 - **SSH key encryption** — keys ride in plain settings JSON today. Move to safeStorage when we bump the SQLite schema (would also be the right time to migrate `connectionSsh` into a typed table).
 - **Schema-diff snapshots** — capped at 50, kept in settings. Move to a dedicated `schema_snapshots` SQLite table on next migration so binary blobs don't bloat the JSON-encoded settings rows.
+- **Drop during an in-flight query** — `query` / `sidebandQuery` carry no IPC deadline (their budget is server-side `statement_timeout`), so a socket that dies *while* a query runs waits on TCP keepalive before failing. Idle-then-query is fast-pathed by the liveness probe (U27); closing the in-flight case means probing the control connection while the primary is busy.
+- **Redis / OpenSearch liveness** — neither driver probes: recovery relies on classifying the failure (`shared/connection-loss.ts`) and reconnecting. ioredis usually self-heals; OpenSearch is bounded by its 10s `requestTimeout`. A dead session is still repaired, just one failed request later than Postgres.
 
 ## Architecture notes
 
@@ -97,3 +99,5 @@ Canonical source: `src/shared/keymap.ts` (native menu, DOM listeners, Monaco, an
 - Worker `sidebandQuery` is the canonical path for any long-running background read (AI tool calls, monitor poll, future `pg_terminate_backend`). Never queues behind a user-issued primary query.
 - All new feature toggles + state live in `SettingsShape` (plain SQLite settings table). No new tables this round, no migrations needed.
 - Adding a new `WorkerRequest` variant tips TS into a non-distributing `Omit` mode — `DistributiveOmit` in `main/index.ts` keeps the discriminated-union narrowing intact for `callWorker`.
+- Transport loss is layered (U27). Drivers detect it — `pg.Client` `error` / `end` handlers plus a `SELECT 1` liveness probe when a connection has been idle ≥ 15s — and throw `ConnectionLostError`; the worker tags the response `fatal: 'connection-lost'`; `main/connection-recovery.ts` rebuilds the session (SSH tunnel first, then worker `connect`) once per failure burst and retries the request; the renderer adopts the new `connectionGen` from `plasma:conn:recovered`. Writes and other side-effecting requests (`commitEditBatch`, redis mutations, exports, `cancel`) reconnect but are never replayed.
+- Main retains the live connection config (`retainedSession`, password included) purely so recovery can reconnect without prompting. It is dropped on disconnect, on an unrecoverable failure, and on worker crash.

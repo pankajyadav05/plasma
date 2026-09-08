@@ -1,3 +1,4 @@
+import { ConnectionLostError } from '@shared/connection-loss';
 import type { ConnectionConfig, PgNotice, QueryResult, SchemaInfo, TxnState } from '@shared/protocol';
 import {
   RESULT_CURSOR_CHUNK,
@@ -13,6 +14,25 @@ const { Client } = pg;
 type ClientT = InstanceType<typeof Client>;
 interface PgNoticeRaw { message?: string; severity?: string; name?: string; code?: string; detail?: string; hint?: string; where?: string; }
 function toPgNotice(n: PgNoticeRaw): PgNotice { return { message: n.message ?? '', severity: n.severity || n.name || undefined, code: n.code || undefined, detail: n.detail || undefined, hint: n.hint || undefined, where: n.where || undefined }; }
+
+/**
+ * U27 — a socket killed by a VPN drop / sleep / Wi-Fi switch is usually
+ * half-open: writes are accepted by the local kernel and never answered,
+ * and `query` / `sidebandQuery` carry no IPC deadline (their budget is
+ * server-side `statement_timeout`, which a dead socket never reaches).
+ * So before reusing a connection that has been idle long enough for the
+ * network to have changed underneath it, probe it under a hard cap.
+ */
+const IDLE_PROBE_AFTER_MS = 15_000;
+const LIVENESS_PROBE_TIMEOUT_MS = 5_000;
+/** TCP keepalive so the kernel tears down silently-dead sockets for us. */
+const KEEPALIVE_INITIAL_DELAY_MS = 10_000;
+
+/** Override the liveness windows above (tests, and only tests, need this). */
+export interface PostgresLivenessOptions {
+  idleProbeAfterMs?: number;
+  probeTimeoutMs?: number;
+}
 
 export type QueryChunkHandler = (chunk: {
   rows: unknown[][];
@@ -78,6 +98,17 @@ export class PostgresDriver {
   private pendingNotices: PgNotice[] = [];
   /** Optional fan-out so the worker can stream notices over the event channel. */
   private noticeListener: ((notice: PgNotice) => void) | null = null;
+  /** Why the transport died, once known — reported to every later caller (U27). */
+  private lostReason: string | null = null;
+  /** Timestamp of the last statement the server actually answered (U27). */
+  private lastActivityAt = 0;
+  private readonly idleProbeAfterMs: number;
+  private readonly probeTimeoutMs: number;
+
+  constructor(liveness?: PostgresLivenessOptions) {
+    this.idleProbeAfterMs = liveness?.idleProbeAfterMs ?? IDLE_PROBE_AFTER_MS;
+    this.probeTimeoutMs = liveness?.probeTimeoutMs ?? LIVENESS_PROBE_TIMEOUT_MS;
+  }
 
   /** Subscribe to NOTICE / RAISE NOTICE events from the primary client. */
   setNoticeListener(listener: ((notice: PgNotice) => void) | null): void {
@@ -107,8 +138,92 @@ export class PostgresDriver {
       password: config.password,
       ssl: config.ssl ? { rejectUnauthorized: false } : false,
       connectionTimeoutMillis: 10_000,
+      // U27: without keepalive a VPN drop leaves an idle socket that
+      // looks writable forever. The kernel probes and fails it instead.
+      keepAlive: true,
+      keepAliveInitialDelayMillis: KEEPALIVE_INITIAL_DELAY_MS,
       application_name,
     };
+  }
+
+  /**
+   * Tear the session down because the transport is gone (U27).
+   *
+   * `pg.Client` re-emits socket errors on itself: with no listener the
+   * idle drop becomes an `uncaughtException` that kills the worker, and
+   * with a listener but no teardown the client stays non-null while
+   * every later query fails with "not queryable". Both leave the app
+   * claiming to be connected, which is the bug this closes.
+   */
+  private markConnectionLost(reason: string): void {
+    const clients = [this.primary, this.control, this.aux];
+    // Nothing live to lose — either already lost, or our own disconnect()
+    // dropped the refs and this is the resulting 'end' event.
+    if (clients.every((c) => c === null)) return;
+
+    console.error('[plasma] postgres connection lost:', reason);
+    this.lostReason = reason;
+    this.txnState = 'none';
+    this.primaryBackendPid = null;
+    this.pendingNotices = [];
+    this.primary = null;
+    this.control = null;
+    this.aux = null;
+
+    for (const client of clients) {
+      if (!client) continue;
+      client.removeListener('notice', this.handleNotice);
+      // end() waits for a Terminate round trip the dead peer will never
+      // complete, so release the fd directly and swallow the fallout.
+      client.connection.stream.destroy();
+      client.end().catch(() => {});
+    }
+  }
+
+  private attachLifecycle(client: ClientT, role: string): void {
+    client.on('error', (err: Error) => this.markConnectionLost(`${role}: ${err.message}`));
+    client.on('end', () => this.markConnectionLost(`${role}: connection closed by server`));
+  }
+
+  /**
+   * Resolve the client for a statement, refusing fast when the transport
+   * is known dead and probing it when it has been idle long enough for
+   * the network to have changed underneath us (U27).
+   */
+  private async requireClient(role: 'primary' | 'aux' | 'control'): Promise<ClientT> {
+    if (this.lostReason) throw new ConnectionLostError(this.lostReason);
+    const client = role === 'primary' ? this.primary : role === 'aux' ? this.aux : this.control;
+    if (!client) throw new Error('not connected');
+    if (Date.now() - this.lastActivityAt < this.idleProbeAfterMs) return client;
+    await this.probe(client, role);
+    if (this.lostReason) throw new ConnectionLostError(this.lostReason);
+    return client;
+  }
+
+  /** `SELECT 1` under a hard cap; a half-open socket simply never answers. */
+  private async probe(client: ClientT, role: string): Promise<void> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const answer = client.query('SELECT 1');
+    // The race loser must not surface as an unhandled rejection.
+    answer.catch(() => {});
+    try {
+      await Promise.race([
+        answer,
+        new Promise<never>((_resolve, reject) => {
+          timer = setTimeout(
+            () => reject(new Error(`no answer in ${this.probeTimeoutMs}ms`)),
+            this.probeTimeoutMs,
+          );
+        }),
+      ]);
+      this.lastActivityAt = Date.now();
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      this.markConnectionLost(`${role} liveness probe failed: ${detail}`);
+      throw new ConnectionLostError(`${role} liveness probe failed: ${detail}`);
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   async connect(config: ConnectionConfig, statementTimeoutMs?: number): Promise<string> {
@@ -124,6 +239,7 @@ export class PostgresDriver {
     // U26: capture RAISE NOTICE / server notices for the messages strip
     // and stream them to the worker's broadcast channel.
     primary.on('notice', this.handleNotice);
+    this.attachLifecycle(primary, 'primary');
     this.primary = primary;
 
     // Grab the backend pid so control can cancel it
@@ -133,16 +249,19 @@ export class PostgresDriver {
     // Control connection — cancel capacity only (U19)
     const control = new Client(this.clientOpts(config, 'plasma-control'));
     await control.connect();
+    this.attachLifecycle(control, 'control');
     this.control = control;
 
     // Aux connection — AI / monitor execution budget, separate from cancel
     const aux = new Client(this.clientOpts(config, 'plasma-aux'));
     await aux.connect();
+    this.attachLifecycle(aux, 'aux');
     this.aux = aux;
 
     await this.applyStatementTimeout();
 
     const res = await primary.query<{ version: string }>('SELECT version()');
+    this.lastActivityAt = Date.now();
     return res.rows[0]?.version ?? 'unknown';
   }
 
@@ -150,9 +269,14 @@ export class PostgresDriver {
     this.txnState = 'none';
     this.primaryBackendPid = null;
     this.pendingNotices = [];
+    this.lostReason = null;
+    this.lastActivityAt = 0;
     const p = this.primary;
     const c = this.control;
     const a = this.aux;
+    // Leave the 'error'/'end' listeners attached: end() can still fail
+    // on a dead socket, and an unhandled 'error' kills the worker. They
+    // no-op now that the refs below are cleared.
     if (p) p.removeListener('notice', this.handleNotice);
     this.primary = null;
     this.control = null;
@@ -181,11 +305,11 @@ export class PostgresDriver {
    * Optional `onChunk` emits cursor batches for the event channel (step 2).
    */
   async query(sql: string, params?: unknown[], opts?: QueryOpts): Promise<QueryResult> {
-    if (!this.primary) throw new Error('not connected');
+    const client = await this.requireClient('primary');
 
     this.pendingNotices = [];
     const start = Date.now();
-    const result = await this.runBounded(this.primary, sql, params, opts);
+    const result = await this.runBounded(client, sql, params, opts);
     const durationMs = Date.now() - start;
     const notices = this.pendingNotices;
     this.pendingNotices = [];
@@ -208,9 +332,9 @@ export class PostgresDriver {
    * Aux never participates in the primary's transaction state.
    */
   async sidebandQuery(sql: string, params?: unknown[], opts?: QueryOpts): Promise<QueryResult> {
-    if (!this.aux) throw new Error('not connected');
+    const client = await this.requireClient('aux');
     const start = Date.now();
-    const result = await this.runBounded(this.aux, sql, params, opts);
+    const result = await this.runBounded(client, sql, params, opts);
     return { ...result, durationMs: Date.now() - start };
   }
 
@@ -232,6 +356,9 @@ export class PostgresDriver {
     try {
       while (true) {
         const batch = await readCursorBatch(cursor, RESULT_CURSOR_CHUNK);
+        // Every answered batch proves the transport is alive, which is
+        // what the idle probe in requireClient() keys off (U27).
+        this.lastActivityAt = Date.now();
         if (columns.length === 0 && batch.fields.length > 0) {
           columns = batch.fields.map((f) => ({
             name: f.name,
@@ -308,8 +435,8 @@ export class PostgresDriver {
     sql: string,
     params?: unknown[],
   ): AsyncGenerator<{ columns: QueryResult["columns"]; rows: unknown[][] }, void, void> {
-    if (!this.primary) throw new Error("not connected");
-    const cursor = this.primary.query(new Cursor(sql, params ?? [], { rowMode: "array" }));
+    const client = await this.requireClient('primary');
+    const cursor = client.query(new Cursor(sql, params ?? [], { rowMode: "array" }));
     let columns: QueryResult["columns"] = [];
     try {
       while (true) {
@@ -333,66 +460,70 @@ export class PostgresDriver {
   // ── Explicit transaction control (used by the Txn UI in the renderer) ──
 
   async beginTransaction(): Promise<TxnState> {
-    if (!this.primary) throw new Error('not connected');
-    await this.primary.query('BEGIN');
+    const client = await this.requireClient('primary');
+    await client.query('BEGIN');
     this.txnState = 'active';
+    this.lastActivityAt = Date.now();
     return this.txnState;
   }
 
   async commitTransaction(): Promise<TxnState> {
-    if (!this.primary) throw new Error('not connected');
-    await this.primary.query('COMMIT');
+    const client = await this.requireClient('primary');
+    await client.query('COMMIT');
     this.txnState = 'none';
+    this.lastActivityAt = Date.now();
     return this.txnState;
   }
 
   async rollbackTransaction(): Promise<TxnState> {
-    if (!this.primary) throw new Error('not connected');
-    await this.primary.query('ROLLBACK');
+    const client = await this.requireClient('primary');
+    await client.query('ROLLBACK');
     this.txnState = 'none';
+    this.lastActivityAt = Date.now();
     return this.txnState;
   }
 
   setConnectionGen(gen: number): void { this.connectionGen = gen; }
 
   async commitEditBatch(expectedGen: number, updates: Array<{ sql: string; params?: unknown[] }>): Promise<TxnState> {
-    if (!this.primary) throw new Error("not connected");
+    const client = await this.requireClient('primary');
     if (expectedGen !== this.connectionGen) throw new Error(`connection generation mismatch: edit batch is for generation ${expectedGen}, current is ${this.connectionGen}`);
     const savepoint = this.txnState === "active";
-    if (savepoint) await this.primary.query("SAVEPOINT plasma_edit_batch"); else await this.primary.query("BEGIN");
+    if (savepoint) await client.query("SAVEPOINT plasma_edit_batch"); else await client.query("BEGIN");
     try {
-      for (const update of updates) await this.primary.query({ text: update.sql, values: update.params });
-      if (savepoint) await this.primary.query("RELEASE SAVEPOINT plasma_edit_batch"); else await this.primary.query("COMMIT");
+      for (const update of updates) await client.query({ text: update.sql, values: update.params });
+      if (savepoint) await client.query("RELEASE SAVEPOINT plasma_edit_batch"); else await client.query("COMMIT");
+      this.lastActivityAt = Date.now();
       return this.txnState;
     } catch (err) {
-      try { await this.primary.query(savepoint ? "ROLLBACK TO SAVEPOINT plasma_edit_batch" : "ROLLBACK"); } catch {}
+      try { await client.query(savepoint ? "ROLLBACK TO SAVEPOINT plasma_edit_batch" : "ROLLBACK"); } catch {}
       throw err;
     }
   }
 
   async aiQuery(sql: string, params?: unknown[]): Promise<QueryResult> {
-    if (!this.aux) throw new Error("not connected");
+    const client = await this.requireClient('aux');
     if (!isSingleSqlStatement(sql)) throw new Error("rejected: AI queries must be a single SQL statement");
     const start = Date.now();
     try {
-      await this.aux.query("BEGIN");
-      await this.aux.query("SET TRANSACTION READ ONLY");
-      const result = await this.runBounded(this.aux, sql, params);
-      await this.aux.query("COMMIT");
+      await client.query("BEGIN");
+      await client.query("SET TRANSACTION READ ONLY");
+      const result = await this.runBounded(client, sql, params);
+      await client.query("COMMIT");
       return { ...result, durationMs: Date.now() - start };
     } catch (err) {
-      try { await this.aux.query("ROLLBACK"); } catch {}
+      try { await client.query("ROLLBACK"); } catch {}
       throw err;
     }
   }
 
   async introspect(): Promise<SchemaInfo> {
-    if (!this.primary) throw new Error('not connected');
+    const client = await this.requireClient('primary');
 
     // IMPORTANT: pg.Client serializes queries internally but DOES warn
     // (and in pg@9 will error) if you call .query() while another is
     // in-flight. Run these sequentially, not via Promise.all.
-    const schemas = await this.primary.query<{ schema_name: string }>(
+    const schemas = await client.query<{ schema_name: string }>(
       `SELECT nspname AS schema_name
        FROM pg_namespace
        WHERE nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
@@ -400,7 +531,7 @@ export class PostgresDriver {
          AND nspname NOT LIKE 'pg_toast_temp_%'
        ORDER BY nspname`,
     );
-    const tables = await this.primary.query<{
+    const tables = await client.query<{
       schema: string;
       name: string;
       kind: 'r' | 'v' | 'm' | 'f' | 'p';
@@ -417,7 +548,7 @@ export class PostgresDriver {
          AND n.nspname NOT LIKE 'pg_temp_%'
        ORDER BY n.nspname, c.relname`,
     );
-    const columns = await this.primary.query<{
+    const columns = await client.query<{
       schema: string;
       table: string;
       name: string;
@@ -458,7 +589,7 @@ export class PostgresDriver {
     // pairs each `conkey` index to its matching `confkey` index so a
     // composite FK (two columns) yields two rows sharing a constraint
     // oid. Filters to system schemas are the same as above.
-    const foreignKeys = await this.primary.query<{
+    const foreignKeys = await client.query<{
       schema: string;
       table: string;
       column: string;
@@ -486,6 +617,7 @@ export class PostgresDriver {
          AND n.nspname NOT LIKE 'pg_temp_%'
        ORDER BY n.nspname, c.relname, a.attnum`,
     );
+    this.lastActivityAt = Date.now();
 
     const kindMap = {
       r: 'table',
