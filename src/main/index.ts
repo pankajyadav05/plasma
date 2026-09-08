@@ -1,12 +1,14 @@
 import { randomUUID } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { CONNECTION_LOST, ConnectionLostError } from '@shared/connection-loss';
 import {
   AiChatRequest,
   type AppMeta,
   ConnectionConfig,
   type ConnectionConfig as ConnectionConfigType,
   type ConnectionInfo,
+  type ConnectionRecovered,
   type ConnectionTestResult,
   ExportSaveRequest,
   type ExportSaveResult,
@@ -32,6 +34,11 @@ import {
   setAiToolExecutor,
   startAiChat,
 } from './ai';
+import {
+  ConnectionRecovery,
+  type RecoveredSession,
+  type RetainedSession,
+} from './connection-recovery';
 import { closeDb, getDb } from './db';
 import { clearHistory, latestHistory, listHistory, recordHistory } from './history';
 import { initLogger, logger } from './logger';
@@ -66,6 +73,14 @@ let queryRequestRevision = 0;
 // right tool call (sideband SQL vs Redis command vs OS search). Set
 // by ConnectionConnect / VaultConnectById, cleared on disconnect.
 let activeEngine: 'postgres' | 'redis' | 'opensearch' | null = null;
+
+/**
+ * The session main opened, retained so a transport loss (VPN drop,
+ * sleep, Wi-Fi switch) can be repaired without the user reconnecting by
+ * hand (U27). Holds the password because that is what `connect`
+ * requires; scoped to the live session and dropped on disconnect.
+ */
+let retainedSession: RetainedSession | null = null;
 
 // ─── App lifecycle ────────────────────────────────────────────────────
 
@@ -126,13 +141,16 @@ app.whenReady().then(async () => {
   });
 
   // Worker crash after readiness invalidates the live connection — the
-  // respawned worker has no DB session (U20).
+  // respawned worker has no DB session (U20). Nothing to recover here:
+  // the process that held the session is gone, so drop the retained
+  // session too and let the renderer fall back to the connect screen.
   workerSupervisor.setCrashHandler(() => {
     const id = activeConnectionId;
     activeConnectionId = null;
     activeEngine = null;
+    retainedSession = null;
     if (id) closeTunnel(id);
-    mainWindow?.webContents.send('plasma:worker:reset');
+    mainWindow?.webContents.send(IpcChannel.WorkerResetEvent);
   });
 
   // AI tools dispatch by the active engine. Postgres uses the worker
@@ -303,16 +321,81 @@ async function callWorker<K extends WorkerResponse['kind']>(
   req: DistributiveOmit<WorkerRequest, 'id'>,
   expected: K,
 ): Promise<Extract<WorkerResponse, { kind: K }>> {
-  const id = randomUUID();
-  const res = await workerSupervisor.request({ ...req, id } as WorkerRequest);
-  if (res.kind === 'error') {
-    throw new Error(res.message);
-  }
-  if (res.kind !== expected) {
-    throw new Error(`unexpected worker response: ${res.kind} (expected ${expected})`);
-  }
-  return res as Extract<WorkerResponse, { kind: K }>;
+  // U27: a request that died with the transport is retried once on a
+  // freshly re-established session; see connection-recovery.ts.
+  return connectionRecovery.run(req.kind, async () => {
+    const id = randomUUID();
+    const res = await workerSupervisor.request({ ...req, id } as WorkerRequest);
+    if (res.kind === 'error') {
+      throw res.fatal === CONNECTION_LOST
+        ? new ConnectionLostError(res.message)
+        : new Error(res.message);
+    }
+    if (res.kind !== expected) {
+      throw new Error(`unexpected worker response: ${res.kind} (expected ${expected})`);
+    }
+    return res as Extract<WorkerResponse, { kind: K }>;
+  });
 }
+
+/**
+ * Re-establish the retained session after a transport loss: reopen the
+ * SSH tunnel when the connection uses one (the tunnel died with the
+ * network too), reconnect the worker, and tell the renderer which
+ * generation it is now talking to (U27).
+ */
+const connectionRecovery = new ConnectionRecovery({
+  session: () => retainedSession,
+  reopenTunnel: async (session) => {
+    const settings = SettingsShape.parse(getAllSettings());
+    const ssh = settings.connectionSsh?.[session.id];
+    if (!ssh) throw new Error(`ssh config for ${session.id} is gone — reconnect manually`);
+    // The old tunnel's sockets are dead; drop them before re-forwarding.
+    closeTunnel(session.id);
+    return openTunnel({
+      id: session.id,
+      ssh,
+      pgHost: session.config.host,
+      pgPort: session.config.port,
+    });
+  },
+  connect: async (session, dial) => {
+    const config = {
+      ...session.config,
+      readOnly: session.config.readOnly ?? false,
+      ...(dial ?? {}),
+    };
+    const res = await callWorker(
+      { kind: 'connect', config, statementTimeoutMs: currentQueryTimeoutMs() },
+      'connected',
+    );
+    activeConnectionId = session.id;
+    activeEngine = res.engine;
+    return {
+      serverVersion: res.serverVersion,
+      engine: res.engine,
+      connectionGen: res.connectionGen ?? 0,
+      attempts: 1,
+    };
+  },
+  onRecovered: (recovered: RecoveredSession) => {
+    const payload: ConnectionRecovered = recovered;
+    mainWindow?.webContents.send(IpcChannel.ConnectionRecoveredEvent, payload);
+  },
+  onLost: (reason) => {
+    logger.error('[plasma] connection unrecoverable:', reason);
+    const id = activeConnectionId;
+    activeConnectionId = null;
+    activeEngine = null;
+    retainedSession = null;
+    if (id) closeTunnel(id);
+    mainWindow?.webContents.send(IpcChannel.WorkerResetEvent);
+  },
+  log: (message, err) => {
+    if (err === undefined) logger.info(message);
+    else logger.error(message, err);
+  },
+});
 
 function currentQueryTimeoutMs(): number {
   return SettingsShape.parse(getAllSettings()).queryTimeoutMs;
@@ -369,14 +452,26 @@ function registerIpcHandlers() {
           },
           'connected',
         );
+        activeConnectionId = config.id;
+        activeEngine = res.engine;
+        // U27: keep what it takes to rebuild this session after a
+        // transport loss. Host/port are the pre-tunnel ones so a retry
+        // re-forwards through a fresh tunnel.
+        retainedSession = {
+          id: config.id,
+          config: { ...effective, host: config.host, port: config.port },
+          tunnelled: Boolean(ssh),
+        };
         try {
           vaultSave(config);
-          activeConnectionId = config.id;
-          activeEngine = res.engine;
         } catch (err) {
           logger.error('[plasma] vault save failed (non-fatal):', err);
         }
-        return { serverVersion: res.serverVersion, engine: res.engine };
+        return {
+          serverVersion: res.serverVersion,
+          engine: res.engine,
+          connectionGen: res.connectionGen,
+        };
       } catch (err) {
         if (ssh) closeTunnel(config.id);
         throw err;
@@ -388,6 +483,7 @@ function registerIpcHandlers() {
     const id = activeConnectionId;
     activeConnectionId = null;
     activeEngine = null;
+    retainedSession = null;
     await callWorker({ kind: 'disconnect' }, 'disconnected');
     if (id) closeTunnel(id);
   });
@@ -456,9 +552,19 @@ function registerIpcHandlers() {
         );
         activeConnectionId = config.id;
         activeEngine = res.engine;
+        // U27: see ConnectionConnect — retained for transparent recovery.
+        retainedSession = {
+          id: config.id,
+          config: { ...effective, host: config.host, port: config.port },
+          tunnelled: Boolean(ssh),
+        };
         const { password: _pwd, ...safeConfig } = config;
         return {
-          info: { serverVersion: res.serverVersion, engine: res.engine },
+          info: {
+            serverVersion: res.serverVersion,
+            engine: res.engine,
+            connectionGen: res.connectionGen,
+          },
           config: safeConfig,
         };
       } catch (err) {

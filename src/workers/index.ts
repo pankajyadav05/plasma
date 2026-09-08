@@ -1,4 +1,5 @@
 /// <reference types="electron" />
+import { CONNECTION_LOST, isConnectionLostError } from '@shared/connection-loss';
 import {
   type ConnectionEngine,
   type PgNotice,
@@ -401,10 +402,14 @@ process.parentPort.on('message', async (evt: Electron.MessageEvent) => {
       }
     }
   } catch (err) {
+    // U27: distinguish "the transport is gone" from "the server said no"
+    // so main can reconnect and retry instead of handing the renderer a
+    // permanently dead session.
     send({
       kind: 'error',
       id: req.id,
       message: err instanceof Error ? err.message : String(err),
+      fatal: isConnectionLostError(err) ? CONNECTION_LOST : undefined,
     });
   }
 });

@@ -16,6 +16,7 @@ import type {
   AiMessage,
   ConnectionConfig,
   ConnectionEngine,
+  ConnectionRecovered,
   HistoryEntry,
   HistoryListOpts,
   OsOverview,
@@ -537,6 +538,12 @@ interface SessionState {
   disconnect(): Promise<void>;
   /** Clear local connection state after an unexpected worker restart (U20). */
   handleWorkerReset(): void;
+  /**
+   * Adopt the session main re-established after a network/VPN drop (U27).
+   * The generation changes, so in-flight results and pending edits from
+   * the previous generation stop being committable by design.
+   */
+  handleConnectionRecovered(recovered: ConnectionRecovered): void;
   refreshSchema(): Promise<void>;
   toggleSchema(name: string): void;
 
@@ -942,6 +949,21 @@ export const useSession = create<SessionState>((set, get) => ({
         selectedRows: new Set(),
       })),
     }));
+  },
+
+  handleConnectionRecovered(recovered) {
+    // Main reconnected for us, so the app is genuinely connected again —
+    // but on a brand-new server session: no open transaction, and a new
+    // generation that in-flight results and staged edits are checked
+    // against (U01/U27). Pending edits are deliberately kept so the user
+    // decides whether to discard them; the write gate refuses them.
+    set({
+      connectionState: 'connected',
+      connectionError: null,
+      serverVersion: recovered.serverVersion,
+      connectionGen: recovered.connectionGen,
+      txnState: 'none',
+    });
   },
 
   async refreshSchema() {

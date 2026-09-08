@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { CONNECTION_LOST } from './connection-loss';
 
 /**
  * IPC protocol — the single source of truth for the shape of messages
@@ -82,6 +83,19 @@ export const ConnectionTestResult = z.discriminatedUnion('ok', [
   z.object({ ok: z.literal(false), message: z.string() }),
 ]);
 export type ConnectionTestResult = z.infer<typeof ConnectionTestResult>;
+
+/**
+ * Payload of `IpcChannel.ConnectionRecoveredEvent` — main re-established
+ * the worker's DB session by itself after a transport loss (U27).
+ */
+export const ConnectionRecovered = z.object({
+  serverVersion: z.string(),
+  engine: ConnectionEngine.default('postgres'),
+  connectionGen: z.number().int().nonnegative(),
+  /** Attempts spent before the session came back (>= 1). */
+  attempts: z.number().int().positive(),
+});
+export type ConnectionRecovered = z.infer<typeof ConnectionRecovered>;
 export const ConnectionSshConfig = z.object({ host: z.string().min(1), port: z.number().int().positive().max(65535).default(22), user: z.string().min(1), password: z.string().default(''), privateKey: z.string().default(''), passphrase: z.string().default('') });
 export type ConnectionSshConfig = z.infer<typeof ConnectionSshConfig>;
 
@@ -736,7 +750,17 @@ export const WorkerResponse = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('schemaInfo'), id: z.string(), info: SchemaInfo }),
   z.object({ kind: z.literal('txnState'), id: z.string(), state: TxnState }),
   z.object({ kind: z.literal('editBatchResult'), id: z.string(), state: TxnState, applied: z.number().int().nonnegative() }),
-  z.object({ kind: z.literal('error'), id: z.string(), message: z.string() }),
+  /**
+   * `fatal: 'connection-lost'` means the driver's transport is gone (VPN
+   * drop, sleep, network switch), not that the statement was bad. Main
+   * reconnects once and retries the request (U27).
+   */
+  z.object({
+    kind: z.literal('error'),
+    id: z.string(),
+    message: z.string(),
+    fatal: z.literal(CONNECTION_LOST).optional(),
+  }),
   z.object({ kind: z.literal('redisScan'), id: z.string(), result: RedisScanResult }),
   z.object({ kind: z.literal('redisKey'), id: z.string(), result: RedisKeyValue }),
   z.object({ kind: z.literal('redisOverview'), id: z.string(), info: RedisOverview }),
@@ -1121,6 +1145,18 @@ export const IpcChannel = {
   ConnectionDisconnect: 'plasma:conn:disconnect',
   ConnectionTest: 'plasma:conn:test',
   ConnectionIntrospect: 'plasma:conn:introspect',
+  /**
+   * Push: the worker process died and was respawned, so the DB session
+   * is gone and could not be restored (U20).
+   */
+  WorkerResetEvent: 'plasma:worker:reset',
+  /**
+   * Push: main transparently re-established the DB session after a
+   * transport loss (VPN/sleep/network switch). Payload is
+   * `ConnectionRecovered` — the renderer adopts the new connection
+   * generation so pending-edit and in-flight-result guards stay honest (U27).
+   */
+  ConnectionRecoveredEvent: 'plasma:conn:recovered',
   QueryRun: 'plasma:query:run',
   QueryCancel: 'plasma:query:cancel',
   /**

@@ -279,4 +279,27 @@ describe('U01 connection generation + pending edits', () => {
     expect(tab?.queryRunState).toBe('idle');
     expect(tab?.queryError).toMatch(/connection changed/);
   });
+
+  it('adopts a recovered generation and refuses edits staged before the drop (U27)', async () => {
+    await useSession.getState().updateCell(0, 1, 'new@b.co');
+    useSession.setState({ txnState: 'active' });
+
+    // Main reconnected after a VPN drop: same connection, new session.
+    useSession.getState().handleConnectionRecovered({
+      serverVersion: 'PostgreSQL 16.6',
+      engine: 'postgres',
+      connectionGen: 5,
+      attempts: 1,
+    });
+
+    expect(useSession.getState().connectionGen).toBe(5);
+    expect(useSession.getState().connectionState).toBe('connected');
+    // The server-side transaction did not survive the reconnect.
+    expect(useSession.getState().txnState).toBe('none');
+    // Edits stamped with the old generation must not be written blind.
+    await expect(useSession.getState().commitPendingEdits()).rejects.toThrow(
+      /previous connection/,
+    );
+    expect(commitEditBatch).not.toHaveBeenCalled();
+  });
 });
