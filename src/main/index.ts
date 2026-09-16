@@ -82,6 +82,21 @@ let activeEngine: 'postgres' | 'redis' | 'opensearch' | null = null;
  */
 let retainedSession: RetainedSession | null = null;
 
+/**
+ * Main's mirror of the primary session's transaction state (U44). The
+ * worker reports it on every query result and error; main pushes changes
+ * to the renderer so the status bar reflects BEGIN/COMMIT run from the
+ * editor, and feeds it to connection recovery so a statement that died
+ * mid-transaction is never replayed on a fresh autocommit session.
+ */
+let lastTxnState: TxnState = 'none';
+
+function publishTxnState(next: TxnState | undefined): void {
+  if (next === undefined || next === lastTxnState) return;
+  lastTxnState = next;
+  mainWindow?.webContents.send(IpcChannel.TxnStateEvent, { state: next });
+}
+
 // ─── App lifecycle ────────────────────────────────────────────────────
 
 // Windows: set the AppUserModelID before any windows are created. This
@@ -322,20 +337,28 @@ async function callWorker<K extends WorkerResponse['kind']>(
   expected: K,
 ): Promise<Extract<WorkerResponse, { kind: K }>> {
   // U27: a request that died with the transport is retried once on a
-  // freshly re-established session; see connection-recovery.ts.
-  return connectionRecovery.run(req.kind, async () => {
-    const id = randomUUID();
-    const res = await workerSupervisor.request({ ...req, id } as WorkerRequest);
-    if (res.kind === 'error') {
-      throw res.fatal === CONNECTION_LOST
-        ? new ConnectionLostError(res.message)
-        : new Error(res.message);
-    }
-    if (res.kind !== expected) {
-      throw new Error(`unexpected worker response: ${res.kind} (expected ${expected})`);
-    }
-    return res as Extract<WorkerResponse, { kind: K }>;
-  });
+  // freshly re-established session; see connection-recovery.ts. Never
+  // replayed when it belonged to an open transaction (U44).
+  return connectionRecovery.run(
+    req.kind,
+    async () => {
+      const id = randomUUID();
+      const res = await workerSupervisor.request({ ...req, id } as WorkerRequest);
+      if (res.kind === 'error') {
+        if (res.fatal === CONNECTION_LOST) throw new ConnectionLostError(res.message);
+        // Carry the worker's txnState so handlers can keep the mirror
+        // honest even when the failing statement changed it (e.g. an
+        // error inside BEGIN…COMMIT). Electron strips extra properties
+        // when the rejection crosses IPC, hence the push event.
+        throw Object.assign(new Error(res.message), { txnState: res.txnState });
+      }
+      if (res.kind !== expected) {
+        throw new Error(`unexpected worker response: ${res.kind} (expected ${expected})`);
+      }
+      return res as Extract<WorkerResponse, { kind: K }>;
+    },
+    { inTransaction: lastTxnState !== 'none' },
+  );
 }
 
 /**
@@ -379,11 +402,14 @@ const connectionRecovery = new ConnectionRecovery({
     };
   },
   onRecovered: (recovered: RecoveredSession) => {
+    // Fresh session: any open transaction died with the old one.
+    publishTxnState('none');
     const payload: ConnectionRecovered = recovered;
     mainWindow?.webContents.send(IpcChannel.ConnectionRecoveredEvent, payload);
   },
   onLost: (reason) => {
     logger.error('[plasma] connection unrecoverable:', reason);
+    publishTxnState('none');
     const id = activeConnectionId;
     activeConnectionId = null;
     activeEngine = null;
@@ -462,6 +488,7 @@ function registerIpcHandlers() {
           config: { ...effective, host: config.host, port: config.port },
           tunnelled: Boolean(ssh),
         };
+        publishTxnState('none');
         try {
           vaultSave(config);
         } catch (err) {
@@ -484,6 +511,7 @@ function registerIpcHandlers() {
     activeConnectionId = null;
     activeEngine = null;
     retainedSession = null;
+    publishTxnState('none');
     await callWorker({ kind: 'disconnect' }, 'disconnected');
     if (id) closeTunnel(id);
   });
@@ -558,6 +586,7 @@ function registerIpcHandlers() {
           config: { ...effective, host: config.host, port: config.port },
           tunnelled: Boolean(ssh),
         };
+        publishTxnState('none');
         const { password: _pwd, ...safeConfig } = config;
         return {
           info: {
@@ -606,6 +635,9 @@ function registerIpcHandlers() {
     try {
       const revision = ++queryRequestRevision;
       const res = await callWorker({ kind: 'query', sql, params, revision }, 'queryResult');
+      // U44: mirror editor-driven BEGIN/COMMIT/ROLLBACK into the
+      // renderer's status bar (and into recovery's replay guard).
+      publishTxnState(res.result.txnState);
       if (!internal) {
         try {
           recordHistory({
@@ -623,6 +655,10 @@ function registerIpcHandlers() {
       return res.result;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
+      // A failed statement can still have changed the transaction state
+      // (e.g. an error inside BEGIN…COMMIT aborts it) — adopt what the
+      // worker reported.
+      publishTxnState((err as { txnState?: TxnState } | null)?.txnState);
       if (!internal) {
         try {
           recordHistory({
@@ -757,18 +793,47 @@ function registerIpcHandlers() {
 
   ipcMain.handle(IpcChannel.TxnBegin, async (): Promise<TxnState> => {
     const res = await callWorker({ kind: 'beginTxn' }, 'txnState');
+    publishTxnState(res.state);
     return res.state;
   });
 
   ipcMain.handle(IpcChannel.TxnCommit, async (): Promise<TxnState> => {
     const res = await callWorker({ kind: 'commitTxn' }, 'txnState');
+    publishTxnState(res.state);
     return res.state;
   });
 
   ipcMain.handle(IpcChannel.TxnRollback, async (): Promise<TxnState> => {
     const res = await callWorker({ kind: 'rollbackTxn' }, 'txnState');
+    publishTxnState(res.state);
     return res.state;
   });
+
+  ipcMain.handle(
+    IpcChannel.QueryCommitEditBatch,
+    async (
+      _e,
+      raw: unknown,
+    ): Promise<{ state: TxnState; applied: number }> => {
+      const req = raw as {
+        connectionGen?: unknown;
+        updates?: unknown;
+      };
+      if (typeof req?.connectionGen !== 'number' || !Array.isArray(req?.updates)) {
+        throw new Error('invalid commitEditBatch payload');
+      }
+      const res = await callWorker(
+        {
+          kind: 'commitEditBatch',
+          connectionGen: req.connectionGen,
+          updates: req.updates as Array<{ sql: string; params?: unknown[] }>,
+        },
+        'editBatchResult',
+      );
+      publishTxnState(res.state);
+      return { state: res.state, applied: res.applied };
+    },
+  );
 
   // ── Redis ──
 

@@ -8,7 +8,7 @@ import {
 import pg from 'pg';
 import Cursor from 'pg-cursor';
 import { formatStatementTimeoutSql } from '@shared/worker-policy';
-import { isSingleSqlStatement } from '@shared/sql-statements';
+import { isSingleSqlStatement, splitSqlStatements } from '@shared/sql-statements';
 
 const { Client } = pg;
 type ClientT = InstanceType<typeof Client>;
@@ -121,6 +121,18 @@ export class PostgresDriver {
     this.noticeListener?.(notice);
   };
 
+  /**
+   * Authoritative transaction state: Postgres reports it on every
+   * ReadyForQuery ('I' idle / 'T' in-transaction / 'E' aborted), and
+   * `pg` re-emits that message on `client.connection` synchronously
+   * before any query promise settles. This catches every form of
+   * BEGIN/COMMIT/ROLLBACK (also END, ABORT, START TRANSACTION, leading
+   * comments, and ROLLBACK TO SAVEPOINT) without SQL sniffing.
+   */
+  private handleReadyForQuery = (msg: { status?: string }): void => {
+    this.txnState = msg.status === 'T' ? 'active' : msg.status === 'E' ? 'error' : 'none';
+  };
+
   isConnected(): boolean {
     return this.primary !== null;
   }
@@ -173,6 +185,7 @@ export class PostgresDriver {
     for (const client of clients) {
       if (!client) continue;
       client.removeListener('notice', this.handleNotice);
+      client.connection?.removeListener('readyForQuery', this.handleReadyForQuery);
       // end() waits for a Terminate round trip the dead peer will never
       // complete, so release the fd directly and swallow the fallout.
       client.connection.stream.destroy();
@@ -218,6 +231,15 @@ export class PostgresDriver {
       ]);
       this.lastActivityAt = Date.now();
     } catch (err) {
+      // A rejection carrying a SQLSTATE (e.g. 25P02 when the probe ran
+      // inside an aborted transaction) proves the server answered — the
+      // transport is fine. Only timeouts and socket-level failures (no
+      // error code) mean the connection is actually gone.
+      const code = (err as { code?: unknown } | null)?.code;
+      if (typeof code === 'string' && code.length === 5) {
+        this.lastActivityAt = Date.now();
+        return;
+      }
       const detail = err instanceof Error ? err.message : String(err);
       this.markConnectionLost(`${role} liveness probe failed: ${detail}`);
       throw new ConnectionLostError(`${role} liveness probe failed: ${detail}`);
@@ -239,6 +261,8 @@ export class PostgresDriver {
     // U26: capture RAISE NOTICE / server notices for the messages strip
     // and stream them to the worker's broadcast channel.
     primary.on('notice', this.handleNotice);
+    // Transaction state is read off the wire, not sniffed from SQL (U44).
+    primary.connection.on('readyForQuery', this.handleReadyForQuery);
     this.attachLifecycle(primary, 'primary');
     this.primary = primary;
 
@@ -277,7 +301,10 @@ export class PostgresDriver {
     // Leave the 'error'/'end' listeners attached: end() can still fail
     // on a dead socket, and an unhandled 'error' kills the worker. They
     // no-op now that the refs below are cleared.
-    if (p) p.removeListener('notice', this.handleNotice);
+    if (p) {
+      p.removeListener('notice', this.handleNotice);
+      p.connection?.removeListener('readyForQuery', this.handleReadyForQuery);
+    }
     this.primary = null;
     this.control = null;
     this.aux = null;
@@ -303,26 +330,65 @@ export class PostgresDriver {
    * Run SQL on the primary connection with pg-cursor bounded reads (U15).
    * Stops at MAX_RESULT_ROWS / MAX_RESULT_BYTES and sets `truncated`.
    * Optional `onChunk` emits cursor batches for the event channel (step 2).
+   *
+   * Multi-statement strings (Notebook cells and any other caller that
+   * bypasses the renderer's splitter) are split here and run sequentially
+   * on this same session: pg-cursor speaks the extended protocol, which
+   * rejects multiple commands in one prepared statement (42601). Running
+   * them one by one keeps `BEGIN …; COMMIT;` in a single string atomic.
    */
   async query(sql: string, params?: unknown[], opts?: QueryOpts): Promise<QueryResult> {
     const client = await this.requireClient('primary');
 
     this.pendingNotices = [];
     const start = Date.now();
-    const result = await this.runBounded(client, sql, params, opts);
+
+    const parts = splitSqlStatements(sql);
+    let result: Omit<QueryResult, 'durationMs'>;
+    if (parts.length <= 1) {
+      result = await this.runBounded(client, sql, params, opts);
+    } else {
+      if (params?.length) {
+        throw new Error('parameters are not supported with multiple statements');
+      }
+      result = await this.runMulti(client, parts);
+    }
+
     const durationMs = Date.now() - start;
     const notices = this.pendingNotices;
     this.pendingNotices = [];
 
-    // BEGIN/COMMIT/ROLLBACK statements flow through this path too.
-    const upper = sql.trim().toUpperCase();
-    if (upper.startsWith('BEGIN') || upper.startsWith('START TRANSACTION')) {
-      this.txnState = 'active';
-    } else if (upper.startsWith('COMMIT') || upper.startsWith('ROLLBACK')) {
-      this.txnState = 'none';
-    }
+    return {
+      ...result,
+      durationMs,
+      notices: notices.length > 0 ? notices : undefined,
+      // txnState is maintained by the ReadyForQuery listener, which fires
+      // before runBounded resolves (its cursor close waits for that byte).
+      txnState: this.txnState,
+    };
+  }
 
-    return { ...result, durationMs, notices: notices.length > 0 ? notices : undefined };
+  /**
+   * Execute a split multi-statement string sequentially on one session.
+   * Chunk streaming is suppressed (per-statement chunks would interleave);
+   * the result is the last statement that produced rows, else the last
+   * statement's result. Stops at the first error.
+   */
+  private async runMulti(client: ClientT, parts: string[]): Promise<Omit<QueryResult, 'durationMs'>> {
+    let last: Omit<QueryResult, 'durationMs'> | null = null;
+    let lastWithColumns: Omit<QueryResult, 'durationMs'> | null = null;
+    for (let i = 0; i < parts.length; i++) {
+      try {
+        last = await this.runBounded(client, parts[i], undefined, undefined);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        throw Object.assign(new Error(`${message} (statement ${i + 1} of ${parts.length})`), {
+          cause: err,
+        });
+      }
+      if (last.columns.length > 0) lastWithColumns = last;
+    }
+    return lastWithColumns ?? last ?? { columns: [], rows: [], rowCount: 0 };
   }
 
   /**
@@ -458,11 +524,12 @@ export class PostgresDriver {
   }
 
   // ── Explicit transaction control (used by the Txn UI in the renderer) ──
+  // txnState itself is maintained by the ReadyForQuery listener; these
+  // just issue the statement and report what the wire said.
 
   async beginTransaction(): Promise<TxnState> {
     const client = await this.requireClient('primary');
     await client.query('BEGIN');
-    this.txnState = 'active';
     this.lastActivityAt = Date.now();
     return this.txnState;
   }
@@ -470,7 +537,6 @@ export class PostgresDriver {
   async commitTransaction(): Promise<TxnState> {
     const client = await this.requireClient('primary');
     await client.query('COMMIT');
-    this.txnState = 'none';
     this.lastActivityAt = Date.now();
     return this.txnState;
   }
@@ -478,7 +544,6 @@ export class PostgresDriver {
   async rollbackTransaction(): Promise<TxnState> {
     const client = await this.requireClient('primary');
     await client.query('ROLLBACK');
-    this.txnState = 'none';
     this.lastActivityAt = Date.now();
     return this.txnState;
   }
@@ -488,6 +553,9 @@ export class PostgresDriver {
   async commitEditBatch(expectedGen: number, updates: Array<{ sql: string; params?: unknown[] }>): Promise<TxnState> {
     const client = await this.requireClient('primary');
     if (expectedGen !== this.connectionGen) throw new Error(`connection generation mismatch: edit batch is for generation ${expectedGen}, current is ${this.connectionGen}`);
+    // SAVEPOINT inside an aborted transaction fails with 25P02 anyway —
+    // say so plainly instead of surfacing the server error.
+    if (this.txnState === 'error') throw new Error('transaction is aborted — roll it back before applying edits');
     const savepoint = this.txnState === "active";
     if (savepoint) await client.query("SAVEPOINT plasma_edit_batch"); else await client.query("BEGIN");
     try {
