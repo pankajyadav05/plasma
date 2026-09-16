@@ -1,3 +1,15 @@
 packages:
   - "."
 blockExoticSubdeps: false
+# pnpm 11+ build approval (replaces the package.json "pnpm.onlyBuiltDependencies"
+# list, which pnpm 12 ignores; that field stays for pnpm 9/10 compat)
+allowBuilds:
+  electron: true
+  esbuild: true
+  "@biomejs/biome": true
+  better-sqlite3: true
+  ssh2: true
+  electron-winstaller: true
+  cpu-features: false
+ignoredOptionalDependencies:
+  - cpu-features
