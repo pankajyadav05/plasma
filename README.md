@@ -21,6 +21,16 @@ See [`DESIGN.md`](./DESIGN.md) for the design system (Paper Editor aesthetic).
 - Node.js ≥ 20
 - pnpm ≥ 9 (recommended) or npm
 
+> **pnpm ≥ 10 note:** pnpm 10+ blocks dependency build scripts by default.
+> This repo ships the required approvals in `pnpm-workspace.yaml` (`allowBuilds`
+> for electron, esbuild, @biomejs/biome, better-sqlite3, ssh2, and
+> electron-winstaller; cpu-features is intentionally **not** built).
+> pnpm 12 ignores the legacy `pnpm.onlyBuiltDependencies` field in
+> `package.json` — only `pnpm-workspace.yaml` is authoritative.
+> A plain `pnpm install` should work out of the box; if you see
+> `ERR_PNPM_IGNORED_BUILDS`, make sure you're on the latest checkout
+> so `pnpm-workspace.yaml` is present.
+
 ## Commands
 
 ```bash
