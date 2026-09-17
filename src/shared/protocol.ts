@@ -409,6 +409,12 @@ export const PgNotice = z.object({
 });
 export type PgNotice = z.infer<typeof PgNotice>;
 
+// ─── Transaction state ───────────────────────────────────────────────
+// Declared before QueryResult: results and error responses carry it.
+
+export const TxnState = z.enum(['none', 'active', 'error']);
+export type TxnState = z.infer<typeof TxnState>;
+
 export const QueryResult = z.object({
   columns: z.array(ColumnMeta),
   rows: z.array(z.array(z.unknown())),
@@ -421,6 +427,12 @@ export const QueryResult = z.object({
    */
   truncated: z.boolean().optional(),
   notices: z.array(PgNotice).optional(),
+  /**
+   * Primary-session transaction state after this statement ran, read from
+   * the wire (ReadyForQuery status byte). Lets main/renderer mirror
+   * BEGIN/COMMIT issued straight from the editor.
+   */
+  txnState: TxnState.optional(),
 });
 export type QueryResult = z.infer<typeof QueryResult>;
 
@@ -551,11 +563,6 @@ export const HistoryListOpts = z.object({
   duration: HistoryDurationFacet.optional(),
 });
 export type HistoryListOpts = z.infer<typeof HistoryListOpts>;
-
-// ─── Transaction state ───────────────────────────────────────────────
-
-export const TxnState = z.enum(['none', 'active', 'error']);
-export type TxnState = z.infer<typeof TxnState>;
 
 // ─── Worker messages (main ↔ utilityProcess) ────────────────────────
 
@@ -760,6 +767,12 @@ export const WorkerResponse = z.discriminatedUnion('kind', [
     id: z.string(),
     message: z.string(),
     fatal: z.literal(CONNECTION_LOST).optional(),
+    /**
+     * Primary-session transaction state at the moment of failure, so main
+     * can keep its mirror honest even when the statement that changed it
+     * (e.g. an error inside BEGIN…COMMIT) rejected.
+     */
+    txnState: TxnState.optional(),
   }),
   z.object({ kind: z.literal('redisScan'), id: z.string(), result: RedisScanResult }),
   z.object({ kind: z.literal('redisKey'), id: z.string(), result: RedisKeyValue }),
@@ -1157,6 +1170,12 @@ export const IpcChannel = {
    * generation so pending-edit and in-flight-result guards stay honest (U27).
    */
   ConnectionRecoveredEvent: 'plasma:conn:recovered',
+  /**
+   * Push: primary-session transaction state changed (BEGIN/COMMIT/
+   * ROLLBACK run from the editor, or a reset after a transport loss).
+   * Payload is `{ state: TxnState }`.
+   */
+  TxnStateEvent: 'plasma:txn:state',
   QueryRun: 'plasma:query:run',
   QueryCancel: 'plasma:query:cancel',
   /**

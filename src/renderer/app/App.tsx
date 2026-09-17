@@ -1,8 +1,9 @@
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { AppShell } from '@/features/app-shell/AppShell';
 import { useSession } from '@/stores/session';
-import { ConnectionRecovered } from '@shared/protocol';
+import { ConnectionRecovered, TxnState } from '@shared/protocol';
 import { useEffect } from 'react';
+import { z } from 'zod';
 
 export function App() {
   useEffect(() => {
@@ -64,6 +65,12 @@ export function App() {
       window.plasmaEvents.on('plasma:conn:recovered', (...args: unknown[]) => {
         const parsed = ConnectionRecovered.safeParse(args[0]);
         if (parsed.success) session().handleConnectionRecovered(parsed.data);
+      }),
+      // U44: primary-session transaction state changed (BEGIN/COMMIT/
+      // ROLLBACK run from the editor, or reset after a transport loss).
+      window.plasmaEvents.on('plasma:txn:state', (...args: unknown[]) => {
+        const parsed = z.object({ state: TxnState }).safeParse(args[0]);
+        if (parsed.success) session().handleTxnState(parsed.data.state);
       }),
     ];
     return () => {

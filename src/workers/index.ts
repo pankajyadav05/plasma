@@ -410,6 +410,9 @@ process.parentPort.on('message', async (evt: Electron.MessageEvent) => {
       id: req.id,
       message: err instanceof Error ? err.message : String(err),
       fatal: isConnectionLostError(err) ? CONNECTION_LOST : undefined,
+      // Main mirrors the primary session's transaction state; a failed
+      // statement can still have changed it (error inside BEGIN…COMMIT).
+      txnState: activeEngine === 'postgres' ? pg.getTxnState() : undefined,
     });
   }
 });
