@@ -1,12 +1,17 @@
 import { type AddressInfo, type Server, type Socket, createServer } from 'node:net';
 
 /**
- * Minimal Postgres wire-protocol server for connection-lifecycle tests.
+ * Minimal Postgres wire-protocol server for connection-lifecycle and
+ * transaction-state tests.
  *
- * Speaks just enough of the v3 protocol for `pg.Client` to connect and
- * run simple queries (`SELECT 1`, `SELECT version()`, `SELECT
- * pg_backend_pid()`), which is what the U27 liveness paths exercise.
- * Extended-protocol (cursor) traffic is intentionally out of scope.
+ * Speaks just enough of the v3 protocol for `pg.Client` to connect, run
+ * simple queries (`SELECT 1`, `SELECT version()`, `SELECT
+ * pg_backend_pid()`), and run extended-protocol (cursor) queries.
+ *
+ * Transaction state is tracked per socket so ReadyForQuery reports the
+ * real status byte ('I' idle / 'T' in-transaction / 'E' aborted), which
+ * is what the driver's txnState mirror keys off. `failNext()` injects a
+ * server error on the next statement.
  *
  * The point is the failure modes a VPN drop produces, which no real
  * server can be asked for on demand:
@@ -19,8 +24,13 @@ export class FakePostgres {
   private readonly server: Server;
   private readonly sockets = new Set<Socket>();
   private readonly stalled = new Set<Socket>();
-  /** Simple-query strings the server answered, in order. */
+  /** Simple-query strings + extended-protocol Parse texts, in order. */
   readonly queries: string[] = [];
+  /** ReadyForQuery status bytes sent per answered statement, in order. */
+  readonly statuses: string[] = [];
+  /** Per-socket transaction status (keyed by socket for assertions). */
+  private readonly txnBySocket = new Map<Socket, 'I' | 'T' | 'E'>();
+  private pendingFailure: { code: string; message: string; match?: RegExp } | null = null;
 
   private constructor(server: Server) {
     this.server = server;
@@ -38,6 +48,30 @@ export class FakePostgres {
   get port(): number {
     const address = this.server.address() as AddressInfo;
     return address.port;
+  }
+
+  /**
+   * Make the next statement (simple Query or extended Execute) on any
+   * socket fail with the given SQLSTATE and message. Inside an active
+   * transaction this also moves that socket to the aborted state.
+   */
+  failNext(code: string, message: string): void {
+    this.pendingFailure = { code, message };
+  }
+
+  /**
+   * Like `failNext`, but the failure lands on the next statement whose
+   * text matches `match` — later statements in a multi-statement run can
+   * be targeted while the earlier ones succeed.
+   */
+  failOn(match: RegExp, code: string, message: string): void {
+    this.pendingFailure = { code, message, match };
+  }
+
+  /** Transaction status of the most recently seen socket ('I'/'T'/'E'). */
+  get txnStatus(): string {
+    const states = [...this.txnBySocket.values()];
+    return states[states.length - 1] ?? 'I';
   }
 
   /**
@@ -66,12 +100,87 @@ export class FakePostgres {
 
   private handle(socket: Socket): void {
     this.sockets.add(socket);
-    socket.on('close', () => this.sockets.delete(socket));
-    socket.on('error', () => this.sockets.delete(socket));
+    socket.on('close', () => {
+      this.sockets.delete(socket);
+      this.txnBySocket.delete(socket);
+    });
+    socket.on('error', () => {
+      this.sockets.delete(socket);
+      this.txnBySocket.delete(socket);
+    });
 
     let buffer = Buffer.alloc(0);
     let started = false;
     let prepared = '';
+    let txn: 'I' | 'T' | 'E' = 'I';
+    // After an ErrorResponse in the extended protocol the backend ignores
+    // Parse/Bind/Describe/Execute/Close until the client sends Sync.
+    let discardUntilSync = false;
+
+    const ready = (): Buffer => {
+      this.txnBySocket.set(socket, txn);
+      this.statuses.push(txn);
+      return readyForQuery(txn);
+    };
+
+    /**
+     * Apply the transaction transitions for one statement and answer it.
+     * Returns the messages to send, or null when the caller should stay
+     * silent (stalled socket / discard-until-Sync).
+     */
+    const answer = (sql: string, extended: boolean): Buffer[] | null => {
+      const keyword = txnKeyword(sql);
+
+      // Injected failure — one statement, then back to normal service.
+      if (
+        this.pendingFailure &&
+        (!this.pendingFailure.match || this.pendingFailure.match.test(sql))
+      ) {
+        const { code, message } = this.pendingFailure;
+        this.pendingFailure = null;
+        if (txn === 'T') txn = 'E';
+        this.txnBySocket.set(socket, txn);
+        if (extended) discardUntilSync = true;
+        return extended
+          ? [errorResponse('ERROR', code, message)]
+          : [errorResponse('ERROR', code, message), ready()];
+      }
+
+      // Aborted transaction: everything but COMMIT/ROLLBACK/END/ABORT is
+      // rejected with 25P02 (this includes the driver's SELECT 1 probe).
+      if (txn === 'E' && keyword !== 'commit' && keyword !== 'rollback') {
+        if (extended) discardUntilSync = true;
+        return extended
+          ? [
+              errorResponse(
+                'ERROR',
+                '25P02',
+                'current transaction is aborted, commands ignored until end of transaction block',
+              ),
+            ]
+          : [
+              errorResponse(
+                'ERROR',
+                '25P02',
+                'current transaction is aborted, commands ignored until end of transaction block',
+              ),
+              ready(),
+            ];
+      }
+
+      if (keyword === 'begin') txn = 'T';
+      const tag = isRowless(sql) ? rowlessTag(sql, txn) : null;
+      if (keyword === 'commit' || keyword === 'rollback') txn = 'I';
+      this.txnBySocket.set(socket, txn);
+
+      if (tag) {
+        return extended ? [commandComplete(tag)] : [commandComplete(tag), ready()];
+      }
+      const { column, value } = resultShape(sql);
+      return extended
+        ? [dataRow(value), commandComplete('SELECT 1')]
+        : [rowDescription(column), dataRow(value), commandComplete('SELECT 1'), ready()];
+    };
 
     socket.on('data', (chunk) => {
       buffer = Buffer.concat([buffer, chunk]);
@@ -89,7 +198,7 @@ export class FakePostgres {
             authenticationOk(),
             parameterStatus('server_version', '16.6 (fake)'),
             backendKeyData(4242, 1),
-            readyForQuery(),
+            readyForQuery('I'),
           ]),
         );
       }
@@ -112,8 +221,10 @@ export class FakePostgres {
         if (type === 'Q') {
           const sql = body.subarray(0, body.length - 1).toString('utf8');
           this.queries.push(sql);
+          discardUntilSync = false;
           if (stalledSocket) continue;
-          socket.write(Buffer.concat(answerSimpleQuery(sql)));
+          const messages = answer(sql, false);
+          if (messages) socket.write(Buffer.concat(messages));
           continue;
         }
 
@@ -124,31 +235,72 @@ export class FakePostgres {
           const textEnd = body.indexOf(0, nameEnd + 1);
           prepared = body.subarray(nameEnd + 1, textEnd).toString('utf8');
           this.queries.push(prepared);
-          if (!stalledSocket) socket.write(message('1', Buffer.alloc(0)));
+          if (!stalledSocket && !discardUntilSync) socket.write(message('1', Buffer.alloc(0)));
           continue;
         }
         if (type === 'B') {
-          if (!stalledSocket) socket.write(message('2', Buffer.alloc(0)));
+          if (!stalledSocket && !discardUntilSync) socket.write(message('2', Buffer.alloc(0)));
           continue;
         }
         if (type === 'D') {
-          if (!stalledSocket) socket.write(describeAnswer(prepared));
+          if (!stalledSocket && !discardUntilSync) socket.write(describeAnswer(prepared));
           continue;
         }
         if (type === 'E') {
-          if (!stalledSocket) socket.write(Buffer.concat(executeAnswer(prepared)));
+          if (stalledSocket || discardUntilSync) continue;
+          const messages = answer(prepared, true);
+          if (messages) socket.write(Buffer.concat(messages));
           continue;
         }
         if (type === 'C') {
-          if (!stalledSocket) socket.write(message('3', Buffer.alloc(0)));
+          if (!stalledSocket && !discardUntilSync) socket.write(message('3', Buffer.alloc(0)));
           continue;
         }
         if (type === 'S') {
-          if (!stalledSocket) socket.write(readyForQuery());
+          discardUntilSync = false;
+          if (!stalledSocket) socket.write(ready());
         }
       }
     });
   }
+}
+
+/** First SQL keyword, skipping leading line/block comments. */
+function firstWord(sql: string): string {
+  let s = sql.trimStart();
+  for (;;) {
+    if (s.startsWith('--')) {
+      const nl = s.indexOf('\n');
+      if (nl === -1) return '';
+      s = s.slice(nl + 1).trimStart();
+      continue;
+    }
+    if (s.startsWith('/*')) {
+      const end = s.indexOf('*/');
+      if (end === -1) return '';
+      s = s.slice(end + 2).trimStart();
+      continue;
+    }
+    break;
+  }
+  return (s.match(/^[a-z]+/i)?.[0] ?? '').toLowerCase();
+}
+
+/**
+ * Transaction-keyword classification shared by both protocols.
+ * `commit` covers END, `rollback` covers ABORT, `begin` covers
+ * START TRANSACTION. ROLLBACK TO SAVEPOINT intentionally stays null —
+ * the transaction stays open.
+ */
+function txnKeyword(sql: string): 'begin' | 'commit' | 'rollback' | null {
+  const word = firstWord(sql);
+  if (word === 'begin' || word === 'start') return 'begin';
+  if (word === 'commit' || word === 'end') return 'commit';
+  if (word === 'rollback' || word === 'abort') {
+    // ROLLBACK TO SAVEPOINT keeps the transaction open.
+    return /^rollback\s+to\b/i.test(sql.trim()) ? null : 'rollback';
+  }
+  return null;
 }
 
 function message(type: string, payload: Buffer): Buffer {
@@ -179,8 +331,24 @@ function backendKeyData(pid: number, secret: number): Buffer {
   return message('K', payload);
 }
 
-function readyForQuery(): Buffer {
-  return message('Z', Buffer.from('I', 'latin1'));
+function readyForQuery(status: 'I' | 'T' | 'E'): Buffer {
+  return message('Z', Buffer.from(status, 'latin1'));
+}
+
+/** Postgres ErrorResponse with severity / SQLSTATE / message fields. */
+function errorResponse(severity: string, code: string, text: string): Buffer {
+  return message(
+    'E',
+    Buffer.concat([
+      Buffer.from('S', 'latin1'),
+      cstring(severity),
+      Buffer.from('C', 'latin1'),
+      cstring(code),
+      Buffer.from('M', 'latin1'),
+      cstring(text),
+      Buffer.from([0]),
+    ]),
+  );
 }
 
 /** One text column named `col` holding `value`. */
@@ -217,30 +385,57 @@ function resultShape(sql: string): { column: string; value: string } {
   return { column: 'col', value: '1' };
 }
 
-function answerSimpleQuery(sql: string): Buffer[] {
-  const lower = sql.toLowerCase();
-  // SET / BEGIN / COMMIT style statements produce no rows.
-  if (lower.startsWith('set ') || lower.startsWith('begin') || lower.startsWith('commit')) {
-    return [commandComplete(sql.trim().split(/\s+/)[0].toUpperCase()), readyForQuery()];
+/** Statements that produce no rows (NoData on Describe, bare CommandComplete on Execute). */
+function isRowless(sql: string): boolean {
+  const lower = sql.trim().toLowerCase();
+  if (lower.startsWith('set ')) return true;
+  const word = firstWord(sql);
+  return [
+    'begin',
+    'start',
+    'commit',
+    'end',
+    'rollback',
+    'abort',
+    'savepoint',
+    'release',
+    'insert',
+    'update',
+    'delete',
+  ].includes(word);
+}
+
+/** Command tag for a row-less statement, given the socket's pre-statement txn. */
+function rowlessTag(sql: string, txn: 'I' | 'T' | 'E'): string {
+  const lower = sql.trim().toLowerCase();
+  if (lower.startsWith('set ')) return 'SET';
+  const word = firstWord(sql);
+  switch (word) {
+    case 'begin':
+    case 'start':
+      return 'BEGIN';
+    case 'commit':
+    case 'end':
+      return txn === 'E' ? 'ROLLBACK' : 'COMMIT';
+    case 'rollback':
+      return 'ROLLBACK';
+    case 'abort':
+      return 'ROLLBACK';
+    case 'savepoint':
+      return 'SAVEPOINT';
+    case 'release':
+      return 'RELEASE';
+    case 'insert':
+      return 'INSERT 0 1';
+    default:
+      return `${word.toUpperCase()} 1`;
   }
-  const { column, value } = resultShape(sql);
-  return [rowDescription(column), dataRow(value), commandComplete('SELECT 1'), readyForQuery()];
 }
 
 /** Answer to a portal Describe: one column, or NoData for row-less SQL. */
 function describeAnswer(sql: string): Buffer {
-  const lower = sql.trim().toLowerCase();
-  if (lower.startsWith('set ') || lower.startsWith('begin') || lower.startsWith('commit')) {
+  if (isRowless(sql)) {
     return message('n', Buffer.alloc(0));
   }
   return rowDescription(resultShape(sql).column);
-}
-
-/** Answer to Execute: the single row this fake serves, then completion. */
-function executeAnswer(sql: string): Buffer[] {
-  const lower = sql.trim().toLowerCase();
-  if (lower.startsWith('set ') || lower.startsWith('begin') || lower.startsWith('commit')) {
-    return [commandComplete(lower.split(/\s+/)[0].toUpperCase())];
-  }
-  return [dataRow(resultShape(sql).value), commandComplete('SELECT 1')];
 }

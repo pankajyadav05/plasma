@@ -132,6 +132,25 @@ export function StatusBar() {
         </>
       )}
 
+      {activeConfig && txnState === 'error' && (
+        <>
+          <Sep />
+          <Seg>
+            <span className="font-semibold text-destructive" data-testid="status-txn-error">
+              txn aborted
+            </span>
+            <Button
+              variant="ghost"
+              size="xs"
+              onClick={() => void rollbackTxn()}
+              className="ml-1.5 h-5"
+            >
+              rollback
+            </Button>
+          </Seg>
+        </>
+      )}
+
       <div className="flex-1" />
       <UpdateBadge />
       {serverVersion && (

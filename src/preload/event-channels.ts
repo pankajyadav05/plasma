@@ -28,6 +28,7 @@ export const eventChannels = [
   'plasma:pg:notice',
   'plasma:worker:reset',
   'plasma:conn:recovered',
+  'plasma:txn:state',
 ] as const;
 
 export type EventChannel = (typeof eventChannels)[number];

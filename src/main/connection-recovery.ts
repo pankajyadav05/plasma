@@ -1,4 +1,4 @@
-import { isConnectionLostError } from '@shared/connection-loss';
+import { ConnectionLostError, isConnectionLostError } from '@shared/connection-loss';
 import type { ConnectionConfig, ConnectionEngine, WorkerRequest } from '@shared/protocol';
 
 /**
@@ -148,10 +148,23 @@ export class ConnectionRecovery {
   /**
    * Run a worker call, recovering once if it fails because the transport
    * died. Non-transport failures and second failures propagate untouched.
+   *
+   * `opts.inTransaction` (primary-session work only: `query` /
+   * `introspect`) downgrades the policy to `reconnect-only`: the open
+   * transaction died with the old session, so replaying the statement on
+   * a fresh autocommit session would silently commit it. The session is
+   * still rebuilt so the next statement works, but this one rejects.
    */
-  async run<T>(kind: WorkerRequest['kind'], call: () => Promise<T>): Promise<T> {
+  async run<T>(
+    kind: WorkerRequest['kind'],
+    call: () => Promise<T>,
+    opts?: { inTransaction?: boolean },
+  ): Promise<T> {
     const policy = recoveryPolicy(kind);
     if (policy === 'none') return call();
+
+    const inTransaction =
+      opts?.inTransaction === true && (kind === 'query' || kind === 'introspect');
 
     try {
       return await call();
@@ -160,6 +173,12 @@ export class ConnectionRecovery {
       this.deps.log(`[plasma] ${kind} hit a dead connection — reconnecting`, err);
       const recovered = await this.recover();
       if (!recovered || policy === 'reconnect-only') throw err;
+      if (inTransaction) {
+        const reason = err instanceof Error ? err.message : String(err);
+        throw new ConnectionLostError(
+          `${reason} — open transaction was lost with the connection; nothing was committed`,
+        );
+      }
       return call();
     }
   }

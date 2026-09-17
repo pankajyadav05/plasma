@@ -59,8 +59,8 @@ const ESTIMATED_COUNT_THRESHOLD = 1_000_000;
  *     tabs doesn't lose scroll/selection context.
  *   - Settings mirrored into the store from the main-process SQLite store
  *     on boot, and persisted via `updateSettings`.
- *   - Action ownership for runQuery / confirmProdGate / commitPendingEdits
- *     lives in sibling modules (U39): session-run-query, session-prod-gate,
+ *   - Action ownership for confirmProdGate / commitPendingEdits
+ *     lives in sibling modules (U39): session-prod-gate,
  *     session-pending-edits. This file composes them into the store.
  */
 
@@ -544,6 +544,12 @@ interface SessionState {
    * the previous generation stop being committable by design.
    */
   handleConnectionRecovered(recovered: ConnectionRecovered): void;
+  /**
+   * Adopt the primary session's transaction state pushed by main (U44) —
+   * BEGIN/COMMIT/ROLLBACK run from the editor otherwise never reach the
+   * status bar.
+   */
+  handleTxnState(state: TxnState): void;
   refreshSchema(): Promise<void>;
   toggleSchema(name: string): void;
 
@@ -964,6 +970,10 @@ export const useSession = create<SessionState>((set, get) => ({
       connectionGen: recovered.connectionGen,
       txnState: 'none',
     });
+  },
+
+  handleTxnState(state) {
+    set({ txnState: state });
   },
 
   async refreshSchema() {

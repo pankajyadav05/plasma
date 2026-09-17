@@ -195,4 +195,46 @@ describe('ConnectionRecovery.run', () => {
     await recovery.run('query', second);
     expect(deps.connect).toHaveBeenCalledTimes(2);
   });
+
+  it('never replays a statement that died inside an open transaction', async () => {
+    const { deps, recovery } = harness();
+    const call = vi.fn(async () => {
+      throw new ConnectionLostError('primary reset');
+    });
+
+    // The transaction died with the old session — replaying the failing
+    // statement on a fresh autocommit session would silently commit it.
+    await expect(recovery.run('query', call, { inTransaction: true })).rejects.toThrow(
+      /open transaction was lost with the connection; nothing was committed/,
+    );
+    expect(call).toHaveBeenCalledTimes(1);
+    // …but the session is still rebuilt so the next statement works.
+    expect(deps.connect).toHaveBeenCalledTimes(1);
+  });
+
+  it('applies the in-transaction guard to introspect, which also runs on primary', async () => {
+    const { deps, recovery } = harness();
+    const call = vi
+      .fn<() => Promise<string>>()
+      .mockRejectedValueOnce(new ConnectionLostError('primary reset'))
+      .mockResolvedValueOnce('schema');
+
+    await expect(recovery.run('introspect', call, { inTransaction: true })).rejects.toThrow(
+      /open transaction was lost/,
+    );
+    expect(call).toHaveBeenCalledTimes(1);
+    expect(deps.connect).toHaveBeenCalledTimes(1);
+  });
+
+  it('still retries a query that died outside any transaction', async () => {
+    const { deps, recovery } = harness();
+    const call = vi
+      .fn<() => Promise<string>>()
+      .mockRejectedValueOnce(new ConnectionLostError('primary reset'))
+      .mockResolvedValueOnce('rows');
+
+    await expect(recovery.run('query', call, { inTransaction: false })).resolves.toBe('rows');
+    expect(call).toHaveBeenCalledTimes(2);
+    expect(deps.connect).toHaveBeenCalledTimes(1);
+  });
 });
