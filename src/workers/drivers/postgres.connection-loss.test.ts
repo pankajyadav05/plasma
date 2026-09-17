@@ -105,4 +105,44 @@ describe('postgres driver transport loss', () => {
     expect(result.rows).toEqual([['1']]);
     await driver.disconnect();
   });
+
+  it('settles an in-flight cursor read when disconnect lands mid-statement', async () => {
+    // Default liveness: no probe, so the query goes straight to a
+    // pg-cursor read on a socket that never answers — before the teardown
+    // race this hung forever once disconnect() ended the client.
+    const driver = new PostgresDriver();
+    await driver.connect(config(server.port), 0);
+    server.stallSockets();
+
+    const pending = driver.query('SELECT pg_sleep(30)');
+    const settled = pending.then(
+      () => 'resolved',
+      (e: unknown) => (e instanceof Error ? e.message : String(e)),
+    );
+    // Let the cursor read reach the wire before tearing down.
+    await new Promise((r) => setTimeout(r, 100));
+    await driver.disconnect();
+
+    await expect(settled).resolves.toBe('connection closed');
+    expect(driver.isConnected()).toBe(false);
+  });
+
+  it('settles an in-flight cursor read as connection-lost when the transport dies', async () => {
+    const driver = new PostgresDriver();
+    await driver.connect(config(server.port), 0);
+    server.stallSockets();
+
+    const pending = driver.query('SELECT pg_sleep(30)');
+    const settled = pending.then(
+      () => null,
+      (e: unknown) => e,
+    );
+    await new Promise((r) => setTimeout(r, 100));
+    server.killSockets();
+
+    const err = await settled;
+    expect(isConnectionLostError(err)).toBe(true);
+    expect(driver.isConnected()).toBe(false);
+    await driver.disconnect();
+  });
 });

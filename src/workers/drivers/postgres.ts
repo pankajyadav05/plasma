@@ -100,6 +100,13 @@ export class PostgresDriver {
   private noticeListener: ((notice: PgNotice) => void) | null = null;
   /** Why the transport died, once known — reported to every later caller (U27). */
   private lostReason: string | null = null;
+  /**
+   * Rejected when the session is torn down (user disconnect or transport
+   * loss) so in-flight cursor operations settle instead of hanging:
+   * pg-cursor's pending `read` callback only fires on protocol messages,
+   * which an ending/destroyed socket never delivers.
+   */
+  private teardown: { promise: Promise<never>; reject: (err: Error) => void } | null = null;
   /** Timestamp of the last statement the server actually answered (U27). */
   private lastActivityAt = 0;
   private readonly idleProbeAfterMs: number;
@@ -167,6 +174,23 @@ export class PostgresDriver {
    * every later query fails with "not queryable". Both leave the app
    * claiming to be connected, which is the bug this closes.
    */
+  private static newTeardown(): { promise: Promise<never>; reject: (err: Error) => void } {
+    let reject!: (err: Error) => void;
+    const promise = new Promise<never>((_resolve, rej) => {
+      reject = rej;
+    });
+    // The signal rejects even when nothing is in flight — keep it handled.
+    promise.catch(() => {});
+    return { promise, reject };
+  }
+
+  /** Race an operation against session teardown so it cannot hang. */
+  private async raceTeardown<T>(op: Promise<T>): Promise<T> {
+    const teardown = this.teardown;
+    if (!teardown) return op;
+    return Promise.race([op, teardown.promise]);
+  }
+
   private markConnectionLost(reason: string): void {
     const clients = [this.primary, this.control, this.aux];
     // Nothing live to lose — either already lost, or our own disconnect()
@@ -181,6 +205,11 @@ export class PostgresDriver {
     this.primary = null;
     this.control = null;
     this.aux = null;
+    // Settle in-flight cursor operations so a dead transport can't wedge
+    // the worker; the rejection lets recovery replay on a fresh session.
+    // Keep the rejected deferred around: cleanup paths (cursor close) race
+    // against it too, and connect() installs a fresh one.
+    this.teardown?.reject(new ConnectionLostError(reason));
 
     for (const client of clients) {
       if (!client) continue;
@@ -251,6 +280,7 @@ export class PostgresDriver {
   async connect(config: ConnectionConfig, statementTimeoutMs?: number): Promise<string> {
     // Hang up any previous clients first
     await this.disconnect();
+    this.teardown = PostgresDriver.newTeardown();
 
     if (statementTimeoutMs !== undefined) {
       this.statementTimeoutMs = Math.max(0, Math.floor(statementTimeoutMs));
@@ -308,6 +338,15 @@ export class PostgresDriver {
     this.primary = null;
     this.control = null;
     this.aux = null;
+    // Settle in-flight cursor operations (a plain Error, not
+    // ConnectionLostError — a user-initiated disconnect must not trigger
+    // recovery/replay), then destroy the sockets so pg's end() doesn't
+    // drain the queue while a pg-cursor read (e.g. a statement sleeping
+    // in pg_sleep) waits on protocol bytes that will never come.
+    this.teardown?.reject(new Error('connection closed'));
+    for (const client of [p, c, a]) {
+      client?.connection?.stream.destroy();
+    }
     await Promise.allSettled([p?.end(), c?.end(), a?.end()]);
   }
 
@@ -421,7 +460,7 @@ export class PostgresDriver {
 
     try {
       while (true) {
-        const batch = await readCursorBatch(cursor, RESULT_CURSOR_CHUNK);
+        const batch = await this.raceTeardown(readCursorBatch(cursor, RESULT_CURSOR_CHUNK));
         // Every answered batch proves the transport is alive, which is
         // what the idle probe in requireClient() keys off (U27).
         this.lastActivityAt = Date.now();
@@ -455,7 +494,9 @@ export class PostgresDriver {
         }
       }
     } finally {
-      await closeCursor(cursor);
+      // If the session was torn down the close handshake will never
+      // arrive — don't wait for it.
+      await this.raceTeardown(closeCursor(cursor)).catch(() => {});
     }
 
     if (opts?.onChunk) {
@@ -506,7 +547,7 @@ export class PostgresDriver {
     let columns: QueryResult["columns"] = [];
     try {
       while (true) {
-        const batch = await readCursorBatch(cursor, RESULT_CURSOR_CHUNK);
+        const batch = await this.raceTeardown(readCursorBatch(cursor, RESULT_CURSOR_CHUNK));
         if (columns.length === 0 && batch.fields.length > 0) {
           columns = batch.fields.map((f) => ({
             name: f.name,
@@ -519,7 +560,7 @@ export class PostgresDriver {
         if (batch.rows.length < RESULT_CURSOR_CHUNK) break;
       }
     } finally {
-      await closeCursor(cursor);
+      await this.raceTeardown(closeCursor(cursor)).catch(() => {});
     }
   }
 
