@@ -24,7 +24,11 @@ export type KeyId =
   | 'askAi'
   | 'codegen'
   | 'notebook'
-  | 'schemaDiff';
+  | 'schemaDiff'
+  | 'nextTab'
+  | 'prevTab'
+  | 'selectTab'
+  | 'toggleRightSidebar';
 
 export interface Chord {
   /** Letter, digit, or special: Enter | Escape | . | / */
@@ -150,6 +154,35 @@ export const KEYMAP: readonly KeyBinding[] = [
     menuChannel: 'plasma:menu:toggleEditor',
   },
   {
+    id: 'toggleRightSidebar',
+    chord: { key: 'b', mod: true, shift: true },
+    label: 'Toggle right sidebar (Details)',
+    category: 'View',
+    scope: 'global',
+  },
+  {
+    id: 'nextTab',
+    chord: { key: ']', mod: true, shift: true },
+    label: 'Next tab',
+    category: 'View',
+    scope: 'global',
+  },
+  {
+    id: 'prevTab',
+    chord: { key: '[', mod: true, shift: true },
+    label: 'Previous tab',
+    category: 'View',
+    scope: 'global',
+  },
+  {
+    // ⌘1…⌘9 are all handled by AppShell; the table lists the first.
+    id: 'selectTab',
+    chord: { key: '1', mod: true },
+    label: 'Go to tab 1–9',
+    category: 'View',
+    scope: 'global',
+  },
+  {
     id: 'codegen',
     chord: { key: 'g', mod: true, shift: true },
     label: 'Codegen dialog',
@@ -244,6 +277,8 @@ function displayKey(key: string): string {
 /** Minimal keyboard-event shape so Node tests don't need DOM libs. */
 export interface KeyEventLike {
   key: string;
+  /** Physical key (KeyboardEvent.code) — used where Shift rewrites `key`. */
+  code?: string;
   metaKey: boolean;
   ctrlKey: boolean;
   shiftKey: boolean;
@@ -260,8 +295,13 @@ export function matchesChord(e: KeyEventLike, chord: Chord): boolean {
   if (hasMod !== wantMod) return false;
   if (!!chord.shift !== e.shiftKey) return false;
   if (!!chord.alt !== e.altKey) return false;
+  // Shift turns `]` into `}` on most layouts; match brackets physically.
+  const code = CODE_FOR_KEY[chord.key];
+  if (code && e.code) return e.code === code;
   return normalizeEventKey(e.key) === normalizeChordKey(chord.key);
 }
+
+const CODE_FOR_KEY: Record<string, string> = { '[': 'BracketLeft', ']': 'BracketRight' };
 
 export function matchesBinding(e: KeyEventLike, id: KeyId): boolean {
   return matchesChord(e, binding(id).chord);

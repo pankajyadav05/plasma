@@ -241,6 +241,31 @@ A faint ink-dot pattern at 2.5% opacity, 4px tile. Invisible individually, colle
 - Sidebar has 1px rule right border
 - Editor/result split: 38% / 1fr vertical, 2px strong bottom border between them
 
+#### Workbench anatomy (TablePlus-derived layout)
+
+```text
+┌ toolbar: brand · ⊟ │ ┌ status capsule ───────────────────────────┐ │ changes · safety · ⊡ ┐
+│                      └ ■ engine version · TLS/SSH/plain · tag │ connection ▾ / db / schema ▾ / object │ ⌘K ┘
+├──────┬───────────────┬──────────────────────────────────────┬──────────────┬──────┤
+│ rail │ Items         │ tab strip                            │ Details      │ rail │
+│      │ Queries       ├──────────────────────────────────────┤ Assistant    │      │
+│      │ History       │ SQL editor                           │ (SQL/Role/RLS)│     │
+│      │ (segmented)   ├ Ln/Col ···· Beautify · Ask AI · Run ▾┤              │      │
+│      │               │ result toolbar                       │              │      │
+│      │               │ result tabs #1 #2 #3 ······ Messages │              │      │
+│      │               │ grid / Structure / DDL               │              │      │
+│      │               │ Data·Structure·DDL │ range · paging  │              │      │
+└──────┴───────────────┴──────────────────────────────────────┴──────────────┴──────┘
+ status bar: connection health · last result · running · txn          ⌘/ shortcuts
+```
+
+- **Status capsule** owns connection identity. It is tinted by the environment tag (prod = destructive border and wash). Transport reads `TLS`, `SSH` or `plain`, and `plain` is shown in the destructive colour. The status bar no longer repeats identity.
+- **Left sidebar modes** (Postgres): Items (entity browser), Queries (saved SQL and table views), History (this connection, grouped by day; click opens in a new tab). Mode is transient UI state in `stores/workbench.ts`.
+- **Right sidebar**: Details (row inspector with field search, selected column highlighted, table sizes when nothing is selected) is the default pane; Assistant follows.
+- **Editor action bar** sits on the editor's bottom edge: caret position on the left; Beautify, Ask AI and a Run split-button (Run current / Run all / Explain analyze) on the right. There is no editor header row; the tab strip already names the file.
+- **Table footer** starts with the Data · Structure · DDL switch at the lower-left, then paging.
+- **Pending edits** surface in the toolbar (count, discard, commit) as well as in the tray above the status bar.
+
 ### 8.2 Top Bar
 
 - Wordmark: `Plasma` in Newsreader italic 38px
@@ -362,7 +387,7 @@ monaco.editor.defineTheme('paper-editor', {
 - Icon-only buttons get `aria-label`
 - Result grid keyboard-navigable:
   - Arrows move the selected cell
-  - Enter opens the row detail drawer (does **not** enter edit mode)
+  - Enter opens the row inspector: the right-sidebar Details pane, or the drawer where no right rail is shown (does **not** enter edit mode)
   - F2 starts an inline edit when the grid is writable; double-click also edits
   - Esc cancels an open edit, or clears the cell selection when not editing
   - Tab / Shift+Tab move to the next / previous cell (commit first if editing)

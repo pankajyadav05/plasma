@@ -1,33 +1,24 @@
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
 import { formatDuration } from '@/lib/format';
+import { kbd } from '@/lib/platform';
 import { useActiveTab, useSession } from '@/stores/session';
 import { AlertCircle, Loader2 } from 'lucide-react';
 import { UpdateBadge } from './UpdateBadge';
 
 /**
- * Environment tag → theme-token class mapping. Mirrors the picker in
- * ConnectionDialog so the badge in the status bar matches the chip
- * the user picked when configuring the connection.
+ * Bottom status line. Connection identity (name, engine, version, TLS,
+ * environment tag) lives in the toolbar status capsule; this bar keeps
+ * the live state — connection health, last result, running query, and
+ * the open-transaction controls.
  */
-const TAG_PILL_CLASS: Record<string, string> = {
-  local: 'bg-foreground text-background',
-  dev: 'bg-secondary text-secondary-foreground',
-  staging: 'bg-primary text-primary-foreground',
-  prod: 'bg-destructive text-destructive-foreground',
-};
-
 export function StatusBar() {
   const tab = useActiveTab();
   const activeConfig = useSession((s) => s.activeConfig);
   const connectionState = useSession((s) => s.connectionState);
-  const serverVersion = useSession((s) => s.serverVersion);
   const txnState = useSession((s) => s.txnState);
   const commitTxn = useSession((s) => s.commitTxn);
   const rollbackTxn = useSession((s) => s.rollbackTxn);
-  const connTag = useSession((s) =>
-    activeConfig?.id ? s.settings.connectionTags?.[activeConfig.id] : undefined,
-  );
 
   const stateLabel =
     connectionState === 'connected'
@@ -47,8 +38,6 @@ export function StatusBar() {
           ? 'bg-destructive'
           : 'bg-muted-foreground';
 
-  const engineLabel = activeConfig?.engine ?? null;
-
   return (
     <footer
       className="flex h-7 shrink-0 items-center gap-0 border-t bg-background px-4 text-xs text-muted-foreground"
@@ -58,30 +47,6 @@ export function StatusBar() {
         <span className={`inline-block h-2 w-2 rounded-full ${dotClass}`} />
         <span data-testid="status-connection">{stateLabel}</span>
       </Seg>
-      {activeConfig && (
-        <>
-          <Sep />
-          <Seg>
-            <span data-testid="status-connection-name">{activeConfig.name}</span>
-          </Seg>
-          {engineLabel && (
-            <Seg>
-              <span data-testid="status-engine">{engineLabel}</span>
-            </Seg>
-          )}
-          {connTag && (
-            <Seg>
-              <span
-                className={`rounded-sm px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider ${TAG_PILL_CLASS[connTag] ?? 'bg-muted text-muted-foreground'}`}
-              >
-                {connTag}
-              </span>
-            </Seg>
-          )}
-          <Sep />
-          <Seg>{activeConfig.database}</Seg>
-        </>
-      )}
       {tab?.queryResult && !tab.queryError && (
         <>
           <Sep />
@@ -116,7 +81,9 @@ export function StatusBar() {
         <>
           <Sep />
           <Seg>
-            <span className="font-semibold text-primary" data-testid="status-txn">txn active</span>
+            <span className="font-semibold text-primary" data-testid="status-txn">
+              txn active
+            </span>
             <Button
               variant="ghost"
               size="xs"
@@ -134,12 +101,9 @@ export function StatusBar() {
 
       <div className="flex-1" />
       <UpdateBadge />
-      {serverVersion && (
-        <>
-          <Seg>{shortVersion(serverVersion)}</Seg>
-          {/* <Sep /> */}
-        </>
-      )}
+      <Seg>
+        <span>{kbd('/')} shortcuts</span>
+      </Seg>
     </footer>
   );
 }
@@ -152,9 +116,4 @@ function Seg({ children, first = false }: { children: React.ReactNode; first?: b
 
 function Sep() {
   return <Separator orientation="vertical" className="h-3" />;
-}
-
-function shortVersion(full: string): string {
-  const m = full.match(/^(PostgreSQL\s+[\d.]+)/);
-  return m ? m[1] : full;
 }

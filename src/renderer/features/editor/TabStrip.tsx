@@ -9,8 +9,6 @@ import {
   Clock,
   FileCode,
   KeyRound,
-  PanelLeft,
-  PanelLeftClose,
   Plus,
   Radio,
   Search,
@@ -40,8 +38,6 @@ export function TabStrip() {
   const setActiveTab = useSession((s) => s.setActiveTab);
   const closeTab = useSession((s) => s.closeTab);
   const addTab = useSession((s) => s.addTab);
-  const sidebarCollapsed = useSession((s) => s.settings.sidebarCollapsed);
-  const toggleSidebar = useSession((s) => s.toggleSidebar);
   // The `+` button creates a fresh SQL tab; that only makes sense for
   // Postgres. For redis / opensearch the user spawns tabs from the sidebar.
   const engine = useSession((s) => s.activeConfig?.engine ?? 'postgres');
@@ -49,20 +45,6 @@ export function TabStrip() {
 
   return (
     <div className="flex h-10 shrink-0 items-stretch border-b border-border bg-background">
-      <div className="flex shrink-0 items-center border-r border-border">
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          onClick={() => void toggleSidebar()}
-          aria-label={
-            sidebarCollapsed ? `Show sidebar (${kbd('B')})` : `Hide sidebar (${kbd('B')})`
-          }
-          title={sidebarCollapsed ? `Show sidebar (${kbd('B')})` : `Hide sidebar (${kbd('B')})`}
-          className="mx-1"
-        >
-          {sidebarCollapsed ? <PanelLeft /> : <PanelLeftClose />}
-        </Button>
-      </div>
       <div
         className="scrollbar-none relative flex min-w-0 flex-1 items-stretch overflow-x-auto overflow-y-hidden [mask-image:linear-gradient(to_right,transparent,black_16px,black_calc(100%-16px),transparent)]"
         style={{ scrollbarWidth: 'none' }}

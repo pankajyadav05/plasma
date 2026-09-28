@@ -1,4 +1,5 @@
 import { setEditorCaret } from '@/lib/editor-run-context';
+import type { EditorCursor } from '@/stores/workbench';
 import type { OnChange, OnMount } from '@monaco-editor/react';
 import { binding, monacoKeybinding } from '@shared/keymap';
 import type * as MonacoType from 'monaco-editor';
@@ -31,6 +32,8 @@ interface Props {
   /** Buffer offsets of the statement that last failed. */
   errorRange?: { start: number; end: number } | null;
   errorMessage?: string | null;
+  /** Caret line/column + selection size, for the editor action bar. */
+  onCursorChange?: (cursor: EditorCursor | null) => void;
 }
 
 /**
@@ -53,6 +56,7 @@ export function MonacoEditor({
   runningRange = null,
   errorRange = null,
   errorMessage = null,
+  onCursorChange,
 }: Props) {
   const monacoRef = useRef<typeof MonacoType | null>(null);
   const editorRef = useRef<MonacoType.editor.IStandaloneCodeEditor | null>(null);
@@ -64,6 +68,8 @@ export function MonacoEditor({
   const onToggleRef = useRef(onToggle);
   const onFormatRef = useRef(onFormat);
   const onAskAiRef = useRef(onAskAi);
+  const onCursorChangeRef = useRef(onCursorChange);
+  onCursorChangeRef.current = onCursorChange;
   useEffect(() => {
     onRunRef.current = onRun;
     onRunAllRef.current = onRunAll;
@@ -76,14 +82,21 @@ export function MonacoEditor({
     const model = editor.getModel();
     if (!model) {
       setEditorCaret(null);
+      onCursorChangeRef.current?.(null);
       return;
     }
     const sel = editor.getSelection();
     const pos = editor.getPosition();
     if (!sel || !pos) {
       setEditorCaret(null);
+      onCursorChangeRef.current?.(null);
       return;
     }
+    onCursorChangeRef.current?.({
+      line: pos.lineNumber,
+      column: pos.column,
+      selectionLength: model.getValueLengthInRange(sel),
+    });
     setEditorCaret({
       cursorOffset: model.getOffsetAt(pos),
       selectionStart: model.getOffsetAt(sel.getStartPosition()),

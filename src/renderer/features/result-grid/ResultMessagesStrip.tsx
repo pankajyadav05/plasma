@@ -2,16 +2,17 @@ import { cn } from '@/lib/cn';
 import { formatDuration } from '@/lib/format';
 import { useActiveTab, useSession } from '@/stores/session';
 import type { PgNotice, QueryResult } from '@shared/protocol';
-import { ChevronLeft, ChevronRight, MessageSquareWarning } from 'lucide-react';
-import { useEffect, useMemo } from 'react';
+import { MessageSquareWarning } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
 
 /**
- * U26 — compact statement switcher + messages strip below the result toolbar.
+ * U26 — result tabs + messages below the result toolbar.
  *
- * Lists every statement from the last multi-result run with command, row
- * count, duration, and any NOTICE/WARNING lines. Click (or ⌥←/→) to focus
- * that statement's grid. Single-result runs collapse to a one-line summary
- * when notices are present; otherwise the strip stays hidden.
+ * Multi-statement runs get one tab per statement (command + row count);
+ * click or ⌥←/→ focuses that statement's grid. The Messages toggle
+ * expands the per-statement summary with NOTICE/WARNING lines. A single
+ * result only shows the strip when it produced notices; otherwise the
+ * strip stays hidden.
  */
 export function ResultMessagesStrip() {
   const tab = useActiveTab();
@@ -54,73 +55,118 @@ export function ResultMessagesStrip() {
     });
   }, [results, streamingNotices]);
 
+  const noticeCount = rows.reduce((n, r) => n + r.notices.length, 0);
+  const [messagesOpen, setMessagesOpen] = useState(false);
+
   if (!tab || !isSql) return null;
   // Hide entirely for a lone result with no notices.
   if (rows.length === 0) return null;
   if (rows.length === 1 && (rows[0]?.notices.length ?? 0) === 0) return null;
 
+  // A single result only gets here when it has notices — show the list.
+  const showList = rows.length === 1 || messagesOpen;
+
   return (
     <div className="flex shrink-0 flex-col border-b bg-muted/30">
-      {rows.length > 1 && (
-        <div className="flex h-8 items-center gap-1 border-b border-border/60 px-2">
+      <div className="flex h-8 items-stretch">
+        {rows.length > 1 ? (
+          <div
+            className="scrollbar-none flex min-w-0 flex-1 items-stretch overflow-x-auto"
+            role="tablist"
+            aria-label="Statement results · ⌥←/→ to switch"
+          >
+            {rows.map(({ index, result, notices }) => {
+              const isActive = index === active;
+              return (
+                <button
+                  key={index}
+                  type="button"
+                  role="tab"
+                  aria-selected={isActive}
+                  onClick={() => setActiveResultIndex(index)}
+                  title={`${summarizeResult(result)} — ⌥←/→ to switch`}
+                  className={cn(
+                    'relative flex shrink-0 items-center gap-1.5 border-r border-border/60 px-3 font-mono text-[11px] transition-colors',
+                    isActive
+                      ? 'bg-background text-foreground'
+                      : 'text-muted-foreground hover:bg-muted/80 hover:text-foreground',
+                  )}
+                >
+                  <span className="font-semibold">#{index + 1}</span>
+                  <span className="uppercase tracking-wide">{result.command ?? 'OK'}</span>
+                  <span className="tabular-nums">{result.rowCount.toLocaleString()}</span>
+                  {notices.length > 0 && (
+                    <MessageSquareWarning className="h-3 w-3 text-amber-700 dark:text-amber-400" />
+                  )}
+                  {isActive && (
+                    <span className="absolute inset-x-2 bottom-0 h-[2px] bg-primary" aria-hidden />
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        ) : (
+          <div className="flex flex-1 items-center px-3 font-display text-xs italic text-muted-foreground">
+            Messages
+          </div>
+        )}
+        {rows.length > 1 && (
           <button
             type="button"
-            className="inline-flex h-6 w-6 items-center justify-center rounded-sm text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-40"
-            title="Previous result (⌥←)"
-            disabled={active <= 0}
-            onClick={() => setActiveResultIndex(active - 1)}
+            onClick={() => setMessagesOpen((v) => !v)}
+            aria-expanded={messagesOpen}
+            className={cn(
+              'flex shrink-0 items-center gap-1.5 border-l border-border/60 px-3 text-[11px] transition-colors',
+              messagesOpen
+                ? 'bg-background text-foreground'
+                : 'text-muted-foreground hover:text-foreground',
+            )}
+            title="Per-statement summary, notices and warnings"
           >
-            <ChevronLeft className="h-3.5 w-3.5" />
+            <MessageSquareWarning className="h-3 w-3" />
+            Messages
+            {noticeCount > 0 && (
+              <span className="rounded-sm bg-amber-600/15 px-1 font-mono text-[10px] text-amber-800 dark:text-amber-300">
+                {noticeCount}
+              </span>
+            )}
           </button>
-          <span className="min-w-[4.5rem] text-center font-mono text-[11px] text-muted-foreground">
-            {active + 1} / {rows.length}
-          </span>
-          <button
-            type="button"
-            className="inline-flex h-6 w-6 items-center justify-center rounded-sm text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-40"
-            title="Next result (⌥→)"
-            disabled={active >= rows.length - 1}
-            onClick={() => setActiveResultIndex(active + 1)}
-          >
-            <ChevronRight className="h-3.5 w-3.5" />
-          </button>
-          <span className="ml-2 truncate text-[11px] text-muted-foreground">
-            Statement results · ⌥←/→ to switch
-          </span>
-        </div>
-      )}
+        )}
+      </div>
 
-      <ul className="max-h-28 overflow-auto px-2 py-1.5">
-        {rows.map(({ index, result, notices }) => (
-          <li key={index}>
-            <button
-              type="button"
-              onClick={() => setActiveResultIndex(index)}
-              className={cn(
-                'flex w-full flex-col gap-0.5 rounded-sm px-2 py-1 text-left text-[11px] transition-colors',
-                index === active
-                  ? 'bg-primary/10 text-foreground'
-                  : 'text-muted-foreground hover:bg-muted/80 hover:text-foreground',
-              )}
-            >
-              <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 font-mono">
-                <span className="font-semibold text-foreground/80">#{index + 1}</span>
-                <span className="uppercase tracking-wide">{result.command ?? 'OK'}</span>
-                <span>· {result.rowCount.toLocaleString()} rows</span>
-                <span>· {formatDuration(result.durationMs)}</span>
-                {result.columns.length > 0 && (
-                  <span className="text-muted-foreground/80">
-                    · {result.columns.length} col{result.columns.length === 1 ? '' : 's'}
-                  </span>
+      {showList && (
+        <ul className="max-h-40 overflow-auto border-t border-border/60 px-2 py-1.5">
+          {rows.map(({ index, result, notices }) => (
+            <li key={index}>
+              <button
+                type="button"
+                onClick={() => setActiveResultIndex(index)}
+                className={cn(
+                  'flex w-full flex-col gap-0.5 rounded-sm px-2 py-1 text-left text-[11px] transition-colors',
+                  index === active
+                    ? 'bg-primary/10 text-foreground'
+                    : 'text-muted-foreground hover:bg-muted/80 hover:text-foreground',
                 )}
-              </div>
-              {notices.map((n, ni) => (
-                <NoticeLine key={`${index}-${ni}-${n.message}`} notice={n} />
-              ))}
-            </button>
-          </li>
-        ))}
-      </ul>
+              >
+                <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 font-mono">
+                  <span className="font-semibold text-foreground/80">#{index + 1}</span>
+                  <span className="uppercase tracking-wide">{result.command ?? 'OK'}</span>
+                  <span>· {result.rowCount.toLocaleString()} rows</span>
+                  <span>· {formatDuration(result.durationMs)}</span>
+                  {result.columns.length > 0 && (
+                    <span className="text-muted-foreground/80">
+                      · {result.columns.length} col{result.columns.length === 1 ? '' : 's'}
+                    </span>
+                  )}
+                </div>
+                {notices.map((n, ni) => (
+                  <NoticeLine key={`${index}-${ni}-${n.message}`} notice={n} />
+                ))}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }
@@ -142,10 +188,7 @@ function NoticeLine({ notice }: { notice: PgNotice }) {
   );
 }
 
-function mergeNoticeLists(
-  a: PgNotice[] | undefined,
-  b: PgNotice[] | undefined,
-): PgNotice[] {
+function mergeNoticeLists(a: PgNotice[] | undefined, b: PgNotice[] | undefined): PgNotice[] {
   const out: PgNotice[] = [];
   const seen = new Set<string>();
   for (const n of [...(a ?? []), ...(b ?? [])]) {

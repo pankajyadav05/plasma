@@ -71,12 +71,31 @@ export function AppShell() {
         }
       }
 
+      // ⌘1…⌘9 jump straight to a tab (⌘9 = last, browser convention).
+      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && /^[1-9]$/.test(e.key)) {
+        const { tabs, setActiveTab } = useSession.getState();
+        const n = Number(e.key);
+        const target = n === 9 ? tabs[tabs.length - 1] : tabs[n - 1];
+        if (target) {
+          e.preventDefault();
+          setActiveTab(target.id);
+        }
+        return;
+      }
+
       const hit = matchGlobalBinding(e);
       if (!hit) return;
 
       // Skip editor-adjacent toggles while typing in a plain input, but
-      // always allow palette / AI / cheat-sheet (Linear/Raycast pattern).
-      const allowInInput = hit.id === 'palette' || hit.id === 'toggleAi' || hit.id === 'cheatSheet';
+      // always allow palette / AI / cheat-sheet (Linear/Raycast pattern)
+      // and pane/tab navigation.
+      const allowInInput =
+        hit.id === 'palette' ||
+        hit.id === 'toggleAi' ||
+        hit.id === 'cheatSheet' ||
+        hit.id === 'nextTab' ||
+        hit.id === 'prevTab' ||
+        hit.id === 'toggleRightSidebar';
       if (inInput && !allowInInput) return;
 
       // Menu-owned run/cancel/new-tab/etc. still arrive via IPC; only
@@ -98,6 +117,26 @@ export function AppShell() {
           e.preventDefault();
           setCheatSheetOpen((v) => !v);
           break;
+        case 'nextTab':
+        case 'prevTab': {
+          e.preventDefault();
+          const { tabs, activeTabId, setActiveTab } = useSession.getState();
+          if (tabs.length < 2) break;
+          const idx = tabs.findIndex((t) => t.id === activeTabId);
+          const step = hit.id === 'nextTab' ? 1 : -1;
+          const next = tabs[(idx + step + tabs.length) % tabs.length];
+          if (next) setActiveTab(next.id);
+          break;
+        }
+        case 'toggleRightSidebar': {
+          e.preventDefault();
+          const st = useSession.getState();
+          if (st.canvasMode !== 'database') break;
+          const fallback =
+            (st.activeConfig?.engine ?? 'postgres') === 'postgres' ? 'details' : 'ai';
+          st.setRightPanelMode(st.rightPanelMode ? null : fallback);
+          break;
+        }
         case 'toggleEditor':
           e.preventDefault();
           useSession.getState().toggleEditor();
@@ -277,7 +316,8 @@ function SqlOnlyCanvas() {
 
 function DatabaseCanvas() {
   const tab = useActiveTab();
-  const showFilterRow = tab?.kind === 'table' && tab.viewMode !== 'definition';
+  const isTableData = tab?.kind === 'table' && tab.viewMode === 'data';
+  const showFilterRow = isTableData;
   // SQL tabs get Monaco inline. When there's no result yet, the editor
   // expands to fill the canvas (the "P · start where you left off" home
   // panel is suppressed). Once a query has run, the editor caps at ~40%
@@ -295,7 +335,7 @@ function DatabaseCanvas() {
       {isSqlTab && <SqlCanvas expanded={!hasResultOrError} />}
       {isSqlTab && hasResultOrError && <EditorResizer />}
       {showFilterRow && <FilterRow />}
-      {showGrid && <ResultToolbar />}
+      {showGrid && (tab?.kind !== 'table' || isTableData) && <ResultToolbar />}
       {showGrid && <ResultMessagesStrip />}
       {showGrid && <ResultGrid />}
       <PendingEditsTray />

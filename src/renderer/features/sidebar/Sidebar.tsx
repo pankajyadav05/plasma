@@ -3,22 +3,36 @@ import { OsSidebar } from '@/features/opensearch/OsSidebar';
 import { RedisSidebar } from '@/features/redis/RedisSidebar';
 import { cn } from '@/lib/cn';
 import { useSession } from '@/stores/session';
-import { Circle, Pencil, Plus } from 'lucide-react';
+import { type SidebarMode, useWorkbench } from '@/stores/workbench';
+import { Bookmark, Circle, Clock, Pencil, Plus, Table2 } from 'lucide-react';
 import { EntityList } from './EntityList';
+import { HistoryList } from './HistoryList';
+import { SavedQueriesList } from './SavedQueriesList';
+
+const MODES: Array<{ mode: SidebarMode; label: string; icon: typeof Table2 }> = [
+  { mode: 'items', label: 'Items', icon: Table2 },
+  { mode: 'queries', label: 'Queries', icon: Bookmark },
+  { mode: 'history', label: 'History', icon: Clock },
+];
 
 /**
- * Sidebar = single-purpose entity browser. Body is the engine-aware
- * browser (Postgres EntityList / Redis key tree / OpenSearch index list).
- * The ⌘K palette trigger lives in the IconRail bottom strip alongside
- * Settings — keeps the sidebar fully dedicated to data discovery.
+ * Left sidebar. For Postgres it has three modes, switched by the
+ * segmented header (TablePlus layout):
+ *
+ *   Items    — schema entity browser (tables, views, matviews)
+ *   Queries  — saved SQL snippets and saved table views
+ *   History  — this connection's recent statements, by day
+ *
+ * Redis / OpenSearch keep their single engine-specific browser.
  */
 export function Sidebar() {
   const activeConfig = useSession((s) => s.activeConfig);
   const engine = activeConfig?.engine ?? 'postgres';
+  const mode = useWorkbench((s) => s.sidebarMode);
 
   return (
     <div className="flex h-full flex-col">
-      {/* ── Engine-specific browser ── */}
+      {activeConfig && engine === 'postgres' && <SidebarModeSwitch />}
       <div className="min-h-0 flex-1 overflow-hidden">
         {!activeConfig ? (
           <SavedConnectionsList />
@@ -26,10 +40,57 @@ export function Sidebar() {
           <RedisSidebar />
         ) : engine === 'opensearch' ? (
           <OsSidebar />
+        ) : mode === 'queries' ? (
+          <SavedQueriesList />
+        ) : mode === 'history' ? (
+          <HistoryList />
         ) : (
           <EntityList />
         )}
       </div>
+    </div>
+  );
+}
+
+function SidebarModeSwitch() {
+  const mode = useWorkbench((s) => s.sidebarMode);
+  const setMode = useWorkbench((s) => s.setSidebarMode);
+  const savedCount = useSession((s) => {
+    const id = s.activeConfig?.id;
+    return id ? (s.settings.savedQueries?.[id]?.length ?? 0) : 0;
+  });
+
+  return (
+    <div
+      className="grid shrink-0 grid-cols-3 border-b border-sidebar-border"
+      role="tablist"
+      aria-label="Sidebar mode"
+    >
+      {MODES.map(({ mode: m, label, icon: Icon }) => {
+        const active = mode === m;
+        return (
+          <button
+            key={m}
+            type="button"
+            role="tab"
+            aria-selected={active}
+            onClick={() => setMode(m)}
+            className={cn(
+              'relative flex h-9 items-center justify-center gap-1.5 text-xs transition-colors',
+              active
+                ? 'font-medium text-foreground'
+                : 'text-muted-foreground hover:bg-sidebar-accent hover:text-foreground',
+            )}
+          >
+            <Icon className={cn('h-3.5 w-3.5', active && 'text-primary')} />
+            {label}
+            {m === 'queries' && savedCount > 0 && (
+              <span className="font-mono text-[10px] text-muted-foreground">{savedCount}</span>
+            )}
+            {active && <span className="absolute inset-x-3 bottom-[-1px] h-0.5 bg-primary" />}
+          </button>
+        );
+      })}
     </div>
   );
 }

@@ -90,12 +90,12 @@ export type TabKind =
   | 'os-search'
   | 'os-index'
   | 'os-sql';
-export type TableViewMode = 'data' | 'definition';
+export type TableViewMode = 'data' | 'structure' | 'definition';
 export type EntityKind = 'table' | 'view' | 'matview' | 'foreign' | 'partitioned';
 /** Drives what the main right-side canvas renders. Switched from IconRail. */
 export type CanvasMode = 'database' | 'sql' | 'history' | 'settings' | 'monitor';
 /** Which slot of the right rail is currently expanded. null = collapsed. */
-export type RightPanelMode = 'query' | 'role' | 'rls' | 'saved' | 'ai' | null;
+export type RightPanelMode = 'details' | 'query' | 'role' | 'rls' | 'ai' | null;
 
 /** One row in the AI chat transcript. Streamed assistant messages mutate
  *  in place as deltas arrive — keep them flat strings. */
@@ -189,7 +189,7 @@ export interface QueryTab {
   /** True when totalRowCount comes from pg_class.reltuples, not COUNT(*). */
   totalRowCountIsEstimate: boolean;
   countLoading: boolean;
-  /** Table tabs: 'data' = grid, 'definition' = DDL. SQL tabs ignore. */
+  /** Table tabs: 'data' = grid, 'structure' = columns/constraints/indexes, 'definition' = DDL. SQL tabs ignore. */
   viewMode: TableViewMode;
   /** RLS policy count for the table backing this tab. null = not yet loaded. */
   rlsPolicyCount: number | null;
@@ -2653,7 +2653,9 @@ function resultPatch(
   }
   const idx = Math.max(0, Math.min(activeIndex, results.length - 1));
   return {
-    queryResults: results,
+    // Copy: the runner keeps pushing into `results` while statements
+    // stream in, and subscribers memoize on array identity.
+    queryResults: results.slice(),
     activeResultIndex: idx,
     queryResult: results[idx] ?? null,
   };

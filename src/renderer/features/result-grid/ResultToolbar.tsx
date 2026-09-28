@@ -2,12 +2,17 @@ import { Button } from '@/components/ui/button';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Separator } from '@/components/ui/separator';
 import { ChartDialog } from '@/features/chart/ChartDialog';
-import { ExplainDialog } from '@/features/explain/ExplainDialog';
 import { MockDataDialog } from '@/features/mock-data/MockDataDialog';
 import { PgVectorDialog } from '@/features/pgvector/PgVectorDialog';
 import { PostGisDialog } from '@/features/postgis/PostGisDialog';
 import { cn } from '@/lib/cn';
-import { type ExportFormat, copyResultToClipboard, pickRows } from '@/lib/export';
+import {
+  type ClipboardFormat,
+  type ExportFormat,
+  copyResultAs,
+  copyResultToClipboard,
+  pickRows,
+} from '@/lib/export';
 import { formatDuration } from '@/lib/format';
 import { useActiveTab, useSession } from '@/stores/session';
 import type { QueryResult } from '@shared/protocol';
@@ -20,12 +25,10 @@ import {
   FileJson,
   FileText,
   FileType2,
-  Gauge,
   Map,
   Plus,
   RefreshCw,
   Sparkles,
-  Wand2,
 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { ColumnsPopover } from './ColumnsPopover';
@@ -49,11 +52,9 @@ export function ResultToolbar() {
   const runQuery = useSession((s) => s.runQuery);
   const editMode = useSession((s) => s.editMode);
   const connectionReadOnly = useSession((s) => Boolean(s.activeConfig?.readOnly));
-  const formatActiveSql = useSession((s) => s.formatActiveSql);
   const [exportOpen, setExportOpen] = useState(false);
   const [insertOpen, setInsertOpen] = useState(false);
   const [chartOpen, setChartOpen] = useState(false);
-  const [explainOpen, setExplainOpen] = useState(false);
   const [mockOpen, setMockOpen] = useState(false);
   const [mapOpen, setMapOpen] = useState(false);
   const [vectorOpen, setVectorOpen] = useState(false);
@@ -99,31 +100,8 @@ export function ResultToolbar() {
 
       <div className="flex-1" />
 
-      {/* ── Right cluster: Format · Explain · Chart · Export · Refresh · duration · Insert ── */}
-      {!isTable && tab.sql.trim().length > 0 && (
-        <Button
-          variant="ghost"
-          size="xs"
-          onClick={() => void formatActiveSql()}
-          title="Format SQL (⌘⇧F)"
-        >
-          <Wand2 />
-          Format
-        </Button>
-      )}
-
-      {!isTable && tab.sql.trim().length > 0 && (
-        <Button
-          variant="ghost"
-          size="xs"
-          onClick={() => setExplainOpen(true)}
-          title="EXPLAIN ANALYZE — runs the query for real"
-        >
-          <Gauge />
-          Explain
-        </Button>
-      )}
-
+      {/* ── Right cluster: Chart · Map · Vector · Export · Refresh · duration · Insert.
+           Beautify / Explain live in the editor action bar now. ── */}
       {hasResult && tab.queryResult && tab.queryResult.rows.length > 0 && (
         <Button
           variant="ghost"
@@ -249,7 +227,6 @@ export function ResultToolbar() {
         onOpenChange={setChartOpen}
         defaultTitle={tab.title}
       />
-      {!isTable && <ExplainDialog open={explainOpen} onOpenChange={setExplainOpen} sql={tab.sql} />}
     </div>
   );
 }
@@ -359,6 +336,15 @@ function ExportPopover({
           filename={effectiveFilename}
           onClose={() => onOpenChange(false)}
         />
+        <div className="my-1 h-px bg-border" />
+        <div className="px-2 pb-0.5 pt-1 text-[10px] uppercase tracking-wider text-muted-foreground">
+          copy as
+        </div>
+        <div className="flex flex-wrap gap-1 px-2 pb-1.5">
+          <CopyAsChip label="Markdown" format="markdown" result={effectiveResult} />
+          <CopyAsChip label="HTML" format="html" result={effectiveResult} />
+          <CopyAsChip label="TSV" format="tsv" result={effectiveResult} />
+        </div>
       </PopoverContent>
     </Popover>
   );
@@ -390,6 +376,39 @@ function ScopeTab({
     >
       <span>{label}</span>
       <span className="tabular-nums text-muted-foreground">{count.toLocaleString()}</span>
+    </button>
+  );
+}
+
+/** Clipboard-only formats — handy for pasting into docs, tickets, sheets. */
+function CopyAsChip({
+  label,
+  format,
+  result,
+}: {
+  label: string;
+  format: ClipboardFormat;
+  result: QueryResult;
+}) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        void copyResultAs(result, format)
+          .then(() => {
+            setCopied(true);
+            setTimeout(() => setCopied(false), 1200);
+          })
+          .catch(() => {
+            /* clipboard unavailable */
+          });
+      }}
+      title={`Copy ${label} to clipboard`}
+      className="flex items-center gap-1 rounded-sm border border-border px-2 py-1 text-xs text-foreground transition-colors hover:bg-accent"
+    >
+      {copied ? <Check className="h-3 w-3 text-primary" /> : <Copy className="h-3 w-3" />}
+      {label}
     </button>
   );
 }

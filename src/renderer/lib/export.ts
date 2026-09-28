@@ -46,6 +46,69 @@ export async function copyResultToClipboard(
   await navigator.clipboard.writeText(content);
 }
 
+/** Clipboard-only table formats (no file download counterpart). */
+export type ClipboardFormat = 'markdown' | 'html' | 'tsv';
+
+export async function copyResultAs(result: QueryResult, format: ClipboardFormat): Promise<void> {
+  await navigator.clipboard.writeText(formatResultAs(result, format));
+}
+
+export function formatResultAs(result: QueryResult, format: ClipboardFormat): string {
+  switch (format) {
+    case 'markdown':
+      return toMarkdown(result);
+    case 'html':
+      return toHtml(result);
+    case 'tsv':
+      return toTsv(result);
+  }
+}
+
+function plainCell(value: unknown): string {
+  if (value === null || value === undefined) return '';
+  if (typeof value === 'object') {
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return String(value);
+    }
+  }
+  return String(value);
+}
+
+function toMarkdown(result: QueryResult): string {
+  const cell = (v: unknown) =>
+    v === null || v === undefined
+      ? 'NULL'
+      : plainCell(v).replace(/\|/g, '\\|').replace(/\r?\n/g, '<br>');
+  const header = `| ${result.columns.map((c) => cell(c.name)).join(' | ')} |`;
+  const rule = `| ${result.columns.map(() => '---').join(' | ')} |`;
+  const body = result.rows.map((row) => `| ${row.map(cell).join(' | ')} |`);
+  return [header, rule, ...body].join('\n');
+}
+
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function toHtml(result: QueryResult): string {
+  const head = result.columns.map((c) => `<th>${escapeHtml(c.name)}</th>`).join('');
+  const body = result.rows
+    .map((row) => `<tr>${row.map((v) => `<td>${escapeHtml(plainCell(v))}</td>`).join('')}</tr>`)
+    .join('\n');
+  return `<table>\n<thead><tr>${head}</tr></thead>\n<tbody>\n${body}\n</tbody>\n</table>`;
+}
+
+function toTsv(result: QueryResult): string {
+  const cell = (v: unknown) => plainCell(v).replace(/[\t\r\n]+/g, ' ');
+  const header = result.columns.map((c) => cell(c.name)).join('\t');
+  return [header, ...result.rows.map((row) => row.map(cell).join('\t'))].join('\n');
+}
+
 /**
  * Return a new QueryResult containing only the rows whose original
  * index is in `indices`. Order follows the iteration order of the

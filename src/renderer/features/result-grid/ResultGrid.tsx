@@ -6,6 +6,7 @@ import { cn } from '@/lib/cn';
 import { copyCellToClipboard } from '@/lib/export';
 import { formatDuration } from '@/lib/format';
 import { useActiveTab, useSession } from '@/stores/session';
+import { useWorkbench } from '@/stores/workbench';
 import type { ColumnMeta } from '@shared/protocol';
 import {
   ArrowUpRight,
@@ -30,6 +31,7 @@ import {
 import { type RowDetail, RowDetailSheet } from './RowDetailSheet';
 import { SqlHomePanel } from './SqlHomePanel';
 import { TableDefinitionView } from './TableDefinitionView';
+import { TableStructureView } from './TableStructureView';
 import { computeRowWindow } from './windowed-rows';
 
 // Stable empty Set used as a fallback when the active tab is null. Using
@@ -180,6 +182,30 @@ export function ResultGrid() {
     }
     return slicePageUnsorted(tab.queryResult.rows, tab.page, tab.pageSize);
   }, [tab?.kind, tab?.queryResult, tab?.page, tab?.pageSize, sortedSqlRows]);
+
+  // Publish the selected row for the right-sidebar Details pane. Only the
+  // grid knows how the selected display row maps back to result data.
+  const setInspectedRow = useWorkbench((s) => s.setInspectedRow);
+  const tabId = tab?.id;
+  const queryResult = tab?.queryResult;
+  const page = tab?.page ?? 0;
+  const pageSize = tab?.pageSize ?? 0;
+  const selRow = tab?.selectedCell?.row;
+  const selCol = tab?.selectedCell?.col;
+  useEffect(() => {
+    const pagedRow = selRow === undefined ? undefined : displayRows[selRow];
+    if (!tabId || !queryResult || !pagedRow || selRow === undefined || selCol === undefined) {
+      setInspectedRow(null);
+      return;
+    }
+    setInspectedRow({
+      tabId,
+      rowNumber: page * pageSize + selRow + 1,
+      columnIndex: selCol,
+      columns: queryResult.columns,
+      row: pagedRow.row,
+    });
+  }, [tabId, queryResult, page, pageSize, selRow, selCol, displayRows, setInspectedRow]);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const [scrollTop, setScrollTop] = useState(0);
@@ -418,10 +444,15 @@ export function ResultGrid() {
         }
         return;
       }
-      // Enter opens the row detail drawer for the selected row.
+      // Enter opens the row inspector: the right-sidebar Details pane
+      // when the database canvas (and its rail) is showing, else the
+      // drawer.
       if (e.key === 'Enter' && !e.metaKey && !e.ctrlKey && !e.shiftKey) {
         const pagedRow = displayRows[row];
-        if (pagedRow && tab.queryResult) {
+        if (pagedRow && useSession.getState().canvasMode === 'database') {
+          useSession.getState().setRightPanelMode('details');
+          e.preventDefault();
+        } else if (pagedRow && tab.queryResult) {
           setRowDetail({
             tabTitle: tab.title,
             rowNumber: tab.page * tab.pageSize + row + 1,
@@ -481,6 +512,9 @@ export function ResultGrid() {
   // ── Definition view (table tabs only) — short-circuits the grid ──
   if (tab?.kind === 'table' && tab.viewMode === 'definition') {
     return <TableDefinitionView />;
+  }
+  if (tab?.kind === 'table' && tab.viewMode === 'structure') {
+    return <TableStructureView />;
   }
 
   // ── Error state ──

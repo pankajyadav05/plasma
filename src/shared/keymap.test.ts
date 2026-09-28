@@ -12,6 +12,7 @@ import {
 
 function ev(partial: {
   key: string;
+  code?: string;
   metaKey?: boolean;
   ctrlKey?: boolean;
   shiftKey?: boolean;
@@ -19,6 +20,7 @@ function ev(partial: {
 }) {
   return {
     key: partial.key,
+    code: partial.code,
     metaKey: partial.metaKey ?? false,
     ctrlKey: partial.ctrlKey ?? false,
     shiftKey: partial.shiftKey ?? false,
@@ -95,5 +97,27 @@ describe('keymap', () => {
   it('matchesChord requires mod when declared', () => {
     expect(matchesChord(ev({ key: 'k' }), { key: 'k', mod: true })).toBe(false);
     expect(matchesChord(ev({ key: 'Escape' }), { key: 'Escape' })).toBe(true);
+  });
+
+  it('matches shifted bracket chords by physical key', () => {
+    // US layout: ⇧] reports key "}" — the code is what identifies it.
+    expect(
+      matchesBinding(
+        ev({ key: '}', code: 'BracketRight', metaKey: true, shiftKey: true }),
+        'nextTab',
+      ),
+    ).toBe(true);
+    expect(
+      matchesBinding(
+        ev({ key: '{', code: 'BracketLeft', ctrlKey: true, shiftKey: true }),
+        'prevTab',
+      ),
+    ).toBe(true);
+    expect(matchesBinding(ev({ key: '}', code: 'BracketRight', metaKey: true }), 'nextTab')).toBe(
+      false,
+    );
+    expect(matchGlobalBinding(ev({ key: 'B', metaKey: true, shiftKey: true }))?.id).toBe(
+      'toggleRightSidebar',
+    );
   });
 });

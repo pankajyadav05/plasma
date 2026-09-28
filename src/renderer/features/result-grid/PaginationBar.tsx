@@ -8,15 +8,16 @@ import {
 } from '@/components/ui/select';
 import { Separator } from '@/components/ui/separator';
 import { cn } from '@/lib/cn';
-import { useActiveTab, useSession } from '@/stores/session';
+import { type TableViewMode, useActiveTab, useSession } from '@/stores/session';
 import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight } from 'lucide-react';
 
 const PAGE_SIZES = [50, 100, 250, 500, 1000] as const;
 
 /**
- * Bottom bar — pagination + Data/Definition toggle (table tabs only).
- * Export, Refresh, Filter, Columns, and duration live in ResultToolbar
- * above the grid.
+ * Bottom bar. Table tabs get the Data · Structure · DDL view switch at
+ * the lower-left (TablePlus layout), then row range + paging. Export,
+ * Refresh, Filter, Columns, and duration live in ResultToolbar above
+ * the grid.
  */
 export function PaginationBar() {
   const tab = useActiveTab();
@@ -26,11 +27,11 @@ export function PaginationBar() {
 
   if (!tab) return null;
 
-  // Definition view of a table tab — show only the toggle, no pagination.
-  if (tab.kind === 'table' && tab.viewMode === 'definition') {
+  // Structure / DDL views of a table tab — show only the switch, no pagination.
+  if (tab.kind === 'table' && tab.viewMode !== 'data') {
     return (
-      <div className="flex h-9 shrink-0 items-center justify-end gap-2 border-t border-border bg-background px-4 text-sm">
-        <DataDefToggle viewMode="definition" onChange={setTabViewMode} />
+      <div className="flex h-9 shrink-0 items-center gap-2 border-t border-border bg-background px-2 text-sm">
+        <ViewModeSwitch viewMode={tab.viewMode} onChange={setTabViewMode} />
       </div>
     );
   }
@@ -40,8 +41,8 @@ export function PaginationBar() {
       // Loading / error states still show the toggle so the user can
       // bail out to Definition view without waiting for the query.
       return (
-        <div className="flex h-9 shrink-0 items-center justify-end gap-2 border-t border-border bg-background px-4 text-sm">
-          <DataDefToggle viewMode={tab.viewMode} onChange={setTabViewMode} />
+        <div className="flex h-9 shrink-0 items-center gap-2 border-t border-border bg-background px-2 text-sm">
+          <ViewModeSwitch viewMode={tab.viewMode} onChange={setTabViewMode} />
         </div>
       );
     }
@@ -65,9 +66,21 @@ export function PaginationBar() {
   const isEstimate = isTable && tab.totalRowCountIsEstimate;
 
   return (
-    <div className="flex h-9 shrink-0 items-center gap-4 border-t border-border bg-background px-4 text-sm text-muted-foreground">
+    <div
+      className={cn(
+        'flex h-9 shrink-0 items-center gap-4 overflow-hidden border-t border-border bg-background text-sm text-muted-foreground',
+        isTable ? 'pl-2 pr-4' : 'px-4',
+      )}
+    >
+      {isTable && (
+        <>
+          <ViewModeSwitch viewMode={tab.viewMode} onChange={setTabViewMode} />
+          <Separator orientation="vertical" className="h-4" />
+        </>
+      )}
+
       {/* Row range */}
-      <div className="flex items-center gap-1.5 tabular-nums">
+      <div className="flex shrink-0 items-center gap-1.5 whitespace-nowrap tabular-nums">
         <span className="text-foreground">
           {start.toLocaleString()}
           <span className="px-[3px] text-muted-foreground">–</span>
@@ -90,7 +103,7 @@ export function PaginationBar() {
       <Separator orientation="vertical" className="h-4" />
 
       {/* Page controls */}
-      <div className="flex items-center gap-0.5">
+      <div className="flex shrink-0 items-center gap-0.5">
         <Button
           variant="ghost"
           size="icon-xs"
@@ -144,7 +157,7 @@ export function PaginationBar() {
 
       {/* Rows per page */}
       <div className="flex items-center gap-2">
-        <span className="text-muted-foreground">rows</span>
+        <span className="text-muted-foreground max-[1200px]:hidden">rows</span>
         <Select value={String(tab.pageSize)} onValueChange={(v) => setPageSize(Number(v))}>
           <SelectTrigger className="h-6 w-[72px] px-2 text-xs">
             <SelectValue />
@@ -158,40 +171,42 @@ export function PaginationBar() {
           </SelectContent>
         </Select>
       </div>
-
-      {isTable && (
-        <>
-          <Separator orientation="vertical" className="h-4" />
-          <DataDefToggle viewMode={tab.viewMode} onChange={setTabViewMode} />
-        </>
-      )}
     </div>
   );
 }
 
+const VIEW_MODES: Array<{ mode: TableViewMode; label: string; title: string }> = [
+  { mode: 'data', label: 'Data', title: 'Rows' },
+  { mode: 'structure', label: 'Structure', title: 'Columns, constraints and indexes' },
+  { mode: 'definition', label: 'DDL', title: 'CREATE TABLE definition' },
+];
+
 /**
- * Two-segment switch — Data | Definition. Active segment gets a 3px
- * oxblood underline (Paper Editor signature) instead of a filled pill.
+ * Segmented Data | Structure | DDL switch. Active segment gets a 2px
+ * accent underline instead of a filled pill.
  */
-function DataDefToggle({
+function ViewModeSwitch({
   viewMode,
   onChange,
 }: {
-  viewMode: 'data' | 'definition';
-  onChange: (m: 'data' | 'definition') => void;
+  viewMode: TableViewMode;
+  onChange: (m: TableViewMode) => void;
 }) {
   return (
     <div
-      className="flex h-7 items-stretch overflow-hidden rounded-md border border-border"
+      className="flex h-7 shrink-0 items-stretch overflow-hidden rounded-md border border-border"
       role="tablist"
-      aria-label="View mode"
+      aria-label="Table view"
     >
-      <ToggleSegment active={viewMode === 'data'} label="Data" onClick={() => onChange('data')} />
-      <ToggleSegment
-        active={viewMode === 'definition'}
-        label="Definition"
-        onClick={() => onChange('definition')}
-      />
+      {VIEW_MODES.map((m) => (
+        <ToggleSegment
+          key={m.mode}
+          active={viewMode === m.mode}
+          label={m.label}
+          title={m.title}
+          onClick={() => onChange(m.mode)}
+        />
+      ))}
     </div>
   );
 }
@@ -199,10 +214,12 @@ function DataDefToggle({
 function ToggleSegment({
   active,
   label,
+  title,
   onClick,
 }: {
   active: boolean;
   label: string;
+  title: string;
   onClick: () => void;
 }) {
   return (
@@ -211,8 +228,9 @@ function ToggleSegment({
       role="tab"
       aria-selected={active}
       onClick={onClick}
+      title={title}
       className={cn(
-        'relative px-3 text-xs transition-colors',
+        'relative border-r border-border px-3 text-xs transition-colors last:border-r-0',
         active
           ? 'bg-card font-medium text-foreground'
           : 'text-muted-foreground hover:text-foreground',
