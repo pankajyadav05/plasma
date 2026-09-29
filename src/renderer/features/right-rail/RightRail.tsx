@@ -1,6 +1,7 @@
 import { Button } from '@/components/ui/button';
 import { Kbd } from '@/components/ui/kbd';
 import { AiPanel } from '@/features/ai/AiPanel';
+import { SidebarResizer } from '@/features/app-shell/SidebarResizer';
 import { MonacoEditor } from '@/features/editor/MonacoEditor';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { IconButton, MenuItem, Pill, Segmented } from '@/components/ui/workbench';
@@ -31,8 +32,6 @@ import { useEffect, useState } from 'react';
 import { SidebarSearch } from '@/features/sidebar/sidebar-parts';
 import { DetailsPanel } from './DetailsPanel';
 
-const PANEL_WIDTH = 260;
-
 const NOOP = () => {};
 
 type PrimaryPane = 'details' | 'ai' | 'none';
@@ -46,6 +45,7 @@ type PrimaryPane = 'details' | 'ai' | 'none';
  */
 export function RightRail() {
   const mode = useSession((s) => s.rightPanelMode);
+  const width = useSession((s) => s.settings.rightSidebarWidth);
   const setMode = useSession((s) => s.setRightPanelMode);
   const engine = useSession((s) => s.activeConfig?.engine ?? 'postgres');
   const tab = useActiveTab();
@@ -64,43 +64,47 @@ export function RightRail() {
     effective === 'details' ? 'details' : effective === 'ai' ? 'ai' : 'none';
 
   return (
-    <aside
-      className="flex shrink-0 flex-col self-stretch border-l border-[var(--wb-separator)] bg-[var(--wb-sidebar)] text-[var(--wb-text)]"
-      style={{ width: PANEL_WIDTH }}
-      aria-label="Right sidebar"
-    >
-      <div className="grid shrink-0 grid-cols-[1fr_auto_1fr] items-center gap-1.5 px-2.5 pb-2 pt-2">
-        <span aria-hidden />
-        {postgres ? (
-          <Segmented<PrimaryPane>
-            ariaLabel="Right sidebar pane"
-            variant="plain"
-            value={primary}
-            onChange={(v) => setMode(v === 'none' ? 'details' : v)}
-            options={[
-              { value: 'details', label: 'Details' },
-              { value: 'ai', label: 'Assistant', title: `Assistant (${kbd('L')})` },
-            ]}
-          />
-        ) : (
-          <span className="flex h-[26px] items-center rounded-[6px] bg-[var(--wb-segment-active)] px-3 text-[13px] font-medium text-[var(--wb-text)]">
-            Assistant
-          </span>
-        )}
-        <div className="flex justify-end">
-          {postgres && (
-            <SessionToolsMenu isTable={isTable} rlsCount={isTable ? tab.rlsPolicyCount : null} />
+    <>
+      {/* Drag handle over the sidebar's left border (width persisted). */}
+      <SidebarResizer side="right" />
+      <aside
+        className="flex shrink-0 flex-col self-stretch border-l border-[var(--wb-separator)] bg-[var(--wb-sidebar)] text-[var(--wb-text)]"
+        style={{ width }}
+        aria-label="Right sidebar"
+      >
+        <div className="grid shrink-0 grid-cols-[1fr_auto_1fr] items-center gap-1.5 px-2.5 pb-2 pt-2">
+          <span aria-hidden />
+          {postgres ? (
+            <Segmented<PrimaryPane>
+              ariaLabel="Right sidebar pane"
+              variant="plain"
+              value={primary}
+              onChange={(v) => setMode(v === 'none' ? 'details' : v)}
+              options={[
+                { value: 'details', label: 'Details' },
+                { value: 'ai', label: 'Assistant', title: `Assistant (${kbd('L')})` },
+              ]}
+            />
+          ) : (
+            <span className="flex h-[26px] items-center rounded-[6px] bg-[var(--wb-segment-active)] px-3 text-[13px] font-medium text-[var(--wb-text)]">
+              Assistant
+            </span>
           )}
+          <div className="flex justify-end">
+            {postgres && (
+              <SessionToolsMenu isTable={isTable} rlsCount={isTable ? tab.rlsPolicyCount : null} />
+            )}
+          </div>
         </div>
-      </div>
-      <div className="min-h-0 flex-1">
-        {effective === 'query' && <QueryPanel />}
-        {effective === 'ai' && <AiPanel />}
-        {effective === 'details' && <DetailsPanel />}
-        {effective === 'role' && <RolePanel />}
-        {effective === 'rls' && <RlsPanel />}
-      </div>
-    </aside>
+        <div className="min-h-0 flex-1">
+          {effective === 'query' && <QueryPanel />}
+          {effective === 'ai' && <AiPanel />}
+          {effective === 'details' && <DetailsPanel />}
+          {effective === 'role' && <RolePanel />}
+          {effective === 'rls' && <RlsPanel />}
+        </div>
+      </aside>
+    </>
   );
 }
 

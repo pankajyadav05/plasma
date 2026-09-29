@@ -275,6 +275,7 @@ const DEFAULT_SETTINGS: Settings = {
   fontMono: 'theme',
   sidebarCollapsed: false,
   sidebarWidth: 264,
+  rightSidebarWidth: 300,
   editorExpanded: false,
   editorFontSize: 13,
   editorHeightPx: 280,
@@ -670,6 +671,7 @@ interface SessionState {
   editConnection(id: string): Promise<void>;
   /** Update sidebar width (optimistic). Persistence is caller's responsibility. */
   setSidebarWidth(width: number): void;
+  setRightSidebarWidth(width: number): void;
 
   // History
   loadHistory(opts?: HistoryListOpts): Promise<void>;
@@ -1549,6 +1551,12 @@ export const useSession = create<SessionState>((set, get) => ({
     // Optimistic, no IPC. The caller (resizer pointerup) persists once.
     const clamped = Math.max(200, Math.min(520, Math.round(width)));
     set({ settings: { ...get().settings, sidebarWidth: clamped } });
+  },
+
+  setRightSidebarWidth(width) {
+    // Same contract as setSidebarWidth: optimistic here, persisted on drop.
+    const clamped = Math.max(240, Math.min(720, Math.round(width)));
+    set({ settings: { ...get().settings, rightSidebarWidth: clamped } });
   },
 
   setPage(page) {

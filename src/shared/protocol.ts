@@ -851,6 +851,8 @@ export const SettingsShape = z.object({
     .default('theme'),
   sidebarCollapsed: z.boolean().default(false),
   sidebarWidth: z.number().int().min(200).max(520).default(264),
+  /** Right sidebar (Details / Assistant) width in px. */
+  rightSidebarWidth: z.number().int().min(240).max(720).default(300),
   editorExpanded: z.boolean().default(false),
   editorFontSize: z.number().int().min(10).max(24).default(13),
   /**

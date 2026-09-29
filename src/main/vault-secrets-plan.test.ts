@@ -67,6 +67,7 @@ describe('redactSettingsWithPresence (U07)', () => {
     fontMono: 'theme',
     sidebarCollapsed: false,
     sidebarWidth: 264,
+    rightSidebarWidth: 300,
     editorExpanded: false,
     editorFontSize: 14,
     editorHeightPx: 280,
