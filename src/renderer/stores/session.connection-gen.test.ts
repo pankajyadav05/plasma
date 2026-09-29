@@ -127,6 +127,10 @@ function resetStore(connectionGen = 1) {
         },
       ],
       foreignKeys: [],
+      routines: [],
+      sequences: [],
+      types: [],
+      extensions: [],
     },
   });
 }

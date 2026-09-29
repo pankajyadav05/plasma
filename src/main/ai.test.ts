@@ -8,9 +8,20 @@ import {
   AI_TOOL_MAX_ROWS,
   buildOpenRouterBody,
   isAiRowDataAllowed,
+  isReadOnlyRedisCommand,
   isReadOnlySql,
   serializeAiToolRows,
 } from './ai-policy';
+
+describe('isReadOnlyRedisCommand (C18)', () => {
+  it('blocks CONFIG (leaks requirepass) and KEYS (blocks the server)', () => {
+    expect(isReadOnlyRedisCommand(['CONFIG', 'GET', 'requirepass'])).toBe(false);
+    expect(isReadOnlyRedisCommand(['KEYS', '*'])).toBe(false);
+    expect(isReadOnlyRedisCommand(['SCAN', '0'])).toBe(true);
+    expect(isReadOnlyRedisCommand(['CLIENT', 'LIST'])).toBe(true);
+    expect(isReadOnlyRedisCommand(['CLIENT', 'KILL', 'x'])).toBe(false);
+  });
+});
 
 describe('isAiRowDataAllowed (U06)', () => {
   it('defaults off for missing connection and missing map entry', () => {
@@ -30,11 +41,24 @@ describe('isReadOnlySql pre-filter (U04)', () => {
     expect(isReadOnlySql('EXPLAIN SELECT 1')).toBe(true);
   });
 
-  it('still accepts write-capable shapes that DB read-only must block', () => {
-    // Documented advisor cases — predicate alone is insufficient.
+  it('rejects data-modifying CTEs (C18)', () => {
     expect(
       isReadOnlySql('WITH removed AS (DELETE FROM accounts RETURNING *) SELECT * FROM removed'),
-    ).toBe(true);
+    ).toBe(false);
+  });
+
+  it('rejects side-effect functions READ ONLY cannot stop (C18)', () => {
+    expect(isReadOnlySql('SELECT pg_terminate_backend(123)')).toBe(false);
+    expect(isReadOnlySql('select pg_catalog.pg_cancel_backend (1)')).toBe(false);
+    expect(isReadOnlySql("SELECT pg_read_file('/etc/passwd')")).toBe(false);
+    expect(isReadOnlySql("SELECT '--', pg_terminate_backend(1)")).toBe(false);
+    expect(isReadOnlySql('SELECT "pg_terminate_backend"(1)')).toBe(false);
+    expect(isReadOnlySql("SELECT dblink('host=x', 'select 1')")).toBe(false);
+    expect(isReadOnlySql('SELECT count(*) FROM pg_stat_activity')).toBe(true);
+  });
+
+  it('still accepts shapes that the worker READ ONLY transaction must block', () => {
+    // Documented advisor cases — predicate alone is insufficient.
     expect(isReadOnlySql('EXPLAIN ANALYZE DELETE FROM accounts')).toBe(true);
     expect(isReadOnlySql('SELECT 1; DROP TABLE accounts')).toBe(true);
   });

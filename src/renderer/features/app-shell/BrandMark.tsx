@@ -2,9 +2,9 @@ import { cn } from '@/lib/cn';
 import markSvg from '@logo/plasma-mark.svg?raw';
 
 /**
- * Plasma monogram (italic serif P + oxblood stroke). Inlined via Vite
- * `?raw` so Newsreader (from the host document) and `currentColor` +
- * `var(--primary)` all work, and so the asset still resolves after
+ * Plasma monogram. Inlined via Vite `?raw` so `currentColor` and
+ * `var(--primary)` inside the SVG follow the theme, and so the asset
+ * still resolves after
  * packaging (a plain `<img src="/plasma-mark.svg">` breaks under
  * `file://` origins because the absolute path escapes the app root).
  */

@@ -4,7 +4,24 @@
  * column doesn't offer ILIKE.
  */
 
+import { pgTypeName } from '@shared/pg-type-oids';
 import type { FilterOp } from './table-query';
+
+/**
+ * Readable type name for a result column (VF3). The worker already maps
+ * built-in OIDs (`int4[]`, `bpchar`, `interval`…); this also rescues any
+ * `oid:NNNN` placeholder from an older worker or cached result.
+ */
+export function readableTypeName(col: {
+  dataTypeName?: string | null;
+  dataTypeID?: number;
+}): string {
+  const name = col.dataTypeName ?? '';
+  const m = /^oid:(\d+)$/.exec(name);
+  if (m) return pgTypeName(Number(m[1]));
+  if (!name && typeof col.dataTypeID === 'number') return pgTypeName(col.dataTypeID);
+  return name;
+}
 
 export type PgTypeCategory =
   | 'numeric'
@@ -94,7 +111,25 @@ const NULLABILITY: Array<{ value: FilterOp; label: string }> = [
 const PATTERN: Array<{ value: FilterOp; label: string }> = [
   { value: 'ILIKE', label: 'contains (ILIKE)' },
   { value: 'LIKE', label: 'matches (LIKE)' },
+  { value: 'NOT ILIKE', label: 'does not contain' },
+  { value: 'NOT LIKE', label: 'does not match' },
 ];
+
+const LIST: Array<{ value: FilterOp; label: string }> = [
+  { value: 'IN', label: 'in list' },
+  { value: 'NOT IN', label: 'not in list' },
+];
+
+const RANGE: Array<{ value: FilterOp; label: string }> = [{ value: 'BETWEEN', label: 'between' }];
+
+/** Label shown for an operator (the same text in the picker and the chip). */
+export function operatorLabel(op: FilterOp): string {
+  const all = [...COMPARISON, ...NULLABILITY, ...PATTERN, ...LIST, ...RANGE];
+  const hit = all.find((o) => o.value === op);
+  if (!hit) return op;
+  // Chips / trigger: short form ("contains"), not the SQL in parentheses.
+  return hit.label.replace(/\s*\(.*\)$/, '');
+}
 
 export interface OperatorGroup {
   heading: string;
@@ -110,6 +145,7 @@ export function operatorsFor(dataTypeName: string | undefined | null): OperatorG
     case 'uuid':
       return [
         { heading: 'Comparison', operators: COMPARISON },
+        { heading: 'Range / list', operators: [...RANGE, ...LIST] },
         { heading: 'Nullability', operators: NULLABILITY },
       ];
     case 'text':
@@ -117,6 +153,7 @@ export function operatorsFor(dataTypeName: string | undefined | null): OperatorG
       return [
         { heading: 'Comparison', operators: [COMPARISON[0], COMPARISON[1]] },
         { heading: 'Pattern matching', operators: PATTERN },
+        { heading: 'List', operators: LIST },
         { heading: 'Nullability', operators: NULLABILITY },
       ];
     case 'bool':
@@ -124,8 +161,6 @@ export function operatorsFor(dataTypeName: string | undefined | null): OperatorG
         { heading: 'Comparison', operators: [COMPARISON[0], COMPARISON[1]] },
         { heading: 'Nullability', operators: NULLABILITY },
       ];
-    case 'array':
-    case 'other':
     default:
       return [
         { heading: 'Comparison', operators: [COMPARISON[0], COMPARISON[1]] },

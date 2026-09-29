@@ -38,6 +38,11 @@ describe('ipcDeadlineMs', () => {
     expect(ipcDeadlineMs('sidebandQuery')).toBeNull();
   });
 
+  it('leaves file exports unbounded so main never gives up mid-write (C30)', () => {
+    expect(ipcDeadlineMs('exportQuery')).toBeNull();
+    expect(ipcDeadlineMs('exportRows')).toBeNull();
+  });
+
   it('bounds control-plane ops', () => {
     expect(ipcDeadlineMs('ping')).toBe(5_000);
     expect(ipcDeadlineMs('cancel')).toBe(15_000);

@@ -61,3 +61,15 @@ export function rememberHostKey(
     },
   };
 }
+
+/**
+ * Key algorithm from an SSH wire-format public key blob (the first
+ * length-prefixed string, e.g. `ssh-ed25519`). Undefined when malformed.
+ */
+export function hostKeyType(key: Buffer): string | undefined {
+  if (key.length < 4) return undefined;
+  const len = key.readUInt32BE(0);
+  if (len <= 0 || len > 64 || key.length < 4 + len) return undefined;
+  const type = key.subarray(4, 4 + len).toString('ascii');
+  return /^[a-z0-9@.-]+$/i.test(type) ? type : undefined;
+}

@@ -1,8 +1,6 @@
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import {
   Select,
   SelectContent,
@@ -10,383 +8,772 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { cn } from '@/lib/cn';
+import { SectionHeading } from '@/components/ui/view-parts';
+import { Segmented } from '@/components/ui/workbench';
+import { isMac } from '@/lib/platform';
 import { describeUpdateStatus } from '@/lib/update-status';
 import { useUpdate } from '@/lib/use-update';
 import { useSession } from '@/stores/session';
+import { ROW_LIMIT_CHOICES, useWorkbench } from '@/stores/workbench';
+import { cheatSheetSections, formatBinding, formatKeys } from '@shared/keymap';
 import type { Settings } from '@shared/protocol';
-import { Check, ChevronDown, Download, Loader2, Moon, RotateCw, Search, Sun } from 'lucide-react';
+import { Download, Loader2, RotateCw } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 type ThemeName = Settings['themeName'];
+type SafeMode = Settings['safeModeDefault'];
+type CsvExport = Settings['csvExport'];
 
-const PALETTES: Array<{
-  id: ThemeName;
+// ───────────────────────── Sections ─────────────────────────
+
+export type SettingsSectionId =
+  | 'general'
+  | 'editor'
+  | 'table'
+  | 'appearance'
+  | 'security'
+  | 'ai'
+  | 'keymap'
+  | 'advanced';
+
+/** TablePlus-style preference sections, in sidebar order (SS1). */
+export const SETTINGS_SECTIONS: ReadonlyArray<{
+  id: SettingsSectionId;
   label: string;
-  light: [string, string, string, string];
-  dark: [string, string, string, string];
+  /** Extra words the section search matches. */
+  keywords: string;
 }> = [
   {
-    id: 'default',
-    label: 'Plasma (default)',
-    light: [
-      'oklch(0.7122 0.1809 21.6630)',
-      'oklch(0.9702 0 0)',
-      'oklch(0.9219 0 0)',
-      'oklch(1 0 0)',
-    ],
-    dark: [
-      'oklch(0.7122 0.1809 21.6630)',
-      'oklch(0.2686 0 0)',
-      'oklch(0.2686 0 0)',
-      'oklch(0.1448 0 0)',
-    ],
+    id: 'general',
+    label: 'General',
+    keywords: 'launch connect reconnect restore workspace tabs sidebar',
   },
+  { id: 'editor', label: 'Editor', keywords: 'sql font size word wrap row limit' },
   {
-    id: 'catppuccin',
-    label: 'Catppuccin',
-    light: [
-      'oklch(0.5500 0.1800 260)',
-      'oklch(0.9100 0.0200 65)',
-      'oklch(0.8800 0.0700 30)',
-      'oklch(0.9550 0.0120 65)',
-    ],
-    dark: [
-      'oklch(0.7800 0.1400 280)',
-      'oklch(0.2700 0.0300 285)',
-      'oklch(0.7800 0.1700 25)',
-      'oklch(0.1900 0.0250 285)',
-    ],
+    id: 'table',
+    label: 'Table & grid',
+    keywords: 'page size rows alternating zebra count estimate csv export delimiter null',
   },
-  {
-    id: 'claude',
-    label: 'Claude',
-    light: [
-      'oklch(0.5500 0.1300 35)',
-      'oklch(0.9000 0.0350 55)',
-      'oklch(0.8800 0.0500 60)',
-      'oklch(0.9650 0.0150 60)',
-    ],
-    dark: [
-      'oklch(0.7300 0.1300 35)',
-      'oklch(0.2700 0.0250 35)',
-      'oklch(0.3300 0.0500 40)',
-      'oklch(0.1700 0.0180 35)',
-    ],
-  },
-  {
-    id: 'claymorphism',
-    label: 'Claymorphism',
-    light: [
-      'oklch(0.6500 0.1500 285)',
-      'oklch(0.9000 0.0500 320)',
-      'oklch(0.8500 0.1000 320)',
-      'oklch(0.9600 0.0220 285)',
-    ],
-    dark: [
-      'oklch(0.7500 0.1300 285)',
-      'oklch(0.2900 0.0500 285)',
-      'oklch(0.3300 0.0700 320)',
-      'oklch(0.1800 0.0400 285)',
-    ],
-  },
-  {
-    id: 'neo-brutalism',
-    label: 'Neo Brutalism',
-    light: ['oklch(0 0 0)', 'oklch(0.9300 0 0)', 'oklch(0.9000 0.2000 95)', 'oklch(1.0000 0 0)'],
-    dark: [
-      'oklch(0.9000 0.2000 95)',
-      'oklch(0.1500 0 0)',
-      'oklch(0.9000 0.2000 95)',
-      'oklch(0 0 0)',
-    ],
-  },
-  {
-    id: 'quantum-rose',
-    label: 'Quantum Rose',
-    light: [
-      'oklch(0.5500 0.2000 0)',
-      'oklch(0.9100 0.0300 0)',
-      'oklch(0.8800 0.0500 30)',
-      'oklch(0.9700 0.0150 0)',
-    ],
-    dark: [
-      'oklch(0.7200 0.2000 0)',
-      'oklch(0.2500 0.0500 350)',
-      'oklch(0.7800 0.1300 30)',
-      'oklch(0.1400 0.0350 350)',
-    ],
-  },
-  {
-    id: 'forest-canopy',
-    label: 'Forest Canopy',
-    light: [
-      'oklch(0.4500 0.1000 145)',
-      'oklch(0.9000 0.0300 100)',
-      'oklch(0.7500 0.1300 70)',
-      'oklch(0.9600 0.0180 95)',
-    ],
-    dark: [
-      'oklch(0.6800 0.1300 145)',
-      'oklch(0.2600 0.0300 130)',
-      'oklch(0.3200 0.0500 100)',
-      'oklch(0.1600 0.0250 130)',
-    ],
-  },
-  {
-    id: 'cyberpunk',
-    label: 'Cyberpunk',
-    light: [
-      'oklch(0.5500 0.2400 320)',
-      'oklch(0.9100 0.0400 200)',
-      'oklch(0.7500 0.1800 200)',
-      'oklch(0.9700 0.0200 200)',
-    ],
-    dark: [
-      'oklch(0.7500 0.2400 320)',
-      'oklch(0.1800 0.0400 280)',
-      'oklch(0.7800 0.2200 200)',
-      'oklch(0.0900 0.0250 280)',
-    ],
-  },
-  {
-    id: 'arctic',
-    label: 'Arctic',
-    light: [
-      'oklch(0.5500 0.1500 240)',
-      'oklch(0.9300 0.0150 220)',
-      'oklch(0.8200 0.0900 200)',
-      'oklch(0.9750 0.0080 220)',
-    ],
-    dark: [
-      'oklch(0.7800 0.1500 220)',
-      'oklch(0.2300 0.0400 240)',
-      'oklch(0.7200 0.1300 200)',
-      'oklch(0.1300 0.0300 240)',
-    ],
-  },
+  { id: 'appearance', label: 'Fonts & themes', keywords: 'theme palette dark light mode font' },
+  { id: 'security', label: 'Security', keywords: 'safe mode read-only confirm timeout' },
+  { id: 'ai', label: 'AI', keywords: 'openrouter api key model assistant' },
+  { id: 'keymap', label: 'Keymap', keywords: 'shortcuts keyboard bindings' },
+  { id: 'advanced', label: 'Advanced', keywords: 'transaction updates version about' },
 ];
 
+const PALETTES: Array<{ id: ThemeName; label: string }> = [
+  { id: 'default', label: 'Plasma (default)' },
+  { id: 'catppuccin', label: 'Catppuccin' },
+  { id: 'claude', label: 'Claude' },
+  { id: 'claymorphism', label: 'Claymorphism' },
+  { id: 'neo-brutalism', label: 'Neo Brutalism' },
+  { id: 'quantum-rose', label: 'Quantum Rose' },
+  { id: 'forest-canopy', label: 'Forest Canopy' },
+  { id: 'cyberpunk', label: 'Cyberpunk' },
+  { id: 'arctic', label: 'Arctic' },
+];
+
+/** Bundled faces (styles/fonts.ts) — every option here actually loads. */
 const FONT_SANS_OPTIONS: Array<{ id: Settings['fontSans']; label: string; sample: string }> = [
   { id: 'theme', label: 'Default (system UI)', sample: '' },
-  { id: 'geist', label: 'Geist', sample: "'Geist', sans-serif" },
-  { id: 'inter', label: 'Inter', sample: "'Inter', sans-serif" },
-  { id: 'outfit', label: 'Outfit', sample: "'Outfit', sans-serif" },
-  { id: 'plus-jakarta', label: 'Plus Jakarta Sans', sample: "'Plus Jakarta Sans', sans-serif" },
-  { id: 'ibm-plex', label: 'IBM Plex Sans', sample: "'IBM Plex Sans', sans-serif" },
+  { id: 'geist', label: 'Geist', sample: "'Geist Variable', sans-serif" },
+  { id: 'inter', label: 'Inter', sample: "'Inter Variable', sans-serif" },
+  { id: 'outfit', label: 'Outfit', sample: "'Outfit Variable', sans-serif" },
+  {
+    id: 'plus-jakarta',
+    label: 'Plus Jakarta Sans',
+    sample: "'Plus Jakarta Sans Variable', sans-serif",
+  },
+  { id: 'ibm-plex', label: 'IBM Plex Sans', sample: "'IBM Plex Sans Variable', sans-serif" },
   { id: 'system', label: 'System UI', sample: 'system-ui, sans-serif' },
 ];
 
 const FONT_MONO_OPTIONS: Array<{ id: Settings['fontMono']; label: string; sample: string }> = [
   { id: 'theme', label: 'Default (JetBrains Mono)', sample: '' },
-  { id: 'jetbrains-mono', label: 'JetBrains Mono', sample: "'JetBrains Mono', monospace" },
-  { id: 'geist-mono', label: 'Geist Mono', sample: "'Geist Mono', monospace" },
+  {
+    id: 'jetbrains-mono',
+    label: 'JetBrains Mono',
+    sample: "'JetBrains Mono Variable', monospace",
+  },
+  { id: 'geist-mono', label: 'Geist Mono', sample: "'Geist Mono Variable', monospace" },
   { id: 'ibm-plex-mono', label: 'IBM Plex Mono', sample: "'IBM Plex Mono', monospace" },
   { id: 'system', label: 'System mono', sample: 'ui-monospace, monospace' },
 ];
 
-/** Settings form body, shared between SettingsSheet (overlay) and SettingsCanvas (full page). */
+const SAFE_MODE_OPTIONS: Array<{ id: SafeMode; label: string; hint: string }> = [
+  { id: 'off', label: 'Off', hint: 'Run everything without asking.' },
+  {
+    id: 'confirm-dangerous',
+    label: 'Confirm dangerous statements',
+    hint: 'DROP, TRUNCATE, ALTER and DELETE / UPDATE without WHERE ask first.',
+  },
+  {
+    id: 'confirm-writes',
+    label: 'Confirm every write',
+    hint: 'Any statement that writes asks first.',
+  },
+  { id: 'read-only', label: 'Read-only', hint: 'Writes are refused.' },
+];
+
+const TIMEOUT_CHOICES = [0, 5_000, 15_000, 30_000, 60_000, 300_000, 900_000];
+
+function formatMs(ms: number): string {
+  if (ms === 0) return 'No timeout';
+  if (ms < 60_000) return `${ms / 1000} seconds`;
+  const m = ms / 60_000;
+  return `${m} minute${m === 1 ? '' : 's'}`;
+}
+
+/** True when a section matches the settings search box. */
+export function sectionMatches(id: SettingsSectionId, query: string): boolean {
+  const q = query.trim().toLowerCase();
+  if (!q) return true;
+  const s = SETTINGS_SECTIONS.find((x) => x.id === id);
+  return Boolean(s && `${s.label} ${s.keywords}`.toLowerCase().includes(q));
+}
+
+/** One preferences section (rendered by SettingsCanvas). */
+export function SettingsSection({ id }: { id: SettingsSectionId }) {
+  switch (id) {
+    case 'general':
+      return <GeneralSection />;
+    case 'editor':
+      return <EditorSection />;
+    case 'table':
+      return <TableSection />;
+    case 'appearance':
+      return <AppearanceSection />;
+    case 'security':
+      return <SecuritySection />;
+    case 'ai':
+      return <AiSection />;
+    case 'keymap':
+      return <KeymapSection />;
+    case 'advanced':
+      return <AdvancedSection />;
+  }
+}
+
+/** Every section stacked (kept for callers that want the whole form). */
 export function SettingsBody() {
+  return (
+    <div className="flex flex-col">
+      {SETTINGS_SECTIONS.map((s) => (
+        <div key={s.id}>
+          <SectionHeading>{s.label}</SectionHeading>
+          <SettingsSection id={s.id} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ───────────────────────── General ─────────────────────────
+
+function GeneralSection() {
   const settings = useSession((s) => s.settings);
   const updateSettings = useSession((s) => s.updateSettings);
-
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-1 py-2">
-      <SectionTitle>Appearance</SectionTitle>
-      <Field label="Mode">
-        <ModeToggle
-          isDark={settings.theme === 'dark'}
-          onToggle={() =>
-            void updateSettings({ theme: settings.theme === 'dark' ? 'light' : 'dark' })
-          }
-        />
-      </Field>
+    <Rows>
+      <CheckRow
+        id="auto-connect"
+        label="On launch"
+        text="Reconnect to the last connection"
+        hint="Skipped after you disconnect on purpose."
+        checked={settings.autoConnectOnLaunch}
+        onChange={(v) => void updateSettings({ autoConnectOnLaunch: v })}
+      />
+      <CheckRow
+        id="restore-workspace"
+        label=""
+        text="Restore open SQL tabs"
+        hint="Reopens the last session's query tabs for each connection."
+        checked={settings.restoreWorkspace}
+        onChange={(v) => void updateSettings({ restoreWorkspace: v })}
+      />
+      <CheckRow
+        id="auto-reconnect"
+        label="Connection lost"
+        text="Retry automatically"
+        hint="Retries after 2s, 5s, 10s, 30s and 60s, and as soon as the network is back. Click the connection capsule in the toolbar to reconnect at any time."
+        checked={settings.autoReconnect}
+        onChange={(v) => void updateSettings({ autoReconnect: v })}
+      />
+      <CheckRow
+        id="sidebar-collapsed"
+        label="Left sidebar"
+        text="Hidden"
+        hint={`Same as View → Toggle sidebar (${formatBinding('toggleSidebar', isMac)}).`}
+        checked={settings.sidebarCollapsed}
+        onChange={(v) => void updateSettings({ sidebarCollapsed: v })}
+      />
+    </Rows>
+  );
+}
 
-      <Field label="Palette">
-        <ThemePicker
+// ───────────────────────── Editor ─────────────────────────
+
+function EditorSection() {
+  const settings = useSession((s) => s.settings);
+  const updateSettings = useSession((s) => s.updateSettings);
+  const wordWrap = useWorkbench((s) => s.wordWrap);
+  const setWordWrap = useWorkbench((s) => s.setWordWrap);
+  const rowLimit = useWorkbench((s) => s.rowLimit);
+  const setRowLimit = useWorkbench((s) => s.setRowLimit);
+  const sizes = useMemo(() => Array.from({ length: 15 }, (_, i) => 10 + i), []);
+  return (
+    <Rows>
+      <Row label="Font size" htmlFor="editor-font-size">
+        <Choice
+          id="editor-font-size"
+          value={String(settings.editorFontSize)}
+          onChange={(v) => void updateSettings({ editorFontSize: Number(v) })}
+          options={sizes.map((n) => ({ value: String(n), label: `${n} px` }))}
+          width="w-[120px]"
+        />
+      </Row>
+      <CheckRow
+        id="word-wrap"
+        label="Long lines"
+        text="Wrap"
+        checked={wordWrap}
+        onChange={setWordWrap}
+      />
+      <Row
+        label="Row limit"
+        htmlFor="row-limit"
+        hint="Rows fetched per SQL statement. The SQL itself is never rewritten."
+      >
+        <Choice
+          id="row-limit"
+          value={rowLimit === null ? 'none' : String(rowLimit)}
+          onChange={(v) => setRowLimit(v === 'none' ? null : Number(v))}
+          options={ROW_LIMIT_CHOICES.map((n) => ({
+            value: n === null ? 'none' : String(n),
+            label: n === null ? 'No limit' : `${n.toLocaleString()} rows`,
+          }))}
+          width="w-[160px]"
+        />
+      </Row>
+    </Rows>
+  );
+}
+
+// ───────────────────────── Table & grid ─────────────────────────
+
+function TableSection() {
+  const settings = useSession((s) => s.settings);
+  const updateSettings = useSession((s) => s.updateSettings);
+  const csv = settings.csvExport;
+  const setCsv = (patch: Partial<CsvExport>) =>
+    void updateSettings({ csvExport: { ...csv, ...patch } });
+  return (
+    <>
+      <Rows>
+        <Row label="Page size" htmlFor="page-size" hint="Rows per page when you open a table.">
+          <Choice
+            id="page-size"
+            value={String(settings.defaultPageSize)}
+            onChange={(v) => void updateSettings({ defaultPageSize: Number(v) })}
+            options={[50, 100, 250, 500, 1000].map((n) => ({
+              value: String(n),
+              label: `${n} rows`,
+            }))}
+            width="w-[140px]"
+          />
+        </Row>
+        <CheckRow
+          id="grid-zebra"
+          label="Rows"
+          text="Alternate row colours"
+          checked={settings.gridAlternatingRows}
+          onChange={(v) => void updateSettings({ gridAlternatingRows: v })}
+        />
+        <Row
+          label="Row counts"
+          htmlFor="count-threshold"
+          hint="Above this many rows a table shows the planner's estimate instead of running count(*)."
+        >
+          <Choice
+            id="count-threshold"
+            value={String(settings.estimatedCountThreshold)}
+            onChange={(v) => void updateSettings({ estimatedCountThreshold: Number(v) })}
+            options={[
+              { value: '0', label: 'Always count exactly' },
+              ...[10_000, 100_000, 1_000_000, 10_000_000].map((n) => ({
+                value: String(n),
+                label: `Estimate above ${n.toLocaleString()}`,
+              })),
+            ]}
+            width="w-[220px]"
+          />
+        </Row>
+      </Rows>
+      <SubHeading>CSV export defaults</SubHeading>
+      <Rows>
+        <Row label="Delimiter" htmlFor="csv-delimiter">
+          <Choice
+            id="csv-delimiter"
+            value={csv.delimiter}
+            onChange={(v) => setCsv({ delimiter: v as CsvExport['delimiter'] })}
+            options={[
+              { value: ',', label: 'Comma  ,' },
+              { value: ';', label: 'Semicolon  ;' },
+              { value: '\t', label: 'Tab' },
+              { value: '|', label: 'Pipe  |' },
+            ]}
+            width="w-[160px]"
+          />
+        </Row>
+        <Row label="Quote" htmlFor="csv-quote">
+          <Choice
+            id="csv-quote"
+            value={csv.quote}
+            onChange={(v) => setCsv({ quote: v as CsvExport['quote'] })}
+            options={[
+              { value: '"', label: 'Double quote  "' },
+              { value: "'", label: "Single quote  '" },
+            ]}
+            width="w-[160px]"
+          />
+        </Row>
+        <Row label="NULL values" htmlFor="csv-null">
+          <Choice
+            id="csv-null"
+            value={csv.nullAs}
+            onChange={(v) => setCsv({ nullAs: v as CsvExport['nullAs'] })}
+            options={[
+              { value: 'empty', label: 'Empty field' },
+              { value: 'NULL', label: 'The word NULL' },
+            ]}
+            width="w-[160px]"
+          />
+        </Row>
+        <Row label="Line endings" htmlFor="csv-eol">
+          <Choice
+            id="csv-eol"
+            value={csv.lineEnding}
+            onChange={(v) => setCsv({ lineEnding: v as CsvExport['lineEnding'] })}
+            options={[
+              { value: 'lf', label: 'LF (macOS, Linux)' },
+              { value: 'crlf', label: 'CRLF (Windows)' },
+            ]}
+            width="w-[160px]"
+          />
+        </Row>
+        <CheckRow
+          id="csv-header"
+          label="Header"
+          text="First line has column names"
+          checked={csv.header}
+          onChange={(v) => setCsv({ header: v })}
+        />
+      </Rows>
+    </>
+  );
+}
+
+// ───────────────────────── Fonts & themes ─────────────────────────
+
+function AppearanceSection() {
+  const settings = useSession((s) => s.settings);
+  const updateSettings = useSession((s) => s.updateSettings);
+  return (
+    <Rows>
+      <Row label="Appearance">
+        <Segmented<'light' | 'dark'>
+          ariaLabel="Appearance"
+          variant="track"
+          value={settings.theme}
+          onChange={(v) => void updateSettings({ theme: v })}
+          options={[
+            { value: 'light', label: 'Light' },
+            { value: 'dark', label: 'Dark' },
+          ]}
+        />
+      </Row>
+      <Row label="Palette" htmlFor="theme-palette" hint="Palettes change colours only.">
+        <PalettePicker
+          id="theme-palette"
           value={settings.themeName}
           mode={settings.theme}
           onChange={(v) => void updateSettings({ themeName: v })}
         />
-      </Field>
-
-      <Field label="UI font (sans)">
-        <Select
+      </Row>
+      <Row label="Interface font" htmlFor="font-sans">
+        <Choice
+          id="font-sans"
           value={settings.fontSans}
-          onValueChange={(v) => void updateSettings({ fontSans: v as Settings['fontSans'] })}
-        >
-          <SelectTrigger className="w-[260px]">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {FONT_SANS_OPTIONS.map((o) => (
-              <SelectItem key={o.id} value={o.id}>
-                <span style={o.sample ? { fontFamily: o.sample } : undefined}>{o.label}</span>
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <p className="mt-1 font-display text-xs italic text-muted-foreground">
-          Body + UI text. Palettes only change colours, so the font stays the same across
-          themes. The SQL editor keeps its own mono font.
-        </p>
-      </Field>
-
-      <Field label="UI font (mono)">
-        <Select
-          value={settings.fontMono}
-          onValueChange={(v) => void updateSettings({ fontMono: v as Settings['fontMono'] })}
-        >
-          <SelectTrigger className="w-[260px]">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {FONT_MONO_OPTIONS.map((o) => (
-              <SelectItem key={o.id} value={o.id}>
-                <span style={o.sample ? { fontFamily: o.sample } : undefined}>{o.label}</span>
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <p className="mt-1 font-display text-xs italic text-muted-foreground">
-          Used by the result grid, version label, and table column types.
-        </p>
-      </Field>
-
-      <Field label="Sidebar">
-        <div className="flex items-center gap-3">
-          <Checkbox
-            id="sidebar-collapsed"
-            checked={settings.sidebarCollapsed}
-            onCheckedChange={(v) => void updateSettings({ sidebarCollapsed: Boolean(v) })}
-          />
-          <label htmlFor="sidebar-collapsed" className="cursor-pointer text-sm text-foreground">
-            Collapse sidebar by default
-          </label>
-        </div>
-      </Field>
-
-      <SectionTitle>Editor</SectionTitle>
-      <Field label={`Font size · ${settings.editorFontSize}px`}>
-        <input
-          type="range"
-          min={10}
-          max={22}
-          step={1}
-          value={settings.editorFontSize}
-          onChange={(e) => void updateSettings({ editorFontSize: Number(e.target.value) })}
-          className="w-full accent-primary"
+          onChange={(v) => void updateSettings({ fontSans: v as Settings['fontSans'] })}
+          options={FONT_SANS_OPTIONS.map((o) => ({
+            value: o.id,
+            label: <span style={o.sample ? { fontFamily: o.sample } : undefined}>{o.label}</span>,
+          }))}
+          width="w-[240px]"
         />
-      </Field>
+      </Row>
+      <Row
+        label="Data font"
+        htmlFor="font-mono"
+        hint="Result grid, column types and other monospaced data."
+      >
+        <Choice
+          id="font-mono"
+          value={settings.fontMono}
+          onChange={(v) => void updateSettings({ fontMono: v as Settings['fontMono'] })}
+          options={FONT_MONO_OPTIONS.map((o) => ({
+            value: o.id,
+            label: <span style={o.sample ? { fontFamily: o.sample } : undefined}>{o.label}</span>,
+          }))}
+          width="w-[240px]"
+        />
+      </Row>
+    </Rows>
+  );
+}
 
-      <SectionTitle>Query</SectionTitle>
-      <Field label="Default page size">
-        <Select
-          value={String(settings.defaultPageSize)}
-          onValueChange={(v) => void updateSettings({ defaultPageSize: Number(v) })}
-        >
-          <SelectTrigger className="w-[160px]">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {[50, 100, 250, 500, 1000].map((n) => (
-              <SelectItem key={n} value={String(n)}>
-                {n} rows
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </Field>
+/**
+ * Reads a palette's colours from the stylesheet with an off-screen probe
+ * (`.theme-x` / `.dark.theme-x` rules apply to any element), so swatches
+ * can never drift from globals.css (V7). The default palette lives on
+ * :root, so its swatch uses the root values when it is the active one.
+ */
+function paletteChips(id: ThemeName, mode: 'light' | 'dark'): string[] {
+  if (typeof document === 'undefined') return [];
+  const probe = document.createElement('div');
+  probe.style.display = 'none';
+  probe.className = [mode === 'dark' ? 'dark' : '', id !== 'default' ? `theme-${id}` : '']
+    .filter(Boolean)
+    .join(' ');
+  document.body.appendChild(probe);
+  const cs = getComputedStyle(probe);
+  const out = ['--primary', '--secondary', '--accent', '--background'].map((v) =>
+    cs.getPropertyValue(v).trim(),
+  );
+  probe.remove();
+  return out.filter(Boolean);
+}
 
-      <Field label="Transaction mode">
-        <div className="flex items-center gap-3">
-          <Checkbox
-            id="txn-mode"
-            checked={settings.transactionMode}
-            onCheckedChange={(v) => void updateSettings({ transactionMode: Boolean(v) })}
-          />
-          <label htmlFor="txn-mode" className="cursor-pointer text-sm text-foreground">
-            Wrap every query in a transaction by default
-          </label>
-        </div>
-        <p className="mt-1 font-display text-xs italic text-muted-foreground">
-          The worker auto-begins a transaction before each user statement. Commit or
-          rollback from the status bar. Edit batches use their own worker-owned
-          transaction (or a savepoint if one is already open).
-        </p>
-      </Field>
+function PalettePicker({
+  id,
+  value,
+  mode,
+  onChange,
+}: {
+  id: string;
+  value: ThemeName;
+  mode: 'light' | 'dark';
+  onChange: (v: ThemeName) => void;
+}) {
+  // Recomputed on mode / palette change (the default swatch reads :root).
+  const chips = useMemo(() => {
+    const map = new Map<ThemeName, string[]>();
+    for (const p of PALETTES) {
+      if (p.id === 'default' && value !== 'default') continue;
+      map.set(p.id, paletteChips(p.id, mode));
+    }
+    return map;
+  }, [mode, value]);
 
-      <SectionTitle>Connection</SectionTitle>
-      <Field label="Auto-connect">
-        <div className="flex items-center gap-3">
-          <Checkbox
-            id="auto-connect"
-            checked={settings.autoConnectOnLaunch}
-            onCheckedChange={(v) => void updateSettings({ autoConnectOnLaunch: Boolean(v) })}
-          />
-          <label htmlFor="auto-connect" className="cursor-pointer text-sm text-foreground">
-            Reconnect to the last connection when Plasma starts
-          </label>
-        </div>
-        <p className="mt-1 text-xs text-muted-foreground">
-          Skipped after you disconnect on purpose.
-        </p>
-      </Field>
+  return (
+    <Choice
+      id={id}
+      value={value}
+      onChange={(v) => onChange(v as ThemeName)}
+      width="w-[240px]"
+      options={PALETTES.map((p) => ({
+        value: p.id,
+        label: (
+          <span className="flex items-center gap-2">
+            <ChipRow colors={chips.get(p.id) ?? []} />
+            {p.label}
+          </span>
+        ),
+      }))}
+    />
+  );
+}
 
-      <Field label="Auto-reconnect">
-        <div className="flex items-center gap-3">
-          <Checkbox
-            id="auto-reconnect"
-            checked={settings.autoReconnect}
-            onCheckedChange={(v) => void updateSettings({ autoReconnect: Boolean(v) })}
-          />
-          <label htmlFor="auto-reconnect" className="cursor-pointer text-sm text-foreground">
-            Retry automatically when the connection drops
-          </label>
-        </div>
-        <p className="mt-1 text-xs text-muted-foreground">
-          Retries after 2s, 5s, 10s, 30s and 60s, and immediately when the network comes
-          back. You can always click the status bar to reconnect.
-        </p>
-      </Field>
+function ChipRow({ colors }: { colors: readonly string[] }) {
+  if (colors.length === 0) return null;
+  return (
+    <span className="flex shrink-0 items-center gap-0.5" aria-hidden>
+      {colors.map((c, i) => (
+        <span
+          // biome-ignore lint/suspicious/noArrayIndexKey: static-length chip row
+          key={i}
+          className="inline-block h-3 w-3 rounded-full shadow-[inset_0_0_0_1px_rgb(0_0_0/0.15)]"
+          style={{ background: c }}
+        />
+      ))}
+    </span>
+  );
+}
 
-      <SectionTitle>AI (OpenRouter)</SectionTitle>
-      <Field label="OpenRouter API key" htmlFor="openrouter-key">
+// ───────────────────────── Security ─────────────────────────
+
+function SecuritySection() {
+  const settings = useSession((s) => s.settings);
+  const updateSettings = useSession((s) => s.updateSettings);
+  const current = SAFE_MODE_OPTIONS.find((o) => o.id === settings.safeModeDefault);
+  return (
+    <Rows>
+      <Row
+        label="Safe mode"
+        htmlFor="safe-mode"
+        hint={`${current?.hint ?? ''} Default for connections without their own setting. Connections tagged PROD always confirm writes; read-only connections never write.`}
+      >
+        <Choice
+          id="safe-mode"
+          value={settings.safeModeDefault}
+          onChange={(v) => void updateSettings({ safeModeDefault: v as SafeMode })}
+          options={SAFE_MODE_OPTIONS.map((o) => ({ value: o.id, label: o.label }))}
+          width="w-[260px]"
+        />
+      </Row>
+      <Row
+        label="Query timeout"
+        htmlFor="query-timeout"
+        hint="Sets statement_timeout for every query you run. Long exports and monitoring are not affected."
+      >
+        <Choice
+          id="query-timeout"
+          value={String(settings.queryTimeoutMs)}
+          onChange={(v) => void updateSettings({ queryTimeoutMs: Number(v) })}
+          options={[
+            ...(TIMEOUT_CHOICES.includes(settings.queryTimeoutMs) ? [] : [settings.queryTimeoutMs]),
+            ...TIMEOUT_CHOICES,
+          ].map((ms) => ({ value: String(ms), label: formatMs(ms) }))}
+          width="w-[160px]"
+        />
+      </Row>
+    </Rows>
+  );
+}
+
+// ───────────────────────── AI ─────────────────────────
+
+function AiSection() {
+  const settings = useSession((s) => s.settings);
+  const updateSettings = useSession((s) => s.updateSettings);
+  return (
+    <Rows>
+      <Row
+        label="OpenRouter API key"
+        htmlFor="openrouter-key"
+        hint={
+          <>
+            Bring your own key — encrypted with the OS keychain and never shown again. One key gives
+            access to Claude, GPT, Gemini, Qwen and more. The schema is sent as a system prompt. Row
+            data is only sent when you enable &quot;Allow AI tools to read row data&quot; on a
+            connection (off by default); tool results are capped by rows and bytes.
+          </>
+        }
+      >
         <DebouncedSettingsInput
           id="openrouter-key"
           type="password"
           value={settings.openrouterApiKey}
           onCommit={(v) => void updateSettings({ openrouterApiKey: v })}
-          placeholder="sk-or-…"
+          placeholder={
+            settings.hasOpenrouterApiKey || settings.hasClaudeApiKey
+              ? 'Saved — paste a new key to replace'
+              : 'sk-or-…'
+          }
         />
-        <p className="mt-1 font-display text-xs italic text-muted-foreground">
-          BYO — stored in the local settings table. One key gives access to Claude, GPT, Gemini,
-          Qwen, etc. Schema is sent as a system prompt. Row data is only sent when you enable
-          &quot;Allow AI tools to read row data&quot; on a connection (off by default); tool
-          results are capped by rows and bytes.
-        </p>
-      </Field>
-
-      <Field label="Model" htmlFor="openrouter-model">
+      </Row>
+      <Row
+        label="Model"
+        htmlFor="openrouter-model"
+        hint={
+          <>
+            Any OpenRouter model id, e.g. <code>anthropic/claude-sonnet-4.5</code>,{' '}
+            <code>openai/gpt-4o</code>, <code>google/gemini-2.5-pro</code>.
+          </>
+        }
+      >
         <DebouncedSettingsInput
           id="openrouter-model"
           value={settings.openrouterModel}
           onCommit={(v) => void updateSettings({ openrouterModel: v })}
           placeholder="anthropic/claude-sonnet-4.5"
         />
-        <p className="mt-1 font-display text-xs italic text-muted-foreground">
-          Any OpenRouter model id. Recommended: <code>anthropic/claude-sonnet-4.5</code>,{' '}
-          <code>openai/gpt-4o</code>, <code>google/gemini-2.5-pro</code>,{' '}
-          <code>qwen/qwen-2.5-coder-32b-instruct</code>.
-        </p>
-      </Field>
+      </Row>
+    </Rows>
+  );
+}
 
-      <SectionTitle>About</SectionTitle>
-      <UpdateField />
+// ───────────────────────── Keymap ─────────────────────────
+
+/** Read-only list generated from `@shared/keymap` (rebinding comes later). */
+function KeymapSection() {
+  const [filter, setFilter] = useState('');
+  const sections = cheatSheetSections(filter, isMac);
+  return (
+    <div className="flex flex-col gap-3 px-4">
+      <Input
+        value={filter}
+        onChange={(e) => setFilter(e.target.value)}
+        placeholder="Search shortcuts…"
+        aria-label="Search shortcuts"
+        className="max-w-[320px]"
+      />
+      {sections.length === 0 && (
+        <div className="text-[13px] text-[var(--wb-text-2)]">No shortcuts match.</div>
+      )}
+      {sections.map((sec) => (
+        <div key={sec.category}>
+          <div className="pb-1 text-[12px] font-medium text-[var(--wb-text-2)]">{sec.category}</div>
+          <dl className="overflow-hidden rounded-[7px] shadow-[inset_0_0_0_1px_var(--wb-toolbar-group-edge)]">
+            {sec.items.map((b, i) => (
+              <div
+                key={b.id}
+                className={
+                  i % 2 === 0
+                    ? 'flex h-[26px] items-center px-2.5'
+                    : 'flex h-[26px] items-center bg-[var(--grid-row-a)] px-2.5'
+                }
+              >
+                <dt className="flex-1 truncate text-[13px] text-[var(--wb-text)]">{b.label}</dt>
+                <dd className="font-mono text-[12px] text-[var(--wb-text-2)]">
+                  {b.keys ? formatKeys(b.keys, isMac) : formatBinding(b.id, isMac)}
+                </dd>
+              </div>
+            ))}
+          </dl>
+        </div>
+      ))}
+      <p className="text-[12px] text-[var(--wb-text-3)]">Shortcuts can't be changed yet.</p>
     </div>
   );
 }
 
+// ───────────────────────── Advanced ─────────────────────────
+
+function AdvancedSection() {
+  const settings = useSession((s) => s.settings);
+  const updateSettings = useSession((s) => s.updateSettings);
+  return (
+    <>
+      <Rows>
+        <CheckRow
+          id="txn-mode"
+          label="Transactions"
+          text="Wrap every query in a transaction"
+          hint="Commit or roll back from the toolbar. Edit batches use their own transaction (or a savepoint if one is already open)."
+          checked={settings.transactionMode}
+          onChange={(v) => void updateSettings({ transactionMode: v })}
+        />
+      </Rows>
+      <SubHeading>About</SubHeading>
+      <div className="px-4">
+        <UpdateField />
+        <p className="mt-2 text-[12px] text-[var(--wb-text-3)]">
+          Preferences are stored locally on this computer.
+        </p>
+      </div>
+    </>
+  );
+}
+
+// ───────────────────────── Form parts ─────────────────────────
+
+function Rows({ children }: { children: React.ReactNode }) {
+  return <div className="flex flex-col gap-3.5 px-4 pb-2">{children}</div>;
+}
+
+function SubHeading({ children }: { children: React.ReactNode }) {
+  return (
+    <h4 className="px-4 pb-2 pt-5 text-[13px] font-semibold text-[var(--wb-text)]">{children}</h4>
+  );
+}
+
+/** Label column (180px, right-aligned like macOS preferences) + control. */
+function Row({
+  label,
+  htmlFor,
+  hint,
+  children,
+}: {
+  label: string;
+  htmlFor?: string;
+  hint?: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="grid grid-cols-[180px_1fr] items-start gap-x-4">
+      <label htmlFor={htmlFor} className="pt-[5px] text-right text-[13px] text-[var(--wb-text-2)]">
+        {label}
+      </label>
+      <div className="min-w-0">
+        {children}
+        {hint && <p className="mt-1 text-[12px] leading-snug text-[var(--wb-text-3)]">{hint}</p>}
+      </div>
+    </div>
+  );
+}
+
+function CheckRow({
+  id,
+  label,
+  text,
+  hint,
+  checked,
+  onChange,
+}: {
+  id: string;
+  label: string;
+  text: string;
+  hint?: React.ReactNode;
+  checked: boolean;
+  onChange: (v: boolean) => void;
+}) {
+  return (
+    <div className="grid grid-cols-[180px_1fr] items-start gap-x-4">
+      <span className="pt-[1px] text-right text-[13px] text-[var(--wb-text-2)]">{label}</span>
+      <div className="min-w-0">
+        <div className="flex items-center gap-2">
+          <Checkbox id={id} checked={checked} onCheckedChange={(v) => onChange(v === true)} />
+          <label htmlFor={id} className="cursor-pointer text-[13px] text-[var(--wb-text)]">
+            {text}
+          </label>
+        </div>
+        {hint && (
+          <p className="mt-1 pl-[22px] text-[12px] leading-snug text-[var(--wb-text-3)]">{hint}</p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function Choice({
+  id,
+  value,
+  onChange,
+  options,
+  width,
+}: {
+  id: string;
+  value: string;
+  onChange: (v: string) => void;
+  options: Array<{ value: string; label: React.ReactNode }>;
+  width: string;
+}) {
+  return (
+    <Select value={value} onValueChange={onChange}>
+      <SelectTrigger id={id} className={width}>
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        {options.map((o) => (
+          <SelectItem key={o.value} value={o.value}>
+            {o.label}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
+}
 
 /** Debounce delay for text settings (API key / model) — U18. */
 const TEXT_SETTING_DEBOUNCE_MS = 300;
@@ -394,8 +781,7 @@ const TEXT_SETTING_DEBOUNCE_MS = 300;
 /**
  * Locally-buffered text input that commits to settings after a short idle
  * period (and on blur / unmount). Instant controls (checkboxes, selects)
- * still call `updateSettings` directly; sidebar drag keeps pointer-up
- * persistence in SidebarResizer.
+ * still call `updateSettings` directly.
  */
 function DebouncedSettingsInput({
   id,
@@ -431,7 +817,7 @@ function DebouncedSettingsInput({
     return () => window.clearTimeout(timer);
   }, [local, value]);
 
-  // Flush a pending edit if the field unmounts mid-debounce (sheet close).
+  // Flush a pending edit if the field unmounts mid-debounce (section switch).
   useEffect(() => {
     return () => {
       const pending = localRef.current;
@@ -456,174 +842,14 @@ function DebouncedSettingsInput({
       onChange={(e) => setLocal(e.target.value)}
       onBlur={flush}
       placeholder={placeholder}
+      className="max-w-[360px]"
     />
   );
 }
 
-function SectionTitle({ children }: { children: React.ReactNode }) {
-  // Padding top inside the heading rather than sibling margin-top —
-  // adjacent shadow-glow trigger buttons get clipped by margin-collapsed
-  // gaps in some browsers, but padding lives inside the box and never
-  // bites neighbouring shadows.
-  return (
-    <h3 className="border-b pb-2 pt-4 text-xs font-medium uppercase tracking-wider text-muted-foreground first:pt-0">
-      {children}
-    </h3>
-  );
-}
-
-function Field({
-  label,
-  htmlFor,
-  children,
-}: {
-  label: string;
-  htmlFor?: string;
-  children: React.ReactNode;
-}) {
-  // No mt-4 — parent SettingsBody now uses flex+gap so shadows on
-  // children (palette trigger glow, etc) never run into margin gaps.
-  return (
-    <div className="flex flex-col gap-2">
-      <Label htmlFor={htmlFor}>{label}</Label>
-      {children}
-    </div>
-  );
-}
-
-function ModeToggle({ isDark, onToggle }: { isDark: boolean; onToggle: () => void }) {
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={isDark}
-      onClick={onToggle}
-      title={`Switch to ${isDark ? 'light' : 'dark'} mode`}
-      className={cn(
-        'relative inline-flex h-7 w-[52px] shrink-0 cursor-pointer items-center rounded-full border transition-colors',
-        isDark ? 'border-foreground bg-foreground' : 'border-border bg-muted',
-      )}
-    >
-      <span
-        className={cn(
-          'pointer-events-none absolute top-0.5 flex h-6 w-6 items-center justify-center rounded-full bg-background shadow transition-transform',
-          isDark ? 'translate-x-[24px]' : 'translate-x-0.5',
-        )}
-      >
-        {isDark ? (
-          <Moon className="h-3 w-3 text-foreground" />
-        ) : (
-          <Sun className="h-3 w-3 text-foreground" />
-        )}
-      </span>
-    </button>
-  );
-}
-
-function ThemePicker({
-  value,
-  mode,
-  onChange,
-}: {
-  value: ThemeName;
-  mode: 'light' | 'dark';
-  onChange: (v: ThemeName) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const [query, setQuery] = useState('');
-
-  const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (!q) return PALETTES;
-    return PALETTES.filter((p) => p.label.toLowerCase().includes(q));
-  }, [query]);
-
-  const active = PALETTES.find((p) => p.id === value) ?? PALETTES[0];
-  const activeChips = mode === 'dark' ? active.dark : active.light;
-
-  return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <button
-          type="button"
-          className="inline-flex h-9 w-[260px] items-center gap-2.5 rounded-md border border-input bg-background px-3 text-sm shadow-sm transition-colors hover:bg-accent/40"
-        >
-          <ChipRow colors={activeChips} />
-          <span className="flex-1 truncate text-left">{active.label}</span>
-          <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-        </button>
-      </PopoverTrigger>
-      <PopoverContent align="start" className="w-[300px] p-0">
-        <div className="flex items-center gap-2 border-b px-3 py-2">
-          <Search className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-          <input
-            autoFocus
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search themes…"
-            className="h-6 flex-1 border-0 bg-transparent text-sm outline-none focus:outline-none focus-visible:outline-none focus-visible:ring-0 placeholder:text-muted-foreground"
-          />
-        </div>
-        <div className="flex items-center justify-between px-3 py-1.5 text-xs text-muted-foreground">
-          <span>
-            {filtered.length} {filtered.length === 1 ? 'theme' : 'themes'}
-          </span>
-        </div>
-        <div className="max-h-[260px] overflow-y-auto p-1">
-          {filtered.length === 0 && (
-            <div className="px-3 py-6 text-center text-xs text-muted-foreground">No matches.</div>
-          )}
-          {filtered.map((p) => {
-            const isActive = p.id === value;
-            const chips = mode === 'dark' ? p.dark : p.light;
-            return (
-              <button
-                key={p.id}
-                type="button"
-                onClick={() => {
-                  onChange(p.id);
-                  setOpen(false);
-                }}
-                className={cn(
-                  'flex w-full items-center gap-2.5 rounded-sm px-2 py-1.5 text-left text-sm transition-colors',
-                  'hover:bg-accent hover:text-accent-foreground',
-                  isActive && 'bg-accent/60 font-medium',
-                )}
-              >
-                <ChipRow colors={chips} />
-                <span className="flex-1 truncate">{p.label}</span>
-                {isActive && <Check className="h-3.5 w-3.5 shrink-0 text-primary" />}
-              </button>
-            );
-          })}
-        </div>
-      </PopoverContent>
-    </Popover>
-  );
-}
-
-function ChipRow({ colors }: { colors: readonly string[] }) {
-  return (
-    <span className="flex shrink-0 items-center gap-0.5">
-      {colors.map((c, i) => (
-        <span
-          // biome-ignore lint/suspicious/noArrayIndexKey: static-length chip row
-          key={i}
-          aria-hidden
-          className="inline-block h-3.5 w-3.5 rounded-full border border-border/60"
-          style={{ background: c }}
-        />
-      ))}
-    </span>
-  );
-}
-
 /**
- * About section — current app version + "Check for updates" button +
- * status line that mirrors whatever electron-updater is doing right
- * now. Restart-to-install lives here too, plus a duplicate of the
- * StatusBar pill so users who never glance at the StatusBar still
- * find the action.
+ * About — app version, "Check for updates" and a restart-to-install
+ * action that mirrors the toolbar's update badge.
  */
 function UpdateField() {
   const { status, check, install } = useUpdate();
@@ -646,11 +872,11 @@ function UpdateField() {
   const statusLine = describeUpdateStatus(status, appVersion);
 
   return (
-    <div className="flex flex-col gap-3 rounded-md border border-border bg-muted/40 p-4">
-      <div className="flex items-baseline justify-between">
+    <div className="flex flex-col gap-2 rounded-[8px] bg-[var(--wb-control)] px-3 py-2.5">
+      <div className="flex items-center justify-between gap-3">
         <div>
-          <div className="font-display text-sm italic text-foreground">Plasma</div>
-          <div className="font-mono text-xs text-muted-foreground tabular-nums">
+          <div className="text-[13px] font-semibold text-[var(--wb-text)]">Plasma</div>
+          <div className="font-mono text-[12px] tabular-nums text-[var(--wb-text-2)]">
             v{appVersion || '—'}
           </div>
         </div>
@@ -675,7 +901,9 @@ function UpdateField() {
           </Button>
         )}
       </div>
-      <p className="font-display text-xs italic text-muted-foreground">{statusLine}</p>
+      <p className="text-[12px] text-[var(--wb-text-2)]" aria-live="polite">
+        {statusLine}
+      </p>
     </div>
   );
 }

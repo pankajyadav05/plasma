@@ -1,10 +1,8 @@
-import { createWriteStream } from "node:fs";
-import { finished } from "node:stream/promises";
-import {
-  type ExportFormat,
-  createExportStreamer,
-} from "@shared/export-format";
-import type { ColumnMeta } from "@shared/protocol";
+import { createWriteStream } from 'node:fs';
+import { rename, rm } from 'node:fs/promises';
+import { finished } from 'node:stream/promises';
+import { type ExportFormat, createExportStreamer } from '@shared/export-format';
+import type { ColumnMeta } from '@shared/protocol';
 
 async function writeChunk(
   stream: ReturnType<typeof createWriteStream>,
@@ -21,24 +19,33 @@ async function writeChunk(
 /**
  * Stream formatted rows to a file path. Never retains the full document
  * string — each batch is written and released (U16).
+ *
+ * F7: rows go to a sibling temp file that is renamed over the destination
+ * only once everything was written, so a failed or cancelled export never
+ * leaves a truncated file behind (or clobbers a good one).
  */
 export async function writeExportFile(opts: {
   filePath: string;
   format: ExportFormat;
   columns: readonly ColumnMeta[];
   batches: AsyncIterable<readonly unknown[][]>;
+  /** Quoted `schema.table` INSERT target for SQL export. */
+  targetTable?: string;
 }): Promise<{ rowCount: number; bytesWritten: number }> {
-  const stream = createWriteStream(opts.filePath, { encoding: "utf8" });
+  const tempPath = `${opts.filePath}.${process.pid}-${Date.now()}.partial`;
+  const stream = createWriteStream(tempPath, { encoding: 'utf8' });
   let bytesWritten = 0;
   let rowCount = 0;
   let pending: Promise<void> = Promise.resolve();
 
   const sink = (chunk: string) => {
-    bytesWritten += Buffer.byteLength(chunk, "utf8");
+    bytesWritten += Buffer.byteLength(chunk, 'utf8');
     pending = pending.then(() => writeChunk(stream, chunk));
   };
 
-  const streamer = createExportStreamer(opts.format, opts.columns, sink);
+  const streamer = createExportStreamer(opts.format, opts.columns, sink, {
+    targetTable: opts.targetTable,
+  });
   try {
     streamer.begin();
     await pending;
@@ -53,8 +60,10 @@ export async function writeExportFile(opts: {
     await pending;
     stream.end();
     await finished(stream);
+    await rename(tempPath, opts.filePath);
   } catch (err) {
     stream.destroy();
+    await rm(tempPath, { force: true }).catch(() => {});
     throw err;
   }
 
@@ -68,6 +77,7 @@ export async function writeExportRows(opts: {
   columns: readonly ColumnMeta[];
   rows: readonly unknown[][];
   batchSize?: number;
+  targetTable?: string;
 }): Promise<{ rowCount: number; bytesWritten: number }> {
   const batchSize = opts.batchSize ?? 500;
   async function* batches() {
@@ -80,5 +90,6 @@ export async function writeExportRows(opts: {
     format: opts.format,
     columns: opts.columns,
     batches: batches(),
+    targetTable: opts.targetTable,
   });
 }

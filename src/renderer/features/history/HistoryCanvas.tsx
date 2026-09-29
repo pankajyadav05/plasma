@@ -1,13 +1,16 @@
-import { Button } from '@/components/ui/button';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
-import { kbd } from '@/lib/platform';
+import { ViewTitle, ViewToolbar } from '@/components/ui/view-parts';
+import { IconButton, Pill } from '@/components/ui/workbench';
 import { useSession } from '@/stores/session';
 import { Trash2, X } from 'lucide-react';
 import { useState } from 'react';
 import { HistoryBrowser } from './HistoryBrowser';
 
 /**
- * Full-window history view with server-side search + facets (U35).
+ * Full-window history view with server-side search + facets (U35) — the
+ * single History surface (the ⌘H sheet is gone; ⌘H, the palette and the
+ * rail all land here). Clicking an entry opens it in a new SQL tab, the
+ * same as the sidebar History list (H2).
  */
 export function HistoryCanvas() {
   const history = useSession((s) => s.history);
@@ -17,47 +20,27 @@ export function HistoryCanvas() {
 
   const [confirmClear, setConfirmClear] = useState(false);
 
-  const reuse = (sql: string) => {
-    reuseHistoryQuery(sql);
-    setCanvasMode('sql');
-  };
-
   return (
-    <div className="flex min-h-0 flex-1 flex-col bg-background">
-      <div className="mx-auto flex min-h-0 w-full max-w-[960px] flex-1 flex-col px-6 py-10">
-        <header className="mb-4 flex shrink-0 items-start justify-between border-b border-border pb-4">
-          <div>
-            <h1 className="font-display text-2xl italic text-foreground">Query history</h1>
-            <p className="font-display text-sm italic text-muted-foreground">
-              Search and filter what you've run — click to reuse, bookmark to save as a snippet.
-            </p>
-          </div>
-          <div className="flex items-center gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setConfirmClear(true)}
-              disabled={history.length === 0}
-            >
-              <Trash2 />
-              Clear
-            </Button>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              onClick={() => setCanvasMode('database')}
-              aria-label="Close history"
-              title={`Close (${kbd('Esc')})`}
-            >
-              <X />
-            </Button>
-          </div>
-        </header>
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-[var(--wb-content)]">
+      <ViewToolbar>
+        <ViewTitle title="Query history" meta="Click an entry to open it in a new SQL tab" />
+        <div className="flex-1" />
+        <Pill onClick={() => setConfirmClear(true)} disabled={history.length === 0}>
+          <Trash2 />
+          Clear…
+        </Pill>
+        <IconButton
+          variant="plain"
+          label="Close history"
+          title="Close (Esc)"
+          onClick={() => setCanvasMode('database')}
+        >
+          <X />
+        </IconButton>
+      </ViewToolbar>
 
-        <div className="min-h-0 flex-1 overflow-hidden rounded-md border border-border">
-          <HistoryBrowser onReuse={reuse} />
-        </div>
-      </div>
+      <HistoryBrowser onReuse={(sql) => reuseHistoryQuery(sql)} />
+
       <ConfirmDialog
         open={confirmClear}
         onOpenChange={setConfirmClear}

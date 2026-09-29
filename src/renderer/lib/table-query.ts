@@ -20,6 +20,11 @@ export type FilterOp =
   | '<='
   | 'LIKE'
   | 'ILIKE'
+  | 'NOT LIKE'
+  | 'NOT ILIKE'
+  | 'IN'
+  | 'NOT IN'
+  | 'BETWEEN'
   | 'IS NULL'
   | 'IS NOT NULL';
 
@@ -27,8 +32,41 @@ export interface Filter {
   id: string;
   column: string;
   op: FilterOp;
-  /** For LIKE/ILIKE we wrap in %. For IS NULL/IS NOT NULL this is ignored. */
+  /**
+   * For LIKE/ILIKE we wrap in %. IN / NOT IN take a comma-separated list;
+   * BETWEEN takes `low, high` (or `low and high`). Ignored for IS [NOT] NULL.
+   */
   value: string;
+  /** Per-filter toggle (F6); `false` keeps the chip but skips the clause. */
+  enabled?: boolean;
+}
+
+/** Split an IN list / BETWEEN pair: commas (quotes allowed around items). */
+export function splitFilterList(value: string): string[] {
+  const out: string[] = [];
+  const re = /\s*(?:"((?:[^"]|"")*)"|'((?:[^']|'')*)'|([^,]*))\s*(?:,|$)/g;
+  for (const m of value.matchAll(re)) {
+    if (m[0] === '') break;
+    const quoted = m[1] !== undefined || m[2] !== undefined;
+    const item =
+      m[1] !== undefined
+        ? m[1].replace(/""/g, '"')
+        : m[2] !== undefined
+          ? m[2].replace(/''/g, "'")
+          : (m[3] ?? '').trim();
+    if (item !== '' || quoted) out.push(item);
+    if ((m.index ?? 0) + m[0].length >= value.length) break;
+  }
+  return out;
+}
+
+/** BETWEEN bounds from `a, b` or `a and b`; null when incomplete. */
+export function betweenBounds(value: string): [string, string] | null {
+  const parts = /\band\b/i.test(value) && !value.includes(',')
+    ? value.split(/\band\b/i).map((p) => p.trim())
+    : splitFilterList(value);
+  if (parts.length !== 2 || parts.some((p) => p === '')) return null;
+  return [parts[0]!, parts[1]!];
 }
 
 export interface TableSort {
@@ -45,6 +83,16 @@ export interface BuildInput {
   filters: Filter[];
   page: number;
   pageSize: number;
+  /**
+   * Primary-key columns (B5/F17). Used as the default ORDER BY when no
+   * sort is chosen, and as a tie-breaker after the user's sort, so LIMIT/
+   * OFFSET pages are deterministic.
+   */
+  primaryKey?: string[];
+  /** Order by `ctid` when there's no primary key (plain tables only). */
+  ctidFallback?: boolean;
+  /** Full-result export: no LIMIT/OFFSET. */
+  unpaged?: boolean;
 }
 
 export interface BuiltSql {
@@ -60,6 +108,7 @@ export function quoteIdent(name: string): string {
 function buildFilterClauses(filters: Filter[], addParam: (value: unknown) => string): string[] {
   const clauses: string[] = [];
   for (const f of filters) {
+    if (f.enabled === false) continue;
     // Skip filters with empty values unless the op is IS NULL / IS NOT NULL
     const needsValue = f.op !== 'IS NULL' && f.op !== 'IS NOT NULL';
     if (needsValue && f.value.trim() === '') continue;
@@ -78,8 +127,23 @@ function buildFilterClauses(filters: Filter[], addParam: (value: unknown) => str
         break;
       case 'LIKE':
       case 'ILIKE':
+      case 'NOT LIKE':
+      case 'NOT ILIKE':
         clauses.push(`${col}::text ${f.op} ${addParam(`%${f.value}%`)}`);
         break;
+      case 'IN':
+      case 'NOT IN': {
+        const items = splitFilterList(f.value);
+        if (items.length === 0) break;
+        clauses.push(`${col} ${f.op} (${items.map((v) => addParam(v)).join(', ')})`);
+        break;
+      }
+      case 'BETWEEN': {
+        const b = betweenBounds(f.value);
+        if (!b) break;
+        clauses.push(`${col} BETWEEN ${addParam(b[0])} AND ${addParam(b[1])}`);
+        break;
+      }
       case 'IS NULL':
         clauses.push(`${col} IS NULL`);
         break;
@@ -89,6 +153,26 @@ function buildFilterClauses(filters: Filter[], addParam: (value: unknown) => str
     }
   }
   return clauses;
+}
+
+/**
+ * ORDER BY for a table page: the user's sort, then the primary key as a
+ * tie-breaker (or alone when nothing is sorted), else `ctid` for plain
+ * tables without a key. Without it Postgres may return rows in any order
+ * and pages repeat or skip rows.
+ */
+function buildOrderBy(input: BuildInput): string {
+  const terms = input.sort.map(
+    (s) => `${quoteIdent(s.column)} ${s.direction === 'asc' ? 'ASC' : 'DESC'}`,
+  );
+  const sorted = new Set(input.sort.map((s) => s.column));
+  const pk = input.primaryKey ?? [];
+  if (pk.length > 0) {
+    for (const c of pk) if (!sorted.has(c)) terms.push(`${quoteIdent(c)} ASC`);
+  } else if (input.ctidFallback) {
+    terms.push('ctid');
+  }
+  return terms.length > 0 ? `ORDER BY ${terms.join(', ')}` : '';
 }
 
 /**
@@ -125,12 +209,7 @@ export function buildDataSql(input: BuildInput): BuiltSql {
   const whereClauses = buildFilterClauses(input.filters, addParam);
   const whereClause = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
 
-  const orderByClause =
-    input.sort.length > 0
-      ? `ORDER BY ${input.sort
-          .map((s) => `${quoteIdent(s.column)} ${s.direction === 'asc' ? 'ASC' : 'DESC'}`)
-          .join(', ')}`
-      : '';
+  const orderByClause = buildOrderBy(input);
 
   const limit = Math.max(1, input.pageSize);
   const offset = Math.max(0, input.page * input.pageSize);
@@ -139,7 +218,7 @@ export function buildDataSql(input: BuildInput): BuiltSql {
     `SELECT ${selectClause} FROM ${fromClause}`,
     whereClause,
     orderByClause,
-    `LIMIT ${limit} OFFSET ${offset}`,
+    input.unpaged ? '' : `LIMIT ${limit} OFFSET ${offset}`,
   ].filter(Boolean);
 
   return { sql: parts.join('\n'), params };
@@ -319,51 +398,68 @@ export function buildRlsPoliciesSql(schema: string, table: string): BuiltSql {
   };
 }
 
+/** Escape `%`, `_` and `\\` so user text matches literally in LIKE/ILIKE. */
+export function escapeLikePattern(text: string): string {
+  return text.replace(/[\\%_]/g, (ch) => `\\${ch}`);
+}
+
+/** Rows scanned (at most) for filter-value suggestions. */
+export const DISTINCT_SAMPLE_ROWS = 5000;
+/** Distinct values kept from that sample. */
+export const DISTINCT_SAMPLE_VALUES = 500;
+
 /**
- * Distinct values from a single column for the filter-value autocomplete.
- *
- * Cast to text so it works for any column type. Prefix-matches case
- * insensitively when `prefix` is non-empty; otherwise returns the most
- * common values. We cap aggressively (LIMIT 20) and add a STATEMENT
- * TIMEOUT-friendly subquery cap so wide tables don't pay a full-scan
- * cost on every keystroke — the worker's own query-cancel handles the
- * extreme case if a key gets held down.
+ * Distinct values from a single column for the filter-value autocomplete
+ * (A7/F12). Always bounded: it reads at most DISTINCT_SAMPLE_ROWS rows
+ * (never a full-table DISTINCT) and returns up to DISTINCT_SAMPLE_VALUES
+ * values. The UI loads this sample once per column and filters it
+ * locally as the user types, so keystrokes never hit the database. An
+ * optional `prefix` narrows the sample (escaped, prefix-only match).
  */
 export function buildDistinctValuesSql(
   schema: string,
   table: string,
   column: string,
-  prefix: string,
+  prefix = '',
 ): BuiltSql {
   const from = `${quoteIdent(schema)}.${quoteIdent(table)}`;
   const col = quoteIdent(column);
   const trimmed = prefix.trim();
+  const params: unknown[] = [];
+  let match = '';
   if (trimmed.length > 0) {
-    return {
-      sql: `SELECT DISTINCT ${col}::text AS v
-            FROM ${from}
-            WHERE ${col}::text ILIKE $1
-              AND ${col} IS NOT NULL
-            ORDER BY v
-            LIMIT 20`,
-      params: [`${trimmed}%`],
-    };
+    params.push(`${escapeLikePattern(trimmed)}%`);
+    match = ` AND ${col}::text ILIKE $1`;
   }
-  // No prefix → sample first N rows and return distinct values from
-  // that window. Avoids a full-table DISTINCT on huge tables. Trade-off
-  // is incompleteness, which is fine — autocomplete is a hint, not a
-  // contract.
   return {
     sql: `SELECT DISTINCT v FROM (
             SELECT ${col}::text AS v
             FROM ${from}
-            WHERE ${col} IS NOT NULL
-            LIMIT 5000
+            WHERE ${col} IS NOT NULL${match}
+            LIMIT ${DISTINCT_SAMPLE_ROWS}
           ) s
           ORDER BY v
-          LIMIT 20`,
-    params: [],
+          LIMIT ${DISTINCT_SAMPLE_VALUES}`,
+    params,
   };
+}
+
+/**
+ * Filter a loaded suggestion sample by what the user typed: prefix
+ * matches first, then substring matches, case-insensitive.
+ */
+export function filterSuggestions(values: readonly string[], typed: string, limit = 20): string[] {
+  const needle = typed.trim().toLowerCase();
+  if (!needle) return values.slice(0, limit);
+  const prefix: string[] = [];
+  const inner: string[] = [];
+  for (const v of values) {
+    const lower = v.toLowerCase();
+    if (lower.startsWith(needle)) prefix.push(v);
+    else if (lower.includes(needle)) inner.push(v);
+    if (prefix.length >= limit) break;
+  }
+  return [...prefix, ...inner].slice(0, limit);
 }
 
 /** List role names (excluding pg_* internals), ordered. */

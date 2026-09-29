@@ -1,7 +1,8 @@
+import { cleanIpcError } from '@/lib/errors';
 import { Pill } from '@/components/ui/workbench';
 import { PLASMA_THEME_ID, applyMonacoTheme } from '@/features/editor/paperTheme';
 import { ipc } from '@/lib/ipc';
-import { buildDefinitionQuerySql } from '@/lib/table-query';
+import { buildTableDdlSql, composeTableDdl } from '@/lib/table-ddl';
 import { useActiveTab, useSession } from '@/stores/session';
 import type { OnMount } from '@monaco-editor/react';
 import { Copy, Loader2 } from 'lucide-react';
@@ -9,14 +10,6 @@ import type * as MonacoType from 'monaco-editor';
 import { Suspense, lazy, useEffect, useState } from 'react';
 
 const Editor = lazy(() => import('@monaco-editor/react').then((m) => ({ default: m.default })));
-
-interface DefRow {
-  kind: 'col' | 'con' | 'idx';
-  c1: string; // name (col) / conname / indexname
-  c2: string; // type (col) / constraintdef / indexdef
-  c3: string; // NOT NULL (col only)
-  c4: string; // default expr (col only)
-}
 
 /**
  * Read-only DDL view for a table tab. Issues a single multi-result-set
@@ -42,20 +35,15 @@ export function TableDefinitionView() {
     setError(null);
     (async () => {
       try {
-        const { sql, params } = buildDefinitionQuerySql(tab.tableSchema!, tab.tableName!);
-        const res = await ipc.query.run(sql, params, { internal: true });
+        // PF10: views/matviews via pg_get_viewdef; tables with identity,
+        // constraints, indexes, triggers, comments, RLS and owner.
+        const { sql, params } = buildTableDdlSql(tab.tableSchema!, tab.tableName!);
+        const res = await ipc.query.sideband(sql, params, { timeoutMs: 15_000 });
         if (cancelled) return;
-        const rows: DefRow[] = res.rows.map((r) => ({
-          kind: String(r[0]) as DefRow['kind'],
-          c1: String(r[2] ?? ''),
-          c2: String(r[3] ?? ''),
-          c3: String(r[4] ?? ''),
-          c4: String(r[5] ?? ''),
-        }));
-        setDdl(composeDdl(tab.tableSchema!, tab.tableName!, rows));
+        setDdl(composeTableDdl(tab.tableSchema!, tab.tableName!, res.rows));
       } catch (err) {
         if (!cancelled) {
-          setError(err instanceof Error ? err.message : String(err));
+          setError(cleanIpcError(err instanceof Error ? err.message : String(err)));
         }
       } finally {
         if (!cancelled) setLoading(false);
@@ -161,39 +149,4 @@ export function TableDefinitionView() {
       )}
     </div>
   );
-}
-
-function quoteIdent(s: string): string {
-  return `"${s.replace(/"/g, '""')}"`;
-}
-
-function composeDdl(schema: string, table: string, rows: DefRow[]): string {
-  const cols = rows.filter((r) => r.kind === 'col');
-  const cons = rows.filter((r) => r.kind === 'con');
-  const idxs = rows.filter((r) => r.kind === 'idx');
-  const ident = `${quoteIdent(schema)}.${quoteIdent(table)}`;
-
-  const colLines = cols.map((c) => {
-    const parts = [`  ${quoteIdent(c.c1)} ${c.c2}`];
-    if (c.c3) parts.push(c.c3); // NOT NULL
-    if (c.c4) parts.push(`DEFAULT ${c.c4}`);
-    return parts.join(' ');
-  });
-
-  const head = `CREATE TABLE ${ident} (\n${colLines.join(',\n')}\n);\n`;
-
-  const consLines = cons
-    .map((c) => `ALTER TABLE ${ident}\n  ADD CONSTRAINT ${quoteIdent(c.c1)} ${c.c2};`)
-    .join('\n\n');
-
-  // pg_indexes returns the full CREATE INDEX statement already; we just
-  // skip ones that match a constraint's auto-created index (Postgres
-  // returns them as both — keep the constraint version).
-  const consNames = new Set(cons.map((c) => c.c1));
-  const idxLines = idxs
-    .filter((i) => !consNames.has(i.c1))
-    .map((i) => `${i.c2};`)
-    .join('\n\n');
-
-  return [head, consLines, idxLines].filter(Boolean).join('\n\n');
 }

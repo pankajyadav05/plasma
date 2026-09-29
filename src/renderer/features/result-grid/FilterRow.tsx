@@ -12,11 +12,18 @@ import {
 } from '@/components/ui/select';
 import { cn } from '@/lib/cn';
 import { ipc } from '@/lib/ipc';
-import { defaultOperatorFor, operatorsFor } from '@/lib/pg-types';
-import { type Filter, type FilterOp, buildDistinctValuesSql } from '@/lib/table-query';
+import { defaultOperatorFor, operatorLabel, operatorsFor } from '@/lib/pg-types';
+import {
+  type Filter,
+  type FilterOp,
+  betweenBounds,
+  buildDistinctValuesSql,
+  filterSuggestions,
+  splitFilterList,
+} from '@/lib/table-query';
 import { useActiveTab, useSession } from '@/stores/session';
 import { Command } from 'cmdk';
-import { Check, ChevronsUpDown, Loader2, Plus, Search, Sparkles, X } from 'lucide-react';
+import { Check, ChevronsUpDown, Code2, Loader2, Plus, Search, X } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 
 interface ColumnOption {
@@ -34,7 +41,7 @@ export function FilterRow() {
   const tab = useActiveTab();
   const schema = useSession((s) => s.schema);
   const removeFilter = useSession((s) => s.removeFilter);
-  const hasAiKey = useSession((s) => Boolean(s.settings.hasOpenrouterApiKey || s.settings.hasClaudeApiKey || s.settings.openrouterApiKey || s.settings.claudeApiKey));
+  const updateFilter = useSession((s) => s.updateFilter);
 
   const columnNames = useMemo(() => {
     if (!tab || tab.kind !== 'table' || !tab.tableSchema || !tab.tableName) return [];
@@ -59,20 +66,26 @@ export function FilterRow() {
     <div className="flex h-9 shrink-0 items-center gap-2 border-b border-[var(--wb-separator)] bg-[var(--wb-content)] px-2 text-[13px]">
       {/* Search-style trigger only shows when no filters are applied —
           once chips exist, "Add more filters" handles new additions. */}
-      {!hasFilters && <FilterTrigger teaser={teaser} hasAi={hasAiKey} />}
+      {!hasFilters && <FilterTrigger teaser={teaser} />}
 
       <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
         {tab.filters.map((f) => (
-          <EditableFilterChip key={f.id} filter={f} onRemove={() => void removeFilter(f.id)} />
+          <EditableFilterChip
+            key={f.id}
+            filter={f}
+            onRemove={() => void removeFilter(f.id)}
+            onToggle={() => void updateFilter(f.id, { enabled: f.enabled === false })}
+          />
         ))}
         {hasFilters && <AddMoreFilters hasAny />}
       </div>
+      {hasFilters && <SqlPreview sql={tab.sql} />}
     </div>
   );
 }
 
 /** Single trigger that opens the add-filter form. */
-function FilterTrigger({ teaser, hasAi }: { teaser: string; hasAi: boolean }) {
+function FilterTrigger({ teaser }: { teaser: string }) {
   const [open, setOpen] = useState(false);
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -81,11 +94,8 @@ function FilterTrigger({ teaser, hasAi }: { teaser: string; hasAi: boolean }) {
           type="button"
           className="group flex h-[26px] w-[280px] shrink-0 cursor-pointer items-center gap-2 rounded-[7px] bg-[var(--wb-field)] px-2 text-[var(--wb-text-3)] transition-colors duration-150 hover:text-[var(--wb-text-2)]"
         >
-          {hasAi ? <Sparkles className="h-3.5 w-3.5" /> : <Search className="h-3.5 w-3.5" />}
+          <Search className="h-3.5 w-3.5" />
           <span className="flex-1 truncate text-left text-[13px]">{teaser}</span>
-          <kbd className="rounded-[4px] bg-[var(--wb-control)] px-1 font-mono text-[11px] text-[var(--wb-text-2)] opacity-0 transition-opacity group-hover:opacity-100">
-            F
-          </kbd>
         </button>
       </PopoverTrigger>
       <PopoverContent align="start" sideOffset={4} className="w-[420px] p-0">
@@ -96,20 +106,46 @@ function FilterTrigger({ teaser, hasAi }: { teaser: string; hasAi: boolean }) {
 }
 
 /** Clickable chip — opens the same form pre-filled, persists via updateFilter. */
-function EditableFilterChip({ filter, onRemove }: { filter: Filter; onRemove: () => void }) {
+function EditableFilterChip({
+  filter,
+  onRemove,
+  onToggle,
+}: {
+  filter: Filter;
+  onRemove: () => void;
+  onToggle: () => void;
+}) {
   const [open, setOpen] = useState(false);
   const showVal = filter.op !== 'IS NULL' && filter.op !== 'IS NOT NULL';
+  const enabled = filter.enabled !== false;
   return (
     <Popover open={open} onOpenChange={setOpen}>
-      <span className="inline-flex h-6 items-center gap-1 rounded-[6px] bg-[var(--wb-control)] text-[13px]">
+      <span
+        className={cn(
+          'inline-flex h-6 items-center gap-1 rounded-[6px] bg-[var(--wb-control)] text-[13px]',
+          !enabled && 'opacity-55',
+        )}
+      >
+        <button
+          type="button"
+          // biome-ignore lint/a11y/useSemanticElements: styled toggle, same pattern as the design-system checkbox
+          role="checkbox"
+          aria-checked={enabled}
+          onClick={onToggle}
+          aria-label={`${enabled ? 'Disable' : 'Enable'} filter on ${filter.column}`}
+          title={enabled ? 'Disable this filter' : 'Enable this filter'}
+          className="ml-1 grid h-3.5 w-3.5 shrink-0 cursor-pointer place-items-center rounded-[3px] ring-1 ring-inset ring-[var(--wb-text-3)] transition-colors hover:ring-[var(--wb-text-2)]"
+        >
+          {enabled && <Check className="h-2.5 w-2.5 text-[var(--wb-text)]" />}
+        </button>
         <PopoverTrigger asChild>
           <button
             type="button"
-            className="flex h-full cursor-pointer items-center gap-1 rounded-l-[6px] px-2 transition-colors duration-150 hover:bg-[var(--wb-control-hover)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--wb-accent)]"
+            className="flex h-full cursor-pointer items-center gap-1 px-1.5 transition-colors duration-150 hover:bg-[var(--wb-control-hover)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--wb-accent)]"
             title="Edit filter"
           >
             <span className="font-mono font-medium text-[var(--wb-text)]">{filter.column}</span>
-            <span className="text-[var(--wb-text-2)]">{filter.op}</span>
+            <span className="text-[var(--wb-text-2)]">{operatorLabel(filter.op)}</span>
             {showVal && (
               <span className="max-w-[160px] truncate font-mono text-[var(--wb-text)]">
                 {filter.value || "''"}
@@ -176,9 +212,32 @@ function FilterForm({ existing, onDone }: { existing?: Filter; onDone: () => voi
   const addFilter = useSession((s) => s.addFilter);
   const updateFilter = useSession((s) => s.updateFilter);
 
-  const [column, setColumn] = useState(existing?.column ?? '');
-  const [op, setOp] = useState<FilterOp>(existing?.op ?? '=');
+  const columns = useMemo(() => {
+    if (!tab || tab.kind !== 'table' || !tab.tableSchema || !tab.tableName) return [];
+    return (
+      schema?.columns
+        .filter((c) => c.schema === tab.tableSchema && c.table === tab.tableName)
+        .sort((a, b) => a.ordinal - b.ordinal) ?? []
+    );
+  }, [tab, schema]);
+
+  // VF15: preselect the grid's selected column (else the first column) so
+  // Enter always has something to apply, with that type's default operator.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: initial value only (not a live binding)
+  const initialColumn = useMemo(() => {
+    if (existing) return existing.column;
+    const selCol = tab?.selectedCell?.col;
+    const selName = selCol === undefined ? undefined : tab?.queryResult?.columns[selCol]?.name;
+    if (selName && columns.some((c) => c.name === selName)) return selName;
+    return columns[0]?.name ?? '';
+  }, [existing, columns.length]);
+
+  const [column, setColumn] = useState(initialColumn);
+  const [op, setOp] = useState<FilterOp>(
+    existing?.op ?? defaultOperatorFor(columns.find((c) => c.name === initialColumn)?.dataType),
+  );
   const [value, setValue] = useState(existing?.value ?? '');
+  const [touched, setTouched] = useState(false);
 
   // If the popover is reopened with a different filter, sync state.
   useEffect(() => {
@@ -189,14 +248,13 @@ function FilterForm({ existing, onDone }: { existing?: Filter; onDone: () => voi
     }
   }, [existing]);
 
-  const columns = useMemo(() => {
-    if (!tab || tab.kind !== 'table' || !tab.tableSchema || !tab.tableName) return [];
-    return (
-      schema?.columns
-        .filter((c) => c.schema === tab.tableSchema && c.table === tab.tableName)
-        .sort((a, b) => a.ordinal - b.ordinal) ?? []
-    );
-  }, [tab, schema]);
+  // Columns can arrive after the form opened (lazy introspection).
+  useEffect(() => {
+    if (!column && initialColumn) {
+      setColumn(initialColumn);
+      setOp(defaultOperatorFor(columns.find((c) => c.name === initialColumn)?.dataType));
+    }
+  }, [column, initialColumn, columns]);
 
   const selectedColumnMeta = columns.find((c) => c.name === column);
   const operatorGroups = useMemo(
@@ -206,16 +264,27 @@ function FilterForm({ existing, onDone }: { existing?: Filter; onDone: () => voi
 
   const handleColumn = (next: string) => {
     setColumn(next);
-    if (!existing) {
-      const meta = columns.find((c) => c.name === next);
-      setOp(defaultOperatorFor(meta?.dataType));
-    }
+    const meta = columns.find((c) => c.name === next);
+    const allowed = operatorsFor(meta?.dataType).flatMap((g) => g.operators.map((o) => o.value));
+    // Keep the operator when it still applies; else the type's default.
+    if (!existing || !allowed.includes(op)) setOp(defaultOperatorFor(meta?.dataType));
   };
 
   const needsValue = op !== 'IS NULL' && op !== 'IS NOT NULL';
-  const canSave = column.length > 0 && (!needsValue || value.trim().length > 0);
+  const listOp = op === 'IN' || op === 'NOT IN';
+  const validation = !column
+    ? 'Pick a column'
+    : needsValue && value.trim().length === 0
+      ? 'Enter a value'
+      : op === 'BETWEEN' && !betweenBounds(value)
+        ? 'Enter two values: low, high'
+        : listOp && splitFilterList(value).length === 0
+          ? 'Enter one or more values, separated by commas'
+          : null;
+  const canSave = validation === null;
 
   const handleSave = () => {
+    setTouched(true);
     if (!canSave) return;
     if (existing) {
       void updateFilter(existing.id, { column, op, value });
@@ -227,18 +296,21 @@ function FilterForm({ existing, onDone }: { existing?: Filter; onDone: () => voi
     onDone();
   };
 
+  const placeholder = listOp ? 'a, b, c' : op === 'BETWEEN' ? 'low, high' : 'value';
+
   return (
     <div className="flex flex-col gap-2 p-4">
       <div className="flex items-center gap-2">
         <ColumnCombobox columns={columns} value={column} onChange={handleColumn} />
         <Select value={op} onValueChange={(v) => setOp(v as FilterOp)}>
-          <SelectTrigger className="h-8 w-[160px] shrink-0 text-[13px]">
-            <SelectValue />
+          <SelectTrigger className="h-8 w-[160px] shrink-0 text-[13px]" aria-label="Operator">
+            {/* Explicit label: the trigger always shows the operator that will be applied. */}
+            <SelectValue>{operatorLabel(op)}</SelectValue>
           </SelectTrigger>
           <SelectContent>
             {operatorGroups.map((group) => (
               <SelectGroup key={group.heading}>
-                <SelectLabel className="text-[10px] font-normal text-[var(--wb-text-2)]">
+                <SelectLabel className="text-[12px] font-normal text-[var(--wb-text-2)]">
                   {group.heading}
                 </SelectLabel>
                 {group.operators.map((o) => (
@@ -251,7 +323,14 @@ function FilterForm({ existing, onDone }: { existing?: Filter; onDone: () => voi
           </SelectContent>
         </Select>
       </div>
-      {needsValue && tab && tab.kind === 'table' && tab.tableSchema && tab.tableName && column ? (
+      {needsValue &&
+      !listOp &&
+      op !== 'BETWEEN' &&
+      tab &&
+      tab.kind === 'table' &&
+      tab.tableSchema &&
+      tab.tableName &&
+      column ? (
         <ValueAutocomplete
           schema={tab.tableSchema}
           table={tab.tableName}
@@ -265,7 +344,8 @@ function FilterForm({ existing, onDone }: { existing?: Filter; onDone: () => voi
           <Input
             value={value}
             onChange={(e) => setValue(e.target.value)}
-            placeholder="value"
+            placeholder={placeholder}
+            aria-label="Filter value"
             className="h-8 text-[13px]"
             onKeyDown={(e) => {
               if (e.key === 'Enter') handleSave();
@@ -273,23 +353,58 @@ function FilterForm({ existing, onDone }: { existing?: Filter; onDone: () => voi
           />
         )
       )}
-      <Button
-        variant={existing ? 'primary' : 'secondary'}
-        size="sm"
-        onClick={handleSave}
-        disabled={!canSave}
-        className="self-end"
-      >
-        {existing ? (
-          'Save'
-        ) : (
-          <>
-            <Plus />
-            Add filter
-          </>
-        )}
-      </Button>
+      <div className="flex items-center gap-2">
+        <span
+          className="min-w-0 flex-1 text-[12px] text-destructive"
+          role={touched && validation ? 'alert' : undefined}
+        >
+          {touched ? validation : null}
+        </span>
+        <Button variant="secondary" size="sm" onClick={handleSave}>
+          {existing ? (
+            'Save'
+          ) : (
+            <>
+              <Plus />
+              Add filter
+            </>
+          )}
+        </Button>
+      </div>
     </div>
+  );
+}
+
+/** The compiled SELECT behind the current filters (F6 "SQL preview"). */
+function SqlPreview({ sql }: { sql: string }) {
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          aria-label="Show the query for these filters"
+          title="Show the query for these filters"
+          className="grid h-6 w-6 shrink-0 cursor-pointer place-items-center rounded-[6px] text-[var(--wb-text-2)] transition-colors hover:bg-[var(--wb-control)] hover:text-[var(--wb-text)]"
+        >
+          <Code2 className="h-3.5 w-3.5" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="end" sideOffset={4} className="w-[460px] max-w-[90vw] p-0">
+        <div className="flex items-center justify-between border-b border-[var(--wb-separator)] px-3 py-1.5 text-[12px] text-[var(--wb-text-2)]">
+          <span>Query sent for this view</span>
+          <button
+            type="button"
+            className="cursor-pointer rounded-[4px] px-1.5 hover:bg-[var(--wb-control)] hover:text-[var(--wb-text)]"
+            onClick={() => void navigator.clipboard.writeText(sql).catch(() => undefined)}
+          >
+            Copy
+          </button>
+        </div>
+        <pre className="max-h-[260px] overflow-auto whitespace-pre-wrap break-words p-3 font-mono text-[12px] text-[var(--wb-text)]">
+          {sql || '—'}
+        </pre>
+      </PopoverContent>
+    </Popover>
   );
 }
 
@@ -412,37 +527,38 @@ function ValueAutocomplete({
   onEnter: () => void;
 }) {
   const [show, setShow] = useState(false);
-  const [suggestions, setSuggestions] = useState<string[]>([]);
+  const [sample, setSample] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  // Debounce the prefix query — keystrokes shouldn't fire IPC per char.
-  // Re-runs on column change too so swapping the column resets results.
+  // A7/F12: load a bounded sample of distinct values once per column (on
+  // the side connection, read-only, short timeout) and filter it locally
+  // as the user types — keystrokes never query the database.
   useEffect(() => {
     if (!show) return;
     let cancelled = false;
     setLoading(true);
-    const handle = setTimeout(async () => {
+    (async () => {
       try {
-        const { sql, params } = buildDistinctValuesSql(schema, table, column, value);
-        const res = await ipc.query.run(sql, params, { internal: true });
+        const { sql, params } = buildDistinctValuesSql(schema, table, column);
+        const res = await ipc.query.sideband(sql, params, { timeoutMs: 5_000 });
         if (cancelled) return;
-        setSuggestions(
+        setSample(
           res.rows
             .map((r) => (r[0] === null || r[0] === undefined ? '' : String(r[0])))
             .filter((s) => s.length > 0),
         );
       } catch {
-        if (!cancelled) setSuggestions([]);
+        if (!cancelled) setSample([]);
       } finally {
         if (!cancelled) setLoading(false);
       }
-    }, 180);
+    })();
     return () => {
       cancelled = true;
-      clearTimeout(handle);
     };
-  }, [schema, table, column, value, show]);
+  }, [schema, table, column, show]);
+  const suggestions = useMemo(() => filterSuggestions(sample, value), [sample, value]);
 
   // The suggestion buttons live OUTSIDE the input, so a normal blur
   // event would close the list before the click registers. We delay

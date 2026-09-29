@@ -1,4 +1,4 @@
-import { type WorkerRequest, type WorkerResponse } from '@shared/protocol';
+import type { WorkerRequest, WorkerResponse } from '@shared/protocol';
 import { ipcDeadlineMs, nextBackoffMs } from '@shared/worker-policy';
 import { parseWorkerResponse } from '@shared/worker-response-parse';
 import { type UtilityProcess, utilityProcess } from 'electron';
@@ -112,6 +112,8 @@ export class WorkerSupervisor {
     });
 
     proc.on('message', (raw: unknown) => {
+      // C25: a process we already gave up on must not settle anything.
+      if (proc !== this.proc) return;
       // U15 step 3: queryResult uses envelope validation (no per-cell Zod walk).
       const parsed = parseWorkerResponse(raw);
       if (!parsed.ok) {
@@ -144,6 +146,10 @@ export class WorkerSupervisor {
 
     proc.on('exit', (code) => {
       logger.warn('[plasma] worker exited code=', code, 'shuttingDown=', this.shuttingDown);
+      // C25: a superseded process (killed after a ready timeout) must not
+      // null out or restart its live successor; the failed spawn()
+      // already schedules the one restart.
+      if (proc !== this.proc) return;
       const wasReady = this.isReady;
       this.isReady = false;
       this.clearStableTimer();
@@ -176,6 +182,7 @@ export class WorkerSupervisor {
     await new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.readyWait = null;
+        if (this.proc === proc) this.proc = null;
         try {
           proc.kill();
         } catch {
@@ -260,7 +267,6 @@ export class WorkerSupervisor {
       this.proc?.postMessage(req);
     });
   }
-
 
   /** E2E only — pid of the current utility-process child, or null. */
   workerPid(): number | null {

@@ -1,0 +1,281 @@
+import {
+  fileNameForTitle,
+  pickSqlFile,
+  rememberFileHandle,
+  saveSqlFile,
+} from '@/features/editor/sql-files';
+import { activeTab, useSession } from '@/stores/session';
+import { useWorkbench } from '@/stores/workbench';
+import type { KeyId } from '@shared/keymap';
+import type { ConnectionEngine } from '@shared/protocol';
+
+/**
+ * One dispatcher for every app command, whatever triggered it: the
+ * document key listener (AppShell), Monaco's passthrough for global
+ * chords, the native menu (App.tsx) and the command palette. Keeping them
+ * on one path means a chord, a menu item and a palette row can't drift.
+ */
+export type CommandId =
+  | KeyId
+  | 'toggleTheme'
+  | 'newConnection'
+  | 'disconnect'
+  | 'monitor'
+  | 'exportJson';
+
+const POSTGRES_ONLY: ReadonlySet<CommandId> = new Set<CommandId>([
+  'runQuery',
+  'runQueryAll',
+  'cancelQuery',
+  'history',
+  'newTab',
+  'toggleEditor',
+  'formatSql',
+  'askAi',
+  'codegen',
+  'notebook',
+  'schemaDiff',
+  'monitor',
+  'exportCsv',
+  'exportJson',
+  'commitEdits',
+  'saveFileAs',
+  'openFile',
+  'wordWrap',
+  'fontBigger',
+  'fontSmaller',
+  'fontReset',
+  'toggleComment',
+]);
+
+/** Commands that need a live connection. */
+const NEEDS_CONNECTION: ReadonlySet<CommandId> = new Set<CommandId>([
+  ...POSTGRES_ONLY,
+  'refresh',
+  'toggleRightSidebar',
+  'disconnect',
+  'closeTab',
+  'nextTab',
+  'prevTab',
+]);
+
+/** Whether `id` makes sense for the connected engine (palette filtering, VF23). */
+export function commandAvailable(
+  id: CommandId,
+  engine: ConnectionEngine | null,
+  connected: boolean,
+): boolean {
+  if (NEEDS_CONNECTION.has(id) && !connected) return false;
+  if (POSTGRES_ONLY.has(id) && engine !== 'postgres') return false;
+  return true;
+}
+
+const session = () => useSession.getState();
+
+function engineOf(): ConnectionEngine | null {
+  const s = session();
+  if (s.connectionState !== 'connected') return null;
+  return (s.activeConfig?.engine ?? 'postgres') as ConnectionEngine;
+}
+
+/** Tabs the strip shows (Redis / OpenSearch hide extra SQL tabs). */
+export function visibleTabs() {
+  const s = session();
+  if (engineOf() === 'postgres' || engineOf() === null) return s.tabs;
+  const overview = s.tabs.find((t) => t.kind === 'sql');
+  return s.tabs.filter((t) => t.kind !== 'sql' || t.id === overview?.id);
+}
+
+export function selectTabAt(index: number): void {
+  const tabs = visibleTabs();
+  const target = index >= 8 ? tabs[tabs.length - 1] : tabs[index];
+  if (target) session().setActiveTab(target.id);
+}
+
+function cycleTab(step: 1 | -1): void {
+  const tabs = visibleTabs();
+  if (tabs.length < 2) return;
+  const idx = tabs.findIndex((t) => t.id === session().activeTabId);
+  const next = tabs[(idx + step + tabs.length) % tabs.length];
+  if (next) session().setActiveTab(next.id);
+}
+
+function exportEvent(kind: 'csv' | 'json') {
+  window.dispatchEvent(new CustomEvent('plasma:export', { detail: { kind } }));
+}
+
+function setFontSize(next: (current: number) => number) {
+  const s = session();
+  const size = Math.max(10, Math.min(24, next(s.settings.editorFontSize)));
+  if (size !== s.settings.editorFontSize) void s.updateSettings({ editorFontSize: size });
+}
+
+/** Save the active SQL tab to its .sql file (⌘S with nothing to commit, ⇧⌘S). */
+export async function saveActiveSqlTab(saveAs: boolean): Promise<void> {
+  const tab = activeTab(session());
+  if (!tab || tab.kind !== 'sql') return;
+  const name = await saveSqlFile(
+    tab.id,
+    tab.sql,
+    tab.fileName ?? fileNameForTitle(tab.title),
+    saveAs,
+  );
+  if (name) session().markTabClean(tab.id, { title: name, fileName: name });
+}
+
+/** Open a .sql file into a new tab (⌘O). */
+export async function openSqlFileInTab(): Promise<void> {
+  const file = await pickSqlFile();
+  if (!file) return;
+  const id = session().openSqlInNewTab(file.text, {
+    title: file.name,
+    fileName: file.name,
+    clean: true,
+  });
+  rememberFileHandle(id, file.handle);
+}
+
+/**
+ * Run a command. Returns false when it doesn't apply right now (wrong
+ * engine, disconnected), so the caller can let the key event through.
+ */
+export function runCommand(id: CommandId): boolean {
+  const s = session();
+  const engine = engineOf();
+  if (!commandAvailable(id, engine, s.connectionState === 'connected')) return false;
+  const wb = useWorkbench.getState();
+
+  switch (id) {
+    case 'palette':
+      s.togglePalette();
+      return true;
+    case 'toggleAi':
+      s.setRightPanelMode(s.rightPanelMode === 'ai' ? null : 'ai');
+      return true;
+    case 'cheatSheet':
+      wb.setOverlay(wb.overlay === 'cheatSheet' ? null : 'cheatSheet');
+      return true;
+    case 'toggleSidebar':
+      void s.toggleSidebar();
+      return true;
+    case 'toggleEditor':
+      s.toggleEditor();
+      return true;
+    case 'toggleRightSidebar':
+      if (s.canvasMode !== 'database') return false;
+      s.setRightPanelMode(s.rightPanelMode ? null : 'details');
+      return true;
+    case 'runQuery':
+      void s.runQuery();
+      return true;
+    case 'runQueryAll':
+      void s.runQuery({ all: true });
+      return true;
+    case 'cancelQuery':
+      void s.cancelQuery();
+      return true;
+    case 'history':
+      s.setCanvasMode(s.canvasMode === 'history' ? 'database' : 'history');
+      return true;
+    case 'settings':
+      s.setCanvasMode(s.canvasMode === 'settings' ? 'database' : 'settings');
+      return true;
+    case 'monitor':
+      s.setCanvasMode(s.canvasMode === 'monitor' ? 'database' : 'monitor');
+      return true;
+    case 'newTab':
+      s.addTab();
+      return true;
+    case 'closeTab':
+      s.requestCloseTabs([s.activeTabId]);
+      return true;
+    case 'nextTab':
+      cycleTab(1);
+      return true;
+    case 'prevTab':
+      cycleTab(-1);
+      return true;
+    case 'selectTab':
+      selectTabAt(0);
+      return true;
+    case 'exportCsv':
+      exportEvent('csv');
+      return true;
+    case 'exportJson':
+      exportEvent('json');
+      return true;
+    case 'formatSql':
+      void s.formatActiveSql();
+      return true;
+    case 'askAi': {
+      const tab = activeTab(s);
+      if (!tab || tab.kind !== 'sql' || !tab.sql.trim()) {
+        s.setRightPanelMode('ai');
+        return true;
+      }
+      void s.aiAsk(`Explain or improve this SQL:\n\n\`\`\`sql\n${tab.sql}\n\`\`\``);
+      return true;
+    }
+    case 'codegen':
+    case 'notebook':
+    case 'schemaDiff':
+      wb.setOverlay(id);
+      return true;
+    case 'commitEdits':
+      if (s.pendingEdits.length > 0) {
+        void s.commitPendingEdits().catch(() => undefined);
+        return true;
+      }
+      if (activeTab(s)?.kind === 'sql') {
+        void saveActiveSqlTab(false);
+        return true;
+      }
+      return false;
+    case 'saveFileAs':
+      if (activeTab(s)?.kind !== 'sql') return false;
+      void saveActiveSqlTab(true);
+      return true;
+    case 'openFile':
+      void openSqlFileInTab();
+      return true;
+    case 'refresh': {
+      const tab = activeTab(s);
+      if (engine === 'redis') {
+        void s.refreshRedisOverview();
+        void s.scanRedisKeys({ cursor: '0' });
+      } else if (engine === 'opensearch') {
+        void s.refreshOsOverview();
+      } else if (tab?.kind === 'table') {
+        void s.refreshTable();
+      } else {
+        void s.refreshSchema();
+      }
+      return true;
+    }
+    case 'wordWrap':
+      wb.setWordWrap(!wb.wordWrap);
+      return true;
+    case 'fontBigger':
+      setFontSize((n) => n + 1);
+      return true;
+    case 'fontSmaller':
+      setFontSize((n) => n - 1);
+      return true;
+    case 'fontReset':
+      setFontSize(() => 13);
+      return true;
+    case 'toggleTheme':
+      void s.toggleTheme();
+      return true;
+    case 'newConnection':
+      s.openDialog();
+      return true;
+    case 'disconnect':
+      void s.disconnect();
+      return true;
+    default:
+      // Documentation-only entries (grid keys etc.) and Monaco's own
+      // comment toggle are handled where they live.
+      return false;
+  }
+}

@@ -1,5 +1,11 @@
 import { Button } from '@/components/ui/button';
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import {
   Select,
   SelectContent,
@@ -7,6 +13,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { EmptyState } from '@/components/ui/view-parts';
 import type { QueryResult } from '@shared/protocol';
 import { Map as MapIcon } from 'lucide-react';
 import { useMemo, useState } from 'react';
@@ -67,42 +74,47 @@ export function PostGisDialog({
       <DialogContent className="max-w-3xl">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <MapIcon className="h-4 w-4 text-primary" />
+            <MapIcon className="h-4 w-4 text-[var(--wb-text-2)]" />
             Map preview
           </DialogTitle>
+          <DialogDescription className="sr-only">
+            Preview GeoJSON geometries from a result column on a map.
+          </DialogDescription>
         </DialogHeader>
 
         <div className="flex items-center gap-2">
-          <span className="font-display text-xs uppercase tracking-wider text-muted-foreground">
+          <span className="shrink-0 text-[12px] font-medium text-[var(--wb-text-2)]">
             Geometry column
           </span>
           <Select value={pickedCol} onValueChange={setPickedCol}>
-            <SelectTrigger className="h-8 w-[240px] text-xs">
+            <SelectTrigger className="w-[240px]">
               <SelectValue placeholder="Pick a column…" />
             </SelectTrigger>
             <SelectContent>
               {result?.columns.map((c) => (
                 <SelectItem key={c.name} value={c.name}>
-                  {c.name} <span className="ml-1 text-muted-foreground">({c.dataTypeName})</span>
+                  {c.name} <span className="ml-1 text-[var(--wb-text-2)]">({c.dataTypeName})</span>
                 </SelectItem>
               ))}
             </SelectContent>
           </Select>
-          <span className="ml-2 font-display text-xs italic text-muted-foreground">
-            wrap in <code>ST_AsGeoJSON(geom)</code> if needed
+          <span className="ml-2 text-[12px] text-[var(--wb-text-3)]">
+            Wrap in <code className="font-mono">ST_AsGeoJSON(geom)</code> if needed
           </span>
         </div>
 
-        <div className="rounded-md border border-border bg-muted/20 p-2">
+        <div className="rounded-[7px] border border-[var(--wb-separator)] bg-[var(--wb-content)] p-2">
           {features.length === 0 ? (
-            <div className="flex h-[360px] items-center justify-center font-display text-sm italic text-muted-foreground">
-              No GeoJSON features found in the selected column.
-            </div>
+            <EmptyState
+              className="h-[360px]"
+              title="No features"
+              hint="No GeoJSON features found in the selected column."
+            />
           ) : (
             <MapSvg features={features} bbox={bbox} />
           )}
         </div>
-        <div className="text-[11px] text-muted-foreground">
+        <div className="text-[12px] text-[var(--wb-text-2)]">
           {features.length} feature{features.length === 1 ? '' : 's'} ·{' '}
           {bbox && (
             <span className="font-mono">
@@ -113,7 +125,7 @@ export function PostGisDialog({
         </div>
 
         <div className="flex justify-end pt-2">
-          <Button variant="outline" size="sm" onClick={() => onOpenChange(false)}>
+          <Button variant="secondary" onClick={() => onOpenChange(false)}>
             Close
           </Button>
         </div>
@@ -255,7 +267,7 @@ function MapSvg({ features, bbox }: { features: GeoJsonGeom[]; bbox: BBox | null
   return (
     <svg viewBox={`0 0 ${W} ${H}`} className="h-[360px] w-full" role="img" aria-label="Map">
       <title>Map preview</title>
-      <rect x={0} y={0} width={W} height={H} className="fill-background" />
+      <rect x={0} y={0} width={W} height={H} fill="var(--wb-content)" />
       {features.map((f, i) => (
         // biome-ignore lint/suspicious/noArrayIndexKey: feature order is stable per query
         <FeatureSvg key={i} feature={f} project={project} />
@@ -271,8 +283,8 @@ function FeatureSvg({
   feature: GeoJsonGeom;
   project: (p: Pt) => [number, number];
 }) {
-  const stroke = 'oklch(0.55 0.15 240)';
-  const fill = 'oklch(0.55 0.15 240 / 0.18)';
+  const stroke = 'var(--chart-1)';
+  const fill = 'color-mix(in oklch, var(--chart-1) 18%, transparent)';
   switch (feature.kind) {
     case 'Point': {
       const [x, y] = project(feature.coords);

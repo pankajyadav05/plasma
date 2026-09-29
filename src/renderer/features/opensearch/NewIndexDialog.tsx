@@ -14,7 +14,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { IconButton, Pill, Segmented } from '@/components/ui/workbench';
-import { PLASMA_THEME_ID, applyMonacoTheme } from '@/features/editor/paperTheme';
+import { PLASMA_THEME_ID, registerMonacoThemes } from '@/features/editor/paperTheme';
 import { ipc } from '@/lib/ipc';
 import {
   DEFAULT_SPEC,
@@ -33,6 +33,8 @@ import type { OnMount } from '@monaco-editor/react';
 import { AlertTriangle, Boxes, Code, Lock, Plus, Trash2 } from 'lucide-react';
 import type * as MonacoType from 'monaco-editor';
 import { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react';
+import { errMessage } from './os-parts';
+import { confirmOsWrite, useOsWriteAccess } from './os-write';
 
 const Editor = lazy(() => import('@monaco-editor/react').then((m) => ({ default: m.default })));
 
@@ -50,10 +52,6 @@ const FIELD_CLASS =
 
 const LABEL_CLASS = 'text-[12px] text-[var(--wb-text-2)]';
 
-function stripIpcPrefix(msg: string): string {
-  return msg.replace(/^Error invoking remote method '[^']+':\s*/i, '').replace(/^Error:\s*/i, '');
-}
-
 /**
  * Create-index dialog with two synchronised views.
  *
@@ -68,7 +66,9 @@ export function NewIndexDialog() {
   const open = useSession((s) => s.osNewIndexOpen);
   const close = useSession((s) => s.closeOsNewIndex);
   const refreshOverview = useSession((s) => s.refreshOsOverview);
-  const themeName = useSession((s) => s.settings.theme);
+  const access = useOsWriteAccess();
+  // F34: validate the name on blur / submit, not the moment the dialog opens.
+  const [nameTouched, setNameTouched] = useState(false);
   const fontSize = useSession((s) => s.settings.editorFontSize);
 
   const [mode, setMode] = useState<Mode>('form');
@@ -100,6 +100,7 @@ export function NewIndexDialog() {
       setParseNotes([]);
       setSubmitError(null);
       setFieldIds([]);
+      setNameTouched(false);
       idCounter.current = 0;
       jsonDirty.current = false;
     }
@@ -198,11 +199,16 @@ export function NewIndexDialog() {
   }
 
   const handleMount: OnMount = (_editor, monaco) => {
-    applyMonacoTheme(monaco as typeof MonacoType, themeName);
+    registerMonacoThemes(monaco as typeof MonacoType);
   };
 
   async function onSubmit() {
     setSubmitError(null);
+    setNameTouched(true);
+    if (!access.canWrite) {
+      setSubmitError(access.reason ?? 'writes are disabled');
+      return;
+    }
     // Make sure we submit the live JSON if the user is in JSON mode.
     let body: Record<string, unknown>;
     let name = spec.name;
@@ -223,13 +229,19 @@ export function NewIndexDialog() {
       setSubmitError(`name: ${nameErr}`);
       return;
     }
+    const ok = await confirmOsWrite({
+      title: 'Create index?',
+      description: `Index ${name} will be created on the cluster.`,
+      confirmLabel: 'Create index',
+    });
+    if (!ok) return;
     setSubmitting(true);
     try {
       await ipc.os.createIndex(name, body);
       await refreshOverview();
       close();
     } catch (err) {
-      setSubmitError(err instanceof Error ? err.message : String(err));
+      setSubmitError(errMessage(err));
     } finally {
       setSubmitting(false);
     }
@@ -258,13 +270,18 @@ export function NewIndexDialog() {
             <Input
               value={spec.name}
               onChange={(e) => commitSpec({ ...spec, name: e.target.value })}
+              onBlur={() => {
+                if (spec.name) setNameTouched(true);
+              }}
               placeholder="orders-2026-05"
               className={`${FIELD_CLASS} w-72`}
               aria-label="Index name"
               spellCheck={false}
               autoFocus
             />
-            {nameError && <span className="text-[12px] text-destructive">{nameError}</span>}
+            {nameError && nameTouched && (
+              <span className="text-[12px] text-destructive">{nameError}</span>
+            )}
           </div>
           <div className="flex flex-col gap-1">
             <span className={LABEL_CLASS}>Shards</span>
@@ -376,7 +393,7 @@ export function NewIndexDialog() {
               <div className="min-w-0 flex-1">
                 <div className="text-[12px] font-semibold text-destructive">Create failed</div>
                 <div className="mt-0.5 break-words font-mono text-[12px] leading-snug text-[var(--wb-text)]">
-                  {stripIpcPrefix(submitError)}
+                  {submitError}
                 </div>
               </div>
             </div>
@@ -385,14 +402,19 @@ export function NewIndexDialog() {
 
         {/* Footer */}
         <div className="flex h-12 shrink-0 items-center justify-end gap-2 border-t border-[var(--wb-separator)] px-5">
+          {!access.canWrite && (
+            <span className="mr-auto text-[12px] text-[var(--wb-text-2)]">{access.reason}</span>
+          )}
           <Pill className="h-7 px-3" onClick={() => close()} disabled={submitting}>
             Cancel
           </Pill>
           <Pill
             className="h-7 bg-[var(--wb-control-active)] px-3 font-medium hover:bg-[var(--wb-control-hover)]"
             onClick={() => void onSubmit()}
+            title={access.reason ?? undefined}
             disabled={
               submitting ||
+              !access.canWrite ||
               (mode === 'form' && formInvalid) ||
               (mode === 'json' && jsonError !== null)
             }

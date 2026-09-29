@@ -4,24 +4,27 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <!--
-      CSP note:
-      - script-src includes 'unsafe-eval' + 'unsafe-inline' + blob: because
-        Monaco Editor (loaded via @monaco-editor/react) requires eval/Function
-        and creates blob-URL workers for its background threads.
-      - connect-src + style-src include https://cdn.jsdelivr.net because
-        @monaco-editor/react's default loader fetches Monaco from jsDelivr.
-      - worker-src blob: is needed for Monaco's web workers.
+      Production CSP (C16). Monaco and every font are bundled locally, so
+      nothing is loaded from a CDN and scripts need neither inline code nor
+      eval. Monaco's workers are inlined as blob: URLs (worker-src blob:);
+      its widgets set inline styles ('unsafe-inline' for style-src only).
+      The dev server relaxes script-src/connect-src for React Refresh + HMR
+      (see devCspPlugin in electron.vite.config.ts).
     -->
     <meta
       http-equiv="Content-Security-Policy"
       content="
         default-src 'self';
-        script-src 'self' 'unsafe-eval' 'unsafe-inline' blob: https://cdn.jsdelivr.net;
-        worker-src 'self' blob: data:;
-        style-src 'self' 'unsafe-inline' https://fonts.bunny.net https://cdn.jsdelivr.net;
-        font-src 'self' https://fonts.bunny.net data:;
+        script-src 'self';
+        worker-src 'self' blob:;
+        style-src 'self' 'unsafe-inline';
+        font-src 'self' data:;
         img-src 'self' data: blob:;
-        connect-src 'self' ws: http://localhost:* https://cdn.jsdelivr.net;
+        connect-src 'self';
+        object-src 'none';
+        base-uri 'none';
+        form-action 'none';
+        frame-src 'none';
       "
     />
     <title>Plasma</title>
@@ -34,11 +37,6 @@
     <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
     <link rel="mask-icon" href="/favicon.svg" color="#7B2D26" />
 
-    <link rel="preconnect" href="https://fonts.bunny.net" />
-    <link
-      href="https://fonts.bunny.net/css?family=newsreader:400,400i,500,500i|dm-sans:400,500,600|jetbrains-mono:400,500&display=swap"
-      rel="stylesheet"
-    />
   </head>
   <body>
     <div id="root"></div>

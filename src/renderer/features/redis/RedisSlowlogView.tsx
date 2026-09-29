@@ -9,6 +9,7 @@ import { useWorkbench } from '@/stores/workbench';
 import type { RedisSlowlogEntry } from '@shared/protocol';
 import { Loader2, RefreshCw } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useRedisWriteGate } from './use-redis-write';
 
 const SLOWLOG_LIMIT = 128;
 
@@ -18,6 +19,8 @@ const SLOWLOG_LIMIT = 128;
  * argv (and client) to the right sidebar's Details pane.
  */
 export function RedisSlowlogView() {
+  // S1: SLOWLOG RESET is a write — only with edit mode on a writable connection.
+  const { canWrite } = useRedisWriteGate();
   const tabId = useActiveTab()?.id ?? null;
   const [entries, setEntries] = useState<RedisSlowlogEntry[]>([]);
   const [loading, setLoading] = useState(false);
@@ -142,13 +145,15 @@ export function RedisSlowlogView() {
         <IconButton label="Refresh slowlog" onClick={() => void load()} disabled={loading}>
           {loading ? <Loader2 className="animate-spin" /> : <RefreshCw />}
         </IconButton>
-        <Pill
-          onClick={() => setConfirmReset(true)}
-          disabled={loading || entries.length === 0}
-          className="text-destructive"
-        >
-          Reset…
-        </Pill>
+        {canWrite && (
+          <Pill
+            onClick={() => setConfirmReset(true)}
+            disabled={loading || entries.length === 0}
+            className="text-destructive"
+          >
+            Reset…
+          </Pill>
+        )}
       </ViewToolbar>
 
       {error && (

@@ -1,9 +1,16 @@
+import { runCommand } from '@/features/keymap/commands';
 import { statementPosition } from '@/lib/sql-split';
 import type { EditorCursor, TabCaret } from '@/stores/workbench';
 import type { OnChange, OnMount } from '@monaco-editor/react';
-import { binding, monacoKeybinding } from '@shared/keymap';
+import {
+  EDITOR_PASSTHROUGH,
+  type KeyId,
+  binding,
+  matchGlobalBinding,
+  monacoKeybinding,
+} from '@shared/keymap';
 import type * as MonacoType from 'monaco-editor';
-import { Suspense, lazy, useCallback, useEffect, useRef } from 'react';
+import { Suspense, lazy, useCallback, useEffect, useRef, useState } from 'react';
 import { PLASMA_THEME_ID, applyMonacoTheme } from './paperTheme';
 import { registerSqlCompletions } from './sqlCompletions';
 
@@ -22,7 +29,8 @@ interface Props {
   onRun: () => void;
   /** ⌘⇧⏎ — whole buffer. */
   onRunAll: () => void;
-  onToggle: () => void;
+  /** @deprecated ⌘J is dispatched globally now; kept for callers. */
+  onToggle?: () => void;
   theme: 'light' | 'dark';
   fontSize: number;
   readOnly?: boolean;
@@ -45,6 +53,19 @@ interface Props {
   path?: string;
   /** Tint the statement "Run Current" would execute (multi-statement buffers). */
   highlightCurrentStatement?: boolean;
+  wordWrap?: boolean;
+  /** Changing this focuses the editor (history / new tab / ⌘J). */
+  focusNonce?: number;
+}
+
+/** Editor-scoped chords dispatched through the shared command table. */
+const EDITOR_COMMANDS: KeyId[] = ['fontBigger', 'fontSmaller', 'fontReset', 'wordWrap'];
+
+/** The user's mono font (`--font-mono`), resolved for Monaco's measurer. */
+function monoFontFamily(): string {
+  if (typeof document === 'undefined') return 'monospace';
+  const v = getComputedStyle(document.documentElement).getPropertyValue('--font-mono').trim();
+  return v || '"JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace';
 }
 
 /**
@@ -58,7 +79,6 @@ export function MonacoEditor({
   onChange,
   onRun,
   onRunAll,
-  onToggle,
   theme,
   fontSize,
   readOnly = false,
@@ -71,6 +91,8 @@ export function MonacoEditor({
   onCaret,
   path,
   highlightCurrentStatement = false,
+  wordWrap = true,
+  focusNonce,
 }: Props) {
   const monacoRef = useRef<typeof MonacoType | null>(null);
   const editorRef = useRef<MonacoType.editor.IStandaloneCodeEditor | null>(null);
@@ -79,7 +101,6 @@ export function MonacoEditor({
   // once at mount) always see the current closure without re-binding.
   const onRunRef = useRef(onRun);
   const onRunAllRef = useRef(onRunAll);
-  const onToggleRef = useRef(onToggle);
   const onFormatRef = useRef(onFormat);
   const onAskAiRef = useRef(onAskAi);
   const onCursorChangeRef = useRef(onCursorChange);
@@ -94,10 +115,9 @@ export function MonacoEditor({
   useEffect(() => {
     onRunRef.current = onRun;
     onRunAllRef.current = onRunAll;
-    onToggleRef.current = onToggle;
     onFormatRef.current = onFormat;
     onAskAiRef.current = onAskAi;
-  }, [onRun, onRunAll, onToggle, onFormat, onAskAi]);
+  }, [onRun, onRunAll, onFormat, onAskAi]);
 
   const publishCaret = useCallback((editor: MonacoType.editor.IStandaloneCodeEditor) => {
     const model = editor.getModel();
@@ -156,21 +176,31 @@ export function MonacoEditor({
       applyMonacoTheme(monaco, theme);
       registerSqlCompletions(monaco);
 
+      // VF21: a run closes the suggest widget so it can't linger over results.
+      const hideWidgets = () => editor.trigger('plasma', 'hideSuggestWidget', {});
+
       // Chords from `@shared/keymap` so U24 registers through the same module.
       editor.addCommand(monacoKeybinding(monaco, binding('runQuery').chord), () => {
+        hideWidgets();
         publishCaret(editor);
         onRunRef.current();
       });
       editor.addCommand(monacoKeybinding(monaco, binding('runQueryAll').chord), () => {
+        hideWidgets();
         publishCaret(editor);
         onRunAllRef.current();
       });
-      editor.addCommand(monacoKeybinding(monaco, binding('toggleEditor').chord), () => {
-        onToggleRef.current();
-      });
-      editor.addCommand(monacoKeybinding(monaco, binding('formatSql').chord), () => {
-        onFormatRef.current?.();
-      });
+      const format = binding('formatSql');
+      for (const chord of [format.chord, ...(format.altChords ?? [])]) {
+        editor.addCommand(monacoKeybinding(monaco, chord), () => {
+          onFormatRef.current?.();
+        });
+      }
+      for (const id of EDITOR_COMMANDS) {
+        editor.addCommand(monacoKeybinding(monaco, binding(id).chord), () => {
+          runCommand(id);
+        });
+      }
       editor.addCommand(monacoKeybinding(monaco, binding('askAi').chord), () => {
         const sel = editor.getSelection();
         const text =
@@ -179,9 +209,20 @@ export function MonacoEditor({
             : editor.getValue();
         onAskAiRef.current?.(text);
       });
-      // Esc — close drawer when focused (not in KEYMAP: editor-local only)
-      editor.addCommand(monaco.KeyCode.Escape, () => {
-        onToggleRef.current();
+      // No Esc binding: Esc stays Monaco's (close suggest / find / hints,
+      // collapse multi-cursor) — E2 / K2.
+
+      // K2 / VF22: global chords Monaco would swallow (⌘K is its chord
+      // prefix; ⌘J / ⌘B / ⌘W … would otherwise do nothing while typing)
+      // run the app command. Stopping propagation keeps Monaco's keybinding
+      // service (on the container) from also handling them.
+      const keyDisposable = editor.onKeyDown((e) => {
+        const hit = matchGlobalBinding(e.browserEvent);
+        if (!hit || !EDITOR_PASSTHROUGH.has(hit.id)) return;
+        if (runCommand(hit.id)) {
+          e.preventDefault();
+          e.stopPropagation();
+        }
       });
 
       publishCaret(editor);
@@ -192,6 +233,7 @@ export function MonacoEditor({
         // cursor must be re-published for the new tab.
         editor.onDidChangeModel(() => publishCaret(editor)),
         editor.onDidChangeModelContent(() => publishCaret(editor)),
+        keyDisposable,
       ];
       editor.onDidDispose(() => {
         for (const d of disposables) d.dispose();
@@ -200,6 +242,24 @@ export function MonacoEditor({
     },
     [theme, publishCaret],
   );
+
+  useEffect(() => {
+    if (focusNonce === undefined || focusNonce === 0) return;
+    editorRef.current?.focus();
+  }, [focusNonce]);
+
+  // Track the user's mono font (Settings → font) — Monaco needs a
+  // concrete family string and a re-measure when it changes.
+  const [fontFamily, setFontFamily] = useState(monoFontFamily);
+  useEffect(() => {
+    const update = () => {
+      setFontFamily(monoFontFamily());
+      monacoRef.current?.editor.remeasureFonts();
+    };
+    const mo = new MutationObserver(update);
+    mo.observe(document.documentElement, { attributes: true, attributeFilter: ['style', 'class'] });
+    return () => mo.disconnect();
+  }, []);
 
   // Re-apply Monaco theme whenever the app theme or palette changes.
   useEffect(() => {
@@ -336,7 +396,7 @@ export function MonacoEditor({
           </div>
         }
         options={{
-          fontFamily: '"JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace',
+          fontFamily,
           fontSize,
           // TablePlus: 13px text on a 20px line; scale the line with the
           // user's font-size setting so larger sizes keep the same rhythm.
@@ -348,7 +408,7 @@ export function MonacoEditor({
           glyphMargin: false,
           folding: false,
           renderLineHighlight: 'line',
-          wordWrap: 'on',
+          wordWrap: wordWrap ? 'on' : 'off',
           padding: { top: 16, bottom: 16 },
           scrollbar: {
             vertical: 'auto',
@@ -364,8 +424,10 @@ export function MonacoEditor({
           insertSpaces: true,
           readOnly,
           domReadOnly: readOnly,
-          contextmenu: false,
-          fixedOverflowWidgets: true,
+          contextmenu: true,
+          // VF21: keep suggest / hover widgets inside the editor instead
+          // of floating over the result grid and the right sidebar.
+          fixedOverflowWidgets: false,
         }}
       />
     </Suspense>

@@ -1,3 +1,4 @@
+import { KEYMAP } from '@shared/keymap';
 import { IpcChannel } from '@shared/protocol';
 import { expect, test } from 'vitest';
 import { eventChannels } from './event-channels';
@@ -15,5 +16,13 @@ test('IpcChannel event channels are all bridged by the preload', () => {
 
   expect(pushChannels.length).toBeGreaterThan(0);
   const missing = pushChannels.filter((channel) => !eventChannels.some((c) => c === channel));
+  expect(missing).toEqual([]);
+});
+
+/** Native menu items send `menuChannel`; the renderer must be able to subscribe. */
+test('every keymap menu channel is bridged by the preload', () => {
+  const missing = KEYMAP.flatMap((b) => (b.menuChannel ? [b.menuChannel] : [])).filter(
+    (channel) => !eventChannels.some((c) => c === channel),
+  );
   expect(missing).toEqual([]);
 });

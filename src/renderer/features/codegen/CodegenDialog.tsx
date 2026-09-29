@@ -1,5 +1,13 @@
 import { Button } from '@/components/ui/button';
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Checkbox } from '@/components/ui/checkbox';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
 import {
   Select,
   SelectContent,
@@ -7,11 +15,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { EmptyState } from '@/components/ui/view-parts';
 import { cn } from '@/lib/cn';
-import { useSession } from '@/stores/session';
+import { useActiveTabSelect, useSession } from '@/stores/session';
 import type { SchemaInfo } from '@shared/protocol';
 import { Check, Copy, Search } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
 
 type Target = 'ts' | 'zod' | 'prisma' | 'drizzle' | 'sqlalchemy' | 'sql';
 
@@ -41,8 +50,24 @@ export function CodegenDialog({
   const [filter, setFilter] = useState('');
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [copied, setCopied] = useState(false);
+  const idBase = useId();
+  // The table open in the active tab, preselected when the dialog opens (F30).
+  const activeTableKey = useActiveTabSelect((t) =>
+    t?.kind === 'table' && t.tableSchema && t.tableName ? `${t.tableSchema}.${t.tableName}` : null,
+  );
 
   const tables = schema?.tables ?? [];
+
+  // Preselect on the closed → open transition only, so unticking the
+  // active table while the dialog is open sticks.
+  const wasOpen = useRef(false);
+  useEffect(() => {
+    const opening = open && !wasOpen.current;
+    wasOpen.current = open;
+    if (!opening || !activeTableKey) return;
+    if (!tables.some((t) => `${t.schema}.${t.name}` === activeTableKey)) return;
+    setSelected((prev) => (prev.has(activeTableKey) ? prev : new Set(prev).add(activeTableKey)));
+  }, [open, activeTableKey, tables]);
   const visible = useMemo(() => {
     const q = filter.trim().toLowerCase();
     return q ? tables.filter((t) => `${t.schema}.${t.name}`.toLowerCase().includes(q)) : tables;
@@ -76,67 +101,74 @@ export function CodegenDialog({
       <DialogContent className="max-w-4xl">
         <DialogHeader>
           <DialogTitle>Generate code</DialogTitle>
+          <DialogDescription className="sr-only">
+            Pick tables and a target to generate type or model code.
+          </DialogDescription>
         </DialogHeader>
 
         <div className="grid grid-cols-[280px_1fr] gap-3">
-          <div className="flex flex-col gap-2 rounded-md border border-border">
-            <div className="flex items-center gap-1.5 border-b border-border px-2 py-1.5">
-              <Search className="h-3.5 w-3.5 text-muted-foreground" />
-              <input
+          <div className="flex min-w-0 flex-col overflow-hidden rounded-[7px] border border-[var(--wb-separator)] bg-[var(--wb-sidebar)]">
+            <div className="relative border-b border-[var(--wb-separator)] p-1.5">
+              <Search className="pointer-events-none absolute left-3.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--wb-text-3)]" />
+              <Input
                 value={filter}
                 onChange={(e) => setFilter(e.target.value)}
                 placeholder="Filter tables…"
-                className="h-6 flex-1 border-0 bg-transparent text-xs outline-none"
+                aria-label="Filter tables"
+                className="pl-7"
               />
             </div>
-            <div className="max-h-[360px] overflow-y-auto p-1">
+            <div className="max-h-[360px] min-h-0 flex-1 overflow-y-auto p-1">
               {visible.length === 0 && (
-                <div className="px-2 py-3 font-display text-xs italic text-muted-foreground">
-                  no tables
-                </div>
+                <EmptyState
+                  className="min-h-[120px]"
+                  title="No tables"
+                  hint={filter.trim() ? 'No tables match the filter.' : undefined}
+                />
               )}
-              {visible.map((t) => {
+              {visible.map((t, i) => {
                 const key = `${t.schema}.${t.name}`;
                 const on = selected.has(key);
+                const id = `${idBase}-t${i}`;
                 return (
-                  <button
+                  <div
                     key={key}
-                    type="button"
-                    onClick={() => toggle(key)}
                     className={cn(
-                      'flex w-full items-center gap-2 rounded-sm px-2 py-1 text-left font-mono text-[11px]',
-                      on ? 'bg-accent text-accent-foreground' : 'hover:bg-accent/40',
+                      'flex w-full min-w-0 items-center gap-2 rounded-[5px] px-2 py-1 font-mono text-[12px] text-[var(--wb-text)]',
+                      on ? 'bg-[var(--wb-selected)]' : 'hover:bg-[var(--wb-control-hover)]',
                     )}
                   >
-                    <span
-                      className={cn(
-                        'h-3 w-3 rounded-sm border',
-                        on ? 'border-primary bg-primary' : 'border-border',
-                      )}
+                    <Checkbox
+                      id={id}
+                      checked={on}
+                      onCheckedChange={() => toggle(key)}
+                      className="shrink-0"
                     />
-                    <span className="truncate">{key}</span>
-                  </button>
+                    <label
+                      htmlFor={id}
+                      className="min-w-0 flex-1 cursor-default truncate"
+                      title={key}
+                    >
+                      {key}
+                    </label>
+                  </div>
                 );
               })}
             </div>
-            <div className="flex items-center justify-between border-t border-border px-2 py-1.5 text-[10px] uppercase text-muted-foreground">
+            <div className="flex h-7 items-center justify-between border-t border-[var(--wb-separator)] px-2 text-[12px] text-[var(--wb-text-2)]">
               <span>{selected.size} selected</span>
               {selected.size > 0 && (
-                <button
-                  type="button"
-                  onClick={() => setSelected(new Set())}
-                  className="hover:text-foreground"
-                >
-                  clear
-                </button>
+                <Button variant="ghost" size="xs" onClick={() => setSelected(new Set())}>
+                  Clear
+                </Button>
               )}
             </div>
           </div>
 
-          <div className="flex min-h-0 flex-col gap-2 rounded-md border border-border">
-            <div className="flex items-center gap-2 border-b border-border px-2 py-1.5">
+          <div className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-[7px] border border-[var(--wb-separator)]">
+            <div className="flex items-center gap-2 border-b border-[var(--wb-separator)] bg-[var(--wb-sidebar)] px-2 py-1.5">
               <Select value={target} onValueChange={(v) => setTarget(v as Target)}>
-                <SelectTrigger className="h-7 w-[200px] text-xs">
+                <SelectTrigger className="w-[200px]">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -148,18 +180,24 @@ export function CodegenDialog({
                 </SelectContent>
               </Select>
               <div className="flex-1" />
-              <Button variant="ghost" size="icon-xs" onClick={handleCopy} title="Copy">
-                {copied ? <Check className="text-primary" /> : <Copy />}
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                onClick={handleCopy}
+                title="Copy"
+                aria-label="Copy code"
+              >
+                {copied ? <Check /> : <Copy />}
               </Button>
             </div>
-            <pre className="max-h-[400px] min-h-[260px] overflow-auto bg-muted/30 p-3 font-mono text-[11px] leading-relaxed text-foreground">
+            <pre className="max-h-[400px] min-h-[260px] flex-1 overflow-auto bg-[var(--wb-content)] p-3 font-mono text-[12px] leading-relaxed text-[var(--wb-text)]">
               {code || '// pick tables on the left'}
             </pre>
           </div>
         </div>
 
         <div className="flex justify-end pt-2">
-          <Button variant="outline" size="sm" onClick={() => onOpenChange(false)}>
+          <Button variant="secondary" onClick={() => onOpenChange(false)}>
             Close
           </Button>
         </div>
@@ -190,10 +228,10 @@ function generate(target: Target, schema: SchemaInfo, tables: Tables): string {
       ].join('\n');
     case 'sqlalchemy':
       return [
-        `from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column`,
-        `from sqlalchemy import String, Integer, Boolean, DateTime, Numeric, JSON`,
-        ``,
-        `class Base(DeclarativeBase): ...`,
+        'from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column',
+        'from sqlalchemy import String, Integer, Boolean, DateTime, Numeric, JSON',
+        '',
+        'class Base(DeclarativeBase): ...',
         '',
         ...tables.map((t) => generateSqlAlchemy(schema, t)),
       ].join('\n');

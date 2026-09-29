@@ -62,3 +62,43 @@ test('requests before the ready handshake are refused, not queued', async () => 
 
   supervisor.stop();
 });
+
+test('a respawn that times out schedules exactly one more restart (C25)', async () => {
+  vi.useFakeTimers();
+  try {
+    const workers: ReturnType<typeof fakeWorker>[] = [];
+    vi.spyOn(utilityProcess, 'fork').mockImplementation(() => {
+      const w = fakeWorker();
+      // kill() makes the process exit, like the real thing.
+      (w.proc as unknown as { kill: () => boolean }).kill = () => {
+        queueMicrotask(() => w.emitter.emit('exit', null));
+        return true;
+      };
+      workers.push(w);
+      return w.proc;
+    });
+    const supervisor = new WorkerSupervisor();
+    const started = supervisor.start('/tmp/plasma-worker.js');
+    workers[0]?.emitter.emit('message', { kind: 'ready', id: 'boot' });
+    await started;
+
+    workers[0]?.emitter.emit('exit', 1); // crash → respawn after backoff
+    await vi.advanceTimersByTimeAsync(300);
+    expect(workers).toHaveLength(2);
+
+    await vi.advanceTimersByTimeAsync(15_000); // respawn never readies → killed
+    await vi.advanceTimersByTimeAsync(1_000); // one backoff
+    expect(workers).toHaveLength(3);
+    workers[2]?.emitter.emit('message', { kind: 'ready', id: 'boot' });
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(workers).toHaveLength(3);
+
+    // The live worker still answers — the dead one's exit didn't null it.
+    const pending = supervisor.request({ kind: 'ping', id: 'p9', message: 'x' });
+    workers[2]?.emitter.emit('message', { kind: 'ping', id: 'p9', echo: 'x', timestamp: 1 });
+    expect(await pending).toMatchObject({ kind: 'ping' });
+    supervisor.stop();
+  } finally {
+    vi.useRealTimers();
+  }
+});

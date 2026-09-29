@@ -41,9 +41,25 @@ export type AppMeta = z.infer<typeof AppMeta>;
  */
 export const ConnectionEngine = z.enum(['postgres', 'redis', 'opensearch']);
 export type ConnectionEngine = z.infer<typeof ConnectionEngine>;
-export const TlsMode = z.enum(['verify-full', 'verify-ca', 'insecure']);
+/**
+ * libpq-style TLS modes (C4/C9). `disable` is the same as `ssl: false`.
+ * `insecure` is the pre-C9 spelling of `require` and is kept so old
+ * rows still parse.
+ */
+export const TlsMode = z.enum(['disable', 'prefer', 'require', 'verify-ca', 'verify-full', 'insecure']);
 export type TlsMode = z.infer<typeof TlsMode>;
-export const ConnectionTls = z.object({ mode: TlsMode.default('verify-full'), ca: z.string().optional(), servername: z.string().optional() });
+export const ConnectionTls = z.object({
+  mode: TlsMode.default('verify-full'),
+  /** PEM contents — filled in by main from the *File paths before connect. */
+  ca: z.string().optional(),
+  cert: z.string().optional(),
+  key: z.string().optional(),
+  /** Paths the user picked in the dialog; persisted in the vault. */
+  caFile: z.string().optional(),
+  certFile: z.string().optional(),
+  keyFile: z.string().optional(),
+  servername: z.string().optional(),
+});
 export type ConnectionTls = z.infer<typeof ConnectionTls>;
 
 export const ConnectionConfig = z.object({
@@ -94,10 +110,30 @@ export const ConnectionRecovered = z.object({
   connectionGen: z.number().int().nonnegative(),
   /** Attempts spent before the session came back (>= 1). */
   attempts: z.number().int().positive(),
+  /** Saved connection the session belongs to — the renderer ignores mismatches (C11). */
+  connectionId: z.string().optional(),
 });
 export type ConnectionRecovered = z.infer<typeof ConnectionRecovered>;
 export const ConnectionSshConfig = z.object({ host: z.string().min(1), port: z.number().int().positive().max(65535).default(22), user: z.string().min(1), password: z.string().default(''), privateKey: z.string().default(''), passphrase: z.string().default('') });
 export type ConnectionSshConfig = z.infer<typeof ConnectionSshConfig>;
+
+/** Payload of `IpcChannel.SshHostKeyPromptEvent` (C8). */
+export interface SshHostKeyPrompt {
+  requestId: string;
+  host: string;
+  port: number;
+  fingerprint: string;
+  /** `changed` = the host presented a different key than the one remembered. */
+  kind: 'unknown' | 'changed';
+  expectedFingerprint?: string;
+}
+
+/** What would be lost if the window closed now (C32). */
+export const AppUnsavedState = z.object({
+  openTransaction: z.boolean(),
+  pendingEdits: z.number().int().nonnegative(),
+});
+export type AppUnsavedState = z.infer<typeof AppUnsavedState>;
 
 // ─── Redis types ─────────────────────────────────────────────────────
 
@@ -130,6 +166,10 @@ export const RedisScanResult = z.object({
   cursor: z.string(),
   keys: z.array(RedisKeyMeta),
   scanned: z.number().int(),
+  /** SCAN calls made for this page (a MATCH scan loops until it finds enough keys). */
+  iterations: z.number().int().optional(),
+  /** Database the page was read from. */
+  db: z.number().int().optional(),
 });
 export type RedisScanResult = z.infer<typeof RedisScanResult>;
 
@@ -140,18 +180,65 @@ export const RedisKeyValue = z.object({
   encoding: z.string().optional(),
   /**
    * Engine-shape payload, all serialized for IPC.
-   *  - string  → string
-   *  - list    → string[]
-   *  - set     → string[]
-   *  - zset    → [member, score][]
-   *  - hash    → [field, value][]
-   *  - stream  → { id, fields: [name, value][] }[]
+   *  - string  → string, or RedisBinaryValue / large-value stub
+   *  - list    → { items: RedisCell[], total }
+   *  - set     → { items: RedisCell[], total }
+   *  - zset    → { items: [RedisCell, score][], total }
+   *  - hash    → { items: [RedisCell, RedisCell][], total }
+   *  - stream  → { items: { id, fields: [name, RedisCell][] }[], total, groups? }
    *  - json    → any (already parsed by RedisJSON.GET)
    *  - none    → null
+   * A RedisCell is a string, or `{ $binary: base64 }` when the bytes are
+   * not valid UTF-8 (R12) — never a lossy utf8 decode.
    */
   value: z.unknown(),
+  /** Raw TYPE reply — set for module types rendered as `unknown` (R16). */
+  typeName: z.string().optional(),
+  /** MEMORY USAGE in bytes; null when unavailable (ACL / old server). */
+  memoryBytes: z.number().int().nullable().optional(),
+  /** OBJECT IDLETIME seconds / OBJECT FREQ (LFU only); null when unavailable. */
+  idleSeconds: z.number().int().nullable().optional(),
+  freq: z.number().int().nullable().optional(),
+  /**
+   * Continuation for collections read page by page (R24): list offset,
+   * SCAN cursor, zset rank or stream id. null/absent = no more elements.
+   */
+  nextCursor: z.string().nullable().optional(),
+  /** Page stopped early because the element bytes hit the fetch budget (R11). */
+  byteCapped: z.boolean().optional(),
+  /** Database the key was read from. */
+  db: z.number().int().optional(),
 });
 export type RedisKeyValue = z.infer<typeof RedisKeyValue>;
+
+/** Options for reading one page of a key (R24). */
+export const RedisGetKeyOpts = z.object({
+  db: z.number().int().nonnegative().optional(),
+  /** Continuation from a previous page's `nextCursor`. */
+  cursor: z.string().optional(),
+  /** Elements per page (default 500, max 5000). */
+  count: z.number().int().positive().max(5000).optional(),
+  /** HSCAN/SSCAN/ZSCAN MATCH filter. */
+  match: z.string().optional(),
+  /** Newest-first for streams (XREVRANGE), highest score first for zsets. */
+  reverse: z.boolean().optional(),
+});
+export type RedisGetKeyOpts = z.infer<typeof RedisGetKeyOpts>;
+
+/** Result of a server-side delete-by-pattern (R26). */
+export const RedisPatternDeleteResult = z.object({
+  /** Keys matched by the SCAN (capped at `limit`). */
+  matched: z.number().int(),
+  /** Keys actually removed (0 on a dry run). */
+  deleted: z.number().int(),
+  /** First few matching keys, for the confirmation preview. */
+  sample: z.array(z.string()),
+  /** True when the scan stopped at the limit before the cursor finished. */
+  capped: z.boolean(),
+  failed: z.number().int(),
+  dryRun: z.boolean(),
+});
+export type RedisPatternDeleteResult = z.infer<typeof RedisPatternDeleteResult>;
 
 export const RedisCommandResult = z.object({
   command: z.string(),
@@ -189,7 +276,8 @@ export type RedisOverview = z.infer<typeof RedisOverview>;
 export const RedisAnalyzeSample = z.object({
   key: z.string(),
   type: RedisValueType,
-  bytes: z.number().int(),
+  /** MEMORY USAGE; null when unavailable (never a fake 0). */
+  bytes: z.number().int().nullable(),
   ttlMs: z.number().int().nullable(),
 });
 export type RedisAnalyzeSample = z.infer<typeof RedisAnalyzeSample>;
@@ -217,6 +305,10 @@ export const RedisAnalyzeResult = z.object({
       bytes: z.number().int(),
     }),
   ),
+  /** True when the user cancelled — the aggregates cover what was scanned so far. */
+  cancelled: z.boolean().optional(),
+  /** Keys whose MEMORY USAGE was unavailable (excluded from byte totals). */
+  unsized: z.number().int().optional(),
 });
 export type RedisAnalyzeResult = z.infer<typeof RedisAnalyzeResult>;
 export const RedisBulkDeleteFailure = z.object({ key: z.string(), error: z.string() });
@@ -258,6 +350,8 @@ export const RedisWriteOp = z.discriminatedUnion('kind', [
     value: z.string(),
     /** Optional TTL in seconds; 0 / undefined keeps existing TTL semantics. */
     ttlSeconds: z.number().int().optional(),
+    /** SET … KEEPTTL — keep whatever expiry the key has *now* (R9). */
+    keepTtl: z.boolean().optional(),
   }),
   z.object({ kind: z.literal('hashSet'), key: z.string(), field: z.string(), value: z.string() }),
   z.object({ kind: z.literal('hashDel'), key: z.string(), field: z.string() }),
@@ -282,6 +376,55 @@ export const RedisWriteOp = z.discriminatedUnion('kind', [
     score: z.number(),
   }),
   z.object({ kind: z.literal('zsetRem'), key: z.string(), member: z.string() }),
+  // ── R21 / R23 ──
+  /** RENAMENX, or RENAME when `overwrite` (destination replaced). */
+  z.object({
+    kind: z.literal('rename'),
+    key: z.string(),
+    newKey: z.string().min(1),
+    overwrite: z.boolean().optional(),
+  }),
+  /** COPY (Redis ≥ 6.2), falling back to DUMP + RESTORE; keeps the TTL. */
+  z.object({
+    kind: z.literal('copy'),
+    key: z.string(),
+    newKey: z.string().min(1),
+    overwrite: z.boolean().optional(),
+  }),
+  /** Create a new key with one initial element; fails if the key exists. */
+  z.object({
+    kind: z.literal('createKey'),
+    key: z.string().min(1),
+    keyType: z.enum(['string', 'hash', 'list', 'set', 'zset', 'stream', 'json']),
+    /** string value / hash value / list element / set member / zset member / JSON document. */
+    value: z.string(),
+    /** hash field or stream field name. */
+    field: z.string().optional(),
+    score: z.number().optional(),
+    ttlSeconds: z.number().int().positive().optional(),
+  }),
+  z.object({
+    kind: z.literal('hashRename'),
+    key: z.string(),
+    field: z.string(),
+    newField: z.string().min(1),
+  }),
+  z.object({
+    kind: z.literal('listRem'),
+    key: z.string(),
+    value: z.string(),
+    /** LREM count: 0 = all, >0 from head, <0 from tail. */
+    count: z.number().int().optional(),
+  }),
+  z.object({
+    kind: z.literal('streamAdd'),
+    key: z.string(),
+    /** Entry id; `*` = server-generated. */
+    id: z.string().optional(),
+    fields: z.array(z.tuple([z.string(), z.string()])).min(1),
+  }),
+  z.object({ kind: z.literal('streamDel'), key: z.string(), ids: z.array(z.string()).min(1) }),
+  z.object({ kind: z.literal('jsonSet'), key: z.string(), path: z.string().optional(), value: z.string() }),
 ]);
 export type RedisWriteOp = z.infer<typeof RedisWriteOp>;
 
@@ -315,11 +458,15 @@ export const OsHit = z.object({
   id: z.string(),
   score: z.number().nullable(),
   source: z.unknown(),
+  /** Hit `sort` values — the `search_after` cursor for the next page (O3). */
+  sort: z.array(z.unknown()).optional(),
 });
 export type OsHit = z.infer<typeof OsHit>;
 
 export const OsSearchResult = z.object({
   total: z.number().int(),
+  /** `gte` when the cluster stopped counting (track_total_hits cap) — render "≥ total" (O3). */
+  totalRelation: z.enum(['eq', 'gte']).default('eq'),
   took: z.number().int(),
   hits: z.array(OsHit),
   aggregations: z.unknown().nullable(),
@@ -332,12 +479,18 @@ export type OsMappingNode = {
   name: string;
   type: string | null;
   children: OsMappingNode[];
+  /** Multi-fields (`title.keyword`) declared under `fields` (O5). */
+  multiFields?: Array<{ name: string; type: string | null }>;
+  /** Distinct types seen for this path across the matched indices (O5). */
+  conflicts?: string[];
 };
 export const OsMappingNode: z.ZodType<OsMappingNode> = z.lazy(() =>
   z.object({
     name: z.string(),
     type: z.string().nullable(),
     children: z.array(OsMappingNode),
+    multiFields: z.array(z.object({ name: z.string(), type: z.string().nullable() })).optional(),
+    conflicts: z.array(z.string()).optional(),
   }),
 );
 
@@ -373,8 +526,18 @@ export const OsSqlResult = z.object({
   total: z.number().int(),
   /** Server-reported execution time when available; otherwise client-side. */
   durationMs: z.number(),
+  /** SQL plugin cursor for the next page (fetch_size paging, O20). */
+  cursor: z.string().nullable().optional(),
 });
 export type OsSqlResult = z.infer<typeof OsSqlResult>;
+
+/** Raw REST response for the Dev Tools console / generic cluster calls (O14). */
+export const OsRawResponse = z.object({
+  status: z.number().int(),
+  body: z.unknown(),
+  durationMs: z.number(),
+});
+export type OsRawResponse = z.infer<typeof OsRawResponse>;
 
 /**
  * Per-field statistics used by the Discover canvas to surface
@@ -391,6 +554,10 @@ export const OsFieldStats = z.object({
   topValues: z.array(z.object({ value: z.string(), count: z.number().int() })),
   /** True when the field is a date / date_nanos type — drives time-picker UI. */
   isTime: z.boolean(),
+  /** Aggregated path when it differs (`title` → `title.keyword`, O2). */
+  aggField: z.string().nullable().optional(),
+  /** Why this field has no stats (not aggregatable, agg failed) — per field, O2. */
+  error: z.string().nullable().optional(),
 });
 export type OsFieldStats = z.infer<typeof OsFieldStats>;
 
@@ -426,6 +593,13 @@ export const QueryResult = z.object({
    */
   truncated: z.boolean().optional(),
   notices: z.array(PgNotice).optional(),
+  /**
+   * Primary-connection transaction status after the statement, read from
+   * the server's ReadyForQuery (I → none, T → active, E → error) (F4).
+   */
+  txnState: z.enum(['none', 'active', 'error']).optional(),
+  /** Renderer-only: the statement text that produced this result. */
+  sql: z.string().optional(),
 });
 export type QueryResult = z.infer<typeof QueryResult>;
 
@@ -446,6 +620,8 @@ export const ExportSaveRequest = z.object({
   /** When set (and rows omitted), worker streams an unbounded query to file. */
   sql: z.string().optional(),
   params: z.array(z.unknown()).optional(),
+  /** Qualified, quoted INSERT target for SQL export (e.g. `"public"."users"`). */
+  targetTable: z.string().optional(),
 });
 export type ExportSaveRequest = z.infer<typeof ExportSaveRequest>;
 
@@ -494,6 +670,11 @@ export const SchemaInfo = z.object({
       name: z.string(),
       kind: z.enum(['table', 'view', 'matview', 'foreign', 'partitioned']),
       rowCountEstimate: z.number().nullable(),
+      /**
+       * Set on partition children: the partitioned parent. The sidebar
+       * nests these under their parent instead of listing them flat.
+       */
+      partitionOf: z.object({ schema: z.string(), name: z.string() }).nullable().optional(),
     }),
   ),
   columns: z.array(
@@ -525,8 +706,52 @@ export const SchemaInfo = z.object({
       }),
     )
     .default([]),
+  /** Functions and procedures (extension-owned routines excluded). */
+  routines: z
+    .array(
+      z.object({
+        schema: z.string(),
+        name: z.string(),
+        kind: z.enum(['function', 'procedure']),
+        /** Identity argument list, e.g. `a integer, b text` — needed to address overloads. */
+        args: z.string(),
+        returns: z.string().nullable(),
+        oid: z.number().int(),
+      }),
+    )
+    .default([]),
+  sequences: z.array(z.object({ schema: z.string(), name: z.string() })).default([]),
+  /** User-defined enum / composite / domain / range types. */
+  types: z
+    .array(
+      z.object({
+        schema: z.string(),
+        name: z.string(),
+        kind: z.enum(['enum', 'composite', 'domain', 'range']),
+        /** Enum labels in sort order (enum types only). */
+        values: z.array(z.string()).optional(),
+      }),
+    )
+    .default([]),
+  extensions: z
+    .array(z.object({ name: z.string(), schema: z.string(), version: z.string() }))
+    .default([]),
 });
 export type SchemaInfo = z.infer<typeof SchemaInfo>;
+
+/**
+ * Scope of an introspection request (F16 / PC4). Omitted fields mean
+ * "everything", so the bare `introspect()` stays a full snapshot.
+ */
+export const IntrospectOpts = z.object({
+  /** Include schemas, tables, routines, sequences, types, extensions. Default true. */
+  objects: z.boolean().optional(),
+  /** Include columns + foreign keys. Default true. */
+  columns: z.boolean().optional(),
+  /** Restrict columns + foreign keys to these schemas. */
+  columnSchemas: z.array(z.string()).optional(),
+});
+export type IntrospectOpts = z.infer<typeof IntrospectOpts>;
 
 // ─── Query history ───────────────────────────────────────────────────
 
@@ -562,6 +787,30 @@ export type HistoryListOpts = z.infer<typeof HistoryListOpts>;
 export const TxnState = z.enum(['none', 'active', 'error']);
 export type TxnState = z.infer<typeof TxnState>;
 
+/**
+ * Renderer → main payload for `query.commitEditBatch` (C7). Contract with
+ * the grid: one parameterised UPDATE per edit (or per row); params are the
+ * Postgres text form of each value, or `null` for SQL NULL — never JS
+ * Dates or objects. Each statement must affect exactly one row.
+ */
+export const CommitEditBatchRequest = z.object({
+  connectionGen: z.number().int().nonnegative(),
+  updates: z
+    .array(
+      z.object({
+        sql: z.string().min(1),
+        params: z.array(z.union([z.string(), z.number(), z.boolean(), z.null()])).optional(),
+        label: z.string().max(500).optional(),
+      }),
+    )
+    .min(1),
+});
+export type CommitEditBatchRequest = z.infer<typeof CommitEditBatchRequest>;
+
+/** Renderer → main payload for `query.explain` (F2). */
+export const ExplainRequest = z.object({ sql: z.string().min(1), analyze: z.boolean() });
+export type ExplainRequest = z.infer<typeof ExplainRequest>;
+
 // ─── Worker messages (main ↔ utilityProcess) ────────────────────────
 
 export const WorkerRequest = z.discriminatedUnion('kind', [
@@ -584,13 +833,27 @@ export const WorkerRequest = z.discriminatedUnion('kind', [
     revision: z.number().int().nonnegative().optional(),
     /** Editor row limit — stop reading the cursor after this many rows. */
     maxRows: z.number().int().positive().optional(),
+    /** Transaction mode: BEGIN first when the session is idle (F9). */
+    autoBegin: z.boolean().optional(),
   }),
   z.object({ kind: z.literal('cancel'), id: z.string() }),
-  z.object({ kind: z.literal('introspect'), id: z.string() }),
+  /**
+   * EXPLAIN one statement on the primary. With `analyze`, the statement
+   * runs inside BEGIN … ROLLBACK (or SAVEPOINT … ROLLBACK TO when a user
+   * transaction is open), so nothing it changes is kept (F2).
+   */
+  z.object({ kind: z.literal('explain'), id: z.string(), sql: z.string().min(1), analyze: z.boolean() }),
+  z.object({ kind: z.literal('introspect'), id: z.string(), opts: IntrospectOpts.optional() }),
   z.object({ kind: z.literal('beginTxn'), id: z.string() }),
   z.object({ kind: z.literal('commitTxn'), id: z.string() }),
   z.object({ kind: z.literal('rollbackTxn'), id: z.string() }),
-  z.object({ kind: z.literal('commitEditBatch'), id: z.string(), connectionGen: z.number().int().nonnegative(), updates: z.array(z.object({ sql: z.string().min(1), params: z.array(z.unknown()).optional() })).min(1) }),
+  /**
+   * Grid edit batch (C7). Each update must affect exactly one row; any
+   * other rowCount (or a Postgres error) rolls the whole batch back.
+   * Params are text or null — Postgres casts them to the column type.
+   * `label` names the edit in error messages (e.g. `public.users id=5 → email`).
+   */
+  z.object({ kind: z.literal('commitEditBatch'), id: z.string(), connectionGen: z.number().int().nonnegative(), updates: z.array(z.object({ sql: z.string().min(1), params: z.array(z.unknown()).optional(), label: z.string().optional() })).min(1) }),
   // Aux query — runs on the dedicated aux connection (AI/monitor) so it
   // never shares a session with cancel. Cancel uses a separate control
   // client (U19).
@@ -600,6 +863,8 @@ export const WorkerRequest = z.discriminatedUnion('kind', [
     sql: z.string(),
     params: z.array(z.unknown()).optional(),
     revision: z.number().int().nonnegative().optional(),
+    /** Per-statement timeout for Plasma's own metadata/lookup queries (F12). */
+    timeoutMs: z.number().int().positive().optional(),
   }),
   z.object({ kind: z.literal('aiQuery'), id: z.string(), sql: z.string(), params: z.array(z.unknown()).optional() }),
   // Apply PG statement_timeout on primary + aux (U20). 0 disables.
@@ -616,12 +881,27 @@ export const WorkerRequest = z.discriminatedUnion('kind', [
     match: z.string().optional(),
     count: z.number().int().positive().max(10000).default(500),
     db: z.number().int().nonnegative().optional(),
+    /**
+     * Keep calling SCAN until this many keys matched or the cursor ends
+     * (R8/F10) — a MATCH page is otherwise often empty mid-keyspace.
+     */
+    minResults: z.number().int().positive().max(10000).optional(),
+    /** Time budget for the SCAN loop in ms (default 1500). */
+    budgetMs: z.number().int().positive().max(30000).optional(),
+    /** SCAN … TYPE filter (Redis ≥ 6). */
+    type: z.string().optional(),
   }),
-  z.object({ kind: z.literal('redisGetKey'), id: z.string(), key: z.string() }),
+  z.object({
+    kind: z.literal('redisGetKey'),
+    id: z.string(),
+    key: z.string(),
+    opts: RedisGetKeyOpts.optional(),
+  }),
   z.object({
     kind: z.literal('redisDeleteKey'),
     id: z.string(),
     key: z.string(),
+    db: z.number().int().nonnegative().optional(),
   }),
   z.object({
     kind: z.literal('redisSetTtl'),
@@ -629,13 +909,34 @@ export const WorkerRequest = z.discriminatedUnion('kind', [
     key: z.string(),
     /** TTL in seconds. Pass 0 or negative to PERSIST (clear TTL). */
     seconds: z.number().int(),
+    db: z.number().int().nonnegative().optional(),
+    /**
+     * `expire` (seconds, default), `pexpire` (ms in `seconds`), `expireat`
+     * (unix seconds in `seconds`) or `persist` (R22).
+     */
+    mode: z.enum(['expire', 'pexpire', 'expireat', 'persist']).optional(),
   }),
   z.object({
     kind: z.literal('redisCommand'),
     id: z.string(),
     /** Already-tokenized command; the renderer splits by whitespace. */
     parts: z.array(z.string()).min(1),
+    /** Database the CLI prompt is on (R5). */
+    db: z.number().int().nonnegative().optional(),
   }),
+  /** Delete every key matching a pattern via SCAN + UNLINK (R26). */
+  z.object({
+    kind: z.literal('redisDeleteByPattern'),
+    id: z.string(),
+    match: z.string().min(1),
+    db: z.number().int().nonnegative().optional(),
+    /** Count + sample only; nothing is deleted. */
+    dryRun: z.boolean().default(true),
+    /** Stop after this many matches. */
+    limit: z.number().int().positive().max(1_000_000).default(100_000),
+  }),
+  /** Abort the running analyzer / pattern delete / blocking CLI command. */
+  z.object({ kind: z.literal('redisCancel'), id: z.string() }),
   z.object({ kind: z.literal('redisOverview'), id: z.string() }),
   z.object({
     kind: z.literal('redisAnalyze'),
@@ -644,6 +945,7 @@ export const WorkerRequest = z.discriminatedUnion('kind', [
      *  hammering production. */
     sampleCap: z.number().int().positive().max(50000).default(5000),
     match: z.string().optional(),
+    db: z.number().int().nonnegative().optional(),
   }),
   z.object({
     kind: z.literal('redisSlowlog'),
@@ -654,8 +956,14 @@ export const WorkerRequest = z.discriminatedUnion('kind', [
     kind: z.literal('redisBulkDelete'),
     id: z.string(),
     keys: z.array(z.string()).min(1).max(10000),
+    db: z.number().int().nonnegative().optional(),
   }),
-  z.object({ kind: z.literal('redisWrite'), id: z.string(), op: RedisWriteOp }),
+  z.object({
+    kind: z.literal('redisWrite'),
+    id: z.string(),
+    op: RedisWriteOp,
+    db: z.number().int().nonnegative().optional(),
+  }),
   /**
    * Subscribe to one channel (or pattern). Worker keeps a separate
    * subscriber connection that emits `redisPubsubMessage` events
@@ -686,12 +994,32 @@ export const WorkerRequest = z.discriminatedUnion('kind', [
     body: z.string(),
     /** Page size hint forwarded to the request body if not specified there. */
     size: z.number().int().positive().max(10000).default(100),
+    /** Per-request timeout; 0/absent = the connection default (O6). */
+    timeoutMs: z.number().int().nonnegative().optional(),
+    /** Renderer-chosen id so `osCancel` can abort this request (O6). */
+    requestId: z.string().optional(),
   }),
   z.object({
     kind: z.literal('osSql'),
     id: z.string(),
-    query: z.string().min(1),
+    /** Empty only when `cursor` fetches the next page. */
+    query: z.string(),
+    fetchSize: z.number().int().positive().max(10000).optional(),
+    cursor: z.string().optional(),
+    timeoutMs: z.number().int().nonnegative().optional(),
+    requestId: z.string().optional(),
   }),
+  /** Arbitrary REST call (Dev Tools console, doc CRUD, index/cluster ops — O13–O17). */
+  z.object({
+    kind: z.literal('osRequest'),
+    id: z.string(),
+    method: z.enum(['GET', 'HEAD', 'POST', 'PUT', 'DELETE', 'PATCH']),
+    path: z.string().min(1),
+    body: z.string().optional(),
+    timeoutMs: z.number().int().nonnegative().optional(),
+    requestId: z.string().optional(),
+  }),
+  z.object({ kind: z.literal('osCancel'), id: z.string(), requestId: z.string() }),
   z.object({ kind: z.literal('osAliases'), id: z.string() }),
   z.object({ kind: z.literal('osIlm'), id: z.string() }),
   z.object({
@@ -713,6 +1041,8 @@ export const WorkerRequest = z.discriminatedUnion('kind', [
     fields: z.array(z.string()).min(1).max(64),
     /** Optional KQL/Lucene-style filter clause to scope the stats. */
     queryString: z.string().optional(),
+    /** Optional DSL `query` object (JSON) — wins over queryString (O2). */
+    query: z.string().optional(),
   }),
   // ── Export (U16) ──
   z.object({
@@ -722,6 +1052,7 @@ export const WorkerRequest = z.discriminatedUnion('kind', [
     filePath: z.string().min(1),
     columns: z.array(ColumnMeta),
     rows: z.array(z.array(z.unknown())),
+    targetTable: z.string().optional(),
   }),
   z.object({
     kind: z.literal('exportQuery'),
@@ -730,6 +1061,7 @@ export const WorkerRequest = z.discriminatedUnion('kind', [
     filePath: z.string().min(1),
     sql: z.string().min(1),
     params: z.array(z.unknown()).optional(),
+    targetTable: z.string().optional(),
   }),
 ]);
 export type WorkerRequest = z.infer<typeof WorkerRequest>;
@@ -767,6 +1099,8 @@ export const WorkerResponse = z.discriminatedUnion('kind', [
     id: z.string(),
     message: z.string(),
     fatal: z.literal(CONNECTION_LOST).optional(),
+    /** The transport died while a transaction was open — its work is gone (C5). */
+    txnLost: z.boolean().optional(),
   }),
   z.object({ kind: z.literal('redisScan'), id: z.string(), result: RedisScanResult }),
   z.object({ kind: z.literal('redisKey'), id: z.string(), result: RedisKeyValue }),
@@ -774,6 +1108,7 @@ export const WorkerResponse = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('redisCommand'), id: z.string(), result: RedisCommandResult }),
   z.object({ kind: z.literal('redisAck'), id: z.string() }),
   z.object({ kind: z.literal('redisBulkDelete'), id: z.string(), result: RedisBulkDeleteResult }),
+  z.object({ kind: z.literal('redisPatternDelete'), id: z.string(), result: RedisPatternDeleteResult }),
   z.object({ kind: z.literal('redisAnalyze'), id: z.string(), result: RedisAnalyzeResult }),
   z.object({ kind: z.literal('redisSlowlog'), id: z.string(), entries: z.array(RedisSlowlogEntry) }),
   /**
@@ -806,6 +1141,7 @@ export const WorkerResponse = z.discriminatedUnion('kind', [
     acknowledged: z.boolean(),
   }),
   z.object({ kind: z.literal('osFieldStats'), id: z.string(), stats: z.array(OsFieldStats) }),
+  z.object({ kind: z.literal('osResponse'), id: z.string(), response: OsRawResponse }),
   z.object({ kind: z.literal('pgNotice'), id: z.string(), notice: PgNotice }),
   z.object({
     kind: z.literal('exportDone'),
@@ -868,6 +1204,43 @@ export const SettingsShape = z.object({
   editorHeightPx: z.number().int().min(120).max(1200).default(280),
   defaultPageSize: z.number().int().positive().default(50),
   queryTimeoutMs: z.number().int().nonnegative().default(0), // 0 = no timeout
+  // ── Settings added by the Settings reorganisation (SS3) ──
+  /** Reopen the last session's SQL tabs (per connection) on launch. */
+  restoreWorkspace: z.boolean().catch(true).default(true),
+  /**
+   * Default safe-mode level for connections without their own choice:
+   * `off` (no prompts), `confirm-dangerous` (DROP / TRUNCATE / unqualified
+   * DELETE / UPDATE ask first), `confirm-writes` (every write asks),
+   * `read-only` (writes refused). A PROD tag always confirms.
+   */
+  safeModeDefault: z
+    .enum(['off', 'confirm-dangerous', 'confirm-writes', 'read-only'])
+    .catch('confirm-dangerous')
+    .default('confirm-dangerous'),
+  /** Per-connection safe-mode override, keyed by connection id. */
+  connectionSafeMode: z
+    .record(z.string(), z.enum(['off', 'confirm-dangerous', 'confirm-writes', 'read-only']))
+    .catch({})
+    .default({}),
+  /** Defaults for CSV export (the export dialog starts from these). */
+  csvExport: z
+    .object({
+      delimiter: z.enum([',', ';', '\t', '|']).catch(',').default(','),
+      header: z.boolean().catch(true).default(true),
+      quote: z.enum(['"', "'"]).catch('"').default('"'),
+      /** How SQL NULL is written: empty field or the literal `NULL`. */
+      nullAs: z.enum(['empty', 'NULL']).catch('empty').default('empty'),
+      lineEnding: z.enum(['lf', 'crlf']).catch('lf').default('lf'),
+    })
+    .catch({ delimiter: ',', header: true, quote: '"', nullAs: 'empty', lineEnding: 'lf' })
+    .default({}),
+  /** Zebra-stripe result grid rows. */
+  gridAlternatingRows: z.boolean().catch(true).default(true),
+  /**
+   * Table tabs show `pg_class.reltuples` instead of running `count(*)`
+   * when the estimate is above this many rows. 0 = always count exactly.
+   */
+  estimatedCountThreshold: z.number().int().nonnegative().catch(100_000).default(100_000),
   telemetryEnabled: z.boolean().optional(),
   /**
    * AI provider config. Plasma uses OpenRouter as the unified gateway —
@@ -987,6 +1360,9 @@ export const SettingsShape = z.object({
             kind: z.literal('sql'),
             id: z.string(),
             name: z.string(),
+            /** Sidebar folder (PC6). Omitted = ungrouped. */
+            folder: z.string().optional(),
+            favorite: z.boolean().optional(),
             createdAt: z.number(),
             updatedAt: z.number(),
             sql: z.string(),
@@ -996,6 +1372,8 @@ export const SettingsShape = z.object({
             kind: z.literal('table'),
             id: z.string(),
             name: z.string(),
+            folder: z.string().optional(),
+            favorite: z.boolean().optional(),
             createdAt: z.number(),
             updatedAt: z.number(),
             tableSchema: z.string(),
@@ -1163,6 +1541,16 @@ export const IpcChannel = {
   ConnectionDisconnect: 'plasma:conn:disconnect',
   ConnectionTest: 'plasma:conn:test',
   ConnectionIntrospect: 'plasma:conn:introspect',
+  /** Native open-file picker for TLS CA / cert / key files (C9). */
+  ConnectionPickFile: 'plasma:conn:pickFile',
+  /**
+   * Push: an SSH bastion presented a host key that is unknown or changed.
+   * Payload is `SshHostKeyPrompt`; answer with `SshHostKeyRespond` (C8).
+   */
+  SshHostKeyPromptEvent: 'plasma:ssh:hostKeyPrompt',
+  SshHostKeyRespond: 'plasma:ssh:hostKeyRespond',
+  /** Renderer → main: open transaction / unsaved edits, for the quit guard (C32). */
+  AppSetUnsavedState: 'plasma:app:setUnsavedState',
   /**
    * Push: the worker process died and was respawned, so the DB session
    * is gone and could not be restored (U20).
@@ -1196,11 +1584,14 @@ export const IpcChannel = {
   RedisWrite: 'plasma:redis:write',
   RedisSubscribe: 'plasma:redis:subscribe',
   RedisUnsubscribe: 'plasma:redis:unsubscribe',
+  RedisDeleteByPattern: 'plasma:redis:deleteByPattern',
+  RedisCancel: 'plasma:redis:cancel',
   /** Renderer-facing event channel for streamed pub/sub messages. */
   RedisPubsubEvent: 'plasma:redis:pubsub',
   /** Cursor-stream query chunks (U15). Payload is QueryChunk. */
   QueryChunkEvent: 'plasma:query:chunk',
   QueryCommitEditBatch: 'plasma:query:commitEditBatch',
+  QueryExplain: 'plasma:query:explain',
   PgNoticeEvent: 'plasma:pg:notice',
   // OpenSearch ops
   OsOverview: 'plasma:os:overview',
@@ -1212,6 +1603,8 @@ export const IpcChannel = {
   OsCreateIndex: 'plasma:os:createIndex',
   OsDeleteIndex: 'plasma:os:deleteIndex',
   OsFieldStats: 'plasma:os:fieldStats',
+  OsRequest: 'plasma:os:request',
+  OsCancel: 'plasma:os:cancel',
   VaultList: 'plasma:vault:list',
   VaultDelete: 'plasma:vault:delete',
   VaultConnectById: 'plasma:vault:connectById',
@@ -1283,12 +1676,18 @@ export interface PlasmaAPI {
   platform: Platform;
   app: {
     meta(): Promise<AppMeta>;
+    /** Tell main what would be lost on quit so it can confirm first (C32). */
+    setUnsavedState(state: AppUnsavedState): Promise<void>;
   };
   conn: {
     connect(config: ConnectionConfig): Promise<ConnectionInfo>;
     disconnect(): Promise<void>;
     test(config: ConnectionConfig, ssh?: ConnectionSshConfig | null): Promise<ConnectionTestResult>;
-    introspect(): Promise<SchemaInfo>;
+    introspect(opts?: IntrospectOpts): Promise<SchemaInfo>;
+    /** Native file picker (TLS CA / cert / key). Resolves null when cancelled. */
+    pickFile(title?: string): Promise<string | null>;
+    /** Answer a `plasma:ssh:hostKeyPrompt` push (C8). */
+    respondHostKey(requestId: string, accept: boolean): Promise<void>;
   };
   vault: {
     list(): Promise<SavedConnection[]>;
@@ -1310,14 +1709,21 @@ export interface PlasmaAPI {
      *   table definition). User-written queries should leave this off.
      */
     run(sql: string, params?: unknown[], opts?: { internal?: boolean; maxRows?: number }): Promise<QueryResult>;
-    commitEditBatch(req: { connectionGen: number; updates: Array<{ sql: string; params?: unknown[] }> }): Promise<{ state: TxnState; applied: number }>;
+    /**
+     * Commit grid edits in one transaction (SAVEPOINT inside an open user
+     * transaction, which stays open). Params are text or null. Rejects with
+     * `Edit N of M (<label>) …` naming the failing edit; nothing is kept.
+     */
+    commitEditBatch(req: { connectionGen: number; updates: Array<{ sql: string; params?: unknown[]; label?: string }> }): Promise<{ state: TxnState; applied: number }>;
+    /** EXPLAIN (FORMAT JSON) one statement; ANALYZE runs it inside a rolled-back transaction. */
+    explain(req: { sql: string; analyze: boolean }): Promise<QueryResult>;
     cancel(): Promise<void>;
     /**
      * Run a query on the worker's sideband connection — never recorded
      * in history. Used by the live monitor + pg_terminate_backend so a
      * long-running primary query doesn't block monitoring.
      */
-    sideband(sql: string, params?: unknown[]): Promise<QueryResult>;
+    sideband(sql: string, params?: unknown[], opts?: { timeoutMs?: number }): Promise<QueryResult>;
   };
   redis: {
     overview(): Promise<RedisOverview>;
@@ -1326,24 +1732,58 @@ export interface PlasmaAPI {
       match?: string;
       count?: number;
       db?: number;
+      minResults?: number;
+      budgetMs?: number;
+      type?: string;
     }): Promise<RedisScanResult>;
-    getKey(key: string): Promise<RedisKeyValue>;
-    deleteKey(key: string): Promise<void>;
+    getKey(key: string, opts?: RedisGetKeyOpts): Promise<RedisKeyValue>;
+    deleteKey(key: string, opts?: { db?: number }): Promise<void>;
     /** seconds <= 0 → PERSIST (clear TTL). */
-    setTtl(key: string, seconds: number): Promise<void>;
-    command(parts: string[]): Promise<RedisCommandResult>;
-    analyze(opts?: { sampleCap?: number; match?: string }): Promise<RedisAnalyzeResult>;
+    setTtl(
+      key: string,
+      seconds: number,
+      opts?: { db?: number; mode?: 'expire' | 'pexpire' | 'expireat' | 'persist' },
+    ): Promise<void>;
+    command(parts: string[], opts?: { db?: number }): Promise<RedisCommandResult>;
+    analyze(opts?: { sampleCap?: number; match?: string; db?: number }): Promise<RedisAnalyzeResult>;
     slowlog(limit?: number): Promise<RedisSlowlogEntry[]>;
-    bulkDelete(keys: string[]): Promise<RedisBulkDeleteResult>;
-    write(op: RedisWriteOp): Promise<void>;
+    bulkDelete(keys: string[], opts?: { db?: number }): Promise<RedisBulkDeleteResult>;
+    write(op: RedisWriteOp, opts?: { db?: number }): Promise<void>;
+    deleteByPattern(opts: {
+      match: string;
+      db?: number;
+      dryRun: boolean;
+      limit?: number;
+    }): Promise<RedisPatternDeleteResult>;
+    /** Abort the running analyzer / pattern delete / blocking command. */
+    cancel(): Promise<void>;
     subscribe(channel: string, pattern?: boolean): Promise<void>;
     unsubscribe(channel: string, pattern?: boolean): Promise<void>;
   };
   os: {
     overview(): Promise<OsOverview>;
     mapping(index: string): Promise<OsMappingNode>;
-    search(opts: { index: string; body: string; size?: number }): Promise<OsSearchResult>;
-    sql(query: string): Promise<OsSqlResult>;
+    search(opts: {
+      index: string;
+      body: string;
+      size?: number;
+      timeoutMs?: number;
+      requestId?: string;
+    }): Promise<OsSearchResult>;
+    sql(
+      query: string,
+      opts?: { fetchSize?: number; cursor?: string; timeoutMs?: number; requestId?: string },
+    ): Promise<OsSqlResult>;
+    /** Raw REST call; non-read methods are refused on read-only connections. */
+    request(opts: {
+      method: 'GET' | 'HEAD' | 'POST' | 'PUT' | 'DELETE' | 'PATCH';
+      path: string;
+      body?: string;
+      timeoutMs?: number;
+      requestId?: string;
+    }): Promise<OsRawResponse>;
+    /** Abort an in-flight search / SQL / request by its renderer-chosen id. */
+    cancel(requestId: string): Promise<void>;
     aliases(): Promise<OsAlias[]>;
     ilm(): Promise<OsIlmPolicy[]>;
     createIndex(
@@ -1355,6 +1795,7 @@ export interface PlasmaAPI {
       index: string;
       fields: string[];
       queryString?: string;
+      query?: string;
     }): Promise<OsFieldStats[]>;
   };
   ai: {

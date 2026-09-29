@@ -1,17 +1,19 @@
-import { type Server, createServer } from 'node:net';
-import { SettingsShape, type Settings } from '@shared/protocol';
+import { type Server, type Socket, createServer } from 'node:net';
+import { pipeline } from 'node:stream';
+import { type Settings, SettingsShape } from '@shared/protocol';
 import { Client as SshClient } from 'ssh2';
 import { logger } from './logger';
 import { getAllSettings, setSetting } from './settings';
 import {
-  evaluateHostKey,
   type KnownHostsStore,
+  evaluateHostKey,
+  hostKeyType,
   rememberHostKey,
 } from './ssh-known-hosts';
 
 /**
- * SSH tunnel manager. One tunnel per connection id. When a worker
- * connect is requested for a tagged connection, we:
+ * SSH tunnel manager. One tunnel per key (normally the connection id).
+ * When a worker connect is requested for a tagged connection, we:
  *   1. Open an ssh2 connection to the bastion (with host-key verification)
  *   2. Bind a local TCP server on a random port
  *   3. For each accepted local socket, ask ssh2 to `forwardOut` to the
@@ -22,8 +24,16 @@ import {
  * Tunnel teardown closes both the local server AND the ssh client so a
  * disconnect leaves no dangling sockets.
  *
- * U08: host keys are checked against the `sshKnownHosts` settings store.
- * First use prompts via `hostKeyPrompt` (TOFU); mismatches refuse.
+ * U08 / C8: host keys are checked against the `sshKnownHosts` settings
+ * store. Unknown keys and changed keys both go to `hostKeyPrompt`
+ * (changed ones with a strong warning); nothing connects without a yes.
+ *
+ * C6 / C13 / C14: every socket, stream, server and ssh client has an
+ * error listener (an unhandled one crashes main); there is exactly one
+ * tunnel per key with no ref counting; a late 'close' from a replaced
+ * client can't evict its successor; concurrent opens share one attempt;
+ * failures clean up after themselves; and keepalives detect a dead
+ * bastion so queries don't hang on it.
  */
 
 type TunnelKey = string;
@@ -32,19 +42,25 @@ interface OpenTunnel {
   server: Server;
   ssh: SshClient;
   localPort: number;
-  refs: number;
+  /** Local sockets currently forwarded, so close() can drop them. */
+  sockets: Set<Socket>;
+  /** Target identity — a changed target must not reuse this tunnel. */
+  signature: string;
 }
 
 const tunnels = new Map<TunnelKey, OpenTunnel>();
+const opening = new Map<TunnelKey, Promise<{ host: string; port: number }>>();
+/** Ids closed while their open was still in flight. */
+const cancelled = new Set<TunnelKey>();
 
 export type SshConfig = NonNullable<Settings['connectionSsh']>[string];
 
 export interface TunnelTarget {
-  /** Connection id (for cache keying + ref counting). */
+  /** Cache key — the connection id, or a throwaway key for tests. */
   id: string;
   /** SSH bastion config. */
   ssh: SshConfig;
-  /** Postgres host as seen from the bastion (often localhost there). */
+  /** Database host as seen from the bastion (often localhost there). */
   pgHost: string;
   pgPort: number;
 }
@@ -53,6 +69,9 @@ export type HostKeyPrompt = (info: {
   host: string;
   port: number;
   fingerprint: string;
+  /** `changed`: the host presented a different key than the remembered one. */
+  kind: 'unknown' | 'changed';
+  expectedFingerprint?: string;
 }) => Promise<boolean>;
 
 /** Injected from main so unit tests / non-Electron callers can stub prompts. */
@@ -61,6 +80,10 @@ let hostKeyPrompt: HostKeyPrompt = async () => false;
 export function setHostKeyPrompt(fn: HostKeyPrompt): void {
   hostKeyPrompt = fn;
 }
+
+/** ssh2 keepalive: probe every 10s, give up after 3 missed replies (C14). */
+export const SSH_KEEPALIVE_INTERVAL_MS = 10_000;
+export const SSH_KEEPALIVE_COUNT_MAX = 3;
 
 function loadKnownHosts(): KnownHostsStore {
   return SettingsShape.parse(getAllSettings()).sshKnownHosts ?? {};
@@ -93,20 +116,24 @@ function attachHostVerifier(
             'expected',
             decision.expectedFingerprint,
           );
-          verify(false);
-          return;
         }
-        // First use — prompt, then remember on accept.
-        const ok = await hostKeyPrompt({
-          host,
-          port,
-          fingerprint: decision.fingerprint,
-        });
+        const ok = await hostKeyPrompt(
+          decision.kind === 'mismatch'
+            ? {
+                host,
+                port,
+                fingerprint: decision.fingerprint,
+                kind: 'changed',
+                expectedFingerprint: decision.expectedFingerprint,
+              }
+            : { host, port, fingerprint: decision.fingerprint, kind: 'unknown' },
+        );
         if (!ok) {
           verify(false);
           return;
         }
-        persistKnownHosts(rememberHostKey(store, host, port, key));
+        // Re-read: another prompt may have written meanwhile.
+        persistKnownHosts(rememberHostKey(loadKnownHosts(), host, port, key, hostKeyType(key)));
         logger.info('[plasma-ssh] remembered host key', `${host}:${port}`, decision.fingerprint);
         verify(true);
       } catch (err) {
@@ -117,66 +144,134 @@ function attachHostVerifier(
   };
 }
 
-export async function openTunnel(target: TunnelTarget): Promise<{ host: string; port: number }> {
-  const cached = tunnels.get(target.id);
-  if (cached) {
-    cached.refs++;
-    return { host: '127.0.0.1', port: cached.localPort };
-  }
+function signatureOf(target: TunnelTarget): string {
+  const { ssh } = target;
+  return `${ssh.user}@${ssh.host}:${ssh.port}->${target.pgHost}:${target.pgPort}`;
+}
 
+function destroyTunnel(id: string, t: OpenTunnel, reason: string): void {
+  if (tunnels.get(id) === t) tunnels.delete(id);
+  for (const socket of t.sockets) socket.destroy();
+  t.sockets.clear();
+  try {
+    t.server.close();
+  } catch {
+    // already closed
+  }
+  try {
+    t.ssh.end();
+  } catch {
+    // already closed
+  }
+  logger.info('[plasma-ssh] tunnel closed', id, reason);
+}
+
+async function connectSsh(target: TunnelTarget): Promise<SshClient> {
   const ssh = new SshClient();
-  await new Promise<void>((resolve, reject) => {
-    ssh.once('ready', resolve);
-    ssh.once('error', reject);
-    const opts: Parameters<typeof ssh.connect>[0] = {
-      host: target.ssh.host,
-      port: target.ssh.port,
-      username: target.ssh.user,
-      readyTimeout: 15_000,
-    };
-    attachHostVerifier(opts, target.ssh.host, target.ssh.port);
-    if (target.ssh.privateKey) {
-      opts.privateKey = target.ssh.privateKey;
-      if (target.ssh.passphrase) opts.passphrase = target.ssh.passphrase;
-    } else if (target.ssh.password) {
-      opts.password = target.ssh.password;
-    }
-    ssh.connect(opts);
+  // C6: a persistent listener — ssh2 can emit more than one error, and
+  // any error without a listener is an uncaught exception in main.
+  ssh.on('error', (err: Error) => {
+    logger.error('[plasma-ssh] ssh client error', target.id, err.message);
   });
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const onReady = () => {
+        ssh.removeListener('error', onError);
+        resolve();
+      };
+      const onError = (err: Error) => {
+        ssh.removeListener('ready', onReady);
+        reject(err);
+      };
+      ssh.once('ready', onReady);
+      ssh.once('error', onError);
+      const opts: Parameters<typeof ssh.connect>[0] = {
+        host: target.ssh.host,
+        port: target.ssh.port,
+        username: target.ssh.user,
+        readyTimeout: 15_000,
+        keepaliveInterval: SSH_KEEPALIVE_INTERVAL_MS,
+        keepaliveCountMax: SSH_KEEPALIVE_COUNT_MAX,
+      };
+      attachHostVerifier(opts, target.ssh.host, target.ssh.port);
+      if (target.ssh.privateKey) {
+        opts.privateKey = target.ssh.privateKey;
+        if (target.ssh.passphrase) opts.passphrase = target.ssh.passphrase;
+      } else if (target.ssh.password) {
+        opts.password = target.ssh.password;
+      }
+      ssh.connect(opts);
+    });
+  } catch (err) {
+    try {
+      ssh.end();
+    } catch {
+      // best-effort
+    }
+    throw err;
+  }
+  return ssh;
+}
+
+async function createTunnel(target: TunnelTarget): Promise<{ host: string; port: number }> {
+  const ssh = await connectSsh(target);
+  const sockets = new Set<Socket>();
 
   const server = createServer((local) => {
+    sockets.add(local);
+    // C6: ECONNRESET from the worker's socket during a reconnect is normal.
+    local.on('error', (e: Error) => logger.warn('[plasma-ssh] local socket error:', e.message));
+    local.on('close', () => sockets.delete(local));
     ssh.forwardOut('127.0.0.1', 0, target.pgHost, target.pgPort, (err, stream) => {
       if (err) {
         logger.error('[plasma-ssh] forwardOut failed:', err);
         local.destroy();
         return;
       }
-      local.pipe(stream).pipe(local);
-      stream.on('error', (e: Error) => {
-        logger.error('[plasma-ssh] tunnel stream error:', e);
+      // pipeline() forwards errors and tears both ends down together.
+      pipeline(local, stream, local, (pipeErr) => {
+        if (pipeErr) logger.warn('[plasma-ssh] tunnel stream closed:', pipeErr.message);
         local.destroy();
+        stream.destroy();
       });
     });
   });
+  server.on('error', (e: Error) => logger.error('[plasma-ssh] local server error:', e.message));
 
-  await new Promise<void>((resolve, reject) => {
-    server.once('error', reject);
-    // Port 0 = OS picks a free one. Bind to 127.0.0.1 only — never
-    // expose the tunnel to the network.
-    server.listen(0, '127.0.0.1', () => resolve());
-  });
+  try {
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', reject);
+      // Port 0 = OS picks a free one. Bind to 127.0.0.1 only — never
+      // expose the tunnel to the network.
+      server.listen(0, '127.0.0.1', () => {
+        server.removeListener('error', reject);
+        resolve();
+      });
+    });
+  } catch (err) {
+    try {
+      ssh.end();
+    } catch {
+      // best-effort
+    }
+    throw err;
+  }
 
   const addr = server.address();
   if (!addr || typeof addr === 'string') {
+    server.close();
+    ssh.end();
     throw new Error('ssh tunnel: failed to bind local port');
   }
 
-  tunnels.set(target.id, {
+  const tunnel: OpenTunnel = {
     server,
     ssh,
     localPort: addr.port,
-    refs: 1,
-  });
+    sockets,
+    signature: signatureOf(target),
+  };
+  tunnels.set(target.id, tunnel);
 
   logger.info(
     '[plasma-ssh] tunnel open',
@@ -184,40 +279,73 @@ export async function openTunnel(target: TunnelTarget): Promise<{ host: string; 
     `127.0.0.1:${addr.port} -> ${target.ssh.host}:${target.ssh.port} -> ${target.pgHost}:${target.pgPort}`,
   );
 
+  // C13: identity-checked — a late close from a replaced client must not
+  // evict the tunnel that superseded it.
   ssh.on('close', () => {
-    logger.info('[plasma-ssh] ssh client closed', target.id);
-    tunnels.delete(target.id);
-    try {
-      server.close();
-    } catch {
-      // already closed
-    }
+    if (tunnels.get(target.id) === tunnel) destroyTunnel(target.id, tunnel, 'ssh client closed');
   });
 
   return { host: '127.0.0.1', port: addr.port };
 }
 
+/**
+ * Open (or reuse) the tunnel for `target.id`. A live tunnel to the same
+ * target is reused; one to a different target is replaced. Concurrent
+ * calls for the same id share one attempt.
+ */
+export function openTunnel(target: TunnelTarget): Promise<{ host: string; port: number }> {
+  const pending = opening.get(target.id);
+  if (pending) {
+    // A close arrived while that attempt was in flight: it will be torn
+    // down on arrival, so queue a fresh one behind it.
+    if (cancelled.has(target.id)) {
+      return pending.then(
+        () => openTunnel(target),
+        () => openTunnel(target),
+      );
+    }
+    return pending;
+  }
+
+  const cached = tunnels.get(target.id);
+  if (cached) {
+    if (cached.signature === signatureOf(target)) {
+      return Promise.resolve({ host: '127.0.0.1', port: cached.localPort });
+    }
+    destroyTunnel(target.id, cached, 'target changed');
+  }
+
+  const attempt = createTunnel(target)
+    .then((local) => {
+      if (cancelled.has(target.id)) {
+        const t = tunnels.get(target.id);
+        if (t) destroyTunnel(target.id, t, 'closed while opening');
+        throw new Error('ssh tunnel was closed while it was opening');
+      }
+      return local;
+    })
+    .finally(() => {
+      opening.delete(target.id);
+      cancelled.delete(target.id);
+    });
+  opening.set(target.id, attempt);
+  return attempt;
+}
+
+/** Close the tunnel for `id` (no-op when none is open). */
 export function closeTunnel(id: string): void {
+  if (opening.has(id)) cancelled.add(id);
   const t = tunnels.get(id);
   if (!t) return;
-  t.refs--;
-  if (t.refs > 0) return;
-  tunnels.delete(id);
-  try {
-    t.server.close();
-  } catch {
-    // best-effort
-  }
-  try {
-    t.ssh.end();
-  } catch {
-    // best-effort
-  }
-  logger.info('[plasma-ssh] tunnel closed', id);
+  destroyTunnel(id, t, 'closed');
 }
 
 export function closeAllTunnels(): void {
-  for (const id of [...tunnels.keys()]) {
-    closeTunnel(id);
-  }
+  for (const id of opening.keys()) cancelled.add(id);
+  for (const [id, t] of [...tunnels.entries()]) destroyTunnel(id, t, 'shutdown');
+}
+
+/** Test hook — how many tunnels are open. */
+export function openTunnelCount(): number {
+  return tunnels.size;
 }

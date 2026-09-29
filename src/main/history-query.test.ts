@@ -3,6 +3,7 @@ import {
   HISTORY_DURATION_MS,
   buildHistoryListQuery,
   escapeLike,
+  redactSqlSecrets,
 } from './history-query';
 
 describe('escapeLike', () => {
@@ -11,9 +12,7 @@ describe('escapeLike', () => {
   });
 
   it('leaves ordinary SQL text alone', () => {
-    expect(escapeLike(`SELECT * FROM users WHERE id = 1`)).toBe(
-      `SELECT * FROM users WHERE id = 1`,
-    );
+    expect(escapeLike(`SELECT * FROM users WHERE id = 1`)).toBe(`SELECT * FROM users WHERE id = 1`);
   });
 });
 
@@ -80,16 +79,29 @@ describe('buildHistoryListQuery', () => {
     expect(q.sql).toMatch(/sql LIKE \?/);
     expect(q.sql).toMatch(/error IS NOT NULL/);
     expect(q.sql).toMatch(/duration_ms > \?/);
-    expect(q.params).toEqual([
-      'c1',
-      '%select%',
-      HISTORY_DURATION_MS.mediumMax,
-      25,
-    ]);
+    expect(q.params).toEqual(['c1', '%select%', HISTORY_DURATION_MS.mediumMax, 25]);
   });
 
   it('clamps limit to [1, 5000]', () => {
     expect(buildHistoryListQuery({ limit: 0 }).params.at(-1)).toBe(1);
     expect(buildHistoryListQuery({ limit: 99999 }).params.at(-1)).toBe(5000);
+  });
+});
+
+describe('redactSqlSecrets (C34)', () => {
+  it('masks role passwords and connection-string passwords', () => {
+    expect(redactSqlSecrets("ALTER USER app WITH PASSWORD 'hunter2'")).toBe(
+      "ALTER USER app WITH PASSWORD '***'",
+    );
+    expect(redactSqlSecrets("CREATE ROLE r LOGIN ENCRYPTED PASSWORD 'it''s'")).toBe(
+      "CREATE ROLE r LOGIN ENCRYPTED PASSWORD '***'",
+    );
+    expect(redactSqlSecrets("SELECT dblink_connect('host=x password=s3cret dbname=y')")).toBe(
+      "SELECT dblink_connect('host=x password=*** dbname=y')",
+    );
+  });
+  it('leaves ordinary SQL alone', () => {
+    const sql = 'SELECT * FROM users WHERE password = $1';
+    expect(redactSqlSecrets(sql)).toBe(sql);
   });
 });

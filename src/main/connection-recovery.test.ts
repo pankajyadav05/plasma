@@ -3,8 +3,10 @@ import type { ConnectionConfig } from '@shared/protocol';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   ConnectionRecovery,
+  NotReplayedError,
   type RecoveryDeps,
   type RetainedSession,
+  isReplaySafeSql,
   recoveryPolicy,
 } from './connection-recovery';
 
@@ -30,6 +32,7 @@ function harness(overrides: Partial<RecoveryDeps> = {}) {
   const session: RetainedSession = { id: 'conn-1', config, tunnelled: false };
   const deps = {
     session: vi.fn(() => session as RetainedSession | null),
+    epoch: vi.fn(() => 0),
     reopenTunnel: vi.fn(async () => ({ host: '127.0.0.1', port: 54321 })),
     connect: vi.fn(async () => ({
       serverVersion: 'PostgreSQL 16.6',
@@ -51,7 +54,7 @@ beforeEach(() => {
 
 describe('recoveryPolicy', () => {
   it('retries reads', () => {
-    expect(recoveryPolicy('query')).toBe('retry');
+    expect(recoveryPolicy('query', { kind: 'query', sql: 'SELECT * FROM t' })).toBe('retry');
     expect(recoveryPolicy('introspect')).toBe('retry');
     expect(recoveryPolicy('redisScan')).toBe('retry');
     expect(recoveryPolicy('osSearch')).toBe('retry');
@@ -62,6 +65,57 @@ describe('recoveryPolicy', () => {
     expect(recoveryPolicy('redisWrite')).toBe('reconnect-only');
     expect(recoveryPolicy('exportQuery')).toBe('reconnect-only');
     expect(recoveryPolicy('cancel')).toBe('reconnect-only');
+  });
+
+  it('never replays user writes, transaction control or write commands (C5)', () => {
+    expect(recoveryPolicy('query', { kind: 'query', sql: 'UPDATE t SET a = 1' })).toBe(
+      'reconnect-only',
+    );
+    expect(recoveryPolicy('query')).toBe('reconnect-only');
+    expect(
+      recoveryPolicy('sidebandQuery', {
+        kind: 'sidebandQuery',
+        sql: 'SELECT pg_terminate_backend(1)',
+      }),
+    ).toBe('reconnect-only');
+    expect(recoveryPolicy('beginTxn')).toBe('reconnect-only');
+    expect(recoveryPolicy('commitTxn')).toBe('reconnect-only');
+    expect(recoveryPolicy('rollbackTxn')).toBe('reconnect-only');
+    expect(recoveryPolicy('redisCommand', { kind: 'redisCommand', parts: ['INCR', 'n'] })).toBe(
+      'reconnect-only',
+    );
+    expect(recoveryPolicy('redisCommand', { kind: 'redisCommand', parts: ['GET', 'n'] })).toBe(
+      'retry',
+    );
+    expect(recoveryPolicy('osSql')).toBe('reconnect-only');
+  });
+});
+
+describe('isReplaySafeSql', () => {
+  it.each([
+    'SELECT 1',
+    'select * from users where id = 1;',
+    'WITH x AS (SELECT 1) SELECT * FROM x',
+    'EXPLAIN SELECT 1',
+    '-- comment\nSHOW search_path',
+  ])('accepts %j', (sql) => {
+    expect(isReplaySafeSql(sql)).toBe(true);
+  });
+
+  it.each([
+    'UPDATE t SET a = 1',
+    'WITH d AS (DELETE FROM t RETURNING *) SELECT * FROM d',
+    'EXPLAIN ANALYZE DELETE FROM t',
+    'SELECT 1; DELETE FROM t',
+    'SELECT * INTO copy FROM t',
+    'SELECT * FROM t FOR UPDATE',
+    "SELECT nextval('s')",
+    'BEGIN',
+    'COMMIT',
+    'SET ROLE admin',
+    '',
+  ])('refuses %j', (sql) => {
+    expect(isReplaySafeSql(sql)).toBe(false);
   });
 
   it('keeps session plumbing out of recovery so it cannot recurse', () => {
@@ -79,10 +133,14 @@ describe('ConnectionRecovery.run', () => {
       .mockRejectedValueOnce(new ConnectionLostError('primary reset'))
       .mockResolvedValueOnce('rows');
 
-    await expect(recovery.run('query', call)).resolves.toBe('rows');
+    await expect(recovery.run('query', call, { kind: 'query', sql: 'SELECT 1' })).resolves.toBe(
+      'rows',
+    );
     expect(call).toHaveBeenCalledTimes(2);
     expect(deps.connect).toHaveBeenCalledTimes(1);
-    expect(deps.onRecovered).toHaveBeenCalledWith(expect.objectContaining({ connectionGen: 7 }));
+    expect(deps.onRecovered).toHaveBeenCalledWith(
+      expect.objectContaining({ connectionGen: 7, connectionId: 'conn-1' }),
+    );
   });
 
   it('leaves a statement-level failure untouched', async () => {
@@ -102,9 +160,56 @@ describe('ConnectionRecovery.run', () => {
       throw new ConnectionLostError('primary reset');
     });
 
-    await expect(recovery.run('commitEditBatch', call)).rejects.toThrow(/connection lost/);
+    await expect(recovery.run('commitEditBatch', call)).rejects.toThrow(/not re-run/);
     expect(call).toHaveBeenCalledTimes(1);
     expect(deps.connect).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not re-run a user UPDATE after the transport died mid-statement (C5)', async () => {
+    const { deps, recovery } = harness();
+    const call = vi.fn(async () => {
+      throw new ConnectionLostError('connection terminated unexpectedly');
+    });
+    const err = await recovery
+      .run('query', call, { kind: 'query', sql: 'UPDATE t SET a = 1' })
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(NotReplayedError);
+    expect(String(err)).toMatch(/not re-run/);
+    expect(call).toHaveBeenCalledTimes(1);
+    expect(deps.connect).toHaveBeenCalledTimes(1);
+  });
+
+  it('never replays anything when the session died inside a transaction (C5)', async () => {
+    const { recovery } = harness();
+    const lost = Object.assign(new ConnectionLostError('primary reset'), { txnLost: true });
+    const call = vi.fn(async () => {
+      throw lost;
+    });
+    await expect(recovery.run('query', call, { kind: 'query', sql: 'SELECT 1' })).rejects.toThrow(
+      /open transaction/,
+    );
+    expect(call).toHaveBeenCalledTimes(1);
+  });
+
+  it('abandons a recovery when the user switched connection meanwhile (C11)', async () => {
+    let epoch = 0;
+    const { deps, recovery } = harness({
+      epoch: vi.fn(() => epoch),
+      session: vi.fn(() => ({ id: 'conn-1', config, tunnelled: true }) as RetainedSession | null),
+      reopenTunnel: vi.fn(async () => {
+        epoch = 1; // user clicked another connection while the tunnel reopened
+        return { host: '127.0.0.1', port: 1 };
+      }),
+    });
+    const call = vi.fn(async () => {
+      throw new ConnectionLostError('primary reset');
+    });
+    await expect(recovery.run('query', call, { kind: 'query', sql: 'SELECT 1' })).rejects.toThrow(
+      /primary reset/,
+    );
+    expect(deps.connect).not.toHaveBeenCalled();
+    expect(deps.onRecovered).not.toHaveBeenCalled();
+    expect(deps.onLost).not.toHaveBeenCalled();
   });
 
   it('never recovers around session plumbing itself', async () => {
@@ -127,7 +232,7 @@ describe('ConnectionRecovery.run', () => {
         .mockResolvedValueOnce('rows');
 
     const results = await Promise.all([
-      recovery.run('query', make()),
+      recovery.run('query', make(), { kind: 'query', sql: 'SELECT 1' }),
       recovery.run('introspect', make()),
       recovery.run('redisScan', make()),
     ]);
@@ -137,15 +242,18 @@ describe('ConnectionRecovery.run', () => {
   });
 
   it('re-forwards the SSH tunnel before reconnecting a tunnelled session', async () => {
+    const tunnelled: RetainedSession = { id: 'conn-1', config, tunnelled: true };
     const { deps, recovery } = harness({
-      session: vi.fn(() => ({ id: 'conn-1', config, tunnelled: true }) as RetainedSession | null),
+      session: vi.fn(() => tunnelled as RetainedSession | null),
     });
     const call = vi
       .fn<() => Promise<string>>()
       .mockRejectedValueOnce(new ConnectionLostError('tunnel died'))
       .mockResolvedValueOnce('rows');
 
-    await expect(recovery.run('query', call)).resolves.toBe('rows');
+    await expect(recovery.run('query', call, { kind: 'query', sql: 'SELECT 1' })).resolves.toBe(
+      'rows',
+    );
     expect(deps.reopenTunnel).toHaveBeenCalledTimes(1);
     expect(deps.connect).toHaveBeenCalledWith(expect.objectContaining({ tunnelled: true }), {
       host: '127.0.0.1',
@@ -191,8 +299,8 @@ describe('ConnectionRecovery.run', () => {
       .mockRejectedValueOnce(new ConnectionLostError('primary reset again'))
       .mockResolvedValueOnce('more rows');
 
-    await recovery.run('query', first);
-    await recovery.run('query', second);
+    await recovery.run('query', first, { kind: 'query', sql: 'SELECT 1' });
+    await recovery.run('query', second, { kind: 'query', sql: 'SELECT 1' });
     expect(deps.connect).toHaveBeenCalledTimes(2);
   });
 });

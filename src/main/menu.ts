@@ -1,4 +1,4 @@
-import { accelerator } from '@shared/keymap';
+import { KEYMAP, type KeyId, accelerator } from '@shared/keymap';
 import { BrowserWindow, Menu, type MenuItemConstructorOptions, app, shell } from 'electron';
 
 /**
@@ -6,17 +6,41 @@ import { BrowserWindow, Menu, type MenuItemConstructorOptions, app, shell } from
  * copy/paste/undo/zoom and a Help menu pointing at the project.
  * Accelerators come from `@shared/keymap` so they stay in lockstep
  * with renderer DOM listeners and the ⌘/ cheat-sheet.
+ *
+ * K1 — no native role may steal an app chord:
+ * - macOS "Close Window" moves to ⇧⌘W (⌘W is Close Tab);
+ * - ⌘R is the app's Refresh, so Reload is never on ⌘R, and Reload /
+ *   DevTools exist only in development builds;
+ * - Query History avoids ⌘H (macOS Hide) — see `history` in keymap.ts.
  */
-export function buildAppMenu(): void {
-  const isMac = process.platform === 'darwin';
 
-  const template: MenuItemConstructorOptions[] = [
+const REPO_URL = 'https://github.com/pankajyadav05/plasma';
+
+export function buildAppMenu(): void {
+  Menu.setApplicationMenu(Menu.buildFromTemplate(appMenuTemplate()));
+}
+
+/** Menu item for a keymap binding with a menu channel (skipped when absent). */
+function keyItem(id: KeyId, label: string): MenuItemConstructorOptions[] {
+  const binding = KEYMAP.find((b) => b.id === id);
+  const channel = binding?.menuChannel;
+  if (!binding || !channel) return [];
+  return [{ label, accelerator: accelerator(id), click: () => sendToFocusedWindow(channel) }];
+}
+
+export function appMenuTemplate(
+  isMac = process.platform === 'darwin',
+  isDev = !app.isPackaged,
+): MenuItemConstructorOptions[] {
+  return [
     ...(isMac
       ? ([
           {
             label: app.name,
             submenu: [
               { role: 'about' },
+              { type: 'separator' },
+              ...keyItem('settings', 'Settings…'),
               { type: 'separator' },
               { role: 'services' },
               { type: 'separator' },
@@ -32,16 +56,11 @@ export function buildAppMenu(): void {
     {
       label: 'File',
       submenu: [
-        {
-          label: 'New Query Tab',
-          accelerator: accelerator('newTab'),
-          click: () => sendToFocusedWindow('plasma:menu:newTab'),
-        },
-        {
-          label: 'Close Tab',
-          accelerator: accelerator('closeTab'),
-          click: () => sendToFocusedWindow('plasma:menu:closeTab'),
-        },
+        ...keyItem('newTab', 'New Query Tab'),
+        ...keyItem('openFile', 'Open SQL File…'),
+        { type: 'separator' },
+        ...keyItem('commitEdits', 'Save'),
+        ...keyItem('saveFileAs', 'Save SQL As…'),
         { type: 'separator' },
         {
           label: 'Export Results as CSV…',
@@ -53,7 +72,15 @@ export function buildAppMenu(): void {
           click: () => sendToFocusedWindow('plasma:menu:exportJson'),
         },
         { type: 'separator' },
-        isMac ? { role: 'close' } : { role: 'quit' },
+        ...keyItem('closeTab', 'Close Tab'),
+        ...(isMac
+          ? ([{ role: 'close', accelerator: 'Shift+CmdOrCtrl+W' }] as MenuItemConstructorOptions[])
+          : ([
+              { type: 'separator' },
+              ...keyItem('settings', 'Settings…'),
+              { type: 'separator' },
+              { role: 'quit' },
+            ] as MenuItemConstructorOptions[])),
       ],
     },
     {
@@ -71,80 +98,51 @@ export function buildAppMenu(): void {
     {
       label: 'View',
       submenu: [
-        {
-          label: 'Toggle Sidebar',
-          accelerator: accelerator('toggleSidebar'),
-          click: () => sendToFocusedWindow('plasma:menu:toggleSidebar'),
-        },
-        {
-          label: 'Toggle Query Editor',
-          accelerator: accelerator('toggleEditor'),
-          click: () => sendToFocusedWindow('plasma:menu:toggleEditor'),
-        },
-        {
-          label: 'Command Palette…',
-          accelerator: accelerator('palette'),
-          click: () => sendToFocusedWindow('plasma:menu:palette'),
-        },
-        {
-          label: 'Toggle AI Panel',
-          accelerator: accelerator('toggleAi'),
-          click: () => sendToFocusedWindow('plasma:menu:toggleAi'),
-        },
+        ...keyItem('toggleSidebar', 'Toggle Sidebar'),
+        ...keyItem('toggleEditor', 'Toggle Query Editor'),
+        ...keyItem('palette', 'Command Palette…'),
+        ...keyItem('toggleAi', 'Toggle AI Panel'),
         { type: 'separator' },
-        { role: 'reload' },
-        { role: 'toggleDevTools' },
+        ...keyItem('refresh', 'Refresh'),
+        { type: 'separator' },
+        // Reload loses every open tab and DevTools expose the IPC bridge —
+        // development builds only, and never on ⌘R.
+        ...(isDev
+          ? ([
+              { role: 'reload', accelerator: 'CmdOrCtrl+Alt+R' },
+              { role: 'toggleDevTools' },
+              { type: 'separator' },
+            ] as MenuItemConstructorOptions[])
+          : []),
         { role: 'togglefullscreen' },
       ],
     },
     {
       label: 'Query',
       submenu: [
-        {
-          label: 'Run',
-          accelerator: accelerator('runQuery'),
-          click: () => sendToFocusedWindow('plasma:menu:runQuery'),
-        },
-        {
-          label: 'Run All',
-          accelerator: accelerator('runQueryAll'),
-          click: () => sendToFocusedWindow('plasma:menu:runQueryAll'),
-        },
-        {
-          label: 'Cancel',
-          accelerator: accelerator('cancelQuery'),
-          click: () => sendToFocusedWindow('plasma:menu:cancelQuery'),
-        },
+        ...keyItem('runQuery', 'Run'),
+        ...keyItem('runQueryAll', 'Run All'),
+        ...keyItem('cancelQuery', 'Cancel'),
         { type: 'separator' },
-        {
-          label: 'Query History…',
-          accelerator: accelerator('history'),
-          click: () => sendToFocusedWindow('plasma:menu:history'),
-        },
+        ...keyItem('history', 'Query History…'),
       ],
     },
     {
       label: 'Help',
       submenu: [
-        {
-          label: 'Keyboard Shortcuts…',
-          accelerator: accelerator('cheatSheet'),
-          click: () => sendToFocusedWindow('plasma:menu:cheatSheet'),
-        },
+        ...keyItem('cheatSheet', 'Keyboard Shortcuts…'),
         { type: 'separator' },
         {
           label: 'Plasma on GitHub',
-          click: () => void shell.openExternal('https://github.com'),
+          click: () => void shell.openExternal(REPO_URL),
         },
         {
           label: 'Report a Bug',
-          click: () => void shell.openExternal('https://github.com'),
+          click: () => void shell.openExternal(`${REPO_URL}/issues`),
         },
       ],
     },
   ];
-
-  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
 function sendToFocusedWindow(channel: string): void {

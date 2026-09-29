@@ -1,7 +1,10 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import type { BrowserWindow } from 'electron';
 import { app, ipcMain } from 'electron';
 import electronUpdater, { type UpdateInfo, type ProgressInfo } from 'electron-updater';
 import { logger } from './logger';
+import { readPublisherName, updatePolicy } from './update-policy';
 
 const { autoUpdater } = electronUpdater;
 
@@ -52,6 +55,14 @@ export function getLastUpdateStatus(): UpdateStatus {
   return lastStatus;
 }
 
+function packagedPublisherName(): string | null {
+  try {
+    return readPublisherName(readFileSync(join(process.resourcesPath, 'app-update.yml'), 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
 export function initUpdater(window: BrowserWindow): void {
   // Packaged E2E / agent runs must not hit the R2 updater feed.
   if (process.env.PLASMA_DISABLE_UPDATER === '1') {
@@ -79,10 +90,18 @@ export function initUpdater(window: BrowserWindow): void {
     return;
   }
 
-  autoUpdater.autoDownload = true; // pull installer in the background
-  autoUpdater.autoInstallOnAppQuit = true; // swap on next quit
+  const policy = updatePolicy(process.platform, packagedPublisherName());
+  autoUpdater.autoDownload = policy.autoDownload; // pull installer in the background
+  // Silent install-on-quit only when the installer's signature is checked.
+  autoUpdater.autoInstallOnAppQuit = policy.autoInstallOnAppQuit;
   autoUpdater.allowPrerelease = false;
   autoUpdater.allowDowngrade = false;
+  if (!policy.signatureVerified) {
+    logger.warn(
+      '[updater] update signatures are not verified on this build (unsigned or no publisherName) — ' +
+        'updates install only when the user clicks "Restart & install"',
+    );
+  }
 
   autoUpdater.logger = {
     info: (msg) => logger.info('[updater]', msg),

@@ -11,11 +11,15 @@ import {
 import { Pill } from '@/components/ui/workbench';
 import { cleanIpcError } from '@/lib/errors';
 import { ipc } from '@/lib/ipc';
-import { useActiveTab, useSession } from '@/stores/session';
+import { useSession } from '@/stores/session';
 import { useWorkbench } from '@/stores/workbench';
 import type { RedisAnalyzeResult, RedisAnalyzeSample } from '@shared/protocol';
-import { ExternalLink, Loader2, Play, Search } from 'lucide-react';
+import { ExternalLink, Loader2, Play, Search, Square } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
+import { DEFAULT_ANALYZE, useRedisTabs } from './redis-store';
+
+/** R14: the analyzer never samples more than this. */
+const MAX_SAMPLE = 50_000;
 
 const FIELD =
   'h-6 rounded-[6px] bg-[var(--wb-field)] font-mono text-[12px] text-[var(--wb-text)] outline-none ring-1 ring-inset ring-[var(--wb-separator)] placeholder:text-[var(--wb-text-3)] focus:ring-[var(--wb-accent)]';
@@ -29,43 +33,43 @@ const FIELD =
  *   3. Drill-down grid — sampled keys by size, with type + TTL.
  *      Selecting a key shows it in Details; double-click / Enter opens it.
  *
- * Sample size is capped (default 5000) so this is safe to run in prod.
- * Results stay until the user runs again or closes the tab.
+ * Sample size is capped (default 5000, max 50,000) and the scan can be
+ * cancelled, so this is safe to run in prod. Results live in the tab
+ * store, so they survive tab switches (R14/R18).
  */
-export function RedisAnalyzeView() {
+export function RedisAnalyzeView({ tabId }: { tabId: string }) {
   const openRedisKey = useSession((s) => s.openRedisKey);
-  const tabId = useActiveTab()?.id ?? null;
-  const [match, setMatch] = useState('');
-  const [sampleCap, setSampleCap] = useState('5000');
-  const [running, setRunning] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [result, setResult] = useState<RedisAnalyzeResult | null>(null);
-  const [tookMs, setTookMs] = useState<number | null>(null);
+  const db = useSession((s) => s.redisDb as number);
+  const st = useRedisTabs((s) => s.analyze[tabId]) ?? DEFAULT_ANALYZE;
+  const update = useRedisTabs((s) => s.updateAnalyze);
+  const { match, sampleCap, running, error, result, tookMs } = st;
+  const setMatch = (v: string) => update(tabId, { match: v });
+  const setSampleCap = (v: string) => update(tabId, { sampleCap: v });
   const [selected, setSelected] = useState<number | null>(null);
 
   // Clear the Details pane when leaving the view.
   useEffect(() => () => useWorkbench.getState().setInspectedRow(null), []);
 
+  const capN = Number.parseInt(sampleCap, 10);
+  const capBad = !Number.isFinite(capN) || capN <= 0 || capN > MAX_SAMPLE;
+
   const onRun = async () => {
-    const cap = Number.parseInt(sampleCap, 10);
-    setRunning(true);
-    setError(null);
+    if (capBad) return;
+    update(tabId, { running: true, error: null });
     setSelected(null);
     useWorkbench.getState().setInspectedRow(null);
     const started = performance.now();
     try {
-      const r = await ipc.redis.analyze({
-        sampleCap: Number.isFinite(cap) && cap > 0 ? cap : 5000,
-        match: match.trim() || undefined,
-      });
-      setResult(r);
-      setTookMs(Math.round(performance.now() - started));
+      const r = await ipc.redis.analyze({ sampleCap: capN, match: match.trim() || undefined, db });
+      update(tabId, { result: r, tookMs: Math.round(performance.now() - started) });
     } catch (err) {
-      setError(cleanIpcError(err instanceof Error ? err.message : String(err)));
-      setResult(null);
-      setTookMs(null);
+      update(tabId, {
+        error: cleanIpcError(err instanceof Error ? err.message : String(err)),
+        result: null,
+        tookMs: null,
+      });
     } finally {
-      setRunning(false);
+      update(tabId, { running: false });
     }
   };
 
@@ -83,7 +87,7 @@ export function RedisAnalyzeView() {
         { name: 'size', dataTypeID: 0, dataTypeName: 'formatted' },
         { name: 'ttl_ms', dataTypeID: 0, dataTypeName: 'PTTL' },
       ],
-      row: [s.key, s.type, s.bytes, fmtBytes(s.bytes), s.ttlMs],
+      row: [s.key, s.type, s.bytes, s.bytes === null ? 'unavailable' : fmtBytes(s.bytes), s.ttlMs],
     });
   };
 
@@ -92,7 +96,7 @@ export function RedisAnalyzeView() {
   return (
     <main className="flex min-h-0 min-w-0 flex-1 flex-col bg-[var(--wb-content)]">
       <ViewToolbar>
-        <ViewTitle title="Memory analyzer" meta="SCAN sample · MEMORY USAGE per key" />
+        <ViewTitle title="Memory analyzer" meta={`db${db} · SCAN sample · MEMORY USAGE per key`} />
         <div className="flex-1" />
         <form
           className="flex items-center gap-2"
@@ -119,13 +123,30 @@ export function RedisAnalyzeView() {
               onChange={(e) => setSampleCap(e.target.value)}
               inputMode="numeric"
               aria-label="Sample cap"
-              className={`${FIELD} w-20 px-2 text-right tabular-nums`}
+              aria-invalid={capBad || undefined}
+              title={`1 – ${MAX_SAMPLE.toLocaleString()} keys`}
+              className={`${FIELD} w-20 px-2 text-right tabular-nums ${capBad ? 'ring-destructive' : ''}`}
             />
           </label>
-          <Pill type="submit" disabled={running} aria-label="Run analyze">
-            {running ? <Loader2 className="animate-spin" /> : <Play />}
-            Run
-          </Pill>
+          {running ? (
+            <Pill
+              onClick={() => void ipc.redis.cancel().catch(() => {})}
+              aria-label="Cancel analyze"
+            >
+              <Square />
+              Stop
+            </Pill>
+          ) : (
+            <Pill
+              type="submit"
+              disabled={capBad}
+              aria-label="Run analyze"
+              title={capBad ? `Sample must be 1 – ${MAX_SAMPLE.toLocaleString()}` : undefined}
+            >
+              <Play />
+              Run
+            </Pill>
+          )}
         </form>
       </ViewToolbar>
 
@@ -166,7 +187,9 @@ export function RedisAnalyzeView() {
       {result && (
         <ViewFooter>
           <span className="tabular-nums">
-            {result.samples.length.toLocaleString()} keys sampled
+            {result.scanned.toLocaleString()} {result.scanned === 1 ? 'key' : 'keys'} sampled
+            {result.cancelled ? ' · stopped early' : ''}
+            {result.unsized ? ` · ${result.unsized.toLocaleString()} without MEMORY USAGE` : ''}
           </span>
           {tookMs !== null && <span className="tabular-nums">· {fmtMs(tookMs)}</span>}
           <div className="flex-1" />
@@ -215,7 +238,7 @@ function Body({
         label: 'type',
         width: 90,
         sans: true,
-        render: (s) => <Badge>{s.type}</Badge>,
+        render: (s) => <Badge className="normal-case">{s.type}</Badge>,
       },
       {
         key: 'size',
@@ -223,8 +246,9 @@ function Body({
         title: 'MEMORY USAGE',
         align: 'right',
         width: 100,
-        render: (s) => fmtBytes(s.bytes),
-        titleOf: (s) => `${s.bytes.toLocaleString()} bytes`,
+        render: (s) => (s.bytes === null ? null : fmtBytes(s.bytes)),
+        titleOf: (s) =>
+          s.bytes === null ? 'MEMORY USAGE unavailable' : `${s.bytes.toLocaleString()} bytes`,
       },
       {
         key: 'ttl',
@@ -247,7 +271,7 @@ function Body({
           <StatTile label="Total bytes" value={fmtBytes(result.totalBytes)} />
           <StatTile
             label="Biggest key"
-            value={biggest ? fmtBytes(biggest.bytes) : '—'}
+            value={biggest && biggest.bytes !== null ? fmtBytes(biggest.bytes) : '—'}
             hint={biggest ? <span title={biggest.key}>{biggest.key}</span> : undefined}
           />
         </div>

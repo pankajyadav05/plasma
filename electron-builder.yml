@@ -43,6 +43,19 @@ win:
         - x64
   icon: resources/icon.png
   artifactName: ${productName}-${version}-${arch}.${ext}
+  # ── Code signing (C20) ──────────────────────────────────────────────
+  # Updates come from a public bucket, and latest.yml's sha512 sits next
+  # to the installer, so only a signature proves who published an update.
+  # To enable verified auto-update:
+  #   1. Provide an Authenticode certificate to the build (CSC_LINK +
+  #      CSC_KEY_PASSWORD, or an Azure Trusted Signing config).
+  #   2. Uncomment publisherName with the certificate's exact subject CN.
+  # electron-builder then writes publisherName into app-update.yml and
+  # electron-updater rejects any installer whose signature doesn't match.
+  # src/main/updater.ts reads that value: without it, updates are still
+  # downloaded but only installed on an explicit "Restart & install".
+  # signtoolOptions:
+  #   publisherName: "Your Legal Entity Name"
 
 nsis:
   oneClick: false
@@ -77,6 +90,10 @@ portable:
 # Auto-update on macOS requires a signed build — without signing,
 # electron-updater will surface the "available" event but the install
 # step will fail. The renderer's update UI handles the error gracefully.
+# Signing also secures updates (C20): Squirrel.Mac only installs an update
+# whose code signature matches the running app, so a tampered bucket can't
+# push a foreign binary. Needs: identity "Developer ID Application: …",
+# `notarize: true` plus APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD / APPLE_TEAM_ID.
 mac:
   target:
     - target: dmg

@@ -85,3 +85,47 @@ export function redactSettingsWithPresence(
     connectionSsh,
   };
 }
+
+/**
+ * True when raw settings rows still hold plaintext secrets — e.g. installs
+ * that reached schema v3 while SettingsSet was still writing API keys / SSH
+ * secrets straight into the settings table (C3). Drives the startup
+ * re-migration.
+ */
+export function hasPlaintextSecrets(raw: Record<string, unknown>): boolean {
+  return Object.keys(planSecretsMigration(raw).secrets).length > 0;
+}
+
+/**
+ * Linux `safeStorage` falls back to `basic_text` (a hardcoded key) when no
+ * keyring (libsecret / kwallet) is reachable — `isEncryptionAvailable()`
+ * still returns true there, so check the backend explicitly (C27).
+ */
+export function isWeakSecretBackend(platform: string, backend: string | null | undefined): boolean {
+  return platform === 'linux' && (backend === 'basic_text' || backend === 'unknown');
+}
+
+type PasswordTarget = {
+  id: string;
+  engine?: string;
+  host: string;
+  port: number;
+  user?: string;
+  database?: string;
+};
+
+/**
+ * The Edit dialog never receives the saved password (C17): a blank field
+ * means "keep the stored one". Only reuse it when the connection still
+ * points at the same server + login, so a tampered or edited config can't
+ * send a stored password to a different host.
+ */
+export function canReuseStoredPassword(saved: PasswordTarget, incoming: PasswordTarget): boolean {
+  return (
+    saved.id === incoming.id &&
+    (saved.engine ?? 'postgres') === (incoming.engine ?? 'postgres') &&
+    saved.host === incoming.host &&
+    saved.port === incoming.port &&
+    (saved.user ?? '') === (incoming.user ?? '')
+  );
+}

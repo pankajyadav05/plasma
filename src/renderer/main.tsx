@@ -1,6 +1,7 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { App } from './app/App';
+import './styles/fonts';
 import './styles/globals.css';
 
 // Set platform data attribute synchronously BEFORE React mounts so CSS

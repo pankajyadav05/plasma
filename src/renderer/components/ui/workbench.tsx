@@ -1,11 +1,17 @@
 import { cn } from '@/lib/cn';
 import { ChevronDown } from 'lucide-react';
 import { forwardRef } from 'react';
+import { buttonVariants } from './button';
 
 /**
  * TablePlus-style chrome controls. Neutral graphite throughout — colour
  * only ever comes from the caller (status capsule, icons). All surfaces
  * consume the `--wb-*` tokens from globals.css.
+ *
+ * One button system: `Pill` and `IconButton` are thin wrappers over
+ * `buttonVariants` from `button.tsx` (`secondary`/`ghost` × `pill`/
+ * `icon-24`), so a `<Button size="pill">` and a `<Pill>` are identical.
+ * Chrome uses these wrappers; forms and dialogs use `<Button>`.
  */
 
 // ───────────────────────── Toolbar group ─────────────────────────
@@ -85,10 +91,7 @@ type IconButtonProps = React.ButtonHTMLAttributes<HTMLButtonElement> & {
 
 /** 24px square, radius 6, --wb-control fill, 14px --wb-text-2 icon. */
 export const IconButton = forwardRef<HTMLButtonElement, IconButtonProps>(
-  (
-    { label, active = false, variant = 'control', className, children, title, ...props },
-    ref,
-  ) => (
+  ({ label, active = false, variant = 'control', className, children, title, ...props }, ref) => (
     <button
       ref={ref}
       type="button"
@@ -96,11 +99,11 @@ export const IconButton = forwardRef<HTMLButtonElement, IconButtonProps>(
       aria-pressed={active || undefined}
       title={title ?? label}
       className={cn(
-        'grid h-6 w-6 shrink-0 place-items-center rounded-[6px] text-[var(--wb-text-2)] transition-colors',
-        'hover:bg-[var(--wb-control-hover)] hover:text-[var(--wb-text)]',
-        'disabled:pointer-events-none disabled:opacity-40',
-        '[&_svg]:h-3.5 [&_svg]:w-3.5 [&_svg]:shrink-0',
-        variant === 'control' && 'bg-[var(--wb-control)]',
+        buttonVariants({
+          variant: variant === 'control' ? 'secondary' : 'ghost',
+          size: 'icon-24',
+        }),
+        'text-[var(--wb-text-2)] hover:text-[var(--wb-text)]',
         active && 'bg-[var(--wb-control-active)] text-[var(--wb-text)]',
         className,
       )}
@@ -122,12 +125,12 @@ export interface SegmentOption<T extends string> {
   disabled?: boolean;
 }
 
-export type SegmentedVariant = 'plain' | 'track' | 'raised' | 'accent';
+export type SegmentedVariant = 'plain' | 'track';
 
 /**
- * `plain` (alias `raised`): no track, active segment --wb-segment-active
+ * `plain`: no track, active segment --wb-segment-active
  * — sidebar Items/Queries/History, Details/Assistant.
- * `track` (alias `accent`): --wb-control track, active --wb-control-active
+ * `track`: --wb-control track, active --wb-control-active
  * — results footer Data/Message/Chart. Both are neutral.
  */
 export function Segmented<T extends string>({
@@ -149,11 +152,34 @@ export function Segmented<T extends string>({
   ariaLabel: string;
   className?: string;
 }) {
-  const track = variant === 'track' || variant === 'accent';
+  const track = variant === 'track';
+  // AA3: tablist keyboard model — one tab stop (the active segment);
+  // ←/→ (and Home/End) move and select, skipping disabled segments.
+  const onKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    const keys = ['ArrowLeft', 'ArrowRight', 'Home', 'End'];
+    if (!keys.includes(e.key)) return;
+    const enabled = options.filter((o) => !o.disabled);
+    if (enabled.length === 0) return;
+    const at = enabled.findIndex((o) => o.value === value);
+    const next =
+      e.key === 'Home'
+        ? enabled[0]
+        : e.key === 'End'
+          ? enabled[enabled.length - 1]
+          : enabled[(at + (e.key === 'ArrowRight' ? 1 : -1) + enabled.length) % enabled.length];
+    if (!next) return;
+    e.preventDefault();
+    onChange(next.value);
+    const btn = e.currentTarget.querySelector<HTMLButtonElement>(
+      `[data-segment="${CSS.escape(next.value)}"]`,
+    );
+    btn?.focus();
+  };
   return (
     <div
       role="tablist"
       aria-label={ariaLabel}
+      onKeyDown={onKeyDown}
       className={cn(
         'inline-flex shrink-0 items-stretch',
         track
@@ -171,6 +197,8 @@ export function Segmented<T extends string>({
             type="button"
             role="tab"
             aria-selected={active}
+            tabIndex={active ? 0 : -1}
+            data-segment={o.value}
             disabled={o.disabled}
             title={o.title}
             onClick={() => onChange(o.value)}
@@ -198,30 +226,14 @@ export function Segmented<T extends string>({
 
 // ───────────────────────── Pill buttons ─────────────────────────
 
-/** `accent` is kept for compatibility and renders the same neutral style. */
-type PillTone = 'default' | 'accent';
+type PillProps = React.ButtonHTMLAttributes<HTMLButtonElement>;
 
-type PillProps = React.ButtonHTMLAttributes<HTMLButtonElement> & {
-  tone?: PillTone;
-};
-
-const PILL_SURFACE =
-  'bg-[var(--wb-control)] text-[var(--wb-text)] hover:bg-[var(--wb-control-hover)] disabled:pointer-events-none disabled:opacity-40';
+const PILL_SURFACE = buttonVariants({ variant: 'secondary', size: 'pill' });
 
 /** 24px neutral pill (e.g. "Export…", "Run Current ⌘↵"). */
 export const Pill = forwardRef<HTMLButtonElement, PillProps>(
-  ({ tone: _tone = 'default', className, children, ...props }, ref) => (
-    <button
-      ref={ref}
-      type="button"
-      className={cn(
-        'inline-flex h-6 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-[6px] px-2.5 text-[13px] leading-none transition-colors',
-        '[&_svg]:h-3.5 [&_svg]:w-3.5 [&_svg]:shrink-0',
-        PILL_SURFACE,
-        className,
-      )}
-      {...props}
-    >
+  ({ className, children, ...props }, ref) => (
+    <button ref={ref} type="button" className={cn(PILL_SURFACE, className)} {...props}>
       {children}
     </button>
   ),
@@ -231,14 +243,14 @@ Pill.displayName = 'Pill';
 /** Chevron half of a split pill — wrap in a PopoverTrigger. */
 export const PillChevron = forwardRef<
   HTMLButtonElement,
-  React.ButtonHTMLAttributes<HTMLButtonElement> & { tone?: PillTone }
->(({ tone: _tone = 'default', className, ...props }, ref) => (
+  React.ButtonHTMLAttributes<HTMLButtonElement>
+>(({ className, ...props }, ref) => (
   <button
     ref={ref}
     type="button"
     className={cn(
-      'grid h-6 w-[22px] shrink-0 place-items-center rounded-r-[6px] transition-colors',
       PILL_SURFACE,
+      'grid w-[22px] place-items-center rounded-l-none px-0',
       'text-[var(--wb-text-2)] hover:text-[var(--wb-text)]',
       className,
     )}
@@ -253,18 +265,38 @@ PillChevron.displayName = 'PillChevron';
  * Joins a Pill + PillChevron into one capsule; the two halves are split
  * by a 1px gap showing the --wb-content background behind them.
  */
-export function SplitPill({
-  tone: _tone = 'default',
-  children,
-}: {
-  tone?: PillTone;
-  children: React.ReactNode;
-}) {
+export function SplitPill({ children }: { children: React.ReactNode }) {
   return (
     <div className="inline-flex shrink-0 items-stretch gap-px rounded-[6px] bg-[var(--wb-content)] [&>button:first-child]:rounded-r-none">
       {children}
     </div>
   );
+}
+
+/**
+ * ↑/↓ (and Home/End) move focus between the menu items of the enclosing
+ * `role="menu"` container (AA3). Disabled items are skipped.
+ */
+function moveMenuFocus(e: React.KeyboardEvent<HTMLButtonElement>) {
+  const keys = ['ArrowDown', 'ArrowUp', 'Home', 'End'];
+  if (!keys.includes(e.key)) return;
+  const menu = e.currentTarget.closest('[role="menu"]');
+  if (!menu) return;
+  const items = Array.from(
+    menu.querySelectorAll<HTMLButtonElement>(
+      '[role="menuitem"]:not(:disabled), [role="menuitemradio"]:not(:disabled)',
+    ),
+  );
+  if (items.length === 0) return;
+  const at = items.indexOf(e.currentTarget);
+  const next =
+    e.key === 'Home'
+      ? items[0]
+      : e.key === 'End'
+        ? items[items.length - 1]
+        : items[(at + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length];
+  e.preventDefault();
+  next?.focus();
 }
 
 /** Native-looking row in a pill's dropdown menu. */
@@ -287,17 +319,18 @@ export function MenuItem({
     <button
       type="button"
       onClick={onClick}
+      onKeyDown={moveMenuFocus}
       disabled={disabled}
       role={checked === undefined ? 'menuitem' : 'menuitemradio'}
       aria-checked={checked}
-      className="group/menu flex h-[22px] w-full items-center gap-2 rounded-[4px] px-2 text-left text-[13px] leading-none text-[var(--wb-text)] transition-none hover:bg-[var(--wb-accent)] hover:text-white focus-visible:bg-[var(--wb-accent)] focus-visible:text-white focus-visible:outline-none disabled:pointer-events-none disabled:opacity-40 [&_svg]:h-3.5 [&_svg]:w-3.5"
+      className="group/menu flex h-[22px] w-full items-center gap-2 rounded-[4px] px-2 text-left text-[13px] leading-none text-[var(--wb-text)] transition-none hover:bg-[var(--wb-accent-fill)] hover:text-white focus-visible:bg-[var(--wb-accent-fill)] focus-visible:text-white focus-visible:outline-none disabled:pointer-events-none disabled:opacity-40 [&_svg]:h-3.5 [&_svg]:w-3.5"
     >
       <span className="grid w-3.5 shrink-0 place-items-center">
         {checked ? <span className="text-[12px]">✓</span> : icon}
       </span>
       <span className="flex-1 truncate">{label}</span>
       {hint && (
-        <span className="text-[12px] text-[var(--wb-text-2)] group-hover/menu:text-white/80">
+        <span className="text-[12px] text-[var(--wb-text-2)] group-hover/menu:text-white/85 group-focus-visible/menu:text-white/85">
           {hint}
         </span>
       )}

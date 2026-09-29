@@ -9,9 +9,7 @@ import {
 
 describe('isMissingSqlEndpointError', () => {
   it('is true for a ResponseError-shaped 404 via statusCode', () => {
-    expect(isMissingSqlEndpointError({ statusCode: 404, meta: { statusCode: 404 } })).toBe(
-      true,
-    );
+    expect(isMissingSqlEndpointError({ statusCode: 404, meta: { statusCode: 404 } })).toBe(true);
   });
 
   it('is true when only meta.statusCode is 404', () => {
@@ -19,9 +17,9 @@ describe('isMissingSqlEndpointError', () => {
   });
 
   it('is true when body.status is 404 (ES-style ResponseError)', () => {
-    expect(
-      isMissingSqlEndpointError({ meta: { body: { status: 404 }, statusCode: 200 } }),
-    ).toBe(true);
+    expect(isMissingSqlEndpointError({ meta: { body: { status: 404 }, statusCode: 200 } })).toBe(
+      true,
+    );
   });
 
   it('preserves non-404 failures (auth, bad SQL, timeout)', () => {
@@ -29,9 +27,7 @@ describe('isMissingSqlEndpointError', () => {
     expect(isMissingSqlEndpointError({ statusCode: 401 })).toBe(false);
     expect(isMissingSqlEndpointError({ statusCode: 403 })).toBe(false);
     expect(isMissingSqlEndpointError({ statusCode: 500 })).toBe(false);
-    expect(isMissingSqlEndpointError({ name: 'TimeoutError', message: 'timeout' })).toBe(
-      false,
-    );
+    expect(isMissingSqlEndpointError({ name: 'TimeoutError', message: 'timeout' })).toBe(false);
     expect(isMissingSqlEndpointError(new Error('network down'))).toBe(false);
     expect(isMissingSqlEndpointError(null)).toBe(false);
     expect(isMissingSqlEndpointError(undefined)).toBe(false);
@@ -89,5 +85,125 @@ describe('buildFieldStatsAggs / readFieldStat', () => {
       topValues: [],
       isTime: true,
     });
+  });
+});
+
+import {
+  encodeIndexPath,
+  flattenMappingProps,
+  isNdjsonPath,
+  mergeMappingTrees,
+  parseTotal,
+  prepareSearchBody,
+  readMsearchFieldStat,
+  resolveAggField,
+  responseFromError,
+  statsQuery,
+} from './opensearch-helpers';
+
+describe('parseTotal (O3)', () => {
+  it('keeps the gte relation past the track_total_hits cap', () => {
+    expect(parseTotal({ value: 10000, relation: 'gte' })).toEqual({
+      total: 10000,
+      relation: 'gte',
+    });
+    expect(parseTotal({ value: 5, relation: 'eq' })).toEqual({ total: 5, relation: 'eq' });
+    expect(parseTotal(42)).toEqual({ total: 42, relation: 'eq' });
+    expect(parseTotal(undefined)).toEqual({ total: 0, relation: 'eq' });
+  });
+});
+
+describe('prepareSearchBody', () => {
+  it('defaults to match_all with size and exact totals', () => {
+    expect(prepareSearchBody('', 20)).toEqual({
+      query: { match_all: {} },
+      size: 20,
+      track_total_hits: true,
+    });
+  });
+  it('keeps explicit size / track_total_hits', () => {
+    expect(prepareSearchBody('{"size":3,"track_total_hits":false}', 20)).toEqual({
+      size: 3,
+      track_total_hits: false,
+    });
+  });
+  it('rejects invalid JSON and non-objects', () => {
+    expect(() => prepareSearchBody('{', 1)).toThrow(/invalid query DSL JSON/);
+    expect(() => prepareSearchBody('[1]', 1)).toThrow(/must be an object/);
+  });
+});
+
+describe('mapping helpers (O5)', () => {
+  const props = {
+    title: { type: 'text', fields: { keyword: { type: 'keyword' } } },
+    body: { type: 'text' },
+    loc: { type: 'geo_point' },
+    user: { properties: { id: { type: 'keyword' } } },
+  };
+  it('flattens dotted paths with multi-fields', () => {
+    const flat = flattenMappingProps(props);
+    expect(Object.keys(flat).sort()).toEqual(['body', 'loc', 'title', 'user', 'user.id']);
+    expect(flat.title?.multiFields).toEqual([{ name: 'keyword', type: 'keyword' }]);
+    expect(flat.user?.type).toBe('object');
+  });
+  it('resolves aggregatable fields', () => {
+    const flat = flattenMappingProps(props);
+    expect(resolveAggField('title', flat).field).toBe('title.keyword');
+    expect(resolveAggField('body', flat).field).toBeNull();
+    expect(resolveAggField('loc', flat).reason).toMatch(/geo_point/);
+    expect(resolveAggField('user', flat).field).toBeNull();
+    expect(resolveAggField('user.id', flat).field).toBe('user.id');
+    expect(resolveAggField('unknown', flat).field).toBe('unknown');
+  });
+  it('merges indices and flags conflicting types', () => {
+    const tree = mergeMappingTrees([
+      { a: { type: 'keyword' }, o: { properties: { x: { type: 'long' } } } },
+      { a: { type: 'text' }, o: { properties: { y: { type: 'date' } } } },
+    ]);
+    const a = tree.find((n) => n.name === 'a');
+    expect(a?.conflicts).toEqual(['keyword', 'text']);
+    expect(tree.find((n) => n.name === 'o')?.children.map((c) => c.name)).toEqual(['x', 'y']);
+  });
+});
+
+describe('field stats per field (O2)', () => {
+  it('reads a successful msearch response', () => {
+    const s = readMsearchFieldStat('title', 'text', 'title.keyword', {
+      aggregations: { card_0: { value: 3 }, top_0: { buckets: [{ key: 'a', doc_count: 2 }] } },
+    });
+    expect(s).toMatchObject({ cardinality: 3, aggField: 'title.keyword', error: null });
+    expect(s.topValues).toEqual([{ value: 'a', count: 2 }]);
+  });
+  it('keeps a failing field isolated with its reason', () => {
+    const s = readMsearchFieldStat('x', 'keyword', 'x', {
+      error: { root_cause: [{ reason: 'boom' }] },
+    });
+    expect(s).toMatchObject({ cardinality: null, error: 'boom' });
+  });
+  it('builds the stats query from DSL or query_string', () => {
+    expect(statsQuery('{"term":{"a":1}}')).toEqual({ term: { a: 1 } });
+    expect(statsQuery(undefined, 'a:1')).toEqual({ query_string: { query: 'a:1' } });
+    expect(statsQuery()).toBeNull();
+    expect(() => statsQuery('[1]')).toThrow();
+  });
+});
+
+describe('request helpers (O14)', () => {
+  it('encodes index paths but keeps wildcards and lists', () => {
+    expect(encodeIndexPath('logs-*,events')).toBe('logs-*,events');
+    expect(encodeIndexPath('a b')).toBe('a%20b');
+  });
+  it('detects NDJSON endpoints', () => {
+    expect(isNdjsonPath('/_bulk')).toBe(true);
+    expect(isNdjsonPath('/idx/_bulk?refresh=true')).toBe(true);
+    expect(isNdjsonPath('/_msearch')).toBe(true);
+    expect(isNdjsonPath('/idx/_search')).toBe(false);
+  });
+  it('extracts HTTP errors but not transport errors', () => {
+    expect(responseFromError({ meta: { statusCode: 404, body: { found: false } } })).toEqual({
+      status: 404,
+      body: { found: false },
+    });
+    expect(responseFromError(new Error('ECONNREFUSED'))).toBeNull();
   });
 });

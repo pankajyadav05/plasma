@@ -5,6 +5,7 @@ import { cn } from '@/lib/cn';
 import {
   type ClipboardFormat,
   type ExportFormat,
+  type FullExportSource,
   copyResultAs,
   copyResultToClipboard,
   pickRows,
@@ -25,16 +26,23 @@ export function ExportPopover({
   result,
   selected,
   filename,
+  full,
+  targetTable,
 }: {
   open: boolean;
   onOpenChange: (o: boolean) => void;
   result: QueryResult;
   selected: Set<number>;
   filename: string;
+  /** F7: server-side export of the whole table / untruncated result. */
+  full?: FullExportSource | null;
+  /** Quoted INSERT target for SQL export (table tabs). */
+  targetTable?: string;
 }) {
   const selectedCount = selected.size;
   const hasSelection = selectedCount > 0;
-  const [scope, setScope] = useState<'all' | 'selected'>('all');
+  const [scope, setScope] = useState<'all' | 'selected' | 'full'>('all');
+  const fullScope = scope === 'full' && full ? full : null;
 
   // Default scope to 'selected' whenever the popover opens with a
   // non-empty selection — that's almost always what the user means.
@@ -63,24 +71,38 @@ export function ExportPopover({
         </Pill>
       </PopoverTrigger>
       <PopoverContent align="end" sideOffset={4} className="w-[280px] p-1">
-        {hasSelection && (
+        {(hasSelection || full) && (
           <div
-            className="mb-1 grid h-6 grid-cols-2 gap-px rounded-[7px] bg-[var(--wb-control)] p-px"
+            className={cn(
+              'mb-1 grid h-6 gap-px rounded-[7px] bg-[var(--wb-control)] p-px',
+              hasSelection && full ? 'grid-cols-3' : 'grid-cols-2',
+            )}
             role="tablist"
             aria-label="Export scope"
           >
-            <ScopeTab
-              active={scope === 'selected'}
-              onClick={() => setScope('selected')}
-              label="Selected"
-              count={selectedCount}
-            />
+            {hasSelection && (
+              <ScopeTab
+                active={scope === 'selected'}
+                onClick={() => setScope('selected')}
+                label="Selected"
+                count={selectedCount}
+              />
+            )}
             <ScopeTab
               active={scope === 'all'}
               onClick={() => setScope('all')}
-              label="All rows"
+              label={full ? 'Loaded' : 'All rows'}
               count={result.rows.length}
             />
+            {full && (
+              <ScopeTab active={scope === 'full'} onClick={() => setScope('full')} label={full.label} />
+            )}
+          </div>
+        )}
+        {result.truncated && !fullScope && (
+          <div className="px-2 pb-1 text-[12px] text-[var(--wb-text-2)]">
+            Only the first {result.rows.length.toLocaleString()} rows were loaded.
+            {full ? ` Choose "${full.label}" to export everything.` : ''}
           </div>
         )}
         <div className="grid grid-cols-[1fr_auto_auto] items-center gap-x-1 px-2 pb-1 pt-1 text-[11px] text-[var(--wb-text-3)]">
@@ -95,6 +117,8 @@ export function ExportPopover({
           format="csv"
           result={effectiveResult}
           filename={effectiveFilename}
+          full={fullScope}
+          targetTable={fullScope?.targetTable ?? targetTable}
           onClose={() => onOpenChange(false)}
         />
         <ExportRow
@@ -104,6 +128,8 @@ export function ExportPopover({
           format="json"
           result={effectiveResult}
           filename={effectiveFilename}
+          full={fullScope}
+          targetTable={fullScope?.targetTable ?? targetTable}
           onClose={() => onOpenChange(false)}
         />
         <ExportRow
@@ -113,6 +139,8 @@ export function ExportPopover({
           format="sql"
           result={effectiveResult}
           filename={effectiveFilename}
+          full={fullScope}
+          targetTable={fullScope?.targetTable ?? targetTable}
           onClose={() => onOpenChange(false)}
         />
         <div className="my-1 h-px bg-[var(--wb-separator)]" />
@@ -136,7 +164,7 @@ function ScopeTab({
   active: boolean;
   onClick: () => void;
   label: string;
-  count: number;
+  count?: number;
 }) {
   return (
     <button
@@ -152,7 +180,9 @@ function ScopeTab({
       )}
     >
       <span>{label}</span>
-      <span className="tabular-nums text-[var(--wb-text-2)]">{count.toLocaleString()}</span>
+      {count !== undefined && (
+        <span className="tabular-nums text-[var(--wb-text-2)]">{count.toLocaleString()}</span>
+      )}
     </button>
   );
 }
@@ -201,6 +231,8 @@ function ExportRow({
   format,
   result,
   filename,
+  full,
+  targetTable,
   onClose,
 }: {
   icon: React.ReactNode;
@@ -209,13 +241,15 @@ function ExportRow({
   format: ExportFormat;
   result: QueryResult;
   filename: string;
+  full?: FullExportSource | null;
+  targetTable?: string;
   onClose: () => void;
 }) {
   const [copied, setCopied] = useState(false);
 
   const handleCopy = async () => {
     try {
-      await copyResultToClipboard(result, format);
+      await copyResultToClipboard(result, format, { targetTable });
       setCopied(true);
       setTimeout(() => setCopied(false), 1200);
     } catch {
@@ -224,7 +258,11 @@ function ExportRow({
   };
 
   const handleDownload = () => {
-    void window.plasma.export.save({ format, defaultPath: filename, columns: result.columns, rows: result.rows });
+    void window.plasma.export.save(
+      full
+        ? { format, defaultPath: filename, columns: result.columns, sql: full.sql, params: full.params, targetTable }
+        : { format, defaultPath: filename, columns: result.columns, rows: result.rows, targetTable },
+    );
     onClose();
   };
 
@@ -239,6 +277,7 @@ function ExportRow({
         variant="ghost"
         size="icon-xs"
         onClick={() => void handleCopy()}
+        disabled={Boolean(full)}
         title={`Copy ${label} to clipboard`}
         aria-label={`Copy ${label}`}
       >

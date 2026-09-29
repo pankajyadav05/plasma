@@ -1,11 +1,15 @@
 import { Button } from '@/components/ui/button';
-import { ConfirmDialog } from '@/components/ui/confirm-dialog';
-import { BrandMark } from '@/features/app-shell/BrandMark';
 import { cn } from '@/lib/cn';
+import { commandDetail, commandTitle } from '@/lib/command-summary';
 import { cleanIpcError } from '@/lib/errors';
-import { copyCellToClipboard } from '@/lib/export';
 import { formatDuration } from '@/lib/format';
-import { useActiveTab, useSession } from '@/stores/session';
+import { type PendingEdit, useActiveTab, useSession } from '@/stores/session';
+import {
+  type RowOverlay,
+  overlayRows,
+  pendingInsertsFor,
+  tablePkNames,
+} from '@/stores/session-pending-edits';
 import { useWorkbench } from '@/stores/workbench';
 import type { ColumnMeta } from '@shared/protocol';
 import {
@@ -13,39 +17,55 @@ import {
   ArrowUpRight,
   ChevronDown,
   ChevronUp,
-  Code2,
+  Copy,
+  CopyPlus,
+  Eraser,
+  Filter as FilterIcon,
+  Loader2,
+  Pencil,
   Search,
-  Table2,
   Trash2,
+  Undo2,
   X,
 } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { type CellDetail, CellDetailDialog } from './CellDetailDialog';
-import { nextCell, prevCell } from './grid-nav';
 import { ColumnHeaderMenu } from './ColumnHeaderMenu';
+import { GridContextMenu, type GridMenuEntry } from './GridContextMenu';
+import { type RowDetail, RowDetailSheet } from './RowDetailSheet';
+import { TableDefinitionView } from './TableDefinitionView';
+import { TableStructureView } from './TableStructureView';
+import { cellToText } from './cell-edit';
+import { COPY_FORMATS, type CopyFormat, formatRows, parseClipboardBlock } from './clipboard-format';
 import {
   type IndexedRow,
   slicePageSorted,
   slicePageUnsorted,
   sortRowsWithIndex,
 } from './display-rows';
-import { type RowDetail, RowDetailSheet } from './RowDetailSheet';
-import { SqlHomePanel } from './SqlHomePanel';
-import { TableDefinitionView } from './TableDefinitionView';
-import { TableStructureView } from './TableStructureView';
+import { nextCell, prevCell } from './grid-nav';
+import { isErrorTabActive } from './result-view';
 import { ROW_HEIGHT_PX, computeRowWindow } from './windowed-rows';
 
 // Stable empty Set used as a fallback when the active tab is null. Using
 // a module-level singleton keeps the useEffect dependency reference-stable
 // across renders so we don't trip the sticky-column re-measure loop.
 const EMPTY_STICKY_SET: ReadonlySet<string> = new Set();
+const EMPTY_EDITS: PendingEdit[] = [];
 
 /** Grid header height (TablePlus: 26px header over 24px rows). */
 const HEADER_HEIGHT_PX = 26;
 /** Row-number gutter width. */
 const GUTTER_WIDTH_PX = 44;
+/** Longest text rendered inside a cell (the full value is in the detail views). */
+const MAX_CELL_CHARS = 1000;
 /** Selected-row tint: the theme accent at 18% (Plasma coral by default). */
 const SELECTED_ROW_BG = 'bg-[color-mix(in_srgb,var(--wb-accent)_18%,transparent)]';
+/** Pending-change tints (B3 / VF13). */
+const EDITED_CELL_BG = 'bg-[color-mix(in_srgb,var(--status-staging)_30%,transparent)]';
+const INSERTED_ROW_BG = 'bg-[color-mix(in_srgb,var(--status-local)_20%,transparent)]';
+const DELETED_ROW_BG = 'bg-[color-mix(in_srgb,var(--destructive)_14%,transparent)]';
+const FAILED_OUTLINE = 'outline outline-2 -outline-offset-2 outline-[var(--destructive)]';
 
 /**
  * Scroll-container background: the zebra stripes continue below the last
@@ -64,19 +84,40 @@ const STRIPED_BACKGROUND: React.CSSProperties = {
   backgroundAttachment: 'scroll, local',
 };
 
+type RowStatus = 'clean' | 'edited' | 'deleted' | 'inserted';
+
+/** One rendered grid row: server values with pending edits applied. */
+interface GridRow {
+  key: string;
+  row: unknown[];
+  /** Index into `queryResult.rows`; -1 for a pending insert. */
+  originalIndex: number;
+  status: RowStatus;
+  editedCols: ReadonlySet<number>;
+  editIdByCol: ReadonlyMap<number, string>;
+  rowKey: string | null;
+  insert?: PendingEdit;
+}
+
+type Cell = { row: number; col: number };
+
+const isMac = typeof navigator !== 'undefined' && /Mac/i.test(navigator.platform);
+const MOD = isMac ? '⌘' : 'Ctrl+';
+
 /**
- * Paginated + sortable result grid with keyboard navigation and cell copy.
+ * Paginated + sortable result grid (role="grid").
  *
- *  - Click a header to toggle sort (asc → desc → none)
- *  - Click a cell to select; arrows move selection
- *  - Enter opens row detail; F2 / double-click edits (when writable)
- *  - Tab / Shift+Tab move to the next / previous cell
- *  - Ctrl/Cmd+C copies the selected cell value
- *  - Long cells truncate with a native tooltip on hover
+ *  - Click a cell to select; Shift+click / drag / Shift+arrows extend a range
+ *  - Arrows, Home/End, PageUp/PageDown move; Tab / Shift+Tab step cells
+ *  - Enter opens row detail; Space opens the cell viewer
+ *  - F2 / double-click / typing edits (edit mode); ⇧⌘⌫ sets NULL
+ *  - ⌘C copies the range (TSV); ⌘V pastes a block; ⌘D duplicates a row;
+ *    ⌘⌫ marks rows for deletion; ⌘S commits the pending changes
+ *  - Right-click (or Shift+F10) opens the cell menu
  *
- * U15: worker results are row/byte-capped (`truncated` flag). The tbody
- * uses scroll-windowed rendering (replacing MAX_DOM_ROWS) so large
- * pageSize values do not mount thousands of DOM nodes.
+ * Keys are only handled while the grid itself has focus, so dialogs,
+ * menus and other panes keep their own Tab / Enter / Space / arrows / ⌘C.
+ * Rows are windowed (only the visible slice is mounted).
  */
 export function ResultGrid() {
   const tab = useActiveTab();
@@ -88,11 +129,19 @@ export function ResultGrid() {
   const editMode = useSession((s) => s.editMode);
   const connectionReadOnly = useSession((s) => Boolean(s.activeConfig?.readOnly));
   const updateCell = useSession((s) => s.updateCell);
-  const deleteRow = useSession((s) => s.deleteRow);
+  const deleteRows = useSession((s) => s.deleteRows);
+  const duplicateRow = useSession((s) => s.duplicateRow);
+  const updatePendingInsert = useSession((s) => s.updatePendingInsert);
+  const discardPendingEdit = useSession((s) => s.discardPendingEdit);
   const schema = useSession((s) => s.schema);
   const openForeignRow = useSession((s) => s.openForeignRow);
   const toggleColumnHidden = useSession((s) => s.toggleColumnHidden);
   const toggleStickyColumn = useSession((s) => s.toggleStickyColumn);
+  const addFilter = useSession((s) => s.addFilter);
+  const pendingEdits = useSession(
+    (s) => (s.pendingEdits as PendingEdit[] | undefined) ?? EMPTY_EDITS,
+  );
+  const pendingEditsError = useSession((s) => s.pendingEditsError);
 
   // Header-menu sort actions. The existing setSort cycles asc → desc →
   // none; the menu wants explicit values, so we write directly through
@@ -120,10 +169,11 @@ export function ResultGrid() {
   };
 
   // Inline cell edit state — local to the grid, only one cell at a time.
+  // `value: null` is SQL NULL (A1) — distinct from the empty string.
   const [editingCell, setEditingCell] = useState<{
     row: number;
     col: number;
-    value: string;
+    value: string | null;
   } | null>(null);
   const [editError, setEditError] = useState<string | null>(null);
 
@@ -131,12 +181,15 @@ export function ResultGrid() {
   // Space on the selected cell. Shows the full, formatted value.
   const [cellDetail, setCellDetail] = useState<CellDetail | null>(null);
 
-  // Row detail drawer — opens on Enter on the selected cell, or on a
-  // click of the row-number column. Lays the whole row out vertically.
+  // Row detail drawer — opens on Enter on the selected cell.
   const [rowDetail, setRowDetail] = useState<RowDetail | null>(null);
 
-  // Pending row index for the destructive-delete confirm dialog.
-  const [pendingDeleteRow, setPendingDeleteRow] = useState<number | null>(null);
+  // Range selection: `tab.selectedCell` is the anchor, this is the far corner.
+  const [rangeEnd, setRangeEnd] = useState<Cell | null>(null);
+  const dragging = useRef(false);
+
+  // Right-click menu.
+  const [menu, setMenu] = useState<{ x: number; y: number; cell: Cell } | null>(null);
 
   // In-grid search — Ctrl+F / ⌘F toggles the floating bar. Matches are
   // computed from displayRows (case-insensitive substring). Enter /
@@ -145,6 +198,7 @@ export function ResultGrid() {
   const [searchQuery, setSearchQuery] = useState('');
   const [activeMatchIdx, setActiveMatchIdx] = useState(0);
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const gridRef = useRef<HTMLTableElement>(null);
 
   // Footer's find button (TablePlus result footer) opens the in-grid search.
   useEffect(() => {
@@ -157,71 +211,117 @@ export function ResultGrid() {
   }, []);
 
   const isTableTab = tab?.kind === 'table';
+  const pkNames = useMemo(
+    () => (isTableTab ? tablePkNames(schema, tab?.tableSchema, tab?.tableName) : []),
+    [isTableTab, schema, tab?.tableSchema, tab?.tableName],
+  );
   const writable = Boolean(
     isTableTab &&
       editMode &&
       !connectionReadOnly &&
       tab?.tableSchema &&
       tab?.tableName &&
-      schema?.columns.some(
-        (c) => c.schema === tab.tableSchema && c.table === tab.tableName && c.isPrimaryKey,
-      ),
+      pkNames.length > 0,
   );
-
-  const commitEdit = async (): Promise<boolean> => {
-    if (!editingCell) return false;
-    const { row, col, value } = editingCell;
-    setEditError(null);
-    try {
-      await updateCell(row, col, value);
-      setEditingCell(null);
-      return true;
-    } catch (err) {
-      setEditError(err instanceof Error ? err.message : String(err));
-      return false;
-    }
-  };
-
-  const confirmDeleteRow = async () => {
-    if (pendingDeleteRow === null) return;
-    const rowIndex = pendingDeleteRow;
-    setPendingDeleteRow(null);
-    setEditError(null);
-    try {
-      await deleteRow(rowIndex);
-    } catch (err) {
-      setEditError(err instanceof Error ? err.message : String(err));
-    }
-  };
 
   // Compute display rows (U14 + U15).
   //
   // Table tabs: the server already returned the sorted + paginated
-  // slice, so we render all rows as-is.
+  // slice; pending edits are overlaid by primary key (so they survive
+  // paging) and pending inserts are appended.
   //
   // SQL tabs: sorted order is memoized on (rows, sort) only so paging
   // does not re-sort. Unsorted pages slice first, then wrap only the
   // visible rows — never allocate an IndexedRow for every result row.
+  const sortTypeName =
+    tab?.kind === 'sql' && tab.sortColumn
+      ? tab.queryResult?.columns[tab.sortColumn.index]?.dataTypeName
+      : undefined;
   const sortedSqlRows = useMemo((): IndexedRow[] | null => {
     if (!tab?.queryResult || tab.kind !== 'sql' || !tab.sortColumn) return null;
-    return sortRowsWithIndex(tab.queryResult.rows, tab.sortColumn);
-  }, [tab?.kind, tab?.queryResult, tab?.sortColumn]);
+    return sortRowsWithIndex(tab.queryResult.rows, tab.sortColumn, sortTypeName);
+  }, [tab?.kind, tab?.queryResult, tab?.sortColumn, sortTypeName]);
 
-  const displayRows = useMemo(() => {
-    if (!tab?.queryResult) return [] as IndexedRow[];
-    if (tab.kind === 'table') {
-      return tab.queryResult.rows.map((row, i) => ({ row, originalIndex: i }));
+  const tabId = tab?.id;
+  const displayRows = useMemo((): GridRow[] => {
+    const result = tab?.queryResult;
+    if (!result || !tabId) return [];
+    const clean = (e: IndexedRow): GridRow => ({
+      key: `r-${e.originalIndex}`,
+      row: e.row,
+      originalIndex: e.originalIndex,
+      status: 'clean',
+      editedCols: EMPTY_COLS,
+      editIdByCol: EMPTY_IDS,
+      rowKey: null,
+    });
+    if (tab.kind !== 'table') {
+      const base = sortedSqlRows
+        ? slicePageSorted(sortedSqlRows, tab.page, tab.pageSize)
+        : slicePageUnsorted(result.rows, tab.page, tab.pageSize);
+      return base.map(clean);
     }
-    if (sortedSqlRows) {
-      return slicePageSorted(sortedSqlRows, tab.page, tab.pageSize);
+    const overlay: RowOverlay[] = overlayRows(
+      tabId,
+      result.columns,
+      result.rows,
+      pkNames,
+      pendingEdits,
+    );
+    const rows: GridRow[] = overlay.map((o, i) => ({
+      key: `r-${i}`,
+      row: o.row,
+      originalIndex: i,
+      status: o.status,
+      editedCols: o.editedCols,
+      editIdByCol: o.editIdByCol,
+      rowKey: o.rowKey,
+    }));
+    for (const ins of pendingInsertsFor(tabId, pendingEdits)) {
+      const values = ins.values ?? {};
+      rows.push({
+        key: `ins-${ins.id}`,
+        row: result.columns.map((c) => (c.name in values ? values[c.name] : undefined)),
+        originalIndex: -1,
+        status: 'inserted',
+        editedCols: EMPTY_COLS,
+        editIdByCol: EMPTY_IDS,
+        rowKey: null,
+        insert: ins,
+      });
     }
-    return slicePageUnsorted(tab.queryResult.rows, tab.page, tab.pageSize);
-  }, [tab?.kind, tab?.queryResult, tab?.page, tab?.pageSize, sortedSqlRows]);
+    return rows;
+  }, [
+    tab?.kind,
+    tab?.queryResult,
+    tab?.page,
+    tab?.pageSize,
+    tabId,
+    sortedSqlRows,
+    pkNames,
+    pendingEdits,
+  ]);
+
+  const columns = tab?.queryResult?.columns;
+
+  /**
+   * Postgres text of a displayed cell (null = NULL, undefined = DEFAULT on
+   * a pending insert). Pending values are already Postgres text.
+   */
+  const cellText = useCallback(
+    (entry: GridRow | undefined, col: number): string | null | undefined => {
+      if (!entry) return null;
+      const v = entry.row[col];
+      if (entry.status === 'inserted') return v as string | null | undefined;
+      if (entry.editedCols.has(col)) return v as string | null;
+      return cellToText(v, columns?.[col]?.dataTypeName);
+    },
+    [columns],
+  );
 
   // Publish the selected row for the right-sidebar Details pane. Only the
   // grid knows how the selected display row maps back to result data.
   const setInspectedRow = useWorkbench((s) => s.setInspectedRow);
-  const tabId = tab?.id;
   const queryResult = tab?.queryResult;
   const page = tab?.page ?? 0;
   const pageSize = tab?.pageSize ?? 0;
@@ -246,6 +346,7 @@ export function ResultGrid() {
   const [scrollTop, setScrollTop] = useState(0);
   const [viewportHeight, setViewportHeight] = useState(400);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: re-bind when a new result mounts the scroller
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
@@ -264,6 +365,14 @@ export function ResultGrid() {
     };
   }, [tab?.queryResult]);
 
+  // A new result (page, re-run, tab switch) drops the range + open editor.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reset keyed on result identity
+  useEffect(() => {
+    setRangeEnd(null);
+    setEditingCell(null);
+    setMenu(null);
+  }, [tab?.id, tab?.queryResult]);
+
   const rowWindow = useMemo(
     () => computeRowWindow(displayRows.length, scrollTop, viewportHeight),
     [displayRows.length, scrollTop, viewportHeight],
@@ -273,25 +382,40 @@ export function ResultGrid() {
     [displayRows, rowWindow.start, rowWindow.end],
   );
 
-  // Foreign-key lookup for the current table tab. Keyed by column name,
-  // since FK click-through is only supported on table tabs where each
-  // column is unambiguously one of the table's own columns. On SQL tabs
-  // we'd need to match projection expressions back to source columns,
-  // which isn't possible without a SQL parser — skip entirely.
+  // Foreign-key lookup for the current table tab, keyed by column name.
+  // Composite FKs (several columns to the same referenced table) navigate
+  // with every column of the key (F7). SQL tabs can't map projections
+  // back to source columns without a parser — skip entirely.
   const fkByColumn = useMemo(() => {
-    const m = new Map<string, { refSchema: string; refTable: string; refColumn: string }>();
+    type Fk = {
+      refSchema: string;
+      refTable: string;
+      pairs: Array<{ column: string; refColumn: string }>;
+    };
+    const groups = new Map<string, Fk>();
+    const m = new Map<string, { fk: Fk; refColumn: string }>();
     if (tab?.kind === 'table' && tab.tableSchema && tab.tableName && schema?.foreignKeys) {
       for (const fk of schema.foreignKeys) {
-        if (fk.schema === tab.tableSchema && fk.table === tab.tableName) {
-          m.set(fk.column, {
-            refSchema: fk.refSchema,
-            refTable: fk.refTable,
-            refColumn: fk.refColumn,
-          });
+        if (fk.schema !== tab.tableSchema || fk.table !== tab.tableName) continue;
+        const key = `${fk.refSchema}.${fk.refTable}`;
+        let g = groups.get(key);
+        if (!g) {
+          g = { refSchema: fk.refSchema, refTable: fk.refTable, pairs: [] };
+          groups.set(key, g);
         }
+        g.pairs.push({ column: fk.column, refColumn: fk.refColumn });
+        m.set(fk.column, { fk: g, refColumn: fk.refColumn });
       }
     }
     return m;
+  }, [tab?.kind, tab?.tableSchema, tab?.tableName, schema?.foreignKeys]);
+
+  /** Foreign keys in other tables that point at this table (reverse navigation). */
+  const referencedBy = useMemo(() => {
+    if (tab?.kind !== 'table' || !schema?.foreignKeys) return [];
+    return schema.foreignKeys.filter(
+      (fk) => fk.refSchema === tab.tableSchema && fk.refTable === tab.tableName,
+    );
   }, [tab?.kind, tab?.tableSchema, tab?.tableName, schema?.foreignKeys]);
 
   // Compute search matches — visible-row / original-col indices. Keyed
@@ -299,19 +423,16 @@ export function ResultGrid() {
   // with what the user sees.
   const searchMatches = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
-    if (!q) return [] as Array<{ row: number; col: number }>;
-    const out: Array<{ row: number; col: number }> = [];
+    if (!q) return [] as Array<Cell>;
+    const out: Array<Cell> = [];
     displayRows.forEach((entry, visibleRow) => {
-      entry.row.forEach((cell, col) => {
-        if (cell === null || cell === undefined) return;
-        const str = typeof cell === 'object' ? JSON.stringify(cell) : String(cell);
-        if (str.toLowerCase().includes(q)) {
-          out.push({ row: visibleRow, col });
-        }
+      entry.row.forEach((_cell, col) => {
+        const str = cellText(entry, col);
+        if (str?.toLowerCase().includes(q)) out.push({ row: visibleRow, col });
       });
     });
     return out;
-  }, [searchQuery, displayRows]);
+  }, [searchQuery, displayRows, cellText]);
 
   const matchSet = useMemo(() => {
     const s = new Set<string>();
@@ -320,49 +441,69 @@ export function ResultGrid() {
   }, [searchMatches]);
 
   // Reset the active match whenever the search query or result changes.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reset trigger
   useEffect(() => {
     setActiveMatchIdx(0);
   }, [searchQuery, displayRows]);
 
-  // Global Ctrl+F / ⌘F handler — only active when the grid has a
-  // renderable result, so it doesn't fight Monaco or other inputs.
+  // Ctrl+F / ⌘F opens the find bar — only when focus isn't in another
+  // text field or Monaco, so it doesn't fight their own find.
   useEffect(() => {
     if (!tab?.queryResult) return;
     const handler = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'f') {
-        const active = document.activeElement;
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'f' && !e.shiftKey && !e.altKey) {
+        const active = document.activeElement as HTMLElement | null;
         const tag = active?.tagName?.toLowerCase();
-        if (tag === 'textarea' || (tag === 'input' && active !== searchInputRef.current)) {
-          return; // let text inputs / Monaco handle their own find
+        if (
+          tag === 'textarea' ||
+          active?.isContentEditable ||
+          (tag === 'input' && active !== searchInputRef.current)
+        ) {
+          return;
         }
+        if (active?.closest('[role="dialog"]')) return;
         e.preventDefault();
         setSearchOpen(true);
         setTimeout(() => searchInputRef.current?.focus(), 0);
-      } else if (e.key === 'Escape' && searchOpen) {
-        setSearchOpen(false);
-        setSearchQuery('');
       }
     };
     document.addEventListener('keydown', handler);
     return () => document.removeEventListener('keydown', handler);
-  }, [tab?.queryResult, searchOpen]);
+  }, [tab?.queryResult]);
+
+  // ⌘S commits the pending-changes tray (B3). Skipped inside Monaco /
+  // text fields / dialogs, and when nothing is pending.
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey) || e.shiftKey || e.altKey || e.key.toLowerCase() !== 's')
+        return;
+      const state = useSession.getState();
+      if (state.pendingEdits.length === 0 || state.pendingEditsBusy) return;
+      const active = document.activeElement as HTMLElement | null;
+      if (active?.closest('.monaco-editor, [role="dialog"]')) return;
+      e.preventDefault();
+      void state.commitPendingEdits().catch(() => undefined);
+    };
+    document.addEventListener('keydown', handler);
+    return () => document.removeEventListener('keydown', handler);
+  }, []);
 
   // Sticky columns — hooks live up here (before any early return) so
-  // the hook order stays stable across renders regardless of whether
-  // tab/queryResult is present. Derived data (refs into columns, offset
-  // math) is fine to compute from nullable state.
+  // the hook order stays stable across renders.
   const stickySet = tab?.stickyColumns ?? EMPTY_STICKY_SET;
   const headerRefs = useRef<Array<HTMLTableCellElement | null>>([]);
   const [stickyLefts, setStickyLefts] = useState<Record<number, number>>({});
   const resultColumns = tab?.queryResult?.columns;
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: re-measure when rows render
   useEffect(() => {
     if (!resultColumns || stickySet.size === 0) {
       setStickyLefts({});
       return;
     }
     const lefts: Record<number, number> = {};
-    let cumulative = 0;
+    // Pinned columns sit to the right of the sticky row-number gutter.
+    let cumulative = GUTTER_WIDTH_PX;
     resultColumns.forEach((col, i) => {
       if (stickySet.has(col.name)) {
         lefts[i] = cumulative;
@@ -373,15 +514,75 @@ export function ResultGrid() {
     setStickyLefts(lefts);
   }, [stickySet, resultColumns, displayRows.length]);
 
-  const stickyStyle = (colIndex: number, colName: string, baseZ: number): React.CSSProperties =>
-    stickySet.has(colName)
-      ? {
-          position: 'sticky',
-          left: stickyLefts[colIndex] ?? 0,
-          zIndex: baseZ,
-          boxShadow: '1px 0 0 0 var(--grid-line)',
-        }
-      : {};
+  // Visible columns in display order, and each original index's position.
+  const hidden = tab?.hiddenColumns;
+  const visibleColumns = useMemo(
+    () =>
+      (resultColumns ?? [])
+        .map((col, i) => ({ col, originalIndex: i }))
+        .filter(({ col }) => !hidden?.has(col.name)),
+    [resultColumns, hidden],
+  );
+  const colPos = useMemo(() => {
+    const m = new Map<number, number>();
+    visibleColumns.forEach((c, pos) => m.set(c.originalIndex, pos));
+    return m;
+  }, [visibleColumns]);
+
+  const anchor = tab?.selectedCell ?? null;
+  const range = useMemo(() => {
+    if (!anchor || !rangeEnd) return null;
+    const a = colPos.get(anchor.col);
+    const b = colPos.get(rangeEnd.col);
+    if (a === undefined || b === undefined) return null;
+    return {
+      r0: Math.min(anchor.row, rangeEnd.row),
+      r1: Math.max(anchor.row, rangeEnd.row),
+      p0: Math.min(a, b),
+      p1: Math.max(a, b),
+    };
+  }, [anchor, rangeEnd, colPos]);
+
+  const inRange = (row: number, col: number) => {
+    if (!range) return false;
+    const p = colPos.get(col);
+    return p !== undefined && row >= range.r0 && row <= range.r1 && p >= range.p0 && p <= range.p1;
+  };
+
+  // F2: keep the active cell in view after keyboard moves / find jumps.
+  const focusCell = rangeEnd ?? anchor;
+  const focusRow = focusCell?.row;
+  const focusCol = focusCell?.col;
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el || focusRow === undefined || focusCol === undefined) return;
+    const top = HEADER_HEIGHT_PX + focusRow * ROW_HEIGHT_PX;
+    if (top < el.scrollTop + HEADER_HEIGHT_PX) el.scrollTop = top - HEADER_HEIGHT_PX;
+    else if (top + ROW_HEIGHT_PX > el.scrollTop + el.clientHeight) {
+      el.scrollTop = top + ROW_HEIGHT_PX - el.clientHeight;
+    }
+    const th = headerRefs.current[focusCol];
+    if (!th || th.style.position === 'sticky') return;
+    let pinned = 0;
+    for (const w of Object.keys(stickyLefts)) {
+      const h = headerRefs.current[Number(w)];
+      if (h) pinned += h.offsetWidth;
+    }
+    const leftEdge = el.scrollLeft + GUTTER_WIDTH_PX + pinned;
+    if (th.offsetLeft < leftEdge) el.scrollLeft = th.offsetLeft - GUTTER_WIDTH_PX - pinned;
+    else if (th.offsetLeft + th.offsetWidth > el.scrollLeft + el.clientWidth) {
+      el.scrollLeft = th.offsetLeft + th.offsetWidth - el.clientWidth;
+    }
+  }, [focusRow, focusCol, stickyLefts]);
+
+  // End a drag-select anywhere.
+  useEffect(() => {
+    const up = () => {
+      dragging.current = false;
+    };
+    document.addEventListener('mouseup', up);
+    return () => document.removeEventListener('mouseup', up);
+  }, []);
 
   // Column resize — drag the right edge of any header to set width.
   // We don't persist mid-drag (IPC would fire on every pointermove);
@@ -411,138 +612,373 @@ export function ResultGrid() {
     document.addEventListener('pointerup', onUp);
   };
 
-  // Begin inline edit on the currently selected cell (F2 / programmatic).
-  const beginEditSelected = () => {
-    if (!writable || !tab?.selectedCell || !tab.queryResult) return false;
-    const { row, col } = tab.selectedCell;
-    const pagedRow = displayRows[row];
-    if (!pagedRow) return false;
-    const cell = pagedRow.row[col];
-    setEditingCell({
-      row,
-      col,
-      value: cell === null || cell === undefined ? '' : String(cell),
-    });
+  // ── Selection / edit helpers ──
+
+  const select = (cell: Cell, extend = false) => {
+    if (extend && anchor) {
+      setRangeEnd(cell);
+    } else {
+      setRangeEnd(null);
+      setSelectedCell(cell);
+    }
+  };
+
+  const refocusGrid = () =>
+    requestAnimationFrame(() => gridRef.current?.focus({ preventScroll: true }));
+
+  const canEditEntry = (entry: GridRow | undefined) =>
+    Boolean(writable && entry && entry.status !== 'deleted');
+
+  const beginEdit = (cell: Cell, initial?: string) => {
+    const entry = displayRows[cell.row];
+    if (!canEditEntry(entry)) return false;
+    const text = cellText(entry, cell.col);
+    setEditingCell({ row: cell.row, col: cell.col, value: initial ?? text ?? null });
     setEditError(null);
     return true;
   };
 
-  // Keyboard navigation — arrows move selection; Enter = row detail;
-  // F2 edits; Tab advances; Ctrl+C copies. (U38 accessibility floor.)
-  useEffect(() => {
-    if (!tab?.queryResult || tab.queryResult.columns.length === 0) return;
-    const handler = (e: KeyboardEvent) => {
-      // Only handle keys when the focus is inside the grid (or body)
-      const active = document.activeElement;
-      const tag = active?.tagName?.toLowerCase();
-      if (
-        tag === 'input' ||
-        tag === 'textarea' ||
-        (active && 'isContentEditable' in active && (active as HTMLElement).isContentEditable)
-      ) {
+  /** Queue one cell value (Postgres text or null) for the given display cell. */
+  const writeCell = async (cell: Cell, value: string | null) => {
+    const entry = displayRows[cell.row];
+    const col = columns?.[cell.col];
+    if (!entry || !col) return;
+    if (entry.status === 'inserted' && entry.insert) {
+      updatePendingInsert(entry.insert.id, col.name, value);
+      return;
+    }
+    if (entry.status === 'deleted')
+      throw new Error('this row is marked for deletion — restore it first');
+    await updateCell(entry.originalIndex, cell.col, value);
+  };
+
+  const commitEdit = async (override?: { value: string | null }): Promise<boolean> => {
+    if (!editingCell) return false;
+    const { row, col } = editingCell;
+    const value = override ? override.value : editingCell.value;
+    setEditError(null);
+    try {
+      await writeCell({ row, col }, value);
+      setEditingCell(null);
+      return true;
+    } catch (err) {
+      setEditError(cleanIpcError(err instanceof Error ? err.message : String(err)));
+      return false;
+    }
+  };
+
+  /** Cells covered by the range, or just the anchor. */
+  const selectedCells = (): Cell[] => {
+    if (!anchor) return [];
+    if (!range) return [anchor];
+    const out: Cell[] = [];
+    for (let r = range.r0; r <= range.r1; r++) {
+      for (let p = range.p0; p <= range.p1; p++) {
+        const c = visibleColumns[p];
+        if (c) out.push({ row: r, col: c.originalIndex });
+      }
+    }
+    return out;
+  };
+
+  /** Rows an action applies to: checked rows, else the range / anchor rows. */
+  const targetRows = (): GridRow[] => {
+    if (tab && tab.selectedRows.size > 0) {
+      return displayRows.filter(
+        (e) => e.originalIndex >= 0 && tab.selectedRows.has(e.originalIndex),
+      );
+    }
+    if (!anchor) return [];
+    const r0 = range ? range.r0 : anchor.row;
+    const r1 = range ? range.r1 : anchor.row;
+    return displayRows.slice(r0, r1 + 1);
+  };
+
+  const setNullOnSelection = async () => {
+    setEditError(null);
+    try {
+      for (const cell of selectedCells()) await writeCell(cell, null);
+    } catch (err) {
+      setEditError(cleanIpcError(err instanceof Error ? err.message : String(err)));
+    }
+  };
+
+  const deleteTargetRows = () => {
+    const rows = targetRows();
+    const inserts = rows.filter((r) => r.insert);
+    for (const r of inserts) if (r.insert) discardPendingEdit(r.insert.id);
+    const idx = rows.filter((r) => r.originalIndex >= 0).map((r) => r.originalIndex);
+    if (idx.length === 0) return;
+    setEditError(null);
+    try {
+      deleteRows(idx);
+    } catch (err) {
+      setEditError(cleanIpcError(err instanceof Error ? err.message : String(err)));
+    }
+  };
+
+  const duplicateTarget = () => {
+    const entry = anchor ? displayRows[anchor.row] : undefined;
+    if (!entry) return;
+    if (entry.insert) {
+      useSession.getState().insertRow({ ...(entry.insert.values ?? {}) });
+      return;
+    }
+    duplicateRow(entry.originalIndex);
+  };
+
+  const copyText = (text: string) => {
+    void navigator.clipboard.writeText(text).catch(() => undefined);
+  };
+
+  /** ⌘C: range (or cell) as TSV; checked rows as TSV of visible columns. */
+  const copySelection = () => {
+    if (!columns) return;
+    if (tab && tab.selectedRows.size > 0 && !range) {
+      copyRows('tsv');
+      return;
+    }
+    if (!anchor) return;
+    if (!range) {
+      const text = cellText(displayRows[anchor.row], anchor.col);
+      copyText(text ?? 'NULL');
+      return;
+    }
+    const cols = visibleColumns.slice(range.p0, range.p1 + 1).map((c) => c.originalIndex);
+    const rows = displayRows.slice(range.r0, range.r1 + 1).map((e) => e.row);
+    copyText(formatRows('tsv', columns, rows, cols));
+  };
+
+  const copyRows = (format: CopyFormat) => {
+    if (!columns || !tab) return;
+    const rows = targetRows().map((e) => e.row);
+    const cols = visibleColumns.map((c) => c.originalIndex);
+    const table =
+      tab.kind === 'table' && tab.tableName
+        ? { schema: tab.tableSchema, name: tab.tableName }
+        : undefined;
+    copyText(formatRows(format, columns, rows, cols, table));
+  };
+
+  /** ⌘V: paste a TSV block at the anchor (a single value fills the range). */
+  const pasteBlock = async (text: string) => {
+    if (!writable || !anchor) return;
+    const block = parseClipboardBlock(text);
+    if (block.length === 0) return;
+    setEditError(null);
+    try {
+      const single = block.length === 1 && block[0]?.length === 1;
+      if (single && range) {
+        for (const cell of selectedCells()) await writeCell(cell, block[0]![0] ?? null);
         return;
       }
-      // Copy
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'c') {
-        if (!tab.selectedCell) return;
-        const pagedRow = displayRows[tab.selectedCell.row];
-        if (!pagedRow) return;
-        const value = pagedRow.row[tab.selectedCell.col];
-        void copyCellToClipboard(value);
-        e.preventDefault();
-        return;
-      }
-      if (!tab.selectedCell) return;
-      const { row, col } = tab.selectedCell;
-      const maxRow = displayRows.length - 1;
-      const maxCol = tab.queryResult ? tab.queryResult.columns.length - 1 : 0;
-      const rowCount = displayRows.length;
-      const colCount = tab.queryResult ? tab.queryResult.columns.length : 0;
-      // Space opens the cell detail viewer for the current selection.
-      if (e.key === ' ') {
-        const pagedRow = displayRows[row];
-        const colMeta = tab.queryResult?.columns[col];
-        if (pagedRow && colMeta) {
-          // Anchor the popover to the selected cell's DOM rect so the
-          // popover pops next to it, not at viewport origin.
-          const td = containerRef.current?.querySelector<HTMLElement>(
-            `td[data-cell="${row}:${col}"]`,
-          );
-          const rect = td?.getBoundingClientRect() ?? new DOMRect(0, 0, 0, 0);
-          setCellDetail({
-            columnName: colMeta.name,
-            dataTypeName: colMeta.dataTypeName,
-            value: pagedRow.row[col],
-            anchorRect: rect,
-          });
-          e.preventDefault();
+      const startPos = colPos.get(anchor.col) ?? 0;
+      for (let r = 0; r < block.length; r++) {
+        const rowIdx = anchor.row + r;
+        if (rowIdx >= displayRows.length) break;
+        const values = block[r] ?? [];
+        for (let c = 0; c < values.length; c++) {
+          const colMeta = visibleColumns[startPos + c];
+          if (!colMeta) break;
+          await writeCell({ row: rowIdx, col: colMeta.originalIndex }, values[c] ?? null);
         }
-        return;
       }
-      // Enter opens the row inspector: the right-sidebar Details pane
-      // when the database canvas (and its rail) is showing, else the
-      // drawer.
-      if (e.key === 'Enter' && !e.metaKey && !e.ctrlKey && !e.shiftKey) {
-        const pagedRow = displayRows[row];
-        if (pagedRow && useSession.getState().canvasMode === 'database') {
-          useSession.getState().setRightPanelMode('details');
-          e.preventDefault();
-        } else if (pagedRow && tab.queryResult) {
-          setRowDetail({
-            tabTitle: tab.title,
-            rowNumber: tab.page * tab.pageSize + row + 1,
-            columns: tab.queryResult.columns,
-            row: pagedRow.row,
-          });
-          e.preventDefault();
-        }
-        return;
-      }
-      // F2 starts an inline edit when the grid is writable (Excel-style).
-      if (e.key === 'F2') {
-        if (beginEditSelected()) e.preventDefault();
-        return;
-      }
-      // Tab / Shift+Tab move selection to the next / previous cell.
-      if (e.key === 'Tab') {
-        const target = e.shiftKey
-          ? prevCell({ row, col }, rowCount, colCount)
-          : nextCell({ row, col }, rowCount, colCount);
-        if (target) {
-          setSelectedCell(target);
-          e.preventDefault();
-        }
-        return;
-      }
-      if (e.key === 'ArrowDown') {
-        setSelectedCell({ row: Math.min(maxRow, row + 1), col });
+    } catch (err) {
+      setEditError(cleanIpcError(err instanceof Error ? err.message : String(err)));
+    }
+  };
+
+  const openCellDetail = (cell: Cell) => {
+    const entry = displayRows[cell.row];
+    const colMeta = columns?.[cell.col];
+    if (!entry || !colMeta) return;
+    const td = containerRef.current?.querySelector<HTMLElement>(
+      `td[data-cell="${cell.row}:${cell.col}"]`,
+    );
+    setCellDetail({
+      columnName: colMeta.name,
+      dataTypeName: colMeta.dataTypeName,
+      value:
+        entry.editedCols.has(cell.col) || entry.insert
+          ? cellText(entry, cell.col)
+          : entry.row[cell.col],
+      anchorRect: td?.getBoundingClientRect() ?? new DOMRect(0, 0, 0, 0),
+    });
+  };
+
+  const openRowDetail = (row: number) => {
+    const entry = displayRows[row];
+    if (!entry || !tab?.queryResult) return;
+    if (useSession.getState().canvasMode === 'database') {
+      useSession.getState().setRightPanelMode('details');
+      return;
+    }
+    setRowDetail({
+      tabTitle: tab.title,
+      rowNumber: tab.page * tab.pageSize + row + 1,
+      columns: tab.queryResult.columns,
+      row: entry.row,
+    });
+  };
+
+  const openMenuAtCell = (cell: Cell) => {
+    const td = containerRef.current?.querySelector<HTMLElement>(
+      `td[data-cell="${cell.row}:${cell.col}"]`,
+    );
+    const r = td?.getBoundingClientRect();
+    setMenu({ x: r ? r.left + 8 : 100, y: r ? r.bottom : 100, cell });
+  };
+
+  // Keyboard — only while the grid element itself has focus (F1 / AA1).
+  const onGridKeyDown = (e: React.KeyboardEvent<HTMLTableElement>) => {
+    if (e.target !== e.currentTarget) return; // inner inputs / buttons own their keys
+    if (!tab?.queryResult || visibleColumns.length === 0) return;
+    const mod = e.metaKey || e.ctrlKey;
+    const key = e.key;
+
+    if (mod && !e.shiftKey && key.toLowerCase() === 'c') {
+      copySelection();
+      e.preventDefault();
+      return;
+    }
+    if (mod && !e.shiftKey && key.toLowerCase() === 'a') {
+      if (displayRows.length === 0) return;
+      const first = visibleColumns[0]!.originalIndex;
+      const last = visibleColumns[visibleColumns.length - 1]!.originalIndex;
+      setSelectedCell({ row: 0, col: first });
+      setRangeEnd({ row: displayRows.length - 1, col: last });
+      e.preventDefault();
+      return;
+    }
+    if (writable && mod && e.shiftKey && (key === 'Backspace' || key === 'Delete')) {
+      void setNullOnSelection();
+      e.preventDefault();
+      return;
+    }
+    if (writable && mod && !e.shiftKey && (key === 'Backspace' || key === 'Delete')) {
+      deleteTargetRows();
+      e.preventDefault();
+      return;
+    }
+    if (writable && mod && !e.shiftKey && key.toLowerCase() === 'd') {
+      duplicateTarget();
+      e.preventDefault();
+      return;
+    }
+    if (key === 'ContextMenu' || (e.shiftKey && key === 'F10')) {
+      if (anchor) openMenuAtCell(anchor);
+      e.preventDefault();
+      return;
+    }
+    if (!anchor) {
+      if (key.startsWith('Arrow') || key === 'Home' || key === 'End') {
+        select({ row: 0, col: visibleColumns[0]!.originalIndex });
         e.preventDefault();
-      } else if (e.key === 'ArrowUp') {
-        setSelectedCell({ row: Math.max(0, row - 1), col });
-        e.preventDefault();
-      } else if (e.key === 'ArrowRight') {
-        setSelectedCell({ row, col: Math.min(maxCol, col + 1) });
-        e.preventDefault();
-      } else if (e.key === 'ArrowLeft') {
-        setSelectedCell({ row, col: Math.max(0, col - 1) });
-        e.preventDefault();
-      } else if (e.key === 'Escape') {
-        setSelectedCell(null);
       }
-    };
-    document.addEventListener('keydown', handler);
-    return () => document.removeEventListener('keydown', handler);
-    // beginEditSelected closes over writable/displayRows/tab; list them.
-  }, [
-    tab?.selectedCell,
-    tab?.queryResult,
-    tab?.title,
-    tab?.page,
-    tab?.pageSize,
-    displayRows,
-    setSelectedCell,
-    writable,
-  ]);
+      return;
+    }
+    const { row } = rangeEnd && e.shiftKey ? rangeEnd : anchor;
+    const col = rangeEnd && e.shiftKey ? rangeEnd.col : anchor.col;
+    const pos = colPos.get(col) ?? 0;
+    const maxRow = displayRows.length - 1;
+    const maxPos = visibleColumns.length - 1;
+    const colAt = (p: number) => visibleColumns[Math.max(0, Math.min(maxPos, p))]!.originalIndex;
+    const pageRows = Math.max(
+      1,
+      Math.floor((containerRef.current?.clientHeight ?? 400) / ROW_HEIGHT_PX) - 1,
+    );
+
+    if (key === ' ') {
+      openCellDetail(anchor);
+      e.preventDefault();
+      return;
+    }
+    if (key === 'Enter' && !mod && !e.shiftKey && !e.altKey) {
+      openRowDetail(anchor.row);
+      e.preventDefault();
+      return;
+    }
+    if (key === 'F2') {
+      if (beginEdit(anchor)) e.preventDefault();
+      return;
+    }
+    if (key === 'Tab') {
+      // Spreadsheet stepping inside the grid; Esc clears the selection so
+      // Tab can leave the grid.
+      const target = e.shiftKey
+        ? prevCell({ row: anchor.row, col: pos }, displayRows.length, visibleColumns.length)
+        : nextCell({ row: anchor.row, col: pos }, displayRows.length, visibleColumns.length);
+      if (target) {
+        select({ row: target.row, col: colAt(target.col) });
+        e.preventDefault();
+      }
+      return;
+    }
+    if (key === 'Escape') {
+      if (rangeEnd) setRangeEnd(null);
+      else setSelectedCell(null);
+      e.preventDefault();
+      return;
+    }
+    let next: Cell | null = null;
+    if (key === 'ArrowDown') next = { row: mod ? maxRow : Math.min(maxRow, row + 1), col };
+    else if (key === 'ArrowUp') next = { row: mod ? 0 : Math.max(0, row - 1), col };
+    else if (key === 'ArrowRight') next = { row, col: colAt(mod ? maxPos : pos + 1) };
+    else if (key === 'ArrowLeft') next = { row, col: colAt(mod ? 0 : pos - 1) };
+    else if (key === 'Home') next = mod ? { row: 0, col: colAt(0) } : { row, col: colAt(0) };
+    else if (key === 'End')
+      next = mod ? { row: maxRow, col: colAt(maxPos) } : { row, col: colAt(maxPos) };
+    else if (key === 'PageDown') next = { row: Math.min(maxRow, row + pageRows), col };
+    else if (key === 'PageUp') next = { row: Math.max(0, row - pageRows), col };
+    if (next) {
+      select(next, e.shiftKey);
+      e.preventDefault();
+      return;
+    }
+    // Typing starts an edit that replaces the value (spreadsheet style).
+    if (writable && key.length === 1 && !mod && !e.altKey) {
+      if (beginEdit(anchor, key)) e.preventDefault();
+    }
+  };
+
+  const onGridPaste = (e: React.ClipboardEvent<HTMLTableElement>) => {
+    if (e.target !== e.currentTarget || !writable) return;
+    const text = e.clipboardData.getData('text/plain');
+    if (!text) return;
+    e.preventDefault();
+    void pasteBlock(text);
+  };
+
+  const onGridFocus = (e: React.FocusEvent<HTMLTableElement>) => {
+    if (e.target !== e.currentTarget) return;
+    // Keyboard entry (Tab into the grid) lands on the first cell.
+    const t = useSession.getState().tabs.find((x) => x.id === tabId);
+    if (!t?.selectedCell && displayRows.length > 0 && visibleColumns[0]) {
+      setSelectedCell({ row: 0, col: visibleColumns[0].originalIndex });
+    }
+  };
+
+  // Commit failure pointers (VF13): the edits whose statement failed.
+  const failedIds = useMemo(() => new Set(pendingEditsError?.editIds ?? []), [pendingEditsError]);
+  const failedRowKeys = useMemo(() => {
+    const s = new Set<string>();
+    for (const e of pendingEdits) if (failedIds.has(e.id) && e.rowKey) s.add(e.rowKey);
+    return s;
+  }, [pendingEdits, failedIds]);
+
+  const jumpToFailure = () => {
+    const idx = displayRows.findIndex(
+      (r) =>
+        (r.insert && failedIds.has(r.insert.id)) ||
+        (r.rowKey && failedRowKeys.has(r.rowKey)) ||
+        [...r.editIdByCol.values()].some((id) => failedIds.has(id)),
+    );
+    if (idx < 0) return;
+    const entry = displayRows[idx]!;
+    const failedCol = [...entry.editIdByCol.entries()].find(([, id]) => failedIds.has(id))?.[0];
+    select({ row: idx, col: failedCol ?? visibleColumns[0]?.originalIndex ?? 0 });
+    refocusGrid();
+  };
 
   // ── Definition view (table tabs only) — short-circuits the grid ──
   if (tab?.kind === 'table' && tab.viewMode === 'definition') {
@@ -552,26 +988,36 @@ export function ResultGrid() {
     return <TableStructureView />;
   }
 
-  // ── Error state ──
-  if (tab?.queryError) {
+  // ── Error state (E6: only when the Error tab is selected) ──
+  if (tab && isErrorTabActive(tab)) {
     return (
       <div className="min-h-0 flex-1 overflow-auto bg-[var(--wb-content)]">
         <div className="max-w-4xl p-5">
-          <div className="flex items-start gap-2.5 rounded-[8px] bg-destructive/10 px-3.5 py-3 ring-1 ring-inset ring-destructive/30">
+          <div
+            className="flex items-start gap-2.5 rounded-[8px] bg-destructive/10 px-3.5 py-3 ring-1 ring-inset ring-destructive/30"
+            role="alert"
+          >
             <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
             <div className="min-w-0">
               <div className="mb-1 text-xs font-semibold text-destructive">Query failed</div>
-              <pre className="whitespace-pre-wrap break-words font-mono text-[13px] text-foreground">
-                {cleanIpcError(tab.queryError)}
+              <pre className="whitespace-pre-wrap break-words font-mono text-[13px] text-[var(--wb-text)]">
+                {cleanIpcError(tab.queryError ?? '')}
               </pre>
+              {tab.queryResults.length > 0 && (
+                <div className="mt-1.5 text-[12px] text-[var(--wb-text-2)]">
+                  {tab.queryResults.length} earlier statement
+                  {tab.queryResults.length === 1 ? '' : 's'} succeeded — open{' '}
+                  {tab.queryResults.length === 1 ? 'its result tab' : 'their result tabs'} above.
+                </div>
+              )}
             </div>
           </div>
           {tab.queryErrorSql && (
             <>
-              <div className="mb-1.5 mt-4 text-[11px] font-semibold text-muted-foreground">
+              <div className="mb-1.5 mt-4 text-[12px] font-medium text-[var(--wb-text-2)]">
                 SQL sent to server
               </div>
-              <pre className="glass whitespace-pre-wrap break-words rounded-[8px] p-3 font-mono text-xs text-foreground">
+              <pre className="whitespace-pre-wrap break-words rounded-[8px] bg-[var(--wb-field)] p-3 font-mono text-xs text-[var(--wb-text)] ring-1 ring-inset ring-[var(--wb-separator)]">
                 {tab.queryErrorSql}
               </pre>
             </>
@@ -581,68 +1027,26 @@ export function ResultGrid() {
     );
   }
 
-  // ── Loading state ──
-  //
-  // Motion: the BrandMark's built-in oxblood signature stroke (the
-  // `rect.accent` inside the SVG) animates directly — draws left→right,
-  // holds, then erases right→left. No secondary line underneath. The
-  // mark glyph itself breathes subtly to confirm the query is alive.
-  if (tab?.queryRunState === 'running') {
+  const running = tab?.queryRunState === 'running';
+
+  // ── Loading with nothing to show yet ──
+  if (running && !tab?.queryResult) {
     return (
-      <div className="flex min-h-0 flex-1 items-center justify-center bg-[var(--wb-content)]">
-        <div className="flex flex-col items-center gap-5 text-center">
-          <BrandMark className="plasma-loading-mark h-28 w-28 text-foreground" />
-          <div className="plasma-loading-caption text-lg text-muted-foreground">
-            running query…
-          </div>
-        </div>
-        <style>{`
-          .plasma-loading-mark svg {
-            animation: plasma-breathe 2.2s ease-in-out infinite;
-          }
-          .plasma-loading-mark svg .accent {
-            transform-box: fill-box;
-            transform-origin: left center;
-            animation: plasma-signature 2.2s cubic-bezier(0.65, 0, 0.35, 1) infinite;
-          }
-          .plasma-loading-caption {
-            animation: plasma-breathe 2.2s ease-in-out infinite;
-            animation-delay: 0.1s;
-          }
-          @keyframes plasma-breathe {
-            0%, 100% { opacity: 0.78; }
-            50%      { opacity: 1; }
-          }
-          @keyframes plasma-signature {
-            0%   { transform: scaleX(0); transform-origin: left center; }
-            42%  { transform: scaleX(1); transform-origin: left center; }
-            50%  { transform: scaleX(1); transform-origin: right center; }
-            92%  { transform: scaleX(0); transform-origin: right center; }
-            100% { transform: scaleX(0); transform-origin: right center; }
-          }
-        `}</style>
+      <div
+        className="flex min-h-0 flex-1 items-center justify-center gap-2 bg-[var(--wb-content)] text-[13px] text-[var(--wb-text-2)]"
+        aria-busy="true"
+      >
+        <Loader2 className="h-4 w-4 animate-spin" />
+        Running query…
       </div>
     );
   }
 
   // ── Empty state — connected only (AppShell handles disconnected) ──
   if (!tab?.queryResult) {
-    const isSqlTab = tab?.kind === 'sql';
-    // For SQL tabs with an empty editor, show the home panel instead
-    // of a blank pitch — lets the user relaunch a recent query without
-    // retyping it or opening the history sheet.
-    if (isSqlTab && (tab?.sql.trim() ?? '') === '') {
-      return <SqlHomePanel />;
-    }
     return (
-      <div className="flex min-h-0 flex-1 items-center justify-center bg-[var(--wb-content)]">
-        <div className="flex flex-col items-center gap-6 text-center">
-          <BrandMark className="h-20 w-20 text-foreground/70" />
-          <div className="text-2xl text-muted-foreground">
-            {isSqlTab ? 'Select a table, or write a query.' : 'Click a table in the sidebar.'}
-          </div>
-          {isSqlTab && <EmptySqlActions />}
-        </div>
+      <div className="flex min-h-0 flex-1 items-center justify-center bg-[var(--wb-content)] text-[13px] text-[var(--wb-text-2)]">
+        {tab?.kind === 'sql' ? 'Run a query to see results.' : 'Click a table in the sidebar.'}
       </div>
     );
   }
@@ -652,12 +1056,14 @@ export function ResultGrid() {
     return (
       <div className="flex min-h-0 flex-1 items-center justify-center bg-[var(--wb-content)]">
         <div className="text-center">
-          <div className="mb-2 text-3xl text-foreground">
-            {tab.queryResult.command ?? 'OK'}
+          <div className="mb-1.5 text-[20px] font-semibold text-[var(--wb-text)]">
+            {commandTitle(tab.queryResult.command, tab.queryResult.sql)}
           </div>
-          <div className="text-sm text-muted-foreground">
-            {tab.queryResult.rowCount.toLocaleString()} rows affected ·{' '}
+          <div className="text-[13px] text-[var(--wb-text-2)]" data-testid="command-summary">
+            {commandDetail(tab.queryResult.command, tab.queryResult.rowCount)} ·{' '}
             {formatDuration(tab.queryResult.durationMs)}
+            {tab.queryResults.length > 1 &&
+              ` · statement ${tab.activeResultIndex + 1} of ${tab.queryResults.length}`}
           </div>
         </div>
       </div>
@@ -666,27 +1072,14 @@ export function ResultGrid() {
 
   const allColumns = tab.queryResult.columns;
 
-  // SQL tabs always need client-side hidden filtering since the server
-  // returns every projected column. Table tabs already rewrite the
-  // SELECT to skip hidden columns — but when *all* are hidden the
-  // SQL builder falls back to `SELECT *`, so we still filter client-side
-  // here. That gives a single empty-state branch below regardless of
-  // tab kind.
-  const visibleColumns: Array<{ col: (typeof allColumns)[number]; originalIndex: number }> =
-    allColumns
-      .map((col, i) => ({ col, originalIndex: i }))
-      .filter(({ col }) => !tab.hiddenColumns.has(col.name));
-
   // Every column is hidden — render a friendly empty state with an
   // explicit "show all" CTA (more discoverable than digging into the
   // Columns popover).
   if (visibleColumns.length === 0) {
     return (
       <div className="flex min-h-0 flex-1 items-center justify-center bg-[var(--wb-content)]">
-        <div className="flex flex-col items-center gap-4 text-center">
-          <div className="text-2xl text-muted-foreground">
-            All columns hidden
-          </div>
+        <div className="flex flex-col items-center gap-3 text-center">
+          <div className="text-[13px] text-[var(--wb-text-2)]">All columns hidden</div>
           <Button
             variant="outline"
             size="sm"
@@ -717,21 +1110,219 @@ export function ResultGrid() {
     if (searchMatches.length === 0) return;
     const wrapped = ((idx % searchMatches.length) + searchMatches.length) % searchMatches.length;
     setActiveMatchIdx(wrapped);
-    const m = searchMatches[wrapped];
-    setSelectedCell({ row: m.row, col: m.col });
+    const m = searchMatches[wrapped]!;
+    select({ row: m.row, col: m.col });
   };
+
+  const cellId = (row: number, col: number) => `grid-${tab.id}-${row}-${col}`;
+  const activeDescendant =
+    anchor && displayRows[anchor.row] ? cellId(anchor.row, anchor.col) : undefined;
+  const totalRowsForAria =
+    tab.kind === 'table' ? (tab.totalRowCount ?? displayRows.length) : tab.queryResult.rows.length;
+
+  // ── Context menu entries for the clicked cell ──
+  const menuEntries = (): GridMenuEntry[] => {
+    if (!menu) return [];
+    const { cell } = menu;
+    const entry = displayRows[cell.row];
+    const colMeta = allColumns[cell.col];
+    if (!entry || !colMeta) return [];
+    const text = cellText(entry, cell.col);
+    const rowsLabel =
+      tab.selectedRows.size > 1 || (range && range.r1 > range.r0)
+        ? `${targetRows().length} rows`
+        : 'row';
+    const out: GridMenuEntry[] = [
+      {
+        kind: 'item',
+        label: range ? 'Copy selection' : 'Copy value',
+        hint: `${MOD}C`,
+        icon: <Copy />,
+        onSelect: copySelection,
+      },
+      { kind: 'heading', label: `Copy ${rowsLabel} as` },
+      ...COPY_FORMATS.map(
+        (f): GridMenuEntry => ({ kind: 'item', label: f.label, onSelect: () => copyRows(f.value) }),
+      ),
+    ];
+    if (writable) {
+      out.push({
+        kind: 'item',
+        label: 'Paste',
+        hint: `${MOD}V`,
+        onSelect: () => {
+          void navigator.clipboard
+            .readText()
+            .then((t) => pasteBlock(t))
+            .catch(() =>
+              setEditError(`Clipboard not readable here — focus the grid and press ${MOD}V`),
+            );
+        },
+      });
+    }
+    out.push(
+      { kind: 'separator' },
+      { kind: 'item', label: 'View value', hint: 'Space', onSelect: () => openCellDetail(cell) },
+      { kind: 'item', label: 'View row', hint: 'Enter', onSelect: () => openRowDetail(cell.row) },
+    );
+    if (writable && entry.status !== 'deleted') {
+      out.push(
+        { kind: 'separator' },
+        {
+          kind: 'item',
+          label: 'Edit value',
+          hint: 'F2',
+          icon: <Pencil />,
+          onSelect: () => beginEdit(cell),
+        },
+        {
+          kind: 'item',
+          label: range ? 'Set selection to NULL' : 'Set NULL',
+          hint: isMac ? '⇧⌘⌫' : 'Ctrl+Shift+⌫',
+          icon: <Eraser />,
+          onSelect: () => void setNullOnSelection(),
+        },
+      );
+      const editId = entry.editIdByCol.get(cell.col);
+      if (editId) {
+        out.push({
+          kind: 'item',
+          label: 'Discard change',
+          icon: <Undo2 />,
+          onSelect: () => discardPendingEdit(editId),
+        });
+      }
+    }
+    if (writable) {
+      out.push({ kind: 'separator' });
+      if (entry.insert) {
+        const id = entry.insert.id;
+        out.push({
+          kind: 'item',
+          label: 'Remove new row',
+          icon: <Trash2 />,
+          onSelect: () => discardPendingEdit(id),
+        });
+      } else {
+        out.push(
+          {
+            kind: 'item',
+            label: 'Duplicate row',
+            hint: `${MOD}D`,
+            icon: <CopyPlus />,
+            onSelect: duplicateTarget,
+          },
+          {
+            kind: 'item',
+            label: entry.status === 'deleted' ? `Restore ${rowsLabel}` : `Delete ${rowsLabel}`,
+            hint: isMac ? '⌘⌫' : 'Ctrl+⌫',
+            icon: entry.status === 'deleted' ? <Undo2 /> : <Trash2 />,
+            onSelect: deleteTargetRows,
+          },
+        );
+      }
+    }
+    if (tab.kind === 'table' && entry.originalIndex >= 0) {
+      out.push(
+        { kind: 'separator' },
+        {
+          kind: 'item',
+          label:
+            text === null
+              ? `Filter: ${colMeta.name} is null`
+              : `Filter: ${colMeta.name} = ${truncate(text ?? '', 24)}`,
+          icon: <FilterIcon />,
+          onSelect: () =>
+            void addFilter({
+              id: `f-${Date.now().toString(36)}`,
+              column: colMeta.name,
+              op: text === null ? 'IS NULL' : '=',
+              value: text ?? '',
+            }),
+        },
+      );
+      const fk = fkByColumn.get(colMeta.name);
+      if (fk && text !== null && text !== undefined) {
+        out.push({
+          kind: 'item',
+          label: `Open ${fk.fk.refTable} row`,
+          icon: <ArrowUpRight />,
+          onSelect: () => openFk(entry, colMeta.name),
+        });
+      }
+      const server = tab.queryResult?.rows[entry.originalIndex];
+      for (const ref of referencedBy.slice(0, 8)) {
+        const idx = allColumns.findIndex((c) => c.name === ref.refColumn);
+        if (idx < 0 || !server) continue;
+        const v = cellToText(server[idx], allColumns[idx]?.dataTypeName);
+        if (v === null) continue;
+        out.push({
+          kind: 'item',
+          label: `Rows in ${ref.table}.${ref.column}`,
+          onSelect: () => openForeignRow(ref.schema, ref.table, ref.column, v),
+        });
+      }
+    }
+    return out;
+  };
+
+  /** FK click-through with every column of a composite key (F7). */
+  const openFk = (entry: GridRow, colName: string) => {
+    const hit = fkByColumn.get(colName);
+    if (!hit) return;
+    const textOf = (name: string) => {
+      const idx = allColumns.findIndex((c) => c.name === name);
+      return idx < 0 ? null : cellText(entry, idx);
+    };
+    const main = textOf(colName);
+    if (main === null || main === undefined) return;
+    const also = hit.fk.pairs
+      .filter((p) => p.column !== colName)
+      .map((p) => ({ column: p.refColumn, value: textOf(p.column) }))
+      .filter((p): p is { column: string; value: string } => typeof p.value === 'string');
+    openForeignRow(hit.fk.refSchema, hit.fk.refTable, hit.refColumn, main, also);
+  };
+
+  const colSpan = visibleColumns.length + 1;
 
   return (
     <div
       ref={containerRef}
       className="relative min-h-0 flex-1 overflow-auto"
       style={STRIPED_BACKGROUND}
+      aria-busy={running || undefined}
     >
-      {editError && (
-        <div className="sticky top-0 z-20 border-b border-primary bg-primary/10 px-4 py-2 text-xs text-primary">
-          {editError}{' '}
-          <button type="button" onClick={() => setEditError(null)} className="ml-2 underline">
-            dismiss
+      {(editError || (pendingEditsError && pendingEdits.length > 0)) && (
+        <div
+          className="sticky left-0 top-0 z-40 flex items-start gap-2 border-b border-destructive/40 bg-[color-mix(in_srgb,var(--destructive)_12%,var(--wb-content))] px-3 py-1.5 text-[12px] text-[var(--wb-text)]"
+          role="alert"
+        >
+          <AlertCircle className="mt-px h-3.5 w-3.5 shrink-0 text-destructive" />
+          <span className="min-w-0 flex-1 whitespace-pre-wrap break-words">
+            {editError ?? (
+              <>
+                <span className="font-semibold text-destructive">
+                  Commit failed — nothing was saved.{' '}
+                </span>
+                {pendingEditsError?.message}
+              </>
+            )}
+          </span>
+          {!editError && failedIds.size > 0 && (
+            <button type="button" onClick={jumpToFailure} className="shrink-0 underline">
+              Show cell
+            </button>
+          )}
+          <button
+            type="button"
+            aria-label="Dismiss"
+            onClick={() => {
+              if (editError) setEditError(null);
+              else useSession.setState({ pendingEditsError: null });
+            }}
+            className="grid h-4 w-4 shrink-0 place-items-center rounded-[4px] text-[var(--wb-text-2)] hover:bg-[var(--wb-control-hover)]"
+          >
+            <X className="h-3 w-3" />
           </button>
         </div>
       )}
@@ -748,6 +1339,7 @@ export function ResultGrid() {
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 placeholder="Find in results…"
+                aria-label="Find in results"
                 className="h-5 w-48 border-0 bg-transparent text-[13px] text-[var(--wb-text)] outline-none placeholder:text-[var(--wb-text-3)]"
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') {
@@ -758,10 +1350,11 @@ export function ResultGrid() {
                     e.preventDefault();
                     setSearchOpen(false);
                     setSearchQuery('');
+                    refocusGrid();
                   }
                 }}
               />
-              <span className="shrink-0 tabular-nums text-[var(--wb-text-2)]">
+              <span className="shrink-0 tabular-nums text-[var(--wb-text-2)]" aria-live="polite">
                 {searchQuery
                   ? searchMatches.length > 0
                     ? `${activeMatchIdx + 1}/${searchMatches.length}`
@@ -793,6 +1386,7 @@ export function ResultGrid() {
                 onClick={() => {
                   setSearchOpen(false);
                   setSearchQuery('');
+                  refocusGrid();
                 }}
                 className="grid h-5 w-5 place-items-center rounded-[4px] text-[var(--wb-text-2)] hover:bg-[var(--wb-control-hover)] hover:text-[var(--wb-text)]"
                 aria-label="Close search"
@@ -804,46 +1398,74 @@ export function ResultGrid() {
           </div>
         </div>
       )}
-      <table className="min-w-full border-collapse font-mono text-[13px] tabular-nums text-[var(--grid-text)]">
+      <table
+        ref={gridRef}
+        // biome-ignore lint/a11y/useSemanticElements: ARIA grid on a native table (cells keep table semantics)
+        role="grid"
+        // biome-ignore lint/a11y/noNoninteractiveTabindex: the grid is the keyboard focus target
+        tabIndex={0}
+        aria-label={tab.kind === 'table' ? `${tab.tableName ?? 'Table'} rows` : 'Query results'}
+        aria-rowcount={totalRowsForAria + 1}
+        aria-colcount={colSpan}
+        aria-multiselectable="true"
+        aria-readonly={!writable}
+        aria-activedescendant={activeDescendant}
+        onKeyDown={onGridKeyDown}
+        onPaste={onGridPaste}
+        onFocus={onGridFocus}
+        data-testid="result-grid"
+        className={cn(
+          'min-w-full select-none border-collapse font-mono text-[13px] tabular-nums text-[var(--grid-text)] outline-none',
+          'focus-visible:shadow-[inset_0_0_0_1px_var(--wb-accent)]',
+          running && 'opacity-60 transition-opacity',
+        )}
+      >
         <thead className="sticky top-0 z-10 bg-[var(--wb-content)]">
-          <tr>
+          <tr aria-rowindex={1}>
             <th
-              className="sticky left-0 z-30 h-[26px] border-r border-[var(--grid-line)] bg-[var(--wb-content)] px-1 shadow-[inset_0_-1px_0_var(--wb-separator)] text-center align-middle"
+              className="sticky left-0 z-30 h-[26px] border-r border-[var(--grid-line)] bg-[var(--wb-content)] px-1 text-center align-middle shadow-[inset_0_-1px_0_var(--wb-separator)]"
               style={{ minWidth: GUTTER_WIDTH_PX, width: GUTTER_WIDTH_PX }}
+              aria-colindex={1}
             >
               <SelectAllCheckbox
-                total={displayRows.length}
+                total={displayRows.filter((e) => e.originalIndex >= 0).length}
                 selectedCount={
-                  displayRows.filter((e) => tab.selectedRows.has(e.originalIndex)).length
+                  displayRows.filter(
+                    (e) => e.originalIndex >= 0 && tab.selectedRows.has(e.originalIndex),
+                  ).length
                 }
                 onToggle={() => {
-                  const allOnPage = displayRows.every((e) => tab.selectedRows.has(e.originalIndex));
-                  if (allOnPage) {
-                    setSelectedRows(new Set());
-                  } else {
-                    setSelectedRows(new Set(displayRows.map((e) => e.originalIndex)));
-                  }
+                  const real = displayRows.filter((e) => e.originalIndex >= 0);
+                  const allOnPage = real.every((e) => tab.selectedRows.has(e.originalIndex));
+                  setSelectedRows(
+                    allOnPage ? new Set() : new Set(real.map((e) => e.originalIndex)),
+                  );
                 }}
               />
             </th>
-            {visibleColumns.map(({ col, originalIndex: origIdx }) => {
+            {visibleColumns.map(({ col, originalIndex: origIdx }, pos) => {
               const sortDir = getSortIndicator(origIdx);
               const isSticky = stickySet.has(col.name);
               const storedWidth = tab.columnWidths[origIdx];
               return (
+                // biome-ignore lint/a11y/useKeyWithClickEvents: header sort also via the column menu
                 <th
                   key={`${col.name}-${origIdx}`}
                   ref={(el) => {
                     headerRefs.current[origIdx] = el;
                   }}
+                  aria-colindex={pos + 2}
+                  aria-sort={
+                    sortDir === 'asc' ? 'ascending' : sortDir === 'desc' ? 'descending' : undefined
+                  }
                   onClick={() => setSort(origIdx)}
                   className={cn(
-                    'group/header relative h-[26px] cursor-pointer select-none whitespace-nowrap border-r border-[var(--grid-line)] bg-[var(--wb-content)] px-6 py-0 text-center font-sans shadow-[inset_0_-1px_0_var(--wb-separator)] text-[13px] font-semibold text-[var(--grid-text)] transition-colors hover:bg-[var(--wb-control)]',
+                    'group/header relative h-[26px] cursor-pointer select-none whitespace-nowrap border-r border-[var(--grid-line)] bg-[var(--wb-content)] px-6 py-0 text-center font-sans text-[13px] font-semibold text-[var(--grid-text)] shadow-[inset_0_-1px_0_var(--wb-separator)] transition-colors hover:bg-[var(--wb-control)]',
                   )}
                   style={{
                     minWidth: storedWidth ?? 120,
                     width: storedWidth,
-                    ...stickyStyle(origIdx, col.name, 20),
+                    ...stickyStyle(stickySet, stickyLefts, origIdx, col.name, 20),
                     ...(isSticky ? { top: 0 } : {}),
                   }}
                   title={`${col.name} — ${col.dataTypeName}${isSticky ? ' · pinned' : ''}`}
@@ -864,31 +1486,23 @@ export function ResultGrid() {
                         pinned={isSticky}
                         tableMode={tab?.kind === 'table'}
                         onSortAsc={() => {
-                          if (tab?.kind === 'table') {
-                            setExplicitTableSort(col.name, 'asc');
-                          } else {
-                            setExplicitSqlSort(origIdx, 'asc');
-                          }
+                          if (tab?.kind === 'table') setExplicitTableSort(col.name, 'asc');
+                          else setExplicitSqlSort(origIdx, 'asc');
                         }}
                         onSortDesc={() => {
-                          if (tab?.kind === 'table') {
-                            setExplicitTableSort(col.name, 'desc');
-                          } else {
-                            setExplicitSqlSort(origIdx, 'desc');
-                          }
+                          if (tab?.kind === 'table') setExplicitTableSort(col.name, 'desc');
+                          else setExplicitSqlSort(origIdx, 'desc');
                         }}
                         onClearSort={() => {
-                          if (tab?.kind === 'table') {
-                            setExplicitTableSort(col.name, null);
-                          } else {
-                            setExplicitSqlSort(origIdx, null);
-                          }
+                          if (tab?.kind === 'table') setExplicitTableSort(col.name, null);
+                          else setExplicitSqlSort(origIdx, null);
                         }}
                         onTogglePin={() => toggleStickyColumn(col.name)}
                         onHide={() => void toggleColumnHidden(col.name)}
                       />
                     </div>
                   </div>
+                  {/* biome-ignore lint/a11y/useFocusableInteractive lint/a11y/useKeyWithClickEvents lint/a11y/useSemanticElements: pointer-only resize handle */}
                   <div
                     role="separator"
                     aria-orientation="vertical"
@@ -902,66 +1516,93 @@ export function ResultGrid() {
                 </th>
               );
             })}
-            {writable && (
-              <th
-                className="sticky right-0 w-10 bg-[var(--wb-content)] shadow-[inset_0_-1px_0_var(--wb-separator)]"
-                aria-label="row actions"
-              />
-            )}
           </tr>
         </thead>
         <tbody>
           {rowWindow.topPadPx > 0 && (
+            // biome-ignore lint/a11y/noAriaHiddenOnFocusable: spacer row, never focusable
             <tr aria-hidden="true" style={{ height: rowWindow.topPadPx }}>
-              <td colSpan={visibleColumns.length + (writable ? 2 : 1)} />
+              <td colSpan={colSpan} />
             </tr>
           )}
           {windowedRows.map((entry, windowIdx) => {
             const visibleRow = rowWindow.start + windowIdx;
-            const rowSelected = tab.selectedCell?.row === visibleRow;
-            const rowChecked = tab.selectedRows.has(entry.originalIndex);
+            const rowSelected = anchor?.row === visibleRow;
+            const rowChecked =
+              entry.originalIndex >= 0 && tab.selectedRows.has(entry.originalIndex);
+            const deleted = entry.status === 'deleted';
+            const inserted = entry.status === 'inserted';
+            const rowFailed =
+              (entry.insert && failedIds.has(entry.insert.id)) ||
+              (deleted && entry.rowKey !== null && failedRowKeys.has(entry.rowKey));
             // Row #1 (index 0) takes stripe A, matching the scroll-container
             // background that continues the stripes below the last row.
             const zebra =
               visibleRow % 2 === 0 ? 'bg-[var(--grid-row-a)]' : 'bg-[var(--grid-row-b)]';
+            const rowNumber = tab.page * tab.pageSize + visibleRow + 1;
             return (
               <tr
-                // biome-ignore lint/suspicious/noArrayIndexKey: stable per-query
-                key={`row-${visibleRow}-${entry.originalIndex}`}
+                key={entry.key}
+                aria-rowindex={inserted ? undefined : rowNumber + 1}
+                aria-selected={rowChecked || undefined}
+                data-row-status={entry.status === 'clean' ? undefined : entry.status}
                 className={cn(
-                  'group/row cv-row-24',
-                  rowSelected ? SELECTED_ROW_BG : rowChecked ? 'bg-[color-mix(in_srgb,var(--wb-accent)_10%,transparent)]' : zebra,
+                  'group/row cv-row-24 h-[24px]',
+                  deleted
+                    ? DELETED_ROW_BG
+                    : inserted
+                      ? INSERTED_ROW_BG
+                      : rowSelected
+                        ? SELECTED_ROW_BG
+                        : rowChecked
+                          ? 'bg-[color-mix(in_srgb,var(--wb-accent)_10%,transparent)]'
+                          : zebra,
+                  rowFailed && FAILED_OUTLINE,
                 )}
               >
                 <td
+                  aria-colindex={1}
                   className={cn(
-                    'sticky left-0 z-[2] border-r border-[var(--grid-line)] p-0 text-center align-middle',
+                    'sticky left-0 z-[2] h-[24px] border-r border-[var(--grid-line)] p-0 text-center align-middle',
                     rowChecked
                       ? 'bg-[color-mix(in_srgb,var(--wb-accent)_30%,var(--wb-content))]'
                       : 'bg-[var(--wb-content)]',
                   )}
                   style={{ minWidth: GUTTER_WIDTH_PX, width: GUTTER_WIDTH_PX }}
                 >
-                  <button
-                    type="button"
-                    onClick={() => toggleRowSelected(entry.originalIndex)}
-                    aria-pressed={rowChecked}
-                    aria-label={`Select row ${tab.page * tab.pageSize + visibleRow + 1}`}
-                    title={rowChecked ? 'Deselect row' : 'Select row'}
-                    className={cn(
-                      'h-[24px] w-full px-1 text-center font-mono text-[12px] tabular-nums transition-colors',
-                      rowChecked
-                        ? 'text-[var(--wb-text)]'
-                        : 'text-[var(--wb-text-3)] hover:bg-[var(--wb-control)] hover:text-[var(--wb-text)]',
-                    )}
-                  >
-                    {(tab.page * tab.pageSize + visibleRow + 1).toLocaleString()}
-                  </button>
+                  {inserted ? (
+                    <span
+                      className="block h-[24px] font-sans text-[12px] leading-[24px] text-[var(--status-local)]"
+                      title="New row — inserted on commit"
+                    >
+                      new
+                    </span>
+                  ) : (
+                    <button
+                      type="button"
+                      tabIndex={-1}
+                      onClick={() => toggleRowSelected(entry.originalIndex)}
+                      aria-pressed={rowChecked}
+                      aria-label={`Select row ${rowNumber}`}
+                      title={
+                        deleted ? 'Marked for deletion' : rowChecked ? 'Deselect row' : 'Select row'
+                      }
+                      className={cn(
+                        'block h-[24px] w-full px-1 text-center font-mono text-[12px] tabular-nums transition-colors',
+                        deleted && 'line-through',
+                        rowChecked
+                          ? 'text-[var(--wb-text)]'
+                          : 'text-[var(--wb-text-3)] hover:bg-[var(--wb-control)] hover:text-[var(--wb-text)]',
+                      )}
+                    >
+                      {rowNumber.toLocaleString()}
+                    </button>
+                  )}
                 </td>
-                {visibleColumns.map(({ col, originalIndex: origIdx }) => {
-                  const cell = entry.row[origIdx];
-                  const cellSelected =
-                    tab.selectedCell?.row === visibleRow && tab.selectedCell?.col === origIdx;
+                {visibleColumns.map(({ col, originalIndex: origIdx }, pos) => {
+                  const text = cellText(entry, origIdx);
+                  const cellSelected = rowSelected && anchor?.col === origIdx;
+                  const cellInRange = inRange(visibleRow, origIdx);
                   const isEditing = editingCell?.row === visibleRow && editingCell?.col === origIdx;
                   const colName = col.name;
                   const isSticky = stickySet.has(colName);
@@ -970,180 +1611,290 @@ export function ResultGrid() {
                   const isActiveMatch =
                     isMatch && activeMatch?.row === visibleRow && activeMatch?.col === origIdx;
                   const fk = fkByColumn.get(colName);
-                  const hasFk = fk && cell !== null && cell !== undefined;
+                  const hasFk = Boolean(fk && text !== null && text !== undefined && !inserted);
+                  const edited = entry.editedCols.has(origIdx);
+                  const editId = entry.editIdByCol.get(origIdx);
+                  const cellFailed = editId !== undefined && failedIds.has(editId);
                   return (
                     <td
-                      key={`${visibleRow}-${origIdx}`}
+                      key={origIdx}
+                      id={cellId(visibleRow, origIdx)}
+                      aria-colindex={pos + 2}
+                      aria-selected={cellSelected || cellInRange}
+                      aria-invalid={cellFailed || undefined}
                       data-cell={`${visibleRow}:${origIdx}`}
-                      onClick={() => {
-                        if (!isEditing) setSelectedCell({ row: visibleRow, col: origIdx });
+                      data-pending={edited ? 'edited' : undefined}
+                      onMouseDown={(e) => {
+                        if (e.button !== 0 || isEditing) return;
+                        if (e.shiftKey && anchor) {
+                          setRangeEnd({ row: visibleRow, col: origIdx });
+                          e.preventDefault();
+                          return;
+                        }
+                        dragging.current = true;
+                        select({ row: visibleRow, col: origIdx });
                       }}
-                      onDoubleClick={(e) => {
-                        if (writable) {
-                          setEditingCell({
-                            row: visibleRow,
-                            col: origIdx,
-                            value: cell === null || cell === undefined ? '' : String(cell),
-                          });
-                        } else {
-                          setCellDetail({
-                            columnName: col.name,
-                            dataTypeName: col.dataTypeName,
-                            value: cell,
-                            anchorRect: (e.currentTarget as HTMLElement).getBoundingClientRect(),
-                          });
+                      onMouseEnter={(e) => {
+                        if (!dragging.current || !(e.buttons & 1) || !anchor) return;
+                        if (anchor.row === visibleRow && anchor.col === origIdx) setRangeEnd(null);
+                        else setRangeEnd({ row: visibleRow, col: origIdx });
+                      }}
+                      onContextMenu={(e) => {
+                        e.preventDefault();
+                        if (!inRange(visibleRow, origIdx))
+                          select({ row: visibleRow, col: origIdx });
+                        gridRef.current?.focus({ preventScroll: true });
+                        setMenu({
+                          x: e.clientX,
+                          y: e.clientY,
+                          cell: { row: visibleRow, col: origIdx },
+                        });
+                      }}
+                      onDoubleClick={() => {
+                        if (!beginEdit({ row: visibleRow, col: origIdx })) {
+                          openCellDetail({ row: visibleRow, col: origIdx });
                         }
                       }}
                       className={cn(
                         'group/cell relative h-[24px] max-w-[480px] whitespace-nowrap border-r border-[var(--grid-line)] px-1.5 text-[var(--grid-text)]',
                         !isEditing && 'cursor-cell truncate',
                         cellClass(col),
-                        cellSelected &&
-                          !isEditing &&
-                          'outline outline-2 -outline-offset-2 outline-[var(--wb-accent)]',
-                        isEditing &&
-                          'bg-[var(--wb-content)] p-0 outline outline-2 -outline-offset-2 outline-[var(--wb-accent)]',
+                        deleted && 'text-[var(--wb-text-3)] line-through',
                         // Sticky cells need an opaque fill so scrolled
                         // columns don't show through.
                         isSticky &&
                           (rowSelected
                             ? 'bg-[color-mix(in_srgb,var(--wb-accent)_18%,var(--grid-row-b))]'
                             : zebra),
+                        edited && !isEditing && EDITED_CELL_BG,
+                        cellInRange &&
+                          !cellSelected &&
+                          'bg-[color-mix(in_srgb,var(--wb-accent)_22%,transparent)]',
                         // Search match highlights — passive matches get an
-                        // accent tint, the "current" match gets a stronger
-                        // tint so the user can see where the jump landed.
-                        isMatch && !isActiveMatch && 'bg-[color-mix(in_srgb,var(--wb-accent)_12%,transparent)]',
+                        // accent tint, the "current" match a stronger one.
+                        isMatch &&
+                          !isActiveMatch &&
+                          'bg-[color-mix(in_srgb,var(--wb-accent)_12%,transparent)]',
                         isActiveMatch &&
                           'bg-[color-mix(in_srgb,var(--wb-accent)_30%,transparent)] outline outline-1 -outline-offset-1 outline-[var(--wb-accent)]',
+                        cellSelected &&
+                          !isEditing &&
+                          'outline outline-2 -outline-offset-2 outline-[var(--wb-accent)]',
+                        isEditing &&
+                          'bg-[var(--wb-content)] p-0 outline outline-2 -outline-offset-2 outline-[var(--wb-accent)]',
+                        cellFailed && FAILED_OUTLINE,
                         // Make room for the FK arrow so long values don't
                         // slide underneath the button.
                         hasFk && !isEditing && 'pr-7',
                       )}
-                      style={stickyStyle(origIdx, colName, 3)}
-                      title={!isEditing ? cellTitle(cell) : undefined}
+                      style={stickyStyle(stickySet, stickyLefts, origIdx, colName, 3)}
+                      title={
+                        isEditing
+                          ? undefined
+                          : cellFailed
+                            ? `Commit failed: ${pendingEditsError?.message ?? ''}`
+                            : edited
+                              ? `Pending change — was ${cellTitle(cellToText(tab.queryResult?.rows[entry.originalIndex]?.[origIdx], col.dataTypeName))}`
+                              : cellTitle(text)
+                      }
                     >
                       {hasFk && !isEditing && (
                         <button
                           type="button"
+                          tabIndex={-1}
+                          onMouseDown={(e) => e.stopPropagation()}
                           onClick={(e) => {
                             e.stopPropagation();
-                            if (fk) openForeignRow(fk.refSchema, fk.refTable, fk.refColumn, cell);
+                            openFk(entry, colName);
                           }}
                           className="absolute right-1 top-1/2 grid h-[18px] w-[18px] -translate-y-1/2 cursor-pointer place-items-center rounded-[4px] bg-[var(--wb-control)] text-[var(--wb-text-2)] opacity-0 transition-all duration-150 hover:bg-[var(--wb-control-hover)] hover:text-[var(--wb-text)] focus-visible:opacity-100 group-hover/cell:opacity-100"
-                          aria-label={`Open ${fk?.refSchema}.${fk?.refTable}`}
-                          title={`Open ${fk?.refSchema}.${fk?.refTable} where ${fk?.refColumn} = ${formatFkTitle(cell)}`}
+                          aria-label={`Open ${fk?.fk.refSchema}.${fk?.fk.refTable}`}
+                          title={`Open ${fk?.fk.refSchema}.${fk?.fk.refTable} where ${fk?.fk.pairs.map((p) => p.refColumn).join(', ')} match`}
                         >
                           <ArrowUpRight className="h-3 w-3" />
                         </button>
                       )}
                       {isEditing ? (
-                        <input
-                          autoFocus
-                          type="text"
+                        <InlineEditor
                           value={editingCell.value}
-                          onChange={(e) =>
-                            setEditingCell({
-                              row: visibleRow,
-                              col: origIdx,
-                              value: e.target.value,
-                            })
+                          onChange={(value) =>
+                            setEditingCell({ row: visibleRow, col: origIdx, value })
                           }
-                          onBlur={() => {
-                            void commitEdit();
+                          onCommit={(opts) => {
+                            void (async () => {
+                              const ok = await commitEdit(
+                                opts?.value !== undefined ? { value: opts.value } : undefined,
+                              );
+                              if (!ok) return;
+                              if (opts?.move) {
+                                const target =
+                                  opts.move === 'prev'
+                                    ? prevCell(
+                                        { row: visibleRow, col: pos },
+                                        displayRows.length,
+                                        visibleColumns.length,
+                                      )
+                                    : opts.move === 'next'
+                                      ? nextCell(
+                                          { row: visibleRow, col: pos },
+                                          displayRows.length,
+                                          visibleColumns.length,
+                                        )
+                                      : {
+                                          row: Math.min(displayRows.length - 1, visibleRow + 1),
+                                          col: pos,
+                                        };
+                                if (target)
+                                  select({
+                                    row: target.row,
+                                    col: visibleColumns[target.col]!.originalIndex,
+                                  });
+                              }
+                              if (opts?.refocus) refocusGrid();
+                            })();
                           }}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter') {
-                              e.preventDefault();
-                              void commitEdit();
-                            } else if (e.key === 'Escape') {
-                              e.preventDefault();
-                              setEditingCell(null);
-                            } else if (e.key === 'Tab') {
-                              // Commit, then advance (or retreat) selection.
-                              e.preventDefault();
-                              const rowCount = displayRows.length;
-                              const colCount = tab.queryResult?.columns.length ?? 0;
-                              const target = e.shiftKey
-                                ? prevCell(
-                                    { row: visibleRow, col: origIdx },
-                                    rowCount,
-                                    colCount,
-                                  )
-                                : nextCell(
-                                    { row: visibleRow, col: origIdx },
-                                    rowCount,
-                                    colCount,
-                                  );
-                              void (async () => {
-                                const ok = await commitEdit();
-                                if (ok && target) setSelectedCell(target);
-                              })();
-                            }
+                          onCancel={() => {
+                            setEditingCell(null);
+                            setEditError(null);
+                            refocusGrid();
                           }}
-                          className="h-[22px] w-full border-0 bg-transparent px-1.5 font-mono text-[13px] text-[var(--grid-text)] outline-none"
                         />
                       ) : (
-                        formatCell(cell)
+                        formatCell(text, inserted)
                       )}
                     </td>
                   );
                 })}
-                {writable && (
-                  <td className="sticky right-0 w-10 bg-[var(--wb-content)] px-1 text-right">
-                    <Button
-                      variant="ghost"
-                      size="icon-xs"
-                      className="opacity-0 transition-opacity duration-150 group-hover/row:opacity-100 focus-visible:opacity-100"
-                      onClick={() => setPendingDeleteRow(visibleRow)}
-                      aria-label="Delete row"
-                      title="Delete this row"
-                    >
-                      <Trash2 />
-                    </Button>
-                  </td>
-                )}
               </tr>
             );
           })}
           {rowWindow.bottomPadPx > 0 && (
+            // biome-ignore lint/a11y/noAriaHiddenOnFocusable: spacer row, never focusable
             <tr aria-hidden="true" style={{ height: rowWindow.bottomPadPx }}>
-              <td colSpan={visibleColumns.length + (writable ? 2 : 1)} />
+              <td colSpan={colSpan} />
             </tr>
           )}
           {tab.queryResult.truncated && (
             <tr>
               <td
-                colSpan={visibleColumns.length + (writable ? 2 : 1)}
-                className="border-t border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-foreground"
+                colSpan={colSpan}
+                className="border-t border-[var(--grid-line)] bg-[color-mix(in_srgb,var(--status-staging)_14%,var(--wb-content))] px-3 py-2 font-sans text-[12px] text-[var(--wb-text)]"
               >
-                Result truncated at {tab.queryResult.rows.length.toLocaleString()} rows (worker
-                row/byte cap). Add a LIMIT — or export via a future incremental path — for the full
-                set.
+                Showing the first {tab.queryResult.rows.length.toLocaleString()} rows — the result
+                hit the row limit. Add a LIMIT / WHERE to narrow it, or raise the limit in the
+                editor’s row-limit menu.
               </td>
             </tr>
           )}
         </tbody>
       </table>
+      <GridContextMenu
+        at={menu ? { x: menu.x, y: menu.y } : null}
+        entries={menu ? menuEntries() : []}
+        onClose={() => {
+          setMenu(null);
+          refocusGrid();
+        }}
+      />
       <CellDetailDialog detail={cellDetail} onOpenChange={(o) => !o && setCellDetail(null)} />
       <RowDetailSheet detail={rowDetail} onOpenChange={(o) => !o && setRowDetail(null)} />
-      <ConfirmDialog
-        open={pendingDeleteRow !== null}
-        onOpenChange={(o) => !o && setPendingDeleteRow(null)}
-        title="Delete this row?"
-        description="This cannot be undone."
-        confirmLabel="Delete row"
-        onConfirm={() => void confirmDeleteRow()}
-      />
     </div>
   );
 }
 
-// ─── Sorting ─────────────────────────────────────────────────────────
+const EMPTY_COLS: ReadonlySet<number> = new Set();
+const EMPTY_IDS: ReadonlyMap<number, string> = new Map();
+
+function stickyStyle(
+  stickySet: ReadonlySet<string>,
+  stickyLefts: Record<number, number>,
+  colIndex: number,
+  colName: string,
+  baseZ: number,
+): React.CSSProperties {
+  return stickySet.has(colName)
+    ? {
+        position: 'sticky',
+        left: stickyLefts[colIndex] ?? GUTTER_WIDTH_PX,
+        zIndex: baseZ,
+        boxShadow: '1px 0 0 0 var(--grid-line)',
+      }
+    : {};
+}
+
+/**
+ * The in-cell editor. `null` shows a NULL placeholder until the user
+ * types (A1); the NULL button / ⇧⌘⌫ commits SQL NULL explicitly.
+ */
+function InlineEditor({
+  value,
+  onChange,
+  onCommit,
+  onCancel,
+}: {
+  value: string | null;
+  onChange: (value: string | null) => void;
+  onCommit: (opts?: {
+    value?: string | null;
+    move?: 'next' | 'prev' | 'down';
+    refocus?: boolean;
+  }) => void;
+  onCancel: () => void;
+}) {
+  const done = useRef(false);
+  const commitOnce = (opts?: Parameters<typeof onCommit>[0]) => {
+    if (done.current) return;
+    done.current = true;
+    onCommit(opts);
+  };
+  return (
+    <div className="flex h-[22px] items-center">
+      <input
+        // biome-ignore lint/a11y/noAutofocus: the editor opens on an explicit edit gesture
+        autoFocus
+        type="text"
+        aria-label="Cell value"
+        value={value ?? ''}
+        placeholder={value === null ? 'NULL' : undefined}
+        onChange={(e) => onChange(e.target.value)}
+        onBlur={() => commitOnce()}
+        onKeyDown={(e) => {
+          e.stopPropagation();
+          const mod = e.metaKey || e.ctrlKey;
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            commitOnce({ refocus: true, move: e.shiftKey ? undefined : 'down' });
+          } else if (e.key === 'Escape') {
+            e.preventDefault();
+            done.current = true;
+            onCancel();
+          } else if (e.key === 'Tab') {
+            e.preventDefault();
+            commitOnce({ move: e.shiftKey ? 'prev' : 'next', refocus: true });
+          } else if (mod && e.shiftKey && (e.key === 'Backspace' || e.key === 'Delete')) {
+            e.preventDefault();
+            commitOnce({ value: null, refocus: true });
+          }
+        }}
+        className="h-[22px] min-w-0 flex-1 border-0 bg-transparent px-1.5 font-mono text-[13px] text-[var(--grid-text)] outline-none placeholder:text-[var(--grid-null)]"
+      />
+      <button
+        type="button"
+        tabIndex={-1}
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={() => commitOnce({ value: null, refocus: true })}
+        title="Set NULL (⇧⌘⌫)"
+        className="mr-0.5 h-[18px] shrink-0 rounded-[4px] bg-[var(--wb-control)] px-1 font-sans text-[11px] text-[var(--wb-text-2)] hover:bg-[var(--wb-control-hover)] hover:text-[var(--wb-text)]"
+      >
+        NULL
+      </button>
+    </div>
+  );
+}
 
 /**
  * Header-row checkbox that reflects all-visible / partial / none
- * states. Uses Radix's `'indeterminate'` value for the partial
- * state so the box renders the dash glyph.
+ * states.
  */
 function SelectAllCheckbox({
   total,
@@ -1158,6 +1909,7 @@ function SelectAllCheckbox({
   return (
     <button
       type="button"
+      tabIndex={-1}
       onClick={onToggle}
       aria-label={all ? 'Deselect all rows' : 'Select all rows'}
       title={all ? 'Deselect all visible' : 'Select all visible'}
@@ -1173,71 +1925,26 @@ function SelectAllCheckbox({
   );
 }
 
-// ─── Cell formatting (shared with export) ───────────────────────────
+// ─── Cell formatting ─────────────────────────────────────────────────
 
-function formatCell(value: unknown): React.ReactNode {
-  if (value === null) return <span className="text-[var(--grid-null)]">NULL</span>;
-  if (value === undefined) return <span className="text-[var(--grid-null)]">undef</span>;
-  if (typeof value === 'boolean') return value ? 'true' : 'false';
-  if (value instanceof Date) return value.toISOString();
-  if (typeof value === 'object') {
-    try {
-      return JSON.stringify(value);
-    } catch {
-      return String(value);
-    }
+function truncate(s: string, n: number): string {
+  return s.length > n ? `${s.slice(0, n)}…` : s;
+}
+
+/** Render a cell's Postgres text (null = NULL, undefined = DEFAULT on a new row). */
+function formatCell(text: string | null | undefined, insertRow: boolean): React.ReactNode {
+  if (text === undefined) {
+    return <span className="text-[var(--grid-null)]">{insertRow ? 'DEFAULT' : ''}</span>;
   }
-  const str = String(value);
-  if (str === '') return <span className="text-[var(--grid-null)]">''</span>;
-  return str;
+  if (text === null) return <span className="text-[var(--grid-null)]">NULL</span>;
+  if (text === '') return <span className="text-[var(--grid-null)]">''</span>;
+  return text.length > MAX_CELL_CHARS ? `${text.slice(0, MAX_CELL_CHARS)}…` : text;
 }
 
-function cellTitle(value: unknown): string {
-  if (value === null || value === undefined) return '';
-  if (typeof value === 'object') {
-    try {
-      return JSON.stringify(value);
-    } catch {
-      return String(value);
-    }
-  }
-  return String(value);
-}
-
-function formatFkTitle(value: unknown): string {
-  const s = cellTitle(value);
-  return s.length > 40 ? `${s.slice(0, 40)}…` : s;
-}
-
-/**
- * SQL-tab empty state actions. Two paths:
- *   1. Browse a table → focuses the sidebar (user can click a table)
- *   2. Write SQL → expands the editor drawer so user can paste/type
- */
-function EmptySqlActions() {
-  const setEditorExpanded = useSession((s) => s.setEditorExpanded);
-  const toggleSidebar = useSession((s) => s.toggleSidebar);
-  const sidebarCollapsed = useSession((s) => s.settings.sidebarCollapsed);
-
-  return (
-    <div className="flex items-center gap-3">
-      <Button
-        variant="secondary"
-        size="default"
-        onClick={() => {
-          if (sidebarCollapsed) void toggleSidebar();
-        }}
-      >
-        <Table2 />
-        Browse tables
-      </Button>
-      <span className="text-sm text-muted-foreground">or</span>
-      <Button variant="primary" size="default" onClick={() => setEditorExpanded(true)}>
-        <Code2 />
-        Write SQL
-      </Button>
-    </div>
-  );
+function cellTitle(text: string | null | undefined): string {
+  if (text === null) return 'NULL';
+  if (text === undefined) return '';
+  return text.length > 2000 ? `${text.slice(0, 2000)}…` : text;
 }
 
 /**

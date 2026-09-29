@@ -57,12 +57,11 @@ function ControlButton({
       onClick={onClick}
       aria-label={ariaLabel}
       title={ariaLabel}
-      className={
-        'flex h-full w-[46px] items-center justify-center text-muted-foreground transition-colors ' +
-        (danger
+      className={`flex h-full w-[46px] items-center justify-center text-[var(--wb-text-2)] transition-colors ${
+        danger
           ? 'hover:bg-win-close hover:text-white'
-          : 'hover:bg-[var(--bg-hover)] hover:text-foreground')
-      }
+          : 'hover:bg-[var(--bg-hover)] hover:text-foreground'
+      }`}
     >
       {children}
     </button>
@@ -74,7 +73,7 @@ function ControlButton({
 
 function MinimizeGlyph() {
   return (
-    <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden>
+    <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
       <line x1="0" y1="5" x2="10" y2="5" stroke="currentColor" strokeWidth="1" />
     </svg>
   );
@@ -82,7 +81,7 @@ function MinimizeGlyph() {
 
 function MaximizeGlyph() {
   return (
-    <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden>
+    <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
       <rect
         x="0.5"
         y="0.5"
@@ -98,7 +97,7 @@ function MaximizeGlyph() {
 
 function RestoreGlyph() {
   return (
-    <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden>
+    <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
       <rect
         x="0.5"
         y="2.5"
@@ -115,7 +114,7 @@ function RestoreGlyph() {
 
 function CloseGlyph() {
   return (
-    <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden>
+    <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
       <line x1="0" y1="0" x2="10" y2="10" stroke="currentColor" strokeWidth="1" />
       <line x1="10" y1="0" x2="0" y2="10" stroke="currentColor" strokeWidth="1" />
     </svg>

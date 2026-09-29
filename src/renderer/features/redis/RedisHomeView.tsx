@@ -7,11 +7,13 @@ import {
   ViewTitle,
   ViewToolbar,
 } from '@/components/ui/view-parts';
-import { IconButton, Pill } from '@/components/ui/workbench';
+import { IconButton, Pill, Segmented } from '@/components/ui/workbench';
 import { useSession } from '@/stores/session';
 import type { RedisOverview } from '@shared/protocol';
-import { Activity, Clock, Loader2, RefreshCw, Terminal } from 'lucide-react';
-import { useMemo } from 'react';
+import { Activity, Clock, Loader2, Radio, RefreshCw, Server, Terminal } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { PubsubDialog } from './redis-dialogs';
+import { ago } from './redis-format';
 
 type KeyspaceRow = RedisOverview['keyspace'][number];
 
@@ -53,6 +55,25 @@ export function RedisHomeView() {
   const openRedisCli = useSession((s) => s.openRedisCli);
   const openRedisAnalyze = useSession((s) => s.openRedisAnalyze);
   const openRedisSlowlog = useSession((s) => s.openRedisSlowlog);
+  const openRedisServer = useSession((s) => s.openRedisServer);
+  const openRedisPubsub = useSession((s) => s.openRedisPubsub);
+  const setRedisDb = useSession((s) => s.setRedisDb);
+  const db = useSession((s) => s.redisDb as number);
+  const updatedAt = useSession((s) => s.redisOverviewAt as number | undefined);
+  const [pubsubOpen, setPubsubOpen] = useState(false);
+  // S3: optional auto-refresh of INFO, like TablePlus' refresh interval.
+  const [interval, setIntervalSec] = useState<'off' | '5' | '30'>('off');
+  const [, tick] = useState(0);
+  useEffect(() => {
+    if (interval === 'off') return;
+    const t = setInterval(() => void refreshRedisOverview(), Number(interval) * 1000);
+    return () => clearInterval(t);
+  }, [interval, refreshRedisOverview]);
+  // Keep "updated … ago" fresh.
+  useEffect(() => {
+    const t = setInterval(() => tick((n) => n + 1), 5000);
+    return () => clearInterval(t);
+  }, []);
 
   const totals = useMemo(() => {
     const keys = overview?.keyspace.reduce((a, k) => a + k.keys, 0) ?? 0;
@@ -80,6 +101,14 @@ export function RedisHomeView() {
           <Clock />
           Slowlog
         </Pill>
+        <Pill onClick={() => setPubsubOpen(true)}>
+          <Radio />
+          Pub/sub
+        </Pill>
+        <Pill onClick={openRedisServer}>
+          <Server />
+          Server
+        </Pill>
         <IconButton
           label="Refresh overview"
           onClick={() => void refreshRedisOverview()}
@@ -104,7 +133,9 @@ export function RedisHomeView() {
               <StatTile
                 label="Memory used"
                 value={overview.usedMemoryHuman}
-                hint={overview.maxMemoryHuman ? `of ${overview.maxMemoryHuman}` : 'no maxmemory limit'}
+                hint={
+                  overview.maxMemoryHuman ? `of ${overview.maxMemoryHuman}` : 'no maxmemory limit'
+                }
               />
             )}
             {overview.connectedClients !== undefined && (
@@ -118,7 +149,11 @@ export function RedisHomeView() {
               value={overview.dbCount.toLocaleString()}
               hint={`${overview.keyspace.length} in use`}
             />
-            <StatTile label="Keys" value={totals.keys.toLocaleString()} hint="all databases" />
+            <StatTile
+              label={`Keys in db${db}`}
+              value={(overview.keyspace.find((k) => k.db === db)?.keys ?? 0).toLocaleString()}
+              hint={`${totals.keys.toLocaleString()} in all databases`}
+            />
             <StatTile
               label="Keys with TTL"
               value={totals.expires.toLocaleString()}
@@ -137,6 +172,10 @@ export function RedisHomeView() {
               columns={KEYSPACE_COLUMNS}
               rows={overview.keyspace}
               rowKey={(r) => `db${r.db}`}
+              selectedIndex={((i) => (i >= 0 ? i : null))(
+                overview.keyspace.findIndex((k) => k.db === db),
+              )}
+              onSelect={(r) => r.db !== db && setRedisDb(r.db)}
               stripeFill={false}
               empty="No keys in any database"
             />
@@ -150,11 +189,33 @@ export function RedisHomeView() {
             ? `${overview.keyspace.length} ${overview.keyspace.length === 1 ? 'database' : 'databases'} · ${totals.keys.toLocaleString()} keys`
             : '—'}
         </span>
+        {updatedAt && (
+          <span className="truncate text-[12px] text-[var(--wb-text-3)]">
+            · updated {ago(updatedAt)}
+          </span>
+        )}
         <div className="flex-1" />
-        <span className="truncate text-[12px] text-[var(--wb-text-3)]">
-          Browse and filter keys in the sidebar
-        </span>
+        <span className="text-[12px] text-[var(--wb-text-2)]">Auto-refresh</span>
+        <Segmented<'off' | '5' | '30'>
+          ariaLabel="Auto-refresh interval"
+          variant="track"
+          value={interval}
+          onChange={setIntervalSec}
+          options={[
+            { value: 'off', label: 'Off' },
+            { value: '5', label: '5s' },
+            { value: '30', label: '30s' },
+          ]}
+        />
       </ViewFooter>
+      <PubsubDialog
+        open={pubsubOpen}
+        onOpenChange={setPubsubOpen}
+        onSubscribe={(channel, pattern) => {
+          openRedisPubsub(channel, pattern);
+          setPubsubOpen(false);
+        }}
+      />
     </main>
   );
 }

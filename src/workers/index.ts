@@ -10,8 +10,10 @@ import {
 import { OpenSearchDriver } from './drivers/opensearch';
 import { PostgresDriver } from './drivers/postgres';
 import { RedisDriver } from './drivers/redis';
+import { dispatchRedis } from './drivers/redis-dispatch';
 import { writeExportFile, writeExportRows } from './export-file';
 import { runIsolatedTestConnect } from './test-connect';
+import { RequestScheduler } from './request-scheduler';
 
 /**
  * DB worker — runs in an Electron utilityProcess.
@@ -33,6 +35,7 @@ const redis = new RedisDriver();
 const os = new OpenSearchDriver();
 
 let activeEngine: ConnectionEngine | null = null;
+const scheduler = new RequestScheduler();
 /** Bumped on every successful connect; edit batches must match (U01). */
 let connectionGen = 0;
 
@@ -91,6 +94,9 @@ process.parentPort.on('message', async (evt: Electron.MessageEvent) => {
   const req = parsed.data;
 
   try {
+    // C12: connect/disconnect never overlap each other or a statement, and
+    // multi-step primary/aux work runs FIFO (see request-scheduler.ts).
+    await scheduler.run(req.kind, async () => {
     switch (req.kind) {
       case 'ping':
         send({ kind: 'ping', id: req.id, echo: req.message, timestamp: Date.now() });
@@ -106,7 +112,7 @@ process.parentPort.on('message', async (evt: Electron.MessageEvent) => {
         } else if (engine === 'redis') {
           serverVersion = await redis.connect(req.config);
         } else if (engine === 'opensearch') {
-          serverVersion = await os.connect(req.config);
+          serverVersion = await os.connect(req.config, req.statementTimeoutMs);
         }
         activeEngine = engine;
         connectionGen += 1;
@@ -143,22 +149,12 @@ process.parentPort.on('message', async (evt: Electron.MessageEvent) => {
       case 'query': {
         if (activeEngine !== 'postgres') return unsupported(req.id, 'query');
         {
-          const revision = req.revision ?? 0;
+          // F10: no queryChunk stream — nothing consumes it, and each chunk
+          // was a second full copy of the rows across two process hops.
           const result = await pg.query(req.sql, req.params, {
-            revision,
+            revision: req.revision ?? 0,
             maxRows: req.maxRows,
-            onChunk: (chunk) => {
-              send({
-                kind: 'queryChunk',
-                id: req.id,
-                revision,
-                columns: chunk.columns,
-                rows: chunk.rows,
-                chunkIndex: chunk.chunkIndex,
-                done: chunk.done,
-                truncated: chunk.truncated,
-              });
-            },
+            autoBegin: req.autoBegin,
           });
           send({ kind: 'queryResult', id: req.id, result });
         }
@@ -166,33 +162,22 @@ process.parentPort.on('message', async (evt: Electron.MessageEvent) => {
       }
       case 'commitEditBatch': {
         if (activeEngine !== 'postgres') return unsupported(req.id, 'commitEditBatch');
-        const state = await pg.commitEditBatch(req.connectionGen, req.updates);
-        send({
-          kind: 'editBatchResult',
-          id: req.id,
-          state,
-          applied: req.updates.length,
-        });
+        const { state, applied } = await pg.commitEditBatch(req.connectionGen, req.updates);
+        send({ kind: 'editBatchResult', id: req.id, state, applied });
+        break;
+      }
+      case 'explain': {
+        if (activeEngine !== 'postgres') return unsupported(req.id, 'explain');
+        const result = await pg.explain(req.sql, req.analyze);
+        send({ kind: 'queryResult', id: req.id, result });
         break;
       }
       case 'sidebandQuery': {
         if (activeEngine !== 'postgres') return unsupported(req.id, 'sidebandQuery');
         {
-          const revision = req.revision ?? 0;
           const result = await pg.sidebandQuery(req.sql, req.params, {
-            revision,
-            onChunk: (chunk) => {
-              send({
-                kind: 'queryChunk',
-                id: req.id,
-                revision,
-                columns: chunk.columns,
-                rows: chunk.rows,
-                chunkIndex: chunk.chunkIndex,
-                done: chunk.done,
-                truncated: chunk.truncated,
-              });
-            },
+            revision: req.revision ?? 0,
+            timeoutMs: req.timeoutMs,
           });
           send({ kind: 'queryResult', id: req.id, result });
         }
@@ -210,7 +195,7 @@ process.parentPort.on('message', async (evt: Electron.MessageEvent) => {
         break;
       case 'introspect': {
         if (activeEngine === 'postgres') {
-          const info = await pg.introspect();
+          const info = await pg.introspect(req.opts);
           send({ kind: 'schemaInfo', id: req.id, info });
         } else if (activeEngine === 'redis') {
           const info = await redis.refreshOverview();
@@ -244,7 +229,7 @@ process.parentPort.on('message', async (evt: Electron.MessageEvent) => {
 
       case "exportRows": {
         if (activeEngine !== "postgres") return unsupported(req.id, "exportRows");
-        const result = await writeExportRows({ filePath: req.filePath, format: req.format, columns: req.columns, rows: req.rows });
+        const result = await writeExportRows({ filePath: req.filePath, format: req.format, columns: req.columns, rows: req.rows, targetTable: req.targetTable });
         send({ kind: "exportDone", id: req.id, filePath: req.filePath, ...result });
         break;
       }
@@ -253,87 +238,28 @@ process.parentPort.on('message', async (evt: Electron.MessageEvent) => {
         const batches = pg.streamQueryForExport(req.sql, req.params);
         const first = await batches.next();
         const columns = first.done ? [] : first.value.columns;
-        const result = await writeExportFile({ filePath: req.filePath, format: req.format, columns, batches: (async function* () { if (!first.done) yield first.value.rows; for await (const batch of batches) yield batch.rows; })() });
+        const result = await writeExportFile({ filePath: req.filePath, format: req.format, columns, targetTable: req.targetTable, batches: (async function* () { if (!first.done) yield first.value.rows; for await (const batch of batches) yield batch.rows; })() });
         send({ kind: "exportDone", id: req.id, filePath: req.filePath, ...result });
         break;
       }
 
-      // ── Redis ──
-      case 'redisScan': {
-        if (activeEngine !== 'redis') return unsupported(req.id, 'redisScan');
-        const result = await redis.scan({
-          cursor: req.cursor,
-          match: req.match,
-          count: req.count,
-          db: req.db,
-        });
-        send({ kind: 'redisScan', id: req.id, result });
-        break;
-      }
-      case 'redisGetKey': {
-        if (activeEngine !== 'redis') return unsupported(req.id, 'redisGetKey');
-        const result = await redis.getKey(req.key);
-        send({ kind: 'redisKey', id: req.id, result });
-        break;
-      }
-      case 'redisDeleteKey': {
-        if (activeEngine !== 'redis') return unsupported(req.id, 'redisDeleteKey');
-        await redis.deleteKey(req.key);
-        send({ kind: 'redisAck', id: req.id });
-        break;
-      }
-      case 'redisSetTtl': {
-        if (activeEngine !== 'redis') return unsupported(req.id, 'redisSetTtl');
-        await redis.setTtl(req.key, req.seconds);
-        send({ kind: 'redisAck', id: req.id });
-        break;
-      }
-      case 'redisCommand': {
-        if (activeEngine !== 'redis') return unsupported(req.id, 'redisCommand');
-        const result = await redis.command(req.parts);
-        send({ kind: 'redisCommand', id: req.id, result });
-        break;
-      }
-      case 'redisOverview': {
-        if (activeEngine !== 'redis') return unsupported(req.id, 'redisOverview');
-        const info = await redis.refreshOverview();
-        send({ kind: 'redisOverview', id: req.id, info });
-        break;
-      }
-      case 'redisAnalyze': {
-        if (activeEngine !== 'redis') return unsupported(req.id, 'redisAnalyze');
-        const result = await redis.analyze({ sampleCap: req.sampleCap, match: req.match });
-        send({ kind: 'redisAnalyze', id: req.id, result });
-        break;
-      }
-      case 'redisSlowlog': {
-        if (activeEngine !== 'redis') return unsupported(req.id, 'redisSlowlog');
-        const entries = await redis.slowlog(req.limit);
-        send({ kind: 'redisSlowlog', id: req.id, entries });
-        break;
-      }
-      case 'redisBulkDelete': {
-        if (activeEngine !== 'redis') return unsupported(req.id, 'redisBulkDelete');
-        const result = await redis.bulkDelete(req.keys);
-        send({ kind: 'redisBulkDelete', id: req.id, result });
-        break;
-      }
-      case 'redisWrite': {
-        if (activeEngine !== 'redis') return unsupported(req.id, 'redisWrite');
-        await redis.write(req.op);
-        send({ kind: 'redisAck', id: req.id });
-        break;
-      }
-      case 'redisSubscribe': {
-        if (activeEngine !== 'redis') return unsupported(req.id, 'redisSubscribe');
-        await redis.subscribe(req.channel, req.pattern);
-        send({ kind: 'redisAck', id: req.id });
-        break;
-      }
+      // ── Redis ── (routing lives in drivers/redis-dispatch.ts)
+      case 'redisScan':
+      case 'redisGetKey':
+      case 'redisDeleteKey':
+      case 'redisSetTtl':
+      case 'redisCommand':
+      case 'redisOverview':
+      case 'redisAnalyze':
+      case 'redisSlowlog':
+      case 'redisBulkDelete':
+      case 'redisDeleteByPattern':
+      case 'redisCancel':
+      case 'redisWrite':
+      case 'redisSubscribe':
       case 'redisUnsubscribe': {
-        if (activeEngine !== 'redis') return unsupported(req.id, 'redisUnsubscribe');
-        await redis.unsubscribe(req.channel, req.pattern);
-        send({ kind: 'redisAck', id: req.id });
+        if (activeEngine !== 'redis') return unsupported(req.id, req.kind);
+        await dispatchRedis(redis, req, send);
         break;
       }
 
@@ -352,14 +278,43 @@ process.parentPort.on('message', async (evt: Electron.MessageEvent) => {
       }
       case 'osSearch': {
         if (activeEngine !== 'opensearch') return unsupported(req.id, 'osSearch');
-        const result = await os.search({ index: req.index, body: req.body, size: req.size });
+        const result = await os.search({
+          index: req.index,
+          body: req.body,
+          size: req.size,
+          timeoutMs: req.timeoutMs,
+          requestId: req.requestId,
+        });
         send({ kind: 'osSearch', id: req.id, result });
         break;
       }
       case 'osSql': {
         if (activeEngine !== 'opensearch') return unsupported(req.id, 'osSql');
-        const result = await os.sql(req.query);
+        const result = await os.sql({
+          query: req.query,
+          fetchSize: req.fetchSize,
+          cursor: req.cursor,
+          timeoutMs: req.timeoutMs,
+          requestId: req.requestId,
+        });
         send({ kind: 'osSql', id: req.id, result });
+        break;
+      }
+      case 'osRequest': {
+        if (activeEngine !== 'opensearch') return unsupported(req.id, 'osRequest');
+        const response = await os.request({
+          method: req.method,
+          path: req.path,
+          body: req.body,
+          timeoutMs: req.timeoutMs,
+          requestId: req.requestId,
+        });
+        send({ kind: 'osResponse', id: req.id, response });
+        break;
+      }
+      case 'osCancel': {
+        if (activeEngine === 'opensearch') await os.cancel(req.requestId);
+        send({ kind: 'cancelled', id: req.id });
         break;
       }
       case 'osAliases': {
@@ -397,11 +352,13 @@ process.parentPort.on('message', async (evt: Electron.MessageEvent) => {
           index: req.index,
           fields: req.fields,
           queryString: req.queryString,
+          query: req.query,
         });
         send({ kind: 'osFieldStats', id: req.id, stats });
         break;
       }
     }
+    });
   } catch (err) {
     // U27: distinguish "the transport is gone" from "the server said no"
     // so main can reconnect and retry instead of handing the renderer a
@@ -411,6 +368,9 @@ process.parentPort.on('message', async (evt: Electron.MessageEvent) => {
       id: req.id,
       message: err instanceof Error ? err.message : String(err),
       fatal: isConnectionLostError(err) ? CONNECTION_LOST : undefined,
+      // C5: main must not replay anything into a fresh session when the
+      // old one died with a transaction open.
+      txnLost: isConnectionLostError(err) && pg.lostDuringTransaction() ? true : undefined,
     });
   }
 });

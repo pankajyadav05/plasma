@@ -1,40 +1,52 @@
 import { EmptyState, ViewFooter, ViewTitle, ViewToolbar } from '@/components/ui/view-parts';
 import { IconButton, Pill } from '@/components/ui/workbench';
-import { cleanIpcError } from '@/lib/errors';
 import { ipc } from '@/lib/ipc';
 import { useSession } from '@/stores/session';
-import type { RedisCommandResult } from '@shared/protocol';
-import { CornerDownLeft, Loader2, Trash2 } from 'lucide-react';
+import { useWorkbench } from '@/stores/workbench';
+import {
+  type RedisCommandVerdict,
+  classifyRedisCommand,
+  redisCommandNeedsConfirm,
+  tokenizeRedisCommand,
+} from '@shared/redis-command-policy';
+import { CornerDownLeft, Loader2, Square, Trash2 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
-
-interface CliEntry {
-  id: string;
-  /** Prompt as it read when the command was sent (`host:port[db]>`). */
-  prompt: string;
-  command: string;
-  result: RedisCommandResult | null;
-  error: string | null;
-  durationMs: number | null;
-}
+import { ActionDialog, errMsg } from './redis-dialogs';
+import { type CliEntry, useRedisTabs } from './redis-store';
+import { useRedisWriteGate } from './use-redis-write';
 
 /**
- * Minimal redis-cli — split user input on whitespace (with rudimentary
- * quoting), forward to ipc.redis.command, render replies bottom-up.
+ * redis-cli inside the workbench.
  *
- * Design intent: feel like a real terminal inside the workbench. Each
- * command echoes after a `127.0.0.1:6379[0]>` prompt with its reply
- * underneath, the input stays pinned at the bottom, and Up/Down walks
- * the local history stack.
+ *   - redis-cli compatible tokenizer (quotes, escapes, empty args — R17)
+ *   - safety (R3/S1): subscriber / connection-state commands are refused
+ *     with a hint; writes need edit mode and a writable connection;
+ *     destructive or expensive commands (FLUSH*, CONFIG SET, KEYS …)
+ *     always confirm, and on prod-tagged connections every write does
+ *   - blocking commands run on their own connection and can be cancelled
+ *   - `SELECT n` switches this tab's prompt db; every command carries it,
+ *     so the rest of the app is never retargeted (R5)
+ *   - transcript + db live in the tab store; history is persisted (R18)
  */
-export function RedisCliView() {
+export function RedisCliView({ tabId }: { tabId: string }) {
   const activeConfig = useSession((s) => s.activeConfig);
+  const sidebarDb = useSession((s) => s.redisDb as number);
+  const state = useRedisTabs((s) => s.cli[tabId]);
+  const history = useRedisTabs((s) => s.history);
+  const updateCli = useRedisTabs((s) => s.updateCli);
+  const pushHistory = useRedisTabs((s) => s.pushHistory);
+  const { canWrite, readOnly, prod } = useRedisWriteGate();
+
+  const entries = state?.entries ?? [];
+  const db = state?.db ?? sidebarDb;
+  const busy = state?.busy ?? false;
   const [input, setInput] = useState('');
-  const [entries, setEntries] = useState<CliEntry[]>([]);
-  const [busy, setBusy] = useState(false);
-  const [history, setHistory] = useState<string[]>([]);
   const [cursor, setCursor] = useState(-1);
-  // Tracks `SELECT n` so the prompt shows the db the worker is on.
-  const [db, setDb] = useState<string>(() => activeConfig?.database || '0');
+  const [pending, setPending] = useState<{
+    parts: string[];
+    text: string;
+    verdict: RedisCommandVerdict;
+  } | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
 
@@ -42,56 +54,104 @@ export function RedisCliView() {
   const prompt = `${host}[${db}]>`;
 
   const scrollToBottom = () => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-    }
+    if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
   };
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: focus + scroll once on mount
   useEffect(() => {
     inputRef.current?.focus();
+    requestAnimationFrame(scrollToBottom);
   }, []);
 
-  const submit = async () => {
-    const cmd = input.trim();
-    if (!cmd || busy) return;
-    const parts = tokenize(cmd);
-    if (parts.length === 0) return;
-    const id = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
-    setEntries((prev) => [
-      ...prev,
-      { id, prompt, command: cmd, result: null, error: null, durationMs: null },
-    ]);
-    setHistory((prev) => [...prev, cmd]);
-    setCursor(-1);
-    setInput('');
-    setBusy(true);
-    // Defer to next paint so the new entry has been laid out before we
-    // read scrollHeight.
+  // F28: the latest reply is what Details shows on this tab.
+  const last = entries[entries.length - 1];
+  useEffect(() => {
+    if (!last || (!last.result && !last.error && !last.notice)) return;
+    useWorkbench.getState().setInspectedRow({
+      tabId,
+      rowNumber: entries.length,
+      columnIndex: 1,
+      columns: [
+        { name: 'command', dataTypeID: 0, dataTypeName: last.prompt },
+        { name: 'reply', dataTypeID: 0, dataTypeName: last.error ? 'error' : 'reply' },
+        { name: 'duration', dataTypeID: 0, dataTypeName: 'ms' },
+      ],
+      row: [
+        last.command,
+        last.error ?? last.notice ?? (last.result ? formatReply(last.result.reply) : null),
+        last.durationMs,
+      ],
+    });
+  }, [last, tabId, entries.length]);
+
+  const addEntry = (entry: CliEntry) => {
+    updateCli(tabId, (s) => ({ entries: [...s.entries, entry].slice(-1000) }));
     requestAnimationFrame(scrollToBottom);
+  };
+  const patchEntry = (id: string, patch: Partial<CliEntry>) => {
+    updateCli(tabId, (s) => ({
+      entries: s.entries.map((e) => (e.id === id ? { ...e, ...patch } : e)),
+    }));
+  };
+
+  const send = async (parts: string[], text: string, verdict: RedisCommandVerdict) => {
+    const id = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    addEntry({ id, prompt, command: text, result: null, error: null, durationMs: null });
+    updateCli(tabId, () => ({ busy: true, db }));
     try {
-      const result = await ipc.redis.command(parts);
-      setEntries((prev) =>
-        prev.map((e) => (e.id === id ? { ...e, result, durationMs: result.durationMs } : e)),
-      );
-      const [verb, arg] = parts;
-      if (verb?.toUpperCase() === 'SELECT' && arg !== undefined && /^\d+$/.test(arg)) {
-        setDb(arg);
+      const result = await ipc.redis.command(parts, { db });
+      patchEntry(id, { result, durationMs: result.durationMs });
+      if (verdict.mode === 'select') {
+        updateCli(tabId, () => ({ db: Number(parts[1]) }));
       }
     } catch (err) {
-      setEntries((prev) =>
-        prev.map((e) =>
-          e.id === id
-            ? { ...e, error: cleanIpcError(err instanceof Error ? err.message : String(err)) }
-            : e,
-        ),
-      );
+      patchEntry(id, { error: errMsg(err) });
     } finally {
-      setBusy(false);
+      updateCli(tabId, () => ({ busy: false }));
       requestAnimationFrame(() => {
         scrollToBottom();
         inputRef.current?.focus();
       });
     }
+  };
+
+  const note = (text: string, notice: string) => {
+    addEntry({
+      id: `${Date.now()}-n`,
+      prompt,
+      command: text,
+      result: null,
+      error: null,
+      notice,
+      durationMs: null,
+    });
+  };
+
+  const submit = () => {
+    const text = input.trim();
+    if (!text || busy) return;
+    const parts = tokenizeRedisCommand(text);
+    setInput('');
+    setCursor(-1);
+    pushHistory(text);
+    if (parts === null) return note(text, 'Invalid argument(s): unbalanced quotes');
+    if (parts.length === 0) return;
+    const verdict = classifyRedisCommand(parts);
+    if (verdict.mode === 'refuse') return note(text, verdict.reason ?? 'Not supported in the CLI');
+    if (verdict.access === 'write' && readOnly) {
+      return note(text, `${verdict.verb} writes data — this connection is read-only.`);
+    }
+    if (verdict.access === 'write' && !canWrite) {
+      return note(
+        text,
+        `${verdict.verb} writes data — turn on edit mode (the pencil in the top bar) to run it.`,
+      );
+    }
+    if (redisCommandNeedsConfirm(verdict, prod)) {
+      setPending({ parts, text, verdict });
+      return;
+    }
+    void send(parts, text, verdict);
   };
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -137,7 +197,7 @@ export function RedisCliView() {
         )}
         <IconButton
           label="Clear output"
-          onClick={() => setEntries([])}
+          onClick={() => updateCli(tabId, () => ({ entries: [] }))}
           disabled={entries.length === 0}
         >
           <Trash2 />
@@ -154,7 +214,11 @@ export function RedisCliView() {
         {entries.length === 0 ? (
           <EmptyState
             title="Type a Redis command below"
-            hint="PING · INFO server · DBSIZE · CLIENT LIST · CONFIG GET maxmemory"
+            hint={
+              canWrite
+                ? 'PING · INFO server · DBSIZE · CLIENT LIST · CONFIG GET maxmemory'
+                : 'PING · INFO server · DBSIZE · CLIENT LIST — write commands need edit mode'
+            }
           />
         ) : (
           <ul className="space-y-2.5">
@@ -172,7 +236,11 @@ export function RedisCliView() {
                   )}
                 </div>
                 <div className="select-text">
-                  {e.error ? (
+                  {e.notice ? (
+                    <span className="whitespace-pre-wrap break-words text-[var(--wb-text-2)]">
+                      (not sent) {e.notice}
+                    </span>
+                  ) : e.error ? (
                     <span className="whitespace-pre-wrap break-all text-destructive">
                       (error) {e.error}
                     </span>
@@ -202,7 +270,7 @@ export function RedisCliView() {
           className="flex min-w-0 flex-1 items-center gap-2"
           onSubmit={(e) => {
             e.preventDefault();
-            void submit();
+            submit();
           }}
         >
           <span className="shrink-0 font-mono text-[13px] text-[var(--wb-text-2)]">{prompt}</span>
@@ -220,45 +288,53 @@ export function RedisCliView() {
             autoComplete="off"
             className="min-w-0 flex-1 bg-transparent font-mono text-[13px] text-[var(--wb-text)] outline-none placeholder:text-[var(--wb-text-3)]"
           />
-          <Pill type="submit" disabled={busy || input.trim() === ''} aria-label="Send">
-            {busy ? <Loader2 className="animate-spin" /> : <CornerDownLeft />}
-            Run
-          </Pill>
+          {busy ? (
+            <Pill
+              onClick={() => void ipc.redis.cancel().catch(() => {})}
+              aria-label="Cancel"
+              title="Cancel a blocking command"
+            >
+              <Square />
+              Cancel
+            </Pill>
+          ) : (
+            <Pill type="submit" disabled={input.trim() === ''} aria-label="Send">
+              <CornerDownLeft />
+              Run
+            </Pill>
+          )}
         </form>
       </ViewFooter>
+
+      <ActionDialog
+        open={pending !== null}
+        onOpenChange={(o) => !o && setPending(null)}
+        title={`Run ${pending?.verdict.verb ?? ''}?`}
+        description={
+          <>
+            <span className="block break-all font-mono text-[var(--wb-text)]">{pending?.text}</span>
+            <span className="mt-1 block">
+              {pending?.verdict.reason ??
+                (prod ? 'This connection is tagged production.' : 'This command changes data.')}
+            </span>
+          </>
+        }
+        confirmLabel="Run"
+        destructive={pending?.verdict.risk !== 'expensive'}
+        typeToConfirm={
+          prod && pending?.verdict.risk === 'destructive'
+            ? pending.verdict.verb.split(' ')[0]
+            : null
+        }
+        onConfirm={() => {
+          if (pending) void send(pending.parts, pending.text, pending.verdict);
+        }}
+      />
     </main>
   );
 }
 
-/**
- * Whitespace-split with simple double-quote support so commands like
- * `SET foo "hello world"` parse correctly. We don't try to be a full
- * shell — backslash escapes etc. are out of scope; users with exotic
- * payloads can use the inline-edit dialogs.
- */
-function tokenize(input: string): string[] {
-  const out: string[] = [];
-  let buf = '';
-  let inQuote = false;
-  for (const ch of input) {
-    if (ch === '"') {
-      inQuote = !inQuote;
-      continue;
-    }
-    if (!inQuote && /\s/.test(ch)) {
-      if (buf) {
-        out.push(buf);
-        buf = '';
-      }
-      continue;
-    }
-    buf += ch;
-  }
-  if (buf) out.push(buf);
-  return out;
-}
-
-function formatReply(reply: unknown): string {
+export function formatReply(reply: unknown): string {
   if (reply === null || reply === undefined) return '(nil)';
   if (typeof reply === 'string' || typeof reply === 'number' || typeof reply === 'boolean') {
     return String(reply);

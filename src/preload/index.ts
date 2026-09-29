@@ -14,12 +14,16 @@ const api: PlasmaAPI = {
   platform: process.platform as Platform,
   app: {
     meta: () => ipcRenderer.invoke(IpcChannel.AppMeta),
+    setUnsavedState: (state) => ipcRenderer.invoke(IpcChannel.AppSetUnsavedState, state),
   },
   conn: {
     connect: (config) => ipcRenderer.invoke(IpcChannel.ConnectionConnect, config),
     disconnect: () => ipcRenderer.invoke(IpcChannel.ConnectionDisconnect),
     test: (config, ssh) => ipcRenderer.invoke(IpcChannel.ConnectionTest, config, ssh),
-    introspect: () => ipcRenderer.invoke(IpcChannel.ConnectionIntrospect),
+    introspect: (opts) => ipcRenderer.invoke(IpcChannel.ConnectionIntrospect, opts),
+    pickFile: (title) => ipcRenderer.invoke(IpcChannel.ConnectionPickFile, title),
+    respondHostKey: (requestId, accept) =>
+      ipcRenderer.invoke(IpcChannel.SshHostKeyRespond, { requestId, accept }),
   },
   vault: {
     list: () => ipcRenderer.invoke(IpcChannel.VaultList),
@@ -39,9 +43,10 @@ const api: PlasmaAPI = {
         : ipcRenderer.invoke(IpcChannel.QueryRun, sql),
     commitEditBatch: (req) => ipcRenderer.invoke(IpcChannel.QueryCommitEditBatch, req),
     cancel: () => ipcRenderer.invoke(IpcChannel.QueryCancel),
-    sideband: (sql, params) =>
-      params
-        ? ipcRenderer.invoke(IpcChannel.QuerySideband, { sql, params })
+    explain: (req) => ipcRenderer.invoke(IpcChannel.QueryExplain, req),
+    sideband: (sql, params, opts) =>
+      params || opts
+        ? ipcRenderer.invoke(IpcChannel.QuerySideband, { sql, params, timeoutMs: opts?.timeoutMs })
         : ipcRenderer.invoke(IpcChannel.QuerySideband, sql),
   },
   export: {
@@ -50,14 +55,17 @@ const api: PlasmaAPI = {
   redis: {
     overview: () => ipcRenderer.invoke(IpcChannel.RedisOverview),
     scan: (opts) => ipcRenderer.invoke(IpcChannel.RedisScan, opts ?? {}),
-    getKey: (key) => ipcRenderer.invoke(IpcChannel.RedisGetKey, key),
-    deleteKey: (key) => ipcRenderer.invoke(IpcChannel.RedisDeleteKey, key),
-    setTtl: (key, seconds) => ipcRenderer.invoke(IpcChannel.RedisSetTtl, { key, seconds }),
-    command: (parts) => ipcRenderer.invoke(IpcChannel.RedisCommand, parts),
+    getKey: (key, opts) => ipcRenderer.invoke(IpcChannel.RedisGetKey, { key, opts }),
+    deleteKey: (key, opts) => ipcRenderer.invoke(IpcChannel.RedisDeleteKey, { key, ...opts }),
+    setTtl: (key, seconds, opts) =>
+      ipcRenderer.invoke(IpcChannel.RedisSetTtl, { key, seconds, ...opts }),
+    command: (parts, opts) => ipcRenderer.invoke(IpcChannel.RedisCommand, { parts, ...opts }),
     analyze: (opts) => ipcRenderer.invoke(IpcChannel.RedisAnalyze, opts ?? {}),
     slowlog: (limit) => ipcRenderer.invoke(IpcChannel.RedisSlowlog, limit ?? 64),
-    bulkDelete: (keys) => ipcRenderer.invoke(IpcChannel.RedisBulkDelete, keys),
-    write: (op) => ipcRenderer.invoke(IpcChannel.RedisWrite, op),
+    bulkDelete: (keys, opts) => ipcRenderer.invoke(IpcChannel.RedisBulkDelete, { keys, ...opts }),
+    write: (op, opts) => ipcRenderer.invoke(IpcChannel.RedisWrite, { op, ...opts }),
+    deleteByPattern: (opts) => ipcRenderer.invoke(IpcChannel.RedisDeleteByPattern, opts),
+    cancel: () => ipcRenderer.invoke(IpcChannel.RedisCancel),
     subscribe: (channel, pattern) =>
       ipcRenderer.invoke(IpcChannel.RedisSubscribe, { channel, pattern: pattern === true }),
     unsubscribe: (channel, pattern) =>
@@ -67,7 +75,10 @@ const api: PlasmaAPI = {
     overview: () => ipcRenderer.invoke(IpcChannel.OsOverview),
     mapping: (index) => ipcRenderer.invoke(IpcChannel.OsMapping, index),
     search: (opts) => ipcRenderer.invoke(IpcChannel.OsSearch, opts),
-    sql: (query) => ipcRenderer.invoke(IpcChannel.OsSql, query),
+    sql: (query, opts) =>
+      ipcRenderer.invoke(IpcChannel.OsSql, opts ? { query, ...opts } : query),
+    request: (opts) => ipcRenderer.invoke(IpcChannel.OsRequest, opts),
+    cancel: (requestId) => ipcRenderer.invoke(IpcChannel.OsCancel, requestId),
     aliases: () => ipcRenderer.invoke(IpcChannel.OsAliases),
     ilm: () => ipcRenderer.invoke(IpcChannel.OsIlm),
     createIndex: (name, body) => ipcRenderer.invoke(IpcChannel.OsCreateIndex, { name, body }),

@@ -1,8 +1,9 @@
 import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { BrowserWindow, shell } from 'electron';
+import { BrowserWindow, app } from 'electron';
 import { getSetting, setSetting } from './settings';
+import type { RendererEntry } from './web-security';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -79,6 +80,14 @@ export function applyThemeToWindow(win: BrowserWindow, theme: Theme): void {
   win.setBackgroundColor(colors.background);
 }
 
+/** Where the renderer is served from — the only page windows may show. */
+export function rendererEntry(): RendererEntry {
+  return {
+    devUrl: app.isPackaged ? undefined : process.env.ELECTRON_RENDERER_URL,
+    file: join(__dirname, '../renderer/index.html'),
+  };
+}
+
 export function createMainWindow(): BrowserWindow {
   const isMac = process.platform === 'darwin';
   const saved = getSetting<WindowBounds | null>('windowBounds', null);
@@ -108,9 +117,15 @@ export function createMainWindow(): BrowserWindow {
     ...(isMac ? { trafficLightPosition: { x: 18, y: 19 } } : {}),
     webPreferences: {
       preload: join(__dirname, '../preload/index.cjs'),
-      sandbox: false,
+      // The preload only uses contextBridge + ipcRenderer (zod is bundled
+      // into it), so it runs in the OS sandbox (C19).
+      sandbox: true,
       contextIsolation: true,
       nodeIntegration: false,
+      webSecurity: true,
+      webviewTag: false,
+      // No DevTools in shipped builds; `pnpm dev` keeps them.
+      devTools: !app.isPackaged,
     },
   });
 
@@ -145,15 +160,14 @@ export function createMainWindow(): BrowserWindow {
   win.on('maximize', () => sendMaximized(true));
   win.on('unmaximize', () => sendMaximized(false));
 
-  win.webContents.setWindowOpenHandler(({ url }) => {
-    shell.openExternal(url);
-    return { action: 'deny' };
-  });
+  // window.open / target=_blank and navigation are guarded for every
+  // webContents in web-security.ts (http/https/mailto only, via the OS).
 
-  if (process.env.ELECTRON_RENDERER_URL) {
-    win.loadURL(process.env.ELECTRON_RENDERER_URL);
+  const entry = rendererEntry();
+  if (entry.devUrl) {
+    win.loadURL(entry.devUrl);
   } else {
-    win.loadFile(join(__dirname, '../renderer/index.html'));
+    win.loadFile(entry.file);
   }
 
   return win;

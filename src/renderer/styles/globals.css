@@ -1,6 +1,6 @@
 @import "tailwindcss";
 @import "tw-animate-css";
-@import url("https://fonts.googleapis.com/css2?family=Antic&family=Geist:wght@300;400;500;600;700&family=Geist+Mono:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@300;400;500;600;700&family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;700&family=Lora:ital,wght@0,400;0,500;0,600;1,400;1,500&family=Newsreader:ital,wght@0,400;0,500;0,600;1,400;1,500&family=Orbitron:wght@400;500;600;700;800&family=Outfit:wght@300;400;500;600;700&family=Plus+Jakarta+Sans:wght@300;400;500;600;700&family=Space+Grotesk:wght@300;400;500;600;700&display=swap");
+/* Fonts are bundled locally (styles/fonts.ts) — no remote font CDN. */
 
 @custom-variant dark (&:is(.dark *));
 
@@ -21,11 +21,12 @@
   --muted-foreground: #6e6e73;
   --accent: #e3e3e3;
   --accent-foreground: #1d1d1f;
-  --destructive: #ff3b30;
+  --destructive: #d70015;
   --destructive-foreground: #ffffff;
   --border: #dcdcdc;
   --input: #d0d0d0;
-  --ring: oklch(0.7122 0.1809 21.663);
+  /* Coral at a lower lightness: the focus ring must clear 3:1 on white. */
+  --ring: oklch(0.6 0.19 21.663);
   --chart-1: oklch(0.8093 0.0985 252.2024);
   --chart-2: oklch(0.6182 0.2066 260.2572);
   --chart-3: oklch(0.5492 0.2491 262.9726);
@@ -38,12 +39,11 @@
   --sidebar-accent: #d5d5d5;
   --sidebar-accent-foreground: #1d1d1f;
   --sidebar-border: #c9c9c9;
-  --sidebar-ring: oklch(0.7122 0.1809 21.663);
+  --sidebar-ring: oklch(0.6 0.19 21.663);
   --font-sans:
     ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
-  --font-serif: "Newsreader", ui-serif, Georgia, Cambria, "Times New Roman", Times, serif;
-  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
-    "Liberation Mono", "Courier New", monospace;
+  --font-mono: "JetBrains Mono Variable", "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo,
+    Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
   --radius: 0.5rem;
   --shadow-x: 0px;
   --shadow-y: 1px;
@@ -128,7 +128,7 @@
   --type-str: oklch(0.52 0.13 135);
   --type-date: oklch(0.5555 0 0);
   --type-bool: oklch(0.6496 0.2362 26.9032);
-  --type-null: oklch(0.72 0 0);
+  --type-null: var(--grid-null);
   --type-json: oklch(0.55 0.12 80);
 }
 :root.dark[class*="theme-"] {
@@ -136,7 +136,7 @@
   --type-str: oklch(0.78 0.14 135);
   --type-date: oklch(0.7155 0 0);
   --type-bool: oklch(0.72 0.18 25);
-  --type-null: oklch(0.45 0 0);
+  --type-null: var(--grid-null);
   --type-json: oklch(0.78 0.14 80);
 }
 
@@ -761,9 +761,7 @@
 
   --font-sans: var(--font-sans);
   --font-mono: var(--font-mono);
-  --font-serif: var(--font-serif);
-  /* Workbench chrome is native-sans throughout (TablePlus look); the
-     serif stays available as font-serif for anything that opts in. */
+  /* Workbench chrome is native-sans throughout (TablePlus look). */
   --font-display: var(--font-sans);
 
   --radius-sm: calc(var(--radius) - 4px);
@@ -779,9 +777,6 @@
   --shadow-lg: var(--shadow-lg);
   --shadow-xl: var(--shadow-xl);
   --shadow-2xl: var(--shadow-2xl);
-  --shadow-offset-sm: 3px 3px 0 0 var(--foreground);
-  --shadow-offset-md: 4px 4px 0 0 var(--primary);
-  --shadow-offset-lg: 6px 6px 0 0 var(--foreground);
 
   --tracking-tighter: calc(var(--tracking-normal) - 0.05em);
   --tracking-tight: calc(var(--tracking-normal) - 0.025em);
@@ -800,18 +795,6 @@
   --color-win-close: #e81123;
 }
 
-/* Off-screen row skipping — browser skips paint/layout of rows outside the
-   viewport. contain-intrinsic-size reserves height so the scrollbar stays
-   accurate. Heights match the fixed row heights used in the grid/sidebar. */
-@utility cv-row-34 {
-  content-visibility: auto;
-  contain-intrinsic-size: auto 34px;
-}
-@utility cv-row-28 {
-  content-visibility: auto;
-  contain-intrinsic-size: auto 28px;
-}
-
 @layer base {
   * {
     @apply border-border outline-ring/50;
@@ -825,7 +808,7 @@
   body {
     @apply bg-background text-foreground;
     font-family: var(--font-sans);
-    font-size: 14px;
+    font-size: 13px;
     font-feature-settings: "tnum";
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
@@ -916,8 +899,8 @@
       coherent version of each surface.
    2. `:root:not([class*="theme-"])` / `.dark:not(…)` — the default theme
       gets the exact values measured from TablePlus (graphite, solid).
-   3. Legacy material vars/utilities (`chrome`, `glass`, `raised`,
-      `hairline`) re-pointed at the tokens. */
+   3. Legacy material vars (`--hairline`, `--glass-*`) and the `glass`
+      utility, re-pointed at the tokens. */
 
 :root {
   --wb-window: color-mix(in oklch, var(--sidebar) 93%, var(--foreground));
@@ -934,31 +917,41 @@
   --wb-field: var(--card);
   --wb-separator: color-mix(in oklch, var(--background) 78%, var(--foreground));
   --wb-text: var(--foreground);
-  --wb-text-2: var(--muted-foreground);
-  --wb-text-3: color-mix(in oklch, var(--muted-foreground) 78%, var(--background));
+  /* Text tokens are mixed so every palette clears WCAG AA (4.5:1) on the
+     surfaces they sit on: text-2 on controls / tab strip, text-3 on
+     content and sidebars. */
+  --wb-text-2: color-mix(in oklch, var(--muted-foreground) 72%, var(--foreground));
+  --wb-text-3: var(--muted-foreground);
   --wb-accent: var(--primary);
+  /* Accent / destructive as a fill under white text: same hue, lightness
+     capped so white labels stay >= 4.5:1 (menu highlight, badges). */
+  --wb-accent-fill: oklch(from var(--wb-accent) min(l, 0.55) c h);
+  --wb-danger-fill: oklch(from var(--destructive) min(l, 0.55) c h);
 
   --grid-text: var(--foreground);
   --grid-row-a: color-mix(in oklch, var(--background) 96%, var(--foreground));
   --grid-row-b: var(--background);
   --grid-line: color-mix(in oklch, var(--background) 90%, var(--foreground));
-  --grid-null: color-mix(in oklch, var(--muted-foreground) 55%, var(--background));
+  --grid-null: color-mix(in oklch, var(--muted-foreground) 85%, var(--background));
 
-  /* Connection status colours — fill the toolbar capsule per env tag. */
-  --status-local: #5b8a66;
+  /* Connection status colours — env tag chips, prod capsule fill. Dark
+     enough that white 13px text clears 4.5:1. */
+  --status-local: #517f5c;
   --status-dev: #5a74a0;
-  --status-staging: #9a8544;
+  --status-staging: #887332;
   --status-prod: #a35252;
   --status-none: color-mix(in oklch, var(--background) 85%, var(--foreground));
+  /* Amber warning text / icons (long-running queries, truncation notes). */
+  --status-warn: #8a5a00;
 
   --icon-folder: #9b6cc4;
   --icon-db: var(--wb-accent);
   --icon-pin: #d9785a;
+  --icon-star: #b8922a;
 
-  /* Connected capsule fill: the theme's accent hue at a fixed lightness
-     and capped chroma, so every palette (black, yellow, pastel accents…)
-     gets a muted TablePlus-style fill that keeps white text readable. */
-  --wb-connected: oklch(from var(--wb-accent) 0.52 min(c, 0.1) h);
+  /* Connected capsule: a neutral control surface faintly tinted with the
+     theme accent, text --wb-text. Only a PROD tag fills it red. */
+  --wb-connected: color-mix(in oklch, var(--wb-accent) 14%, var(--wb-control));
 }
 
 .dark {
@@ -973,23 +966,26 @@
   --wb-segment-active: color-mix(in oklch, var(--sidebar) 86%, var(--foreground));
   --wb-field: color-mix(in oklch, var(--sidebar) 82%, black);
   --wb-separator: color-mix(in oklch, var(--background) 35%, black);
-  --wb-text-3: color-mix(in oklch, var(--muted-foreground) 72%, var(--background));
+  --wb-text-2: var(--muted-foreground);
+  --wb-text-3: color-mix(in oklch, var(--muted-foreground) 88%, var(--background));
 
   --grid-row-a: color-mix(in oklch, var(--background) 94%, var(--foreground));
   --grid-line: color-mix(in oklch, var(--background) 94%, var(--foreground));
-  --grid-null: color-mix(in oklch, var(--muted-foreground) 45%, var(--background));
+  --grid-null: color-mix(in oklch, var(--muted-foreground) 75%, var(--background));
 
   --status-local: #4d6953;
   --status-dev: #4b5f7e;
   --status-staging: #7a6a3c;
   --status-prod: #7e4444;
   --status-none: color-mix(in oklch, var(--background) 86%, var(--foreground));
+  --status-warn: #e0a84a;
 
   --icon-folder: #ae86cd;
   --icon-db: var(--wb-accent);
   --icon-pin: #e49375;
+  --icon-star: #d9b44a;
 
-  --wb-connected: oklch(from var(--wb-accent) 0.45 min(c, 0.08) h);
+  --wb-connected: color-mix(in oklch, var(--wb-accent) 16%, var(--wb-control));
 }
 
 /* Default theme — exact TablePlus values. */
@@ -1008,19 +1004,19 @@
   --wb-field: #ffffff;
   --wb-separator: #c9c9c9;
   --wb-text: #1d1d1f;
-  --wb-text-2: #6e6e73;
-  --wb-text-3: #8e8e93;
+  --wb-text-2: #5f5f64;
+  --wb-text-3: #6b6b70;
   --wb-accent: var(--primary); /* Plasma coral — the palette the user picked */
 
   --grid-text: #1d1d1f;
   --grid-row-a: #f5f5f5;
   --grid-row-b: #ffffff;
   --grid-line: #e6e6e6;
-  --grid-null: #b3b3b3;
+  --grid-null: #767676;
 
-  --status-local: #5b8a66;
+  --status-local: #517f5c;
   --status-dev: #5a74a0;
-  --status-staging: #9a8544;
+  --status-staging: #887332;
   --status-prod: #a35252;
   --status-none: #d8d8d8;
 
@@ -1044,15 +1040,15 @@
   --wb-field: #171717;
   --wb-separator: #000000;
   --wb-text: #e0e0e0;
-  --wb-text-2: #9a9a9a;
-  --wb-text-3: #7f7f7f;
+  --wb-text-2: #a3a3a3;
+  --wb-text-3: #8f8f8f;
   --wb-accent: var(--primary); /* Plasma coral — the palette the user picked */
 
   --grid-text: #d6d6d6;
   --grid-row-a: #2e2e2e;
   --grid-row-b: #1f1f1f;
   --grid-line: #2e2e2e;
-  --grid-null: #4a4a4a;
+  --grid-null: #808080;
 
   --status-local: #4d6953;
   --status-dev: #4b5f7e;
@@ -1065,55 +1061,31 @@
   --icon-pin: #e49375;
 }
 
-/* Legacy material vars, re-pointed at the tokens. */
+/* Legacy material vars still referenced by a few views. */
 :root {
-  --chrome: var(--wb-window);
   --hairline: color-mix(in oklch, var(--foreground) 11%, transparent);
   --glass-fill: var(--wb-toolbar-group);
-  --glass-fill-hover: color-mix(in oklch, var(--foreground) 7%, transparent);
-  --glass-fill-press: color-mix(in oklch, var(--foreground) 12%, transparent);
   --glass-stroke: var(--wb-toolbar-group-edge);
   --glass-highlight: color-mix(in oklch, white 70%, transparent);
   --glass-shadow: 0 0.5px 1px color-mix(in oklch, black 8%, transparent);
-  --raised: var(--wb-control-active);
-  --raised-shadow: 0 0 0 0.5px color-mix(in oklch, black 12%, transparent), 0 1px 2px
-    color-mix(in oklch, black 12%, transparent);
-  --grid-stripe: var(--grid-row-a);
-  --grid-header: var(--wb-content);
 }
 
 .dark {
   --hairline: color-mix(in oklch, var(--foreground) 10%, transparent);
-  --glass-fill-hover: color-mix(in oklch, var(--foreground) 8%, transparent);
-  --glass-fill-press: color-mix(in oklch, var(--foreground) 13%, transparent);
   --glass-highlight: color-mix(in oklch, white 9%, transparent);
   --glass-shadow: 0 0.5px 1px color-mix(in oklch, black 40%, transparent);
-  --raised-shadow: 0 1px 2px color-mix(in oklch, black 35%, transparent);
 }
 
 /* macOS vibrancy: the native window is transparent behind the page.
    The default theme stays fully opaque (TablePlus chrome is solid), so
    the body paints the window colour and no surface can read through as
-   black or see-through. Named themes keep a very light vibrancy tint on
-   the chrome only. */
+   black or see-through. Named themes let the window read through
+   behind the page. */
 :root[data-vibrancy] body {
   background: var(--wb-window);
 }
 :root[data-vibrancy][class*="theme-"] body {
   background: transparent;
-}
-:root[data-vibrancy][class*="theme-"] {
-  --chrome: color-mix(in oklch, var(--wb-window) 88%, transparent);
-}
-
-/* Window chrome surface (toolbar, workspace rail): solid --wb-window. */
-@utility chrome {
-  background-color: var(--chrome);
-}
-
-/* Sidebar surface (left / right sidebars): solid --wb-sidebar. */
-@utility chrome-sidebar {
-  background-color: var(--wb-sidebar);
 }
 
 /* Toolbar capsule: graphite fill, 1px ring, faintly lit top edge. */
@@ -1123,22 +1095,9 @@
     var(--glass-shadow);
 }
 
-/* A segment / tab lifted above its track (--wb-control-active). */
-@utility raised {
-  background-color: var(--raised);
-  box-shadow: var(--raised-shadow);
-}
-
-/* Pane / bar divider: 1px --wb-separator (black in dark). */
-@utility hairline {
-  border-color: var(--wb-separator);
-}
-
-@utility cv-row-26 {
-  content-visibility: auto;
-  contain-intrinsic-size: auto 26px;
-}
-
+/* Off-screen row skipping for the 24px grid rows: the browser skips
+   paint/layout outside the viewport; the intrinsic size keeps the
+   scrollbar accurate. */
 @utility cv-row-24 {
   content-visibility: auto;
   contain-intrinsic-size: auto 24px;
@@ -1162,14 +1121,21 @@
   box-shadow: none !important;
 }
 
-/* ─── Reduced motion ─── */
+/* ─── Reduced motion ───
+   Stop motion rather than speed it up: a looping animation (spinners,
+   pulse, the loading breathe) clamped to a short duration would strobe.
+   Every animation plays once, near-instantly, and ends on its final
+   frame; transitions become instant. */
 
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
   *::after {
-    animation-duration: 80ms !important;
-    transition-duration: 80ms !important;
-    transition-timing-function: linear !important;
+    animation-duration: 1ms !important;
+    animation-delay: 0ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+    transition-delay: 0ms !important;
+    scroll-behavior: auto !important;
   }
 }

@@ -1,3 +1,4 @@
+import { cleanIpcError } from '@/lib/errors';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -14,7 +15,9 @@ import { useEffect, useState } from 'react';
 /**
  * Modal form for inserting a new row into the active table tab. Pulls
  * the column list from the schema (not the result), so columns hidden
- * from the current query still appear. Blank inputs are sent as:
+ * from the current query still appear. The row is queued with the other
+ * pending changes (A5) and inserted when the tray is committed — through
+ * the prod-tag confirmation. Blank inputs are sent as:
  *   - NULL  if the column is nullable
  *   - DEFAULT (column omitted) if the column has a default
  *   - empty string otherwise
@@ -56,7 +59,7 @@ export function InsertRowDialog({
       await insertRow(values);
       onOpenChange(false);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(cleanIpcError(err instanceof Error ? err.message : String(err)));
     } finally {
       setSubmitting(false);
     }
@@ -70,7 +73,8 @@ export function InsertRowDialog({
         <DialogHeader>
           <DialogTitle>Insert row</DialogTitle>
           <DialogDescription>
-            {tab.tableSchema}.{tab.tableName} — blanks use column defaults or NULL.
+            {tab.tableSchema}.{tab.tableName} — blanks use column defaults or NULL. The row is added
+            to the pending changes and inserted when you commit.
           </DialogDescription>
         </DialogHeader>
 
@@ -84,9 +88,9 @@ export function InsertRowDialog({
                 >
                   <span className="font-semibold text-foreground">{col.name}</span>
                   <span>{col.dataType}</span>
-                  {col.isPrimaryKey && <span className="text-primary">pk</span>}
+                  {col.isPrimaryKey && <span className="text-foreground">pk</span>}
                   {!col.isNullable && !col.hasDefault && (
-                    <span className="text-primary">required</span>
+                    <span className="text-foreground">required</span>
                   )}
                   {col.hasDefault && <span>default</span>}
                 </label>
@@ -102,7 +106,10 @@ export function InsertRowDialog({
           </div>
 
           {error && (
-            <div className="mt-4 rounded-md border border-primary bg-primary/10 px-3 py-2 text-xs text-primary">
+            <div
+              className="mt-4 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive"
+              role="alert"
+            >
               {error}
             </div>
           )}
@@ -112,8 +119,8 @@ export function InsertRowDialog({
           <Button variant="ghost" size="sm" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
-          <Button variant="primary" size="sm" onClick={handleSubmit} disabled={submitting}>
-            {submitting ? 'Inserting…' : 'Insert row'}
+          <Button variant="secondary" size="sm" onClick={handleSubmit} disabled={submitting}>
+            Add row
           </Button>
         </DialogFooter>
       </DialogContent>

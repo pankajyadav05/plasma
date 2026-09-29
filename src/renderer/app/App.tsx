@@ -1,9 +1,34 @@
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { AppShell } from '@/features/app-shell/AppShell';
+import { HostKeyDialog } from '@/features/connection-manager/HostKeyDialog';
+import { type CommandId, runCommand } from '@/features/keymap/commands';
 import { useReconnect } from '@/stores/reconnect';
 import { useSession } from '@/stores/session';
 import { ConnectionRecovered } from '@shared/protocol';
 import { useEffect } from 'react';
+
+type EventChannel = Parameters<Window['plasmaEvents']['on']>[0];
+
+const MENU_COMMANDS: ReadonlyArray<readonly [EventChannel, CommandId]> = [
+  ['plasma:menu:newTab', 'newTab'],
+  ['plasma:menu:closeTab', 'closeTab'],
+  ['plasma:menu:toggleSidebar', 'toggleSidebar'],
+  ['plasma:menu:toggleEditor', 'toggleEditor'],
+  ['plasma:menu:palette', 'palette'],
+  ['plasma:menu:toggleAi', 'toggleAi'],
+  ['plasma:menu:cheatSheet', 'cheatSheet'],
+  ['plasma:menu:runQuery', 'runQuery'],
+  ['plasma:menu:runQueryAll', 'runQueryAll'],
+  ['plasma:menu:cancelQuery', 'cancelQuery'],
+  ['plasma:menu:history', 'history'],
+  ['plasma:menu:exportCsv', 'exportCsv'],
+  ['plasma:menu:exportJson', 'exportJson'],
+  ['plasma:menu:settings', 'settings'],
+  ['plasma:menu:refresh', 'refresh'],
+  ['plasma:menu:commitEdits', 'commitEdits'],
+  ['plasma:menu:saveFileAs', 'saveFileAs'],
+  ['plasma:menu:openFile', 'openFile'],
+];
 
 export function App() {
   useEffect(() => {
@@ -30,25 +55,11 @@ export function App() {
   useEffect(() => {
     const session = useSession.getState;
     const unsub = [
-      window.plasmaEvents.on('plasma:menu:newTab', () => session().addTab()),
-      window.plasmaEvents.on('plasma:menu:closeTab', () =>
-        session().closeTab(session().activeTabId),
+      // Native menu items dispatch through the same command table as the
+      // keyboard and the palette (features/keymap/commands.ts).
+      ...MENU_COMMANDS.map(([channel, id]) =>
+        window.plasmaEvents.on(channel, () => runCommand(id)),
       ),
-      window.plasmaEvents.on('plasma:menu:toggleSidebar', () => void session().toggleSidebar()),
-      window.plasmaEvents.on('plasma:menu:toggleEditor', () => session().toggleEditor()),
-      window.plasmaEvents.on('plasma:menu:palette', () => session().togglePalette()),
-      window.plasmaEvents.on('plasma:menu:runQuery', () => void session().runQuery()),
-      window.plasmaEvents.on(
-        'plasma:menu:runQueryAll',
-        () => void session().runQuery({ all: true }),
-      ),
-      window.plasmaEvents.on('plasma:menu:cancelQuery', () => void session().cancelQuery()),
-      window.plasmaEvents.on('plasma:menu:history', () => {
-        session().setHistoryOpen(true);
-        void session().loadHistory();
-      }),
-      window.plasmaEvents.on('plasma:menu:exportCsv', () => exportEvent('csv')),
-      window.plasmaEvents.on('plasma:menu:exportJson', () => exportEvent('json')),
       // AI streaming deltas. Cast on receipt — preload sends raw IPC
       // payloads typed as unknown[] through the generic on() facade.
       window.plasmaEvents.on('plasma:ai:event', (...args: unknown[]) => {
@@ -98,12 +109,7 @@ export function App() {
   return (
     <ErrorBoundary>
       <AppShell />
+      <HostKeyDialog />
     </ErrorBoundary>
   );
-}
-
-// Dispatch a DOM custom event so the PaginationBar (which owns the
-// export UI) can respond without a direct store coupling.
-function exportEvent(kind: 'csv' | 'json') {
-  window.dispatchEvent(new CustomEvent('plasma:export', { detail: { kind } }));
 }

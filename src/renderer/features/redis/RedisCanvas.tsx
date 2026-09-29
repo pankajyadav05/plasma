@@ -1,10 +1,12 @@
 import { TabStrip } from '@/features/editor/TabStrip';
-import { useActiveTab } from '@/stores/session';
+import { useActiveTab, useSession } from '@/stores/session';
+import { REDIS_TAB_KINDS } from '@/stores/session-redis';
 import { RedisAnalyzeView } from './RedisAnalyzeView';
 import { RedisCliView } from './RedisCliView';
 import { RedisHomeView } from './RedisHomeView';
 import { RedisKeyView } from './RedisKeyView';
 import { RedisPubsubView } from './RedisPubsubView';
+import { RedisServerView } from './RedisServerView';
 import { RedisSlowlogView } from './RedisSlowlogView';
 
 /**
@@ -15,15 +17,9 @@ import { RedisSlowlogView } from './RedisSlowlogView';
  *   - redis-pubsub   → RedisPubsubView (live tail of one channel)
  *   - redis-analyze  → RedisAnalyzeView (memory analyzer)
  *   - redis-slowlog  → RedisSlowlogView (SLOWLOG GET table)
+ *   - redis-server   → RedisServerView (INFO / CLIENT LIST / CONFIG GET)
  *   - other          → RedisHomeView (server info + getting-started cues)
  */
-const REDIS_TAB_KINDS = new Set([
-  'redis-key',
-  'redis-cli',
-  'redis-pubsub',
-  'redis-analyze',
-  'redis-slowlog',
-]);
 
 export function RedisCanvas() {
   const tab = useActiveTab();
@@ -38,23 +34,27 @@ export function RedisCanvas() {
 
 function RedisBody() {
   const tab = useActiveTab();
+  const sidebarDb = useSession((s) => s.redisDb as number);
   if (!tab) return <RedisHomeView />;
   if (tab.kind === 'redis-key' && tab.redisKey) {
-    // Keyed by tab + key so switching keys starts from a clean view
+    // Keyed by tab + key + db so switching keys starts from a clean view
     // (selection, string mode, inspected row) instead of flashing stale state.
-    return <RedisKeyView key={`${tab.id}:${tab.redisKey}`} keyName={tab.redisKey} />;
+    const db = tab.redisDb ?? sidebarDb;
+    return <RedisKeyView key={`${tab.id}:${db}:${tab.redisKey}`} keyName={tab.redisKey} db={db} />;
   }
-  if (tab.kind === 'redis-cli') return <RedisCliView />;
+  if (tab.kind === 'redis-cli') return <RedisCliView key={tab.id} tabId={tab.id} />;
   if (tab.kind === 'redis-pubsub' && tab.redisChannel) {
     return (
       <RedisPubsubView
         key={tab.id}
+        tabId={tab.id}
         channel={tab.redisChannel}
         pattern={tab.redisPattern === true}
       />
     );
   }
-  if (tab.kind === 'redis-analyze') return <RedisAnalyzeView />;
+  if (tab.kind === 'redis-analyze') return <RedisAnalyzeView key={tab.id} tabId={tab.id} />;
+  if (tab.kind === 'redis-server') return <RedisServerView key={tab.id} />;
   if (tab.kind === 'redis-slowlog') return <RedisSlowlogView />;
   return <RedisHomeView />;
 }

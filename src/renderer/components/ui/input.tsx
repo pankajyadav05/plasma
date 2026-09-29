@@ -10,11 +10,16 @@ export const Input = React.forwardRef<HTMLInputElement, InputProps>(
         type={type}
         ref={ref}
         className={cn(
-          'flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors',
-          'placeholder:text-muted-foreground',
-          'focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',
-          'disabled:cursor-not-allowed disabled:opacity-50',
-          'file:border-0 file:bg-transparent file:text-sm file:font-medium',
+          // Workbench field: 26px, radius 7, --wb-field fill, hairline ring.
+          'flex h-[26px] w-full rounded-[7px] border-0 bg-[var(--wb-field)] px-2 py-0 text-[13px] text-[var(--wb-text)]',
+          'shadow-[inset_0_0_0_1px_var(--wb-toolbar-group-edge)] transition-shadow',
+          'placeholder:text-[var(--wb-text-3)]',
+          'focus-visible:outline-none focus-visible:shadow-[inset_0_0_0_1px_var(--ring),0_0_0_3px_color-mix(in_oklch,var(--ring)_30%,transparent)]',
+          'aria-[invalid=true]:shadow-[inset_0_0_0_1px_var(--destructive)]',
+          'disabled:cursor-not-allowed disabled:opacity-40',
+          'file:border-0 file:bg-transparent file:text-[13px] file:font-medium',
+          // Native number spinners are off-theme; typing / arrow keys still work.
+          '[&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none',
           className,
         )}
         {...props}

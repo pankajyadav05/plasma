@@ -1,3 +1,4 @@
+import { cleanIpcError } from '@/lib/errors';
 import { IconButton } from '@/components/ui/workbench';
 import { cn } from '@/lib/cn';
 import { ipc } from '@/lib/ipc';
@@ -56,7 +57,7 @@ export function TableStructureView() {
         }));
         setStructure(buildTableStructure(rows));
       } catch (err) {
-        if (!cancelled) setError(err instanceof Error ? err.message : String(err));
+        if (!cancelled) setError(cleanIpcError(err instanceof Error ? err.message : String(err)));
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -185,7 +186,7 @@ export function TableStructureView() {
                       className="even:bg-[var(--grid-row-b)] odd:bg-[var(--grid-row-a)]"
                     >
                       <Td className="font-medium text-[var(--wb-text)]">{c.name}</Td>
-                      <Td>
+                      <Td className="whitespace-nowrap">
                         <Tag>{CONSTRAINT_LABEL[c.type]}</Tag>
                       </Td>
                       <Td className="whitespace-pre-wrap break-words text-[var(--wb-text-2)]">
@@ -303,7 +304,7 @@ function Td({
 
 function Tag({ children }: { children: React.ReactNode }) {
   return (
-    <span className="rounded-[4px] bg-[var(--wb-control)] px-1 py-px font-sans text-[11px] text-[var(--wb-text-2)]">
+    <span className="inline-block whitespace-nowrap rounded-[4px] bg-[var(--wb-control)] px-1 py-px font-sans text-[11px] text-[var(--wb-text-2)]">
       {children}
     </span>
   );

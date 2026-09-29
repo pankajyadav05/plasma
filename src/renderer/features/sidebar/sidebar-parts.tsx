@@ -11,12 +11,17 @@ export function SidebarSearch({
   placeholder,
   ariaLabel,
   disabled,
+  onKeyDown,
+  inputRef,
 }: {
   value: string;
   onChange: (v: string) => void;
   placeholder: string;
   ariaLabel?: string;
   disabled?: boolean;
+  /** Lets a list take over ↓ / Enter from its search field. */
+  onKeyDown?: (e: React.KeyboardEvent<HTMLInputElement>) => void;
+  inputRef?: React.Ref<HTMLInputElement>;
 }) {
   return (
     <div className="relative min-w-0 flex-1">
@@ -25,6 +30,8 @@ export function SidebarSearch({
         type="text"
         value={value}
         onChange={(e) => onChange(e.target.value)}
+        onKeyDown={onKeyDown}
+        ref={inputRef}
         placeholder={placeholder}
         aria-label={ariaLabel ?? placeholder.replace(/…$/, '')}
         disabled={disabled}

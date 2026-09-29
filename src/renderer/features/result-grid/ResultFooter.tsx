@@ -4,15 +4,18 @@ import { MockDataDialog } from '@/features/mock-data/MockDataDialog';
 import { PgVectorDialog } from '@/features/pgvector/PgVectorDialog';
 import { PostGisDialog } from '@/features/postgis/PostGisDialog';
 import { cn } from '@/lib/cn';
+import { exportTargetTable, queryFullExport, tableFullExport } from '@/lib/export';
 import { formatDuration } from '@/lib/format';
 import { type TableViewMode, useActiveTab, useSession } from '@/stores/session';
 import { type ResultView, useWorkbench } from '@/stores/workbench';
 import type { QueryResult } from '@shared/protocol';
+import { MAX_RESULT_ROWS } from '@shared/result-bounds';
 import {
   Brain,
   ChevronLeft,
   ChevronRight,
   Map as MapIcon,
+  Minus,
   MoreHorizontal,
   Plus,
   RefreshCw,
@@ -26,6 +29,7 @@ import { ExportPopover } from './ExportMenu';
 import { InsertRowDialog } from './InsertRowDialog';
 import { useNoticeCount } from './ResultTabs';
 import { SortPopover } from './SortPopover';
+import { isErrorTabActive } from './result-view';
 
 const PAGE_SIZES = [50, 100, 300, 500, 1000] as const;
 
@@ -37,12 +41,17 @@ const PAGE_SIZES = [50, 100, 300, 500, 1000] as const;
  *
  * Replaces the old result toolbar, messages strip and pagination bar.
  */
+
+const EMPTY_COLUMNS: NonNullable<ReturnType<typeof useSession.getState>['schema']>['columns'] = [];
+
 export function ResultFooter() {
   const tab = useActiveTab();
   const editMode = useSession((s) => s.editMode);
+  const schemaColumns = useSession((s) => s.schema?.columns ?? EMPTY_COLUMNS);
   const connectionReadOnly = useSession((s) => Boolean(s.activeConfig?.readOnly));
   const setTabViewMode = useSession((s) => s.setTabViewMode);
   const refreshTable = useSession((s) => s.refreshTable);
+  const deleteRows = useSession((s) => s.deleteRows);
   const resultView = useWorkbench((s) => (tab ? (s.resultViews[tab.id] ?? 'data') : 'data'));
   const setResultView = useWorkbench((s) => s.setResultView);
   const noticeCount = useNoticeCount();
@@ -74,9 +83,25 @@ export function ResultFooter() {
 
   if (!tab) return null;
 
+  // "− Row": checked rows, else the selected cell's row.
+  const rowsToDelete = (): number[] => {
+    if (tab.selectedRows.size > 0) return [...tab.selectedRows] as number[];
+    const sel = tab.selectedCell;
+    if (!sel || !tab.queryResult || sel.row >= tab.queryResult.rows.length) return [];
+    return [sel.row];
+  };
+  const canDeleteRows = rowsToDelete().length > 0;
+  const deleteSelectedRows = () => {
+    try {
+      deleteRows(rowsToDelete());
+    } catch (err) {
+      console.error('[plasma] delete rows', err);
+    }
+  };
+
   const isTable = tab.kind === 'table';
   const result = tab.queryResult;
-  const hasRows = Boolean(result && result.columns.length > 0 && !tab.queryError);
+  const hasRows = Boolean(result && result.columns.length > 0 && !isErrorTabActive(tab));
   const running = tab.queryRunState === 'running';
   const tableData = isTable && tab.viewMode === 'data';
   const showDataTools = hasRows && (isTable ? tableData : resultView === 'data');
@@ -86,10 +111,32 @@ export function ResultFooter() {
   );
   const hasVector = Boolean(hasRows && result?.columns.some((c) => /vector/i.test(c.dataTypeName)));
   const moreItems = hasGeo || hasVector || canWrite;
+  // F7: "Whole table" / "Full result" export streams from the server.
+  const fullExport =
+    isTable && tab.tableSchema && tab.tableName
+      ? tableFullExport({
+          schema: tab.tableSchema,
+          table: tab.tableName,
+          allColumns: schemaColumns
+            .filter((c) => c.schema === tab.tableSchema && c.table === tab.tableName)
+            .sort((a, b) => a.ordinal - b.ordinal)
+            .map((c) => c.name),
+          hiddenColumns: tab.hiddenColumns,
+          sort: tab.tableSort,
+          filters: tab.filters,
+          primaryKey: schemaColumns
+            .filter(
+              (c) => c.schema === tab.tableSchema && c.table === tab.tableName && c.isPrimaryKey,
+            )
+            .map((c) => c.name),
+        })
+      : result
+        ? queryFullExport(result)
+        : null;
 
   return (
     <div
-      className="flex h-9 shrink-0 items-center gap-1.5 border-t border-[var(--wb-separator)] bg-[var(--wb-content)] px-2"
+      className="@container flex h-9 min-w-0 shrink-0 items-center gap-1.5 overflow-hidden border-t border-[var(--wb-separator)] bg-[var(--wb-content)] px-2"
       data-testid="result-footer"
     >
       {isTable ? (
@@ -134,14 +181,24 @@ export function ResultFooter() {
       )}
 
       {canWrite && tableData && (
-        <Pill onClick={() => setInsertOpen(true)} title="Insert a new row">
-          <Plus />
-          Row
-        </Pill>
+        <>
+          <Pill onClick={() => setInsertOpen(true)} title="Add a new row (queued until you commit)">
+            <Plus />
+            <span className="@max-[560px]:hidden">Row</span>
+          </Pill>
+          <Pill
+            onClick={() => deleteSelectedRows()}
+            disabled={!canDeleteRows}
+            aria-label="Delete row"
+            title="Mark the selected rows for deletion (⌘⌫) — committed with the pending changes"
+          >
+            <Minus />
+          </Pill>
+        </>
       )}
 
       {!isTable && result && !running && (
-        <span className="ml-1.5 shrink-0 text-[13px] tabular-nums text-[var(--wb-text-2)]">
+        <span className="ml-1.5 shrink-0 text-[13px] tabular-nums text-[var(--wb-text-2)] @max-[520px]:hidden">
           {formatDuration(
             tab.queryResults.length > 1
               ? tab.queryResults.reduce((sum: number, r: QueryResult) => sum + r.durationMs, 0)
@@ -161,6 +218,7 @@ export function ResultFooter() {
         <>
           <IconButton
             label="Find in results (⌘F)"
+            className="@max-[620px]:hidden"
             onClick={() => window.dispatchEvent(new CustomEvent('plasma:grid-find'))}
           >
             <Search />
@@ -174,7 +232,13 @@ export function ResultFooter() {
                   <MoreHorizontal />
                 </IconButton>
               </PopoverTrigger>
-              <PopoverContent align="end" side="top" sideOffset={6} className="w-[220px] p-1" role="menu">
+              <PopoverContent
+                align="end"
+                side="top"
+                sideOffset={6}
+                className="w-[220px] p-1"
+                role="menu"
+              >
                 {hasGeo && (
                   <MenuItem
                     icon={<MapIcon />}
@@ -215,6 +279,8 @@ export function ResultFooter() {
               result={result}
               selected={tab.selectedRows}
               filename={tab.title.replace(/\.sql$/i, '')}
+              full={fullExport}
+              targetTable={isTable ? exportTargetTable(tab.tableSchema, tab.tableName) : undefined}
             />
           )}
         </>
@@ -246,17 +312,19 @@ function RowRange() {
   if (!tab?.queryResult) return null;
 
   const isTable = tab.kind === 'table';
-  const totalRows = isTable
-    ? (tab.totalRowCount ?? tab.queryResult.rows.length)
-    : tab.queryResult.rows.length;
-  const totalPages = Math.max(1, Math.ceil(totalRows / tab.pageSize));
-  const page = Math.min(tab.page, totalPages - 1);
-  const start = totalRows === 0 ? 0 : page * tab.pageSize + 1;
-  const end = isTable
-    ? Math.min(totalRows, start + tab.queryResult.rows.length - 1)
-    : Math.min(totalRows, (page + 1) * tab.pageSize);
-  const paged = totalPages > 1;
+  const pageRows = tab.queryResult.rows.length;
+  // F8: while COUNT is loading (or failed) the total is unknown — a full
+  // page means there may be more, so Next stays available.
+  const countKnown = !isTable || tab.totalRowCount !== null;
+  const mayHaveMore = isTable && !countKnown && pageRows >= tab.pageSize;
+  const totalRows = isTable ? (tab.totalRowCount ?? tab.page * tab.pageSize + pageRows) : pageRows;
+  const totalPages = Math.max(1, Math.ceil(totalRows / tab.pageSize)) + (mayHaveMore ? 1 : 0);
+  const page = countKnown ? Math.min(tab.page, totalPages - 1) : tab.page;
+  const start = pageRows === 0 && totalRows === 0 ? 0 : page * tab.pageSize + 1;
+  const end = isTable ? start + pageRows - 1 : Math.min(totalRows, (page + 1) * tab.pageSize);
+  const paged = totalPages > 1 || page > 0;
   const limited = !isTable && tab.queryResult.truncated;
+  const cap = rowLimitCap(pageRows);
 
   return (
     <div className="flex min-w-0 items-center gap-1 text-[13px] tabular-nums text-[var(--wb-text-2)]">
@@ -270,11 +338,11 @@ function RowRange() {
           <ChevronLeft />
         </IconButton>
       )}
-      <span className="truncate px-1" data-testid="row-range">
+      <span className="shrink-0 whitespace-nowrap px-1" data-testid="row-range">
         {paged ? (
           <>
-            {start.toLocaleString()}–{end.toLocaleString()} of{' '}
-            {tab.countLoading ? '…' : totalRows.toLocaleString()}
+            {start.toLocaleString()}–{Math.max(start, end).toLocaleString()} of{' '}
+            {tab.countLoading ? '…' : countKnown ? totalRows.toLocaleString() : 'many'}
             {isTable && tab.totalRowCountIsEstimate && (
               <span className="text-[var(--wb-text-3)]" title="Estimate from pg_class.reltuples">
                 {' '}
@@ -289,10 +357,7 @@ function RowRange() {
           </>
         )}
         {limited && (
-          <span
-            className="text-[var(--wb-text)]"
-            title="Stopped at the editor row limit / worker cap"
-          >
+          <span className="text-[var(--wb-text)]" title={cap}>
             {' '}
             · limited
           </span>
@@ -302,7 +367,7 @@ function RowRange() {
         <IconButton
           label="Next page"
           variant="plain"
-          disabled={page >= totalPages - 1}
+          disabled={countKnown ? page >= totalPages - 1 : !mayHaveMore}
           onClick={() => setPage(page + 1)}
         >
           <ChevronRight />
@@ -314,16 +379,16 @@ function RowRange() {
             <Settings2 />
           </IconButton>
         </PopoverTrigger>
-        <PopoverContent side="top" sideOffset={6} className="w-[220px] p-3">
+        <PopoverContent side="top" sideOffset={6} className="w-[264px] p-3">
           <div className="mb-2 text-[12px] font-medium text-[var(--wb-text-2)]">Rows per page</div>
-          <div className="mb-3 flex flex-wrap gap-1">
+          <div className="mb-3 flex flex-nowrap gap-1">
             {PAGE_SIZES.map((n) => (
               <button
                 key={n}
                 type="button"
                 onClick={() => setPageSize(n)}
                 className={cn(
-                  'rounded-[6px] px-2 py-1 font-mono text-[12px] transition-colors',
+                  'shrink-0 whitespace-nowrap rounded-[6px] px-2 py-1 font-mono text-[12px] transition-colors',
                   tab.pageSize === n
                     ? 'bg-[var(--wb-control-active)] text-[var(--wb-text)]'
                     : 'bg-[var(--wb-control)] text-[var(--wb-text-2)] hover:bg-[var(--wb-control-hover)] hover:text-[var(--wb-text)]',
@@ -334,14 +399,14 @@ function RowRange() {
             ))}
           </div>
           <div className="mb-1.5 text-[12px] font-medium text-[var(--wb-text-2)]">
-            Go to page (1–{totalPages.toLocaleString()})
+            {countKnown ? `Go to page (1–${totalPages.toLocaleString()})` : 'Go to page'}
           </div>
           <form
             className="flex gap-1"
             onSubmit={(e) => {
               e.preventDefault();
               const n = Number(jump);
-              if (Number.isInteger(n) && n >= 1 && n <= totalPages) setPage(n - 1);
+              if (Number.isInteger(n) && n >= 1 && (!countKnown || n <= totalPages)) setPage(n - 1);
             }}
           >
             <input
@@ -358,4 +423,13 @@ function RowRange() {
       </Popover>
     </div>
   );
+}
+
+/** Tooltip for "· limited": the real cap the result stopped at (F16). */
+function rowLimitCap(rows: number): string {
+  const limit = useWorkbench.getState().rowLimit;
+  if (limit === null || limit >= MAX_RESULT_ROWS) {
+    return `Stopped at ${rows.toLocaleString()} rows — "No limit" is capped at ${MAX_RESULT_ROWS.toLocaleString()} rows (or the result byte cap).`;
+  }
+  return `Stopped at the editor row limit (${limit.toLocaleString()} rows).`;
 }

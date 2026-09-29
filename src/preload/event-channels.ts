@@ -20,6 +20,11 @@ export const eventChannels = [
   'plasma:menu:runQueryAll',
   'plasma:menu:cancelQuery',
   'plasma:menu:history',
+  'plasma:menu:settings',
+  'plasma:menu:refresh',
+  'plasma:menu:commitEdits',
+  'plasma:menu:saveFileAs',
+  'plasma:menu:openFile',
   'plasma:window:maximizedChanged',
   'plasma:update:status',
   'plasma:ai:event',
@@ -28,6 +33,7 @@ export const eventChannels = [
   'plasma:pg:notice',
   'plasma:worker:reset',
   'plasma:conn:recovered',
+  'plasma:ssh:hostKeyPrompt',
 ] as const;
 
 export type EventChannel = (typeof eventChannels)[number];

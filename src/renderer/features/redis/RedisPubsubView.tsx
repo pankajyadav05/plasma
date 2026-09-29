@@ -2,91 +2,52 @@ import { type DataColumn, DataTable } from '@/components/ui/data-table';
 import { Badge, EmptyState, ViewFooter, ViewToolbar } from '@/components/ui/view-parts';
 import { IconButton, Pill } from '@/components/ui/workbench';
 import { cn } from '@/lib/cn';
-import { cleanIpcError } from '@/lib/errors';
-import { ipc } from '@/lib/ipc';
-import { useActiveTab } from '@/stores/session';
 import { useWorkbench } from '@/stores/workbench';
-import type { RedisPubsubMessage } from '@shared/protocol';
 import { Loader2, Pause, Play, Trash2 } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import {
+  PUBSUB_MAX_MESSAGES,
+  type PubsubRow,
+  type PubsubStatus,
+  useRedisTabs,
+} from './redis-store';
 
-const MAX_MESSAGES = 2000;
+const MAX_MESSAGES = PUBSUB_MAX_MESSAGES;
 
-type Status = 'subscribing' | 'live' | 'error' | 'stopped';
+type Status = PubsubStatus;
+type Row = PubsubRow;
 
 interface PubsubViewProps {
+  tabId: string;
   channel: string;
   pattern: boolean;
-}
-
-/** A received message plus a local sequence number for stable identity. */
-interface Row extends RedisPubsubMessage {
-  seq: number;
 }
 
 /**
  * Live tail of a Redis pub/sub channel (or PSUBSCRIBE pattern).
  *
- * Subscribes on mount via the worker, listens to broadcast events on
- * `plasma:redis:pubsub`, and renders messages newest-on-top capped at
- * MAX_MESSAGES so memory stays bounded on chatty channels. Pause stops
- * accepting new messages without unsubscribing — useful for inspecting
- * a fast feed without dropping the subscription. Unsubscribe drops the
- * subscription (keeping the captured messages); Subscribe re-attaches.
+ * The subscription and the message buffer belong to the *tab* (R13):
+ * they live in the Redis tab store, so switching to another tab keeps
+ * the tail running and the messages; closing the tab unsubscribes.
+ * Messages render newest-on-top capped at MAX_MESSAGES. Pause drops new
+ * messages without unsubscribing; Unsubscribe keeps what was captured.
  */
-export function RedisPubsubView({ channel, pattern }: PubsubViewProps) {
-  const tabId = useActiveTab()?.id ?? null;
-  const [messages, setMessages] = useState<Row[]>([]);
-  const [paused, setPaused] = useState(false);
-  const [active, setActive] = useState(true);
-  const [status, setStatus] = useState<Status>('subscribing');
-  const [error, setError] = useState<string | null>(null);
+export function RedisPubsubView({ tabId, channel, pattern }: PubsubViewProps) {
+  const st = useRedisTabs((s) => s.pubsub[tabId]);
+  const pubsubStart = useRedisTabs((s) => s.pubsubStart);
+  const pubsubStop = useRedisTabs((s) => s.pubsubStop);
+  const pubsubPatch = useRedisTabs((s) => s.pubsubPatch);
+  const messages = st?.messages ?? [];
+  const paused = st?.paused ?? false;
+  const status: Status = st?.status ?? 'subscribing';
+  const error = st?.error ?? null;
   const [selectedSeq, setSelectedSeq] = useState<number | null>(null);
-  const pausedRef = useRef(paused);
-  pausedRef.current = paused;
-  const seqRef = useRef(0);
 
+  // First open of the tab subscribes; later mounts just re-attach.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: only on first mount of this tab
   useEffect(() => {
-    if (!active) {
-      setStatus('stopped');
-      return;
-    }
-    let cancelled = false;
-    setStatus('subscribing');
-    setError(null);
-    void ipc.redis
-      .subscribe(channel, pattern)
-      .then(() => {
-        if (!cancelled) setStatus('live');
-      })
-      .catch((err) => {
-        if (cancelled) return;
-        setStatus('error');
-        setError(cleanIpcError(err instanceof Error ? err.message : String(err)));
-      });
-
-    const off = window.plasmaEvents.on('plasma:redis:pubsub', (payload: unknown) => {
-      const msg = payload as RedisPubsubMessage;
-      // Filter for matching channel — the worker forwards every event.
-      // Direct subscription uses exact channel match; pattern subs match
-      // when the message's channel matches our glob.
-      if (!matchesSubscription(channel, pattern, msg.channel)) return;
-      if (pausedRef.current) return;
-      seqRef.current += 1;
-      const row: Row = { ...msg, seq: seqRef.current };
-      setMessages((prev) => {
-        const next = [row, ...prev];
-        if (next.length > MAX_MESSAGES) next.length = MAX_MESSAGES;
-        return next;
-      });
-    });
-
-    return () => {
-      cancelled = true;
-      off();
-      void ipc.redis.unsubscribe(channel, pattern).catch(() => {});
-    };
-  }, [channel, pattern, active]);
+    if (!useRedisTabs.getState().pubsub[tabId]) void pubsubStart(tabId, channel, pattern);
+  }, [tabId]);
 
   // Clear the Details pane when leaving the view.
   useEffect(() => () => useWorkbench.getState().setInspectedRow(null), []);
@@ -142,10 +103,13 @@ export function RedisPubsubView({ channel, pattern }: PubsubViewProps) {
     [],
   );
 
+  const active = status === 'live' || status === 'subscribing';
   const toggleSubscription = () => {
-    setPaused(false);
-    setActive((v) => !v);
+    if (active) void pubsubStop(tabId);
+    else void pubsubStart(tabId, channel, pattern);
   };
+  const setPaused = (fn: (v: boolean) => boolean) => pubsubPatch(tabId, { paused: fn(paused) });
+  const setMessages = (m: Row[]) => pubsubPatch(tabId, { messages: m });
 
   return (
     <main className="flex min-h-0 min-w-0 flex-1 flex-col bg-[var(--wb-content)]">
@@ -281,20 +245,4 @@ function fmtTime(ts: number): string {
   const ss = d.getSeconds().toString().padStart(2, '0');
   const ms = d.getMilliseconds().toString().padStart(3, '0');
   return `${hh}:${mm}:${ss}.${ms}`;
-}
-
-/**
- * Determine whether an incoming pub/sub message matches the
- * subscription set up by this tab.
- */
-function matchesSubscription(channel: string, pattern: boolean, incoming: string): boolean {
-  if (!pattern) return incoming === channel;
-  // Convert Redis glob pattern to RegExp. Supports * and ? and [chars].
-  const re = new RegExp(
-    `^${channel
-      .replace(/[.+^${}()|[\]\\]/g, '\\$&')
-      .replace(/\*/g, '.*')
-      .replace(/\?/g, '.')}$`,
-  );
-  return re.test(incoming);
 }

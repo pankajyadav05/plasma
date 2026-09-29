@@ -129,7 +129,7 @@ describe('U03 origin-tab SQL publish', () => {
     const tabA = state.tabs.find((t) => t.id === 'tab-a');
     const tabB = state.tabs.find((t) => t.id === 'tab-b');
     expect(tabA?.queryRunState).toBe('idle');
-    expect(tabA?.queryResult).toEqual(sampleResult);
+    expect(tabA?.queryResult).toMatchObject(sampleResult);
     expect(tabB?.queryResult).toBeNull();
     expect(tabB?.queryRunState).toBe('idle');
   });

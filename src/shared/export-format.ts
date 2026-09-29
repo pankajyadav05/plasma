@@ -1,4 +1,4 @@
-import type { ColumnMeta } from "./protocol";
+import type { ColumnMeta } from './protocol';
 
 /**
  * Incremental CSV / JSON / SQL INSERT formatting (U16).
@@ -8,27 +8,27 @@ import type { ColumnMeta } from "./protocol";
  * in-memory string up front.
  */
 
-export type ExportFormat = "csv" | "json" | "sql";
+export type ExportFormat = 'csv' | 'json' | 'sql';
 
 export function exportExtension(format: ExportFormat): string {
   switch (format) {
-    case "csv":
-      return "csv";
-    case "json":
-      return "json";
-    case "sql":
-      return "sql";
+    case 'csv':
+      return 'csv';
+    case 'json':
+      return 'json';
+    case 'sql':
+      return 'sql';
   }
 }
 
 export function exportMime(format: ExportFormat): string {
   switch (format) {
-    case "csv":
-      return "text/csv;charset=utf-8";
-    case "json":
-      return "application/json;charset=utf-8";
-    case "sql":
-      return "text/plain;charset=utf-8";
+    case 'csv':
+      return 'text/csv;charset=utf-8';
+    case 'json':
+      return 'application/json;charset=utf-8';
+    case 'sql':
+      return 'text/plain;charset=utf-8';
   }
 }
 
@@ -41,12 +41,14 @@ export type ExportStreamer = {
 };
 
 /** UTF-8 BOM so Excel opens CSV correctly. */
-export const CSV_BOM = "\uFEFF";
+export const CSV_BOM = '\uFEFF';
 
 export function csvEscape(value: unknown): string {
-  if (value === null || value === undefined) return "";
+  if (value === null || value === undefined) return '';
   let str: string;
-  if (typeof value === "object") {
+  if (value instanceof Date) {
+    str = value.toISOString();
+  } else if (typeof value === 'object') {
     try {
       str = JSON.stringify(value);
     } catch {
@@ -56,17 +58,17 @@ export function csvEscape(value: unknown): string {
     str = String(value);
   }
   if (/[",\r\n]/.test(str)) {
-    return "\"" + str.replace(/"/g, "\"\"") + "\"";
+    return `"${str.replace(/"/g, '""')}"`;
   }
   return str;
 }
 
 export function formatCsvHeader(columns: readonly ColumnMeta[]): string {
-  return columns.map((c) => csvEscape(c.name)).join(",");
+  return columns.map((c) => csvEscape(c.name)).join(',');
 }
 
 export function formatCsvRow(row: readonly unknown[]): string {
-  return row.map(csvEscape).join(",");
+  return row.map(csvEscape).join(',');
 }
 
 export function rowToObject(
@@ -80,29 +82,51 @@ export function rowToObject(
   return obj;
 }
 
-export function sqlLiteral(value: unknown): string {
-  if (value === null || value === undefined) return "NULL";
-  if (typeof value === "number") return String(value);
-  if (typeof value === "boolean") return value ? "TRUE" : "FALSE";
-  if (value instanceof Date) return "'" + value.toISOString() + "'";
-  if (typeof value === "object") {
+function quoteText(str: string): string {
+  return `'${str.replace(/'/g, "''")}'`;
+}
+
+/**
+ * SQL literal for one exported value (F7). The worker hands us Postgres
+ * text for dates, timestamps, intervals, bytea (`\x…`), numeric, int8 and
+ * arrays (`{1,2}`), so those are quoted verbatim and Postgres casts them
+ * to the target column on INSERT — no UTC shift, no precision loss, no
+ * array-as-jsonb. Only json/jsonb arrive as parsed values; they are
+ * re-serialised and cast to the column's own JSON type.
+ */
+export function sqlLiteral(value: unknown, column?: Pick<ColumnMeta, 'dataTypeName'>): string {
+  if (value === null || value === undefined) return 'NULL';
+  if (typeof value === 'number')
+    return Number.isFinite(value) ? String(value) : quoteText(String(value));
+  if (typeof value === 'boolean') return value ? 'TRUE' : 'FALSE';
+  if (typeof value === 'bigint') return value.toString();
+  if (value instanceof Date) return quoteText(value.toISOString());
+  if (typeof value === 'object') {
+    const cast = column?.dataTypeName === 'json' ? '::json' : '::jsonb';
     try {
-      return "'" + JSON.stringify(value).replace(/'/g, "''") + "'::jsonb";
+      return quoteText(JSON.stringify(value)) + cast;
     } catch {
-      return "'" + String(value).replace(/'/g, "''") + "'";
+      return quoteText(String(value));
     }
   }
-  return "'" + String(value).replace(/'/g, "''") + "'";
+  if (column?.dataTypeName === 'json' || column?.dataTypeName === 'jsonb') {
+    // A JSON string scalar parses to a JS string; keep it valid JSON.
+    return `${quoteText(JSON.stringify(value))}::${column.dataTypeName}`;
+  }
+  return quoteText(String(value));
 }
+
+/** Default INSERT target when the result has no single source table. */
+export const DEFAULT_EXPORT_TABLE = 'target_table';
 
 export function formatSqlInsert(
   columns: readonly ColumnMeta[],
   row: readonly unknown[],
-  tableName = "target_table",
+  tableName = DEFAULT_EXPORT_TABLE,
 ): string {
-  const colList = columns.map((c) => "\"" + c.name.replace(/"/g, "\"\"") + "\"").join(", ");
-  const vals = row.map((v) => sqlLiteral(v)).join(", ");
-  return "INSERT INTO " + tableName + " (" + colList + ") VALUES (" + vals + ");";
+  const colList = columns.map((c) => `"${c.name.replace(/"/g, '""')}"`).join(', ');
+  const vals = row.map((v, i) => sqlLiteral(v, columns[i])).join(', ');
+  return `INSERT INTO ${tableName} (${colList}) VALUES (${vals});`;
 }
 
 /**
@@ -113,19 +137,21 @@ export function createExportStreamer(
   format: ExportFormat,
   columns: readonly ColumnMeta[],
   sink: ExportSink,
+  opts?: { targetTable?: string },
 ): ExportStreamer {
+  const targetTable = opts?.targetTable || DEFAULT_EXPORT_TABLE;
   let rowIndex = 0;
 
-  if (format === "csv") {
+  if (format === 'csv') {
     return {
       begin() {
         void sink(CSV_BOM);
-        void sink(formatCsvHeader(columns) + "\r\n");
+        void sink(`${formatCsvHeader(columns)}\r\n`);
       },
       writeRows(rows) {
         if (rows.length === 0) return;
-        const body = rows.map((row) => formatCsvRow(row)).join("\r\n");
-        void sink(body + "\r\n");
+        const body = rows.map((row) => formatCsvRow(row)).join('\r\n');
+        void sink(`${body}\r\n`);
         rowIndex += rows.length;
       },
       end() {
@@ -134,24 +160,21 @@ export function createExportStreamer(
     };
   }
 
-  if (format === "json") {
+  if (format === 'json') {
     return {
       begin() {
-        void sink("[\n");
+        void sink('[\n');
       },
       writeRows(rows) {
         for (const row of rows) {
-          const prefix = rowIndex === 0 ? "  " : ",\n  ";
-          const json = JSON.stringify(rowToObject(columns, row), null, 2).replace(
-            /\n/g,
-            "\n  ",
-          );
+          const prefix = rowIndex === 0 ? '  ' : ',\n  ';
+          const json = JSON.stringify(rowToObject(columns, row), null, 2).replace(/\n/g, '\n  ');
           void sink(prefix + json);
           rowIndex++;
         }
       },
       end() {
-        void sink(rowIndex === 0 ? "\n]\n" : "\n]\n");
+        void sink(rowIndex === 0 ? '\n]\n' : '\n]\n');
       },
     };
   }
@@ -160,8 +183,8 @@ export function createExportStreamer(
     begin() {},
     writeRows(rows) {
       if (rows.length === 0) return;
-      const body = rows.map((row) => formatSqlInsert(columns, row)).join("\n");
-      void sink(body + "\n");
+      const body = rows.map((row) => formatSqlInsert(columns, row, targetTable)).join('\n');
+      void sink(`${body}\n`);
       rowIndex += rows.length;
     },
     end() {
@@ -175,13 +198,20 @@ export function formatResultString(
   columns: readonly ColumnMeta[],
   rows: readonly unknown[][],
   format: ExportFormat,
+  opts?: { targetTable?: string; bom?: boolean },
 ): string {
   const parts: string[] = [];
-  const streamer = createExportStreamer(format, columns, (chunk) => {
-    parts.push(chunk);
-  });
+  const streamer = createExportStreamer(
+    format,
+    columns,
+    (chunk) => {
+      if (chunk === CSV_BOM && opts?.bom === false) return;
+      parts.push(chunk);
+    },
+    opts,
+  );
   streamer.begin();
   streamer.writeRows(rows);
   streamer.end();
-  return parts.join("");
+  return parts.join('');
 }

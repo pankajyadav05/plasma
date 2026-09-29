@@ -1,5 +1,4 @@
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { Badge } from '@/components/ui/view-parts';
 import { IconButton, MenuItem } from '@/components/ui/workbench';
 import {
   SidebarEmpty,
@@ -9,40 +8,35 @@ import {
 } from '@/features/sidebar/sidebar-parts';
 import { cn } from '@/lib/cn';
 import { useSession } from '@/stores/session';
+import type { OsIndex } from '@shared/protocol';
 import {
+  ChevronDown,
+  ChevronRight,
+  Layers,
   Loader2,
   Plus,
   RefreshCw,
   Search,
   SlidersHorizontal,
   SquareTerminal,
+  Terminal,
   Trash2,
 } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
+import {
+  type IndexGroup,
+  capitalise,
+  fmtBytes,
+  fmtCount,
+  groupIndices,
+  healthTone,
+} from './os-format';
+import { OsBadge } from './os-parts';
+import { useOsWriteAccess } from './os-write';
 
-function fmtBytes(n: number): string {
-  if (!Number.isFinite(n)) return '—';
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
-  if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`;
-  return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`;
-}
-
-/** Compact docs count for the 11px right-aligned column (1.2k, 3.4M). */
-function fmtCount(n: number): string {
-  if (n < 1000) return String(n);
-  if (n < 1_000_000) return `${(n / 1000).toFixed(n < 10_000 ? 1 : 0)}k`;
-  if (n < 1_000_000_000) return `${(n / 1_000_000).toFixed(n < 10_000_000 ? 1 : 0)}M`;
-  return `${(n / 1_000_000_000).toFixed(1)}B`;
-}
-
-/** Cluster / index health → Badge tone. Green stays neutral (graphite). */
-function healthTone(health: string): 'neutral' | 'warn' | 'danger' {
-  const h = health.toLowerCase();
-  if (h === 'red') return 'danger';
-  if (h === 'yellow') return 'warn';
-  return 'neutral';
-}
+const ROW_H = 24;
+/** Rows rendered above/below the viewport when windowing (O24). */
+const OVERSCAN = 12;
 
 /** Small health dot for 24px rows. */
 function HealthDot({ health }: { health: string }) {
@@ -67,12 +61,18 @@ function isSystemIndex(name: string): boolean {
   return name.startsWith('.');
 }
 
+type Item =
+  | { kind: 'index'; index: OsIndex; depth: number }
+  | { kind: 'group'; group: IndexGroup; docs: number; open: boolean };
+
 /**
  * OpenSearch sidebar — Postgres-sidebar look: compact cluster meta,
- * search field + sliders menu, then a flat list of 24px index rows.
+ * search field + sliders menu, then 24px index rows. Rolling indices
+ * (date-suffixed, rollover counters, data-stream backing indices) fold
+ * into one expandable group, and long lists are windowed (O24).
  *
- * Click an index to open its mapping/stats; double-click (or the row's
- * search action) opens a search tab against it.
+ * Click an index to open its mapping/stats; the row's search action
+ * opens a search tab against it (O11: no double-click double tab).
  */
 export function OsSidebar() {
   const overview = useSession((s) => s.osOverview);
@@ -81,13 +81,20 @@ export function OsSidebar() {
   const openIndex = useSession((s) => s.openOsIndex);
   const openSearch = useSession((s) => s.openOsSearch);
   const openOsSql = useSession((s) => s.openOsSql);
+  const openOsConsole = useSession((s) => s.openOsConsole);
   const openNewIndex = useSession((s) => s.openOsNewIndex);
   const requestDelete = useSession((s) => s.requestOsDeleteIndex);
   const activeIndex = useSession((s) => s.activeOsIndex);
+  const access = useOsWriteAccess();
 
   const [filter, setFilter] = useState('');
   const [showSystem, setShowSystem] = useState(false);
+  const [grouping, setGrouping] = useState(true);
+  const [openGroups, setOpenGroups] = useState<Set<string>>(new Set());
   const [menuOpen, setMenuOpen] = useState(false);
+  const [scrollTop, setScrollTop] = useState(0);
+  const [viewport, setViewport] = useState(600);
+  const listRef = useRef<HTMLDivElement | null>(null);
   const runAndClose = (fn: () => void) => () => {
     setMenuOpen(false);
     fn();
@@ -109,19 +116,67 @@ export function OsSidebar() {
       .sort((a, b) => a.index.localeCompare(b.index));
   }, [overview, filter, showSystem]);
 
+  const items = useMemo<Item[]>(() => {
+    const byName = new Map(indices.map((i) => [i.index, i]));
+    if (!grouping) return indices.map((index) => ({ kind: 'index', index, depth: 0 }));
+    const out: Item[] = [];
+    for (const entry of groupIndices(indices.map((i) => i.index))) {
+      if (typeof entry === 'string') {
+        const index = byName.get(entry);
+        if (index) out.push({ kind: 'index', index, depth: 0 });
+        continue;
+      }
+      // An active filter expands groups so matches are visible.
+      const open = openGroups.has(entry.name) || filter.trim().length > 0;
+      const docs = entry.members.reduce((n, m) => n + (byName.get(m)?.docsCount ?? 0), 0);
+      out.push({ kind: 'group', group: entry, docs, open });
+      if (open) {
+        for (const m of entry.members) {
+          const index = byName.get(m);
+          if (index) out.push({ kind: 'index', index, depth: 1 });
+        }
+      }
+    }
+    return out;
+  }, [indices, grouping, openGroups, filter]);
+
+  const toggleGroup = (name: string) =>
+    setOpenGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
+      return next;
+    });
+
+  // Window the list: only rows near the viewport are in the DOM.
+  const windowed = items.length > 200;
+  const start = windowed ? Math.max(0, Math.floor(scrollTop / ROW_H) - OVERSCAN) : 0;
+  const end = windowed
+    ? Math.min(items.length, Math.ceil((scrollTop + viewport) / ROW_H) + OVERSCAN)
+    : items.length;
+  const visible = items.slice(start, end);
+
+  const pattern = filter.trim() && indices.length > 1 ? `*${filter.trim()}*` : null;
+
   return (
-    <div className="flex h-full flex-col bg-[var(--wb-sidebar)]">
+    <div className="flex h-full min-w-0 flex-col overflow-hidden bg-[var(--wb-sidebar)]">
       {/* Header — cluster meta */}
       <div className="shrink-0 px-2.5 pb-2 pt-2">
-        <div className="flex h-6 items-center gap-1.5">
+        <div className="flex h-6 min-w-0 items-center gap-1.5">
           <span className="truncate text-[13px] font-semibold text-[var(--wb-text)]">
-            {overview?.distribution ?? 'OpenSearch'}
+            {overview ? capitalise(overview.distribution) : 'OpenSearch'}
           </span>
           <span className="truncate font-mono text-[11px] text-[var(--wb-text-2)]">
             {overview ? overview.version : '—'}
           </span>
           <div className="flex-1" />
-          <IconButton variant="plain" label="New index" onClick={openNewIndex}>
+          <IconButton
+            variant="plain"
+            label="New index"
+            title={access.reason ?? 'New index'}
+            onClick={openNewIndex}
+            disabled={!access.canWrite}
+          >
             <Plus />
           </IconButton>
           <IconButton
@@ -135,7 +190,7 @@ export function OsSidebar() {
         </div>
         {overview && (
           <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[11px] text-[var(--wb-text-3)]">
-            <Badge tone={healthTone(overview.health)}>{overview.health}</Badge>
+            <OsBadge tone={healthTone(overview.health)}>{overview.health}</OsBadge>
             <span className="truncate">
               {overview.nodes} {overview.nodes === 1 ? 'node' : 'nodes'} · {overview.indices.length}{' '}
               {overview.indices.length === 1 ? 'index' : 'indices'}
@@ -148,7 +203,11 @@ export function OsSidebar() {
       <SidebarSearchRow>
         <SidebarSearch
           value={filter}
-          onChange={setFilter}
+          onChange={(v) => {
+            setFilter(v);
+            if (listRef.current) listRef.current.scrollTop = 0;
+            setScrollTop(0);
+          }}
           placeholder="Search for index…"
           ariaLabel="Filter indices"
         />
@@ -163,15 +222,34 @@ export function OsSidebar() {
               <SlidersHorizontal />
             </IconButton>
           </PopoverTrigger>
-          <PopoverContent align="end" sideOffset={4} className="w-[230px] p-1">
+          <PopoverContent align="end" sideOffset={4} className="w-[240px] p-1">
             <div role="menu" aria-label="Index options" className="flex flex-col">
+              {pattern && (
+                <MenuItem
+                  icon={<Search />}
+                  label={`Search ${pattern}`}
+                  hint={String(indices.length)}
+                  onClick={runAndClose(() => openSearch(pattern))}
+                />
+              )}
               <MenuItem
                 icon={<SquareTerminal />}
                 label="Open SQL canvas"
                 hint="_sql"
                 onClick={runAndClose(openOsSql)}
               />
-              <MenuItem icon={<Plus />} label="New index…" onClick={runAndClose(openNewIndex)} />
+              <MenuItem
+                icon={<Terminal />}
+                label="Open console"
+                hint="REST"
+                onClick={runAndClose(openOsConsole)}
+              />
+              <MenuItem
+                icon={<Plus />}
+                label="New index…"
+                disabled={!access.canWrite}
+                onClick={runAndClose(openNewIndex)}
+              />
               <MenuItem
                 icon={<RefreshCw />}
                 label="Refresh"
@@ -184,15 +262,29 @@ export function OsSidebar() {
                 checked={showSystem}
                 onClick={() => setShowSystem((v) => !v)}
               />
+              <MenuItem
+                label="Group rolling indices"
+                checked={grouping}
+                onClick={() => setGrouping((v) => !v)}
+              />
             </div>
           </PopoverContent>
         </Popover>
       </SidebarSearchRow>
 
       {/* Indices */}
-      <div className="min-h-0 flex-1 overflow-y-auto py-1" role="tree" aria-label="Indices">
+      <div
+        ref={(el) => {
+          listRef.current = el;
+          if (el?.clientHeight && el.clientHeight !== viewport) setViewport(el.clientHeight);
+        }}
+        onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}
+        className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden py-1"
+        role="tree"
+        aria-label="Indices"
+      >
         {!overview && <SidebarEmpty title="Loading cluster…" />}
-        {overview && indices.length === 0 && (
+        {overview && items.length === 0 && (
           <SidebarEmpty
             title={filter ? `No indices match "${filter}"` : 'No indices'}
             hint={
@@ -202,59 +294,124 @@ export function OsSidebar() {
             }
           />
         )}
-        {indices.map((idx) => {
-          const isActive = activeIndex === idx.index;
-          return (
+        {windowed && <div style={{ height: start * ROW_H }} aria-hidden />}
+        {visible.map((item) =>
+          item.kind === 'group' ? (
             <div
-              key={idx.index}
+              key={`g:${item.group.name}`}
               role="treeitem"
               aria-level={1}
-              aria-selected={isActive}
-              aria-label={idx.index}
-              className={cn('group/idx relative items-stretch', sidebarRowClass(isActive))}
+              aria-expanded={item.open}
+              aria-selected={false}
+              aria-label={`${item.group.name} (${item.group.members.length} indices)`}
+              className={cn('relative', sidebarRowClass(false))}
             >
               <button
                 type="button"
-                onClick={() => openIndex(idx.index)}
-                onDoubleClick={() => openSearch(idx.index)}
-                className="flex min-w-0 flex-1 cursor-default items-center gap-2 pl-2 pr-2 text-left"
-                title={`${idx.index} · ${idx.health} · ${idx.docsCount.toLocaleString()} docs · ${fmtBytes(idx.storeBytes)}`}
+                onClick={() => toggleGroup(item.group.name)}
+                className="flex min-w-0 flex-1 cursor-default items-center gap-1.5 pl-1 pr-2 text-left"
+                title={`${item.group.members.length} indices`}
               >
-                <HealthDot health={idx.health} />
-                <span className="min-w-0 flex-1 truncate">{idx.index}</span>
-                <span className="shrink-0 font-mono text-[11px] tabular-nums text-[var(--wb-text-3)] group-focus-within/idx:invisible group-hover/idx:invisible">
-                  {fmtCount(idx.docsCount)}
+                {item.open ? (
+                  <ChevronDown className="h-3 w-3 shrink-0 text-[var(--wb-text-3)]" />
+                ) : (
+                  <ChevronRight className="h-3 w-3 shrink-0 text-[var(--wb-text-3)]" />
+                )}
+                <Layers className="h-3.5 w-3.5 shrink-0 text-[var(--wb-text-2)]" />
+                <span className="min-w-0 flex-1 truncate">{item.group.name}</span>
+                <span className="shrink-0 font-mono text-[11px] tabular-nums text-[var(--wb-text-3)]">
+                  {item.group.members.length} · {fmtCount(item.docs)}
                 </span>
               </button>
-              <div className="absolute inset-y-0 right-1 hidden items-center gap-0.5 group-focus-within/idx:flex group-hover/idx:flex">
-                <IconButton
-                  variant="plain"
-                  label={`Open search on ${idx.index}`}
-                  title="Open search"
-                  className="h-5 w-5"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    openSearch(idx.index);
-                  }}
-                >
-                  <Search />
-                </IconButton>
-                <IconButton
-                  variant="plain"
-                  label={`Delete index ${idx.index}`}
-                  title="Delete index"
-                  className="h-5 w-5 hover:text-destructive"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    requestDelete(idx.index);
-                  }}
-                >
-                  <Trash2 />
-                </IconButton>
-              </div>
             </div>
-          );
-        })}
+          ) : (
+            <IndexRow
+              key={item.index.index}
+              idx={item.index}
+              depth={item.depth}
+              active={activeIndex === item.index.index}
+              canWrite={access.canWrite}
+              writeReason={access.reason}
+              onOpen={() => openIndex(item.index.index)}
+              onSearch={() => openSearch(item.index.index)}
+              onDelete={() => requestDelete(item.index.index)}
+            />
+          ),
+        )}
+        {windowed && <div style={{ height: (items.length - end) * ROW_H }} aria-hidden />}
+      </div>
+    </div>
+  );
+}
+
+function IndexRow({
+  idx,
+  depth,
+  active,
+  canWrite,
+  writeReason,
+  onOpen,
+  onSearch,
+  onDelete,
+}: {
+  idx: OsIndex;
+  depth: number;
+  active: boolean;
+  canWrite: boolean;
+  writeReason: string | null;
+  onOpen: () => void;
+  onSearch: () => void;
+  onDelete: () => void;
+}) {
+  return (
+    <div
+      role="treeitem"
+      aria-level={depth + 1}
+      aria-selected={active}
+      aria-label={idx.index}
+      className={cn('group/idx relative items-stretch', sidebarRowClass(active))}
+    >
+      <button
+        type="button"
+        onClick={onOpen}
+        className="flex min-w-0 flex-1 cursor-default items-center gap-2 pr-2 text-left"
+        style={{ paddingLeft: 8 + depth * 16 }}
+        title={`${idx.index} · ${idx.health} · ${idx.status} · ${idx.docsCount.toLocaleString()} docs · ${fmtBytes(idx.storeBytes)}`}
+      >
+        <HealthDot health={idx.health} />
+        <span className={cn('min-w-0 flex-1 truncate', idx.status === 'close' && 'opacity-60')}>
+          {idx.index}
+        </span>
+        <span className="shrink-0 font-mono text-[11px] tabular-nums text-[var(--wb-text-3)] group-focus-within/idx:invisible group-hover/idx:invisible">
+          {idx.status === 'close' ? 'closed' : fmtCount(idx.docsCount)}
+        </span>
+      </button>
+      <div className="absolute inset-y-0 right-1 hidden items-center gap-0.5 group-focus-within/idx:flex group-hover/idx:flex">
+        <IconButton
+          variant="plain"
+          label={`Open search on ${idx.index}`}
+          title="Open search"
+          className="h-5 w-5"
+          onClick={(e) => {
+            e.stopPropagation();
+            onSearch();
+          }}
+        >
+          <Search />
+        </IconButton>
+        <IconButton
+          variant="plain"
+          label={`Delete index ${idx.index}`}
+          title={writeReason ?? 'Delete index'}
+          className="h-5 w-5 hover:text-destructive"
+          disabled={!canWrite}
+          onClick={(e) => {
+            e.stopPropagation();
+            onDelete();
+          }}
+        >
+          <Trash2 />
+        </IconButton>
       </div>
     </div>
   );

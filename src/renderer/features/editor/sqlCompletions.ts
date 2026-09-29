@@ -1,5 +1,51 @@
 import { useSession } from '@/stores/session';
+import type { SchemaInfo } from '@shared/protocol';
 import type * as MonacoType from 'monaco-editor';
+
+/**
+ * Per-introspection lookups, built once per `schema` object (F14) rather
+ * than scanning every column of the database on each completion request.
+ */
+interface SchemaIndex {
+  qualifiedTables: { qualified: string; rows: number | null }[];
+  columnNames: string[];
+  tablesBySchema: Map<string, SchemaInfo['tables']>;
+  columnsByTable: Map<string, SchemaInfo['columns']>;
+}
+
+const indexCache = new WeakMap<SchemaInfo, SchemaIndex>();
+
+function schemaIndex(schema: SchemaInfo): SchemaIndex {
+  const hit = indexCache.get(schema);
+  if (hit) return hit;
+  const tablesBySchema = new Map<string, SchemaInfo['tables']>();
+  for (const t of schema.tables) {
+    const list = tablesBySchema.get(t.schema) ?? [];
+    list.push(t);
+    tablesBySchema.set(t.schema, list);
+  }
+  const columnsByTable = new Map<string, SchemaInfo['columns']>();
+  const names = new Set<string>();
+  for (const c of schema.columns) {
+    names.add(c.name);
+    for (const key of [`${c.schema}.${c.table}`, c.table]) {
+      const list = columnsByTable.get(key) ?? [];
+      list.push(c);
+      columnsByTable.set(key, list);
+    }
+  }
+  const index: SchemaIndex = {
+    qualifiedTables: schema.tables.map((t) => ({
+      qualified: t.schema === 'public' ? t.name : `${t.schema}.${t.name}`,
+      rows: t.rowCountEstimate,
+    })),
+    columnNames: [...names],
+    tablesBySchema,
+    columnsByTable,
+  };
+  indexCache.set(schema, index);
+  return index;
+}
 
 /**
  * Schema-aware SQL autocomplete. Registered once per renderer lifetime;
@@ -26,10 +72,13 @@ export function registerSqlCompletions(monaco: typeof MonacoType): void {
   registered = true;
 
   monaco.languages.registerCompletionItemProvider('sql', {
-    triggerCharacters: ['.', ' '],
+    // Only '.' — a ' ' trigger rebuilt every suggestion on each space (F14);
+    // Monaco's quick suggestions still open as soon as a word starts.
+    triggerCharacters: ['.'],
     provideCompletionItems: (model, position) => {
       const schema = useSession.getState().schema;
       if (!schema) return { suggestions: [] };
+      const idx = schemaIndex(schema);
 
       const line = model.getLineContent(position.lineNumber);
       const beforeCursor = line.slice(0, position.column - 1);
@@ -55,7 +104,7 @@ export function registerSqlCompletions(monaco: typeof MonacoType): void {
       if (dotMatch) {
         const prefix = dotMatch[1];
         // First guess: prefix is a schema name → list its tables
-        const schemaTables = schema.tables.filter((t) => t.schema === prefix);
+        const schemaTables = idx.tablesBySchema.get(prefix) ?? [];
         if (schemaTables.length > 0) {
           return {
             suggestions: schemaTables.map((t) => ({
@@ -69,11 +118,14 @@ export function registerSqlCompletions(monaco: typeof MonacoType): void {
           };
         }
         // Second guess: prefix is a table name or alias used in FROM
-        const tableName = resolveAlias(precedingText, prefix);
-        if (tableName) {
-          const cols = schema.columns.filter(
-            (c) => c.table === tableName && !isHidden(precedingText, c.schema),
-          );
+        const target = resolveAlias(precedingText, prefix);
+        if (target) {
+          // Schema-qualified when the FROM clause said so; otherwise the
+          // table as resolved on the search path (public first).
+          const cols =
+            idx.columnsByTable.get(`${target.schema ?? 'public'}.${target.table}`) ??
+            idx.columnsByTable.get(target.table) ??
+            [];
           return {
             suggestions: cols.map((c) => ({
               label: c.name,
@@ -98,23 +150,19 @@ export function registerSqlCompletions(monaco: typeof MonacoType): void {
         );
       if (afterKeyword) {
         return {
-          suggestions: schema.tables.map((t) => {
-            const qualified = t.schema === 'public' ? t.name : `${t.schema}.${t.name}`;
-            return {
-              label: qualified,
-              kind: monaco.languages.CompletionItemKind.Class,
-              insertText: qualified,
-              range,
-              detail: `table${t.rowCountEstimate !== null && t.rowCountEstimate >= 0 ? ` · ~${formatRows(t.rowCountEstimate)} rows` : ''}`,
-              sortText: `0_${qualified}`,
-            };
-          }),
+          suggestions: idx.qualifiedTables.map(({ qualified, rows }) => ({
+            label: qualified,
+            kind: monaco.languages.CompletionItemKind.Class,
+            insertText: qualified,
+            range,
+            detail: `table${rows !== null && rows >= 0 ? ` · ~${formatRows(rows)} rows` : ''}`,
+            sortText: `0_${qualified}`,
+          })),
         };
       }
 
       // ── 3. General: tables + columns + keywords ──
-      const tableSuggestions = schema.tables.map((t) => {
-        const qualified = t.schema === 'public' ? t.name : `${t.schema}.${t.name}`;
+      const tableSuggestions = idx.qualifiedTables.map(({ qualified }) => {
         return {
           label: qualified,
           kind: monaco.languages.CompletionItemKind.Class,
@@ -126,9 +174,7 @@ export function registerSqlCompletions(monaco: typeof MonacoType): void {
       });
       // Deduplicate column names so each unique name shows once
       // (cross-table duplicates are common — `id`, `name`, `created_at`).
-      const colNames = new Set<string>();
-      for (const c of schema.columns) colNames.add(c.name);
-      const columnSuggestions = [...colNames].map((name) => ({
+      const columnSuggestions = idx.columnNames.map((name) => ({
         label: name,
         kind: monaco.languages.CompletionItemKind.Field,
         insertText: name,
@@ -162,24 +208,21 @@ export function registerSqlCompletions(monaco: typeof MonacoType): void {
  *
  * Also handles `FROM public.users u` by stripping the schema qualifier.
  */
-function resolveAlias(precedingText: string, identifier: string): string | null {
+function resolveAlias(
+  precedingText: string,
+  identifier: string,
+): { schema: string | null; table: string } | null {
   // Walk FROM/JOIN occurrences and pair table names with their aliases
   const re =
     /\b(?:from|join|update|into)\s+(?:([a-zA-Z_][a-zA-Z0-9_]*)\.)?([a-zA-Z_][a-zA-Z0-9_]*)(?:\s+(?:as\s+)?([a-zA-Z_][a-zA-Z0-9_]*))?/gi;
-  let match: RegExpExecArray | null;
-  while ((match = re.exec(precedingText))) {
-    const table = match[2];
+  for (const match of precedingText.matchAll(re)) {
+    const schemaName = match[1] ?? null;
+    const table = match[2]!;
     const alias = match[3];
-    if (alias === identifier) return table;
-    if (!alias && table === identifier) return table;
+    if (alias === identifier) return { schema: schemaName, table };
+    if (!alias && table === identifier) return { schema: schemaName, table };
   }
   return null;
-}
-
-function isHidden(_text: string, _schema: string): boolean {
-  // Placeholder for future smarts (e.g. omit columns the user's SELECT
-  // already mentions). For now show everything.
-  return false;
 }
 
 function formatRows(n: number): string {

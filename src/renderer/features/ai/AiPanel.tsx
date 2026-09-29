@@ -18,7 +18,11 @@ import { type KeyboardEvent, useEffect, useRef, useState } from 'react';
  * "Run" buttons on hover so the user never has to copy-paste.
  */
 export function AiPanel() {
-  const aiChat = useSession((s) => s.aiChat);
+  // G3: the conversation belongs to the connection it was started on —
+  // switching connections shows a fresh chat instead of leaking context.
+  const aiChat = useSession((s) =>
+    s.aiChatConnectionId === (s.activeConfig?.id ?? null) ? s.aiChat : EMPTY_CHAT,
+  );
   const aiPending = useSession((s) => s.aiPending);
   const aiAsk = useSession((s) => s.aiAsk);
   const aiCancel = useSession((s) => s.aiCancel);
@@ -26,13 +30,9 @@ export function AiPanel() {
   const setSql = useSession((s) => s.setSql);
   const runQuery = useSession((s) => s.runQuery);
   const addTab = useSession((s) => s.addTab);
+  const setCanvasMode = useSession((s) => s.setCanvasMode);
   const hasApiKey = useSession((s) =>
-    Boolean(
-      s.settings.hasOpenrouterApiKey ||
-        s.settings.hasClaudeApiKey ||
-        s.settings.openrouterApiKey ||
-        s.settings.claudeApiKey,
-    ),
+    Boolean(s.settings.hasOpenrouterApiKey || s.settings.hasClaudeApiKey),
   );
   const model = useSession((s) => s.settings.openrouterModel);
   const allowAiRowData = useSession((s) => {
@@ -68,23 +68,21 @@ export function AiPanel() {
     setDraft('');
   };
 
+  // E5: never overwrite the user's work — reuse the active tab only when
+  // it is an empty SQL tab, otherwise open a new one. addTab/setSql are
+  // synchronous store updates, so the run below sees the new text.
   const handleInsert = (code: string) => {
     if (!tab) return;
-    if (tab.kind === 'table') {
-      // Spawn a fresh SQL tab for the user — don't clobber the table tab.
-      addTab();
-      // After the next tick, set sql on the new active tab.
-      queueMicrotask(() => setSql(code));
-      return;
-    }
+    if (tab.kind === 'table' || tab.sql.trim().length > 0) addTab();
     setSql(code);
   };
 
+  // Runs every statement in the block (buffer mode), still through the
+  // normal run path so read-only and the prod-tag confirmation apply.
   const handleRun = (code: string) => {
     if (!tab) return;
     handleInsert(code);
-    // Defer slightly so the new tab + setSql settle before the run.
-    setTimeout(() => void runQuery(), 30);
+    void runQuery({ all: true });
   };
 
   const empty = aiChat.length === 0;
@@ -93,7 +91,10 @@ export function AiPanel() {
     <div className="flex h-full flex-col">
       <div className="flex h-8 shrink-0 items-center gap-2 border-b border-[color-mix(in_srgb,var(--wb-text)_8%,transparent)] pl-3 pr-2">
         <Sparkles className="h-3.5 w-3.5 text-[var(--wb-text-2)]" />
-        <span className="truncate text-[12px] text-[var(--wb-text-2)]" title="Active model">
+        <span
+          className="truncate text-[12px] text-[var(--wb-text-2)]"
+          title={`${model} via OpenRouter (your API key)`}
+        >
           {modelLabel(model)}
         </span>
         <div className="flex-1" />
@@ -105,7 +106,9 @@ export function AiPanel() {
       </div>
 
       <div ref={scrollerRef} className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
-        {empty && <EmptyState hasKey={hasApiKey} />}
+        {empty && (
+          <EmptyState hasKey={hasApiKey} onOpenSettings={() => setCanvasMode('settings')} />
+        )}
         {aiChat.map((turn) => (
           <ChatTurn key={turn.id} turn={turn} onInsert={handleInsert} onRun={handleRun} />
         ))}
@@ -159,15 +162,19 @@ export function AiPanel() {
   );
 }
 
-function EmptyState({ hasKey }: { hasKey: boolean }) {
+function EmptyState({ hasKey, onOpenSettings }: { hasKey: boolean; onOpenSettings: () => void }) {
   if (!hasKey) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-2 px-4 text-center">
         <Sparkles className="h-6 w-6 text-[var(--wb-text-3)]" />
         <div className="text-[16px] text-[var(--wb-text-2)]">No API key</div>
         <div className="text-[12px] text-[var(--wb-text-3)]">
-          Add your OpenRouter key in Settings → AI to start asking questions about this database.
+          The assistant uses your own OpenRouter key (it reaches Claude, GPT, Gemini and other
+          models). Add it in Settings → AI.
         </div>
+        <Pill className="mt-1" onClick={onOpenSettings} data-testid="ai-open-settings">
+          Open Settings
+        </Pill>
       </div>
     );
   }
@@ -349,8 +356,27 @@ function parseFences(input: string): Part[] {
   return out.length > 0 ? out : [{ kind: 'text', text: input, lang: '', code: '' }];
 }
 
-function modelLabel(model: string): string {
-  // Trim provider prefix for the badge — "anthropic/claude-sonnet-4.5" → "claude-sonnet-4.5".
+const EMPTY_CHAT: AiTurn[] = [];
+
+const PROVIDER_NAMES: Record<string, string> = {
+  anthropic: 'Anthropic',
+  openai: 'OpenAI',
+  google: 'Google',
+  'meta-llama': 'Meta',
+  mistralai: 'Mistral',
+  qwen: 'Qwen',
+  deepseek: 'DeepSeek',
+  'x-ai': 'xAI',
+};
+
+/**
+ * Badge label for an OpenRouter model id: "anthropic/claude-sonnet-4.5" →
+ * "Anthropic · claude-sonnet-4.5". The request always goes through
+ * OpenRouter; the prefix names the model's actual provider (G3).
+ */
+export function modelLabel(model: string): string {
   const slash = model.indexOf('/');
-  return slash === -1 ? model : model.slice(slash + 1);
+  if (slash === -1) return model;
+  const vendor = model.slice(0, slash);
+  return `${PROVIDER_NAMES[vendor] ?? vendor} · ${model.slice(slash + 1)}`;
 }

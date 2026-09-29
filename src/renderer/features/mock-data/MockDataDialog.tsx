@@ -1,5 +1,12 @@
 import { Button } from '@/components/ui/button';
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Checkbox } from '@/components/ui/checkbox';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import {
@@ -15,6 +22,7 @@ import { useActiveTab, useSession } from '@/stores/session';
 import type { SchemaInfo } from '@shared/protocol';
 import { AlertTriangle, Sparkles } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
+import { GENERATOR_CHOICES, type GenKind, defaultKind, generate } from './mock-generators';
 
 /**
  * Mock data generator. Pick a row count, hit Generate, and Plasma
@@ -22,29 +30,10 @@ import { useEffect, useMemo, useState } from 'react';
  * generator chosen from data type + name heuristics. Edit-mode-gated
  * so users can't blow real data into a connection by accident.
  *
- * No `faker` dep — the built-in generators cover text / numeric /
- * timestamp / uuid / boolean / json. Per-column overrides let users
- * pin specific values (great for FK columns that have to match).
+ * Generators live in `mock-generators.ts` (no `faker` dep) and respect
+ * `char(n)` / `varchar(n)` widths. Per-column overrides let users pin
+ * specific values (great for FK columns that have to match).
  */
-type GenKind =
-  | 'auto'
-  | 'name-first'
-  | 'name-last'
-  | 'name-full'
-  | 'email'
-  | 'url'
-  | 'lorem'
-  | 'word'
-  | 'int'
-  | 'numeric'
-  | 'bool'
-  | 'timestamp'
-  | 'date'
-  | 'uuid'
-  | 'json'
-  | 'fixed'
-  | 'null';
-
 interface ColPlan {
   name: string;
   dataType: string;
@@ -133,6 +122,20 @@ export function MockDataDialog({
       }
       const colList = enabled.map((c) => quoteIdent(c.name)).join(', ');
       const sql = `INSERT INTO ${quoteIdent(tableSchema)}.${quoteIdent(tableName)} (${colList}) VALUES\n${valueRows.join(',\n')}`;
+      // A7: mock rows are writes — refuse on read-only connections and
+      // confirm on prod-tagged ones.
+      const session = useSession.getState();
+      if (session.activeConfig?.readOnly) {
+        throw new Error('This connection is read-only.');
+      }
+      const ok = await session.confirmUserSql(sql, {
+        force: true,
+        summary: `Insert ${count} mock rows into ${tableSchema}.${tableName}`,
+      });
+      if (!ok) {
+        setBusy(false);
+        return;
+      }
       await ipc.query.run(sql, params, { internal: true });
       onOpenChange(false);
       void refreshTable();
@@ -148,68 +151,72 @@ export function MockDataDialog({
       <DialogContent className="max-w-3xl">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <Sparkles className="h-4 w-4 text-primary" />
+            <Sparkles className="h-4 w-4 text-[var(--wb-text-2)]" aria-hidden />
             Generate mock rows
           </DialogTitle>
-        </DialogHeader>
-
-        <div className="grid grid-cols-[1fr_auto] items-end gap-3">
-          <div className="text-sm text-muted-foreground">
-            <span className="font-mono text-foreground">
+          <DialogDescription className="text-[12px]">
+            <span className="font-mono text-[var(--wb-text)]">
               {tableSchema}.{tableName}
             </span>{' '}
             · {columns.length} columns detected
-          </div>
-          <div className="flex items-center gap-2">
-            <Label htmlFor="mock-count" className="text-xs">
-              Rows
-            </Label>
-            <Input
-              id="mock-count"
-              type="number"
-              min={1}
-              max={5000}
-              value={count}
-              onChange={(e) => setCount(Math.max(1, Math.min(5000, Number(e.target.value) || 1)))}
-              className="w-24"
-            />
-          </div>
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="flex items-center justify-end gap-2">
+          <Label htmlFor="mock-count" className="text-[12px] font-medium text-[var(--wb-text-2)]">
+            Rows
+          </Label>
+          <Input
+            id="mock-count"
+            type="number"
+            inputMode="numeric"
+            min={1}
+            max={5000}
+            value={count}
+            onChange={(e) => setCount(Math.max(1, Math.min(5000, Number(e.target.value) || 1)))}
+            className="w-24"
+          />
         </div>
 
         <div className="-mx-2 max-h-[420px] overflow-y-auto px-2">
-          <table className="w-full font-mono text-xs">
-            <thead className="sticky top-0 bg-background">
-              <tr className="border-b border-border text-left text-[10px] uppercase tracking-wider text-muted-foreground">
+          <table className="w-full text-[13px]">
+            <thead className="sticky top-0 z-10 bg-[var(--wb-content)]">
+              <tr className="border-b border-[var(--wb-separator)] text-left text-[12px] font-medium text-[var(--wb-text-2)]">
                 <th className="w-8" />
-                <th className="px-2 py-1.5">column</th>
-                <th className="px-2 py-1.5">type</th>
-                <th className="px-2 py-1.5">generator</th>
-                <th className="px-2 py-1.5">fixed value</th>
+                <th className="px-2 py-1.5 font-medium">Column</th>
+                <th className="px-2 py-1.5 font-medium">Type</th>
+                <th className="px-2 py-1.5 font-medium">Generator</th>
+                <th className="px-2 py-1.5 font-medium">Fixed value</th>
               </tr>
             </thead>
             <tbody>
               {columns.map((c, idx) => (
-                <tr key={c.name} className="border-b border-border/60 align-top">
+                <tr key={c.name} className="border-b border-[var(--wb-separator)] align-middle">
                   <td className="px-2 py-1.5">
-                    <input
-                      type="checkbox"
+                    <Checkbox
                       checked={c.enabled}
-                      onChange={(e) => update(idx, { enabled: e.target.checked })}
+                      onCheckedChange={(v) => update(idx, { enabled: v === true })}
+                      aria-label={`Include ${c.name}`}
                     />
                   </td>
-                  <td className="px-2 py-1.5">
+                  <td className="px-2 py-1.5 font-mono text-[12px] text-[var(--wb-text)]">
                     {c.name}
                     {c.isPrimaryKey && (
-                      <span className="ml-1 text-[9px] uppercase text-primary">PK</span>
+                      <span className="ml-1.5 rounded-[4px] bg-[var(--wb-control)] px-1 py-0.5 font-sans text-[11px] text-[var(--wb-text-2)]">
+                        PK
+                      </span>
                     )}
                   </td>
-                  <td className="px-2 py-1.5 text-muted-foreground">{c.dataType}</td>
+                  <td className="px-2 py-1.5 font-mono text-[12px] text-[var(--wb-text-2)]">
+                    {c.dataType}
+                  </td>
                   <td className="px-2 py-1.5">
                     <Select
                       value={c.kind}
                       onValueChange={(v) => update(idx, { kind: v as GenKind })}
+                      disabled={!c.enabled}
                     >
-                      <SelectTrigger className="h-7 w-[140px] text-xs">
+                      <SelectTrigger className="w-[140px]" aria-label={`Generator for ${c.name}`}>
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
@@ -222,13 +229,20 @@ export function MockDataDialog({
                     </Select>
                   </td>
                   <td className="px-2 py-1.5">
-                    {c.kind === 'fixed' && (
-                      <Input
-                        value={c.fixedValue}
-                        onChange={(e) => update(idx, { fixedValue: e.target.value })}
-                        className="h-7 text-xs"
-                      />
-                    )}
+                    {/* Always editable: typing a value switches the column to "fixed". */}
+                    <Input
+                      value={c.fixedValue}
+                      onChange={(e) =>
+                        update(idx, {
+                          fixedValue: e.target.value,
+                          ...(e.target.value !== '' ? { kind: 'fixed' as const } : {}),
+                        })
+                      }
+                      disabled={!c.enabled}
+                      placeholder={c.kind === 'fixed' ? 'Empty string' : 'Generated'}
+                      aria-label={`Fixed value for ${c.name}`}
+                      className="min-w-[120px]"
+                    />
                   </td>
                 </tr>
               ))}
@@ -237,17 +251,17 @@ export function MockDataDialog({
         </div>
 
         {error && (
-          <div className="flex items-center gap-2 rounded-md border border-destructive/40 bg-destructive/10 p-2 font-mono text-xs text-destructive">
-            <AlertTriangle className="h-3.5 w-3.5" />
+          <div className="flex items-center gap-2 rounded-[6px] border border-destructive/40 bg-destructive/10 p-2 text-[12px] text-destructive">
+            <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
             {error}
           </div>
         )}
 
         <div className="flex justify-end gap-2 pt-2">
-          <Button variant="outline" size="sm" onClick={() => onOpenChange(false)}>
+          <Button variant="secondary" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
-          <Button variant="primary" size="sm" onClick={() => void onGenerate()} disabled={busy}>
+          <Button variant="primary" onClick={() => void onGenerate()} disabled={busy}>
             Generate {count} rows
           </Button>
         </div>
@@ -255,26 +269,6 @@ export function MockDataDialog({
     </Dialog>
   );
 }
-
-const GENERATOR_CHOICES: GenKind[] = [
-  'auto',
-  'name-first',
-  'name-last',
-  'name-full',
-  'email',
-  'url',
-  'lorem',
-  'word',
-  'int',
-  'numeric',
-  'bool',
-  'timestamp',
-  'date',
-  'uuid',
-  'json',
-  'fixed',
-  'null',
-];
 
 function columnsFor(
   schema: SchemaInfo,
@@ -284,143 +278,4 @@ function columnsFor(
   return schema.columns
     .filter((c) => c.schema === tableSchema && c.table === tableName)
     .sort((a, b) => a.ordinal - b.ordinal);
-}
-
-function defaultKind(col: { name: string; dataType: string }): GenKind {
-  const t = col.dataType.toLowerCase();
-  const n = col.name.toLowerCase();
-  if (t.includes('uuid')) return 'uuid';
-  if (t.includes('json')) return 'json';
-  if (t.includes('timestamp')) return 'timestamp';
-  if (t.includes('date')) return 'date';
-  if (t === 'boolean' || t === 'bool') return 'bool';
-  if (t.includes('int')) return 'int';
-  if (t.includes('numeric') || t.includes('float') || t.includes('double') || t.includes('real'))
-    return 'numeric';
-  if (n === 'email' || n.endsWith('_email')) return 'email';
-  if (n.endsWith('_url') || n === 'url') return 'url';
-  if (n === 'first_name' || n === 'firstname' || n === 'given_name') return 'name-first';
-  if (n === 'last_name' || n === 'lastname' || n === 'family_name' || n === 'surname')
-    return 'name-last';
-  if (n === 'name' || n === 'full_name' || n === 'fullname') return 'name-full';
-  if (n.endsWith('_at') || n.endsWith('_time')) return 'timestamp';
-  return 'lorem';
-}
-
-const FIRST_NAMES = [
-  'Ada',
-  'Linus',
-  'Grace',
-  'Alan',
-  'Margaret',
-  'Donald',
-  'Edsger',
-  'Barbara',
-  'Tony',
-  'Niklaus',
-  'John',
-  'Karen',
-  'Brian',
-  'Anita',
-  'Dennis',
-  'Vint',
-  'Radia',
-  'Frances',
-  'Tim',
-  'Sandi',
-];
-const LAST_NAMES = [
-  'Lovelace',
-  'Torvalds',
-  'Hopper',
-  'Turing',
-  'Hamilton',
-  'Knuth',
-  'Dijkstra',
-  'Liskov',
-  'Hoare',
-  'Wirth',
-  'Carmack',
-  'Sandberg',
-  'Kernighan',
-  'Borg',
-  'Ritchie',
-  'Cerf',
-  'Perlman',
-  'Allen',
-  'Berners-Lee',
-  'Metz',
-];
-const WORDS = [
-  'lorem',
-  'ipsum',
-  'dolor',
-  'sit',
-  'amet',
-  'consectetur',
-  'adipiscing',
-  'elit',
-  'sed',
-  'tempor',
-  'incididunt',
-  'ut',
-  'labore',
-  'magna',
-  'aliqua',
-];
-
-function pick<T>(xs: T[]): T {
-  return xs[Math.floor(Math.random() * xs.length)];
-}
-
-function randInt(lo: number, hi: number): number {
-  return Math.floor(Math.random() * (hi - lo + 1)) + lo;
-}
-
-/**
- * Returns the value to bind for this column.
- *  - `undefined` → emit `DEFAULT` (skip the param)
- *  - `null` → emit `NULL` literal
- *  - any other value is bound via `$N` to keep the SQL injection-free
- */
-function generate(col: ColPlan, idx: number): unknown {
-  if (col.kind === 'null') return null;
-  if (col.kind === 'fixed') return col.fixedValue;
-  const kind = col.kind === 'auto' ? defaultKind(col) : col.kind;
-  switch (kind) {
-    case 'name-first':
-      return pick(FIRST_NAMES);
-    case 'name-last':
-      return pick(LAST_NAMES);
-    case 'name-full':
-      return `${pick(FIRST_NAMES)} ${pick(LAST_NAMES)}`;
-    case 'email':
-      return `${pick(FIRST_NAMES).toLowerCase()}.${idx}@example.com`;
-    case 'url':
-      return `https://example.com/${randInt(1000, 9999)}`;
-    case 'lorem':
-      return Array.from({ length: randInt(3, 8) }, () => pick(WORDS)).join(' ');
-    case 'word':
-      return pick(WORDS);
-    case 'int':
-      return randInt(0, 10000);
-    case 'numeric':
-      return Math.round(Math.random() * 10000) / 100;
-    case 'bool':
-      return Math.random() < 0.5;
-    case 'timestamp': {
-      const d = new Date(Date.now() - randInt(0, 365 * 24 * 3600 * 1000));
-      return d.toISOString();
-    }
-    case 'date': {
-      const d = new Date(Date.now() - randInt(0, 365 * 24 * 3600 * 1000));
-      return d.toISOString().slice(0, 10);
-    }
-    case 'uuid':
-      return crypto.randomUUID?.() ?? `${randInt(1, 1e9)}-${idx}`;
-    case 'json':
-      return JSON.stringify({ idx, sample: pick(WORDS) });
-    default:
-      return pick(WORDS);
-  }
 }

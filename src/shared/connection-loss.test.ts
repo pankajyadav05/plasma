@@ -41,9 +41,15 @@ describe('isConnectionLostError', () => {
   });
 
   it('recognises the OpenSearch transport error classes by name', () => {
+    const err = new Error('boom');
+    err.name = 'ConnectionError';
+    expect(isConnectionLostError(err)).toBe(true);
+  });
+
+  it('does not treat a slow OpenSearch request as a lost connection (C29)', () => {
     const err = new Error('Response timeout');
     err.name = 'TimeoutError';
-    expect(isConnectionLostError(err)).toBe(true);
+    expect(isConnectionLostError(err)).toBe(false);
   });
 
   it('recognises a socket error carrying only a code', () => {

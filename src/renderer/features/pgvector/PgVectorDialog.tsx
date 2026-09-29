@@ -1,5 +1,11 @@
 import { Button } from '@/components/ui/button';
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import {
   Select,
@@ -8,6 +14,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { EmptyState } from '@/components/ui/view-parts';
 import { useActiveTab, useSession } from '@/stores/session';
 import type { QueryResult } from '@shared/protocol';
 import { Brain, Check, Copy, Sigma } from 'lucide-react';
@@ -115,34 +122,42 @@ export function PgVectorDialog({
       <DialogContent className="max-w-3xl">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <Brain className="h-4 w-4 text-primary" />
+            <Brain className="h-4 w-4 text-[var(--wb-text-2)]" />
             pgvector
           </DialogTitle>
+          <DialogDescription>
+            Vector dimensions and a nearest-neighbor query builder for this result.
+          </DialogDescription>
         </DialogHeader>
 
         {vectorCols.length === 0 ? (
-          <div className="py-6 text-center font-display text-sm italic text-muted-foreground">
-            No vector columns in this result.
-          </div>
+          <EmptyState
+            title="No vector columns"
+            hint="This result has no pgvector columns."
+            className="min-h-[120px]"
+          />
         ) : (
           <>
-            <div className="rounded-md border border-border">
-              <table className="w-full font-mono text-xs">
-                <thead className="bg-muted/30">
-                  <tr className="border-b border-border text-left text-[10px] uppercase tracking-wider text-muted-foreground">
-                    <th className="px-2 py-1.5">column</th>
-                    <th className="px-2 py-1.5">type</th>
-                    <th className="px-2 py-1.5">dimensions</th>
+            <div className="overflow-hidden rounded-[7px] border border-[var(--wb-separator)]">
+              <table className="w-full text-[12px]">
+                <thead className="bg-[var(--wb-sidebar)]">
+                  <tr className="border-b border-[var(--wb-separator)] text-left text-[12px] font-medium text-[var(--wb-text-2)]">
+                    <th className="px-2 py-1.5 font-medium">Column</th>
+                    <th className="px-2 py-1.5 font-medium">Type</th>
+                    <th className="px-2 py-1.5 font-medium">Dimensions</th>
                   </tr>
                 </thead>
                 <tbody>
                   {vectorCols.map((c) => (
-                    <tr key={c.name} className="border-b border-border/60 last:border-b-0">
+                    <tr
+                      key={c.name}
+                      className="border-b border-[var(--wb-separator)] font-mono text-[var(--wb-text)] last:border-b-0 even:bg-[var(--grid-row-a)]"
+                    >
                       <td className="px-2 py-1.5">{c.name}</td>
-                      <td className="px-2 py-1.5 text-muted-foreground">{c.dataTypeName}</td>
+                      <td className="px-2 py-1.5 text-[var(--wb-text-2)]">{c.dataTypeName}</td>
                       <td className="px-2 py-1.5">
                         <span className="inline-flex items-center gap-1">
-                          <Sigma className="h-3 w-3 text-muted-foreground" />
+                          <Sigma className="h-3 w-3 text-[var(--wb-text-3)]" />
                           {dims[c.name] ?? '?'}
                         </span>
                       </td>
@@ -155,7 +170,7 @@ export function PgVectorDialog({
             <div className="grid grid-cols-4 gap-3">
               <Field label="Anchor column">
                 <Select value={colName} onValueChange={setColName}>
-                  <SelectTrigger className="h-8 text-xs">
+                  <SelectTrigger>
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -178,7 +193,7 @@ export function PgVectorDialog({
               </Field>
               <Field label="Distance">
                 <Select value={distance} onValueChange={(v) => setDistance(v as Distance)}>
-                  <SelectTrigger className="h-8 text-xs">
+                  <SelectTrigger>
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -188,7 +203,7 @@ export function PgVectorDialog({
                   </SelectContent>
                 </Select>
               </Field>
-              <Field label="LIMIT">
+              <Field label="Limit">
                 <Input
                   type="number"
                   min={1}
@@ -199,24 +214,30 @@ export function PgVectorDialog({
               </Field>
             </div>
 
-            <div className="rounded-md border border-border">
-              <div className="flex items-center gap-2 border-b border-border px-2 py-1.5 font-display text-xs italic text-muted-foreground">
-                <span>nearest-neighbor SQL</span>
+            <div className="overflow-hidden rounded-[7px] border border-[var(--wb-separator)]">
+              <div className="flex items-center gap-2 border-b border-[var(--wb-separator)] bg-[var(--wb-sidebar)] px-2 py-1 text-[12px] font-medium text-[var(--wb-text-2)]">
+                <span>Nearest-neighbor SQL</span>
                 <div className="flex-1" />
-                <Button variant="ghost" size="icon-xs" onClick={handleCopy}>
-                  {copied ? <Check className="text-primary" /> : <Copy />}
+                <Button
+                  variant="ghost"
+                  size="icon-xs"
+                  onClick={handleCopy}
+                  aria-label="Copy SQL"
+                  title="Copy SQL"
+                >
+                  {copied ? <Check /> : <Copy />}
                 </Button>
               </div>
-              <pre className="overflow-x-auto bg-muted/20 p-3 font-mono text-[11px] text-foreground">
+              <pre className="overflow-x-auto bg-[var(--wb-content)] p-3 font-mono text-[12px] text-[var(--wb-text)]">
                 {sql || '-- pick an anchor row above'}
               </pre>
             </div>
 
             <div className="flex justify-end gap-2 pt-2">
-              <Button variant="outline" size="sm" onClick={() => onOpenChange(false)}>
+              <Button variant="secondary" onClick={() => onOpenChange(false)}>
                 Close
               </Button>
-              <Button variant="primary" size="sm" onClick={insertIntoEditor} disabled={!sql}>
+              <Button variant="primary" onClick={insertIntoEditor} disabled={!sql}>
                 Insert into editor
               </Button>
             </div>
@@ -230,9 +251,7 @@ export function PgVectorDialog({
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="flex flex-col gap-1">
-      <span className="font-display text-[10px] uppercase tracking-wider text-muted-foreground">
-        {label}
-      </span>
+      <span className="text-[12px] font-medium text-[var(--wb-text-2)]">{label}</span>
       {children}
     </div>
   );

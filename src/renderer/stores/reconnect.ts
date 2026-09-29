@@ -1,3 +1,4 @@
+import { ipc } from '@/lib/ipc';
 import { create } from 'zustand';
 import { useSession } from './session';
 
@@ -74,7 +75,8 @@ export const useReconnect = create<ReconnectState>((set, get) => {
       });
       return;
     }
-    const delay = RECONNECT_DELAYS_MS[attempt] ?? RECONNECT_DELAYS_MS[RECONNECT_DELAYS_MS.length - 1];
+    const delay =
+      RECONNECT_DELAYS_MS[attempt] ?? RECONNECT_DELAYS_MS[RECONNECT_DELAYS_MS.length - 1];
     clearTimer();
     set({ phase: 'waiting', nextAt: Date.now() + delay });
     timer = setTimeout(() => void get().reconnectNow(), delay);
@@ -133,4 +135,21 @@ useSession.subscribe((state, prev) => {
   if (state.connectionState !== 'connected' || prev.connectionState === 'connected') return;
   const r = useReconnect.getState();
   if (r.target && r.phase !== 'connecting') r.cancel();
+});
+
+// C32: keep main's quit / close guard informed about what would be lost.
+let lastUnsaved = '';
+useSession.subscribe((state) => {
+  const next = {
+    openTransaction: state.txnState !== 'none',
+    pendingEdits: state.pendingEdits.length,
+  };
+  const key = `${next.openTransaction}:${next.pendingEdits}`;
+  if (key === lastUnsaved) return;
+  lastUnsaved = key;
+  try {
+    void ipc.app.setUnsavedState(next).catch(() => undefined);
+  } catch {
+    // No preload (unit tests) — nothing to guard.
+  }
 });

@@ -26,8 +26,12 @@ export function initLogger(): typeof log {
 
   log.transports.file.resolvePathFn = () => join(app.getPath('userData'), 'logs', 'main.log');
 
-  // Pipe renderer console.log into the same log file
-  log.initialize();
+  // Pipe renderer console output into main.log only for development and
+  // E2E runs (C34) — in shipped builds renderer logs can carry query text
+  // and result values, which don't belong in a plaintext log file.
+  if (!app.isPackaged || process.env.PLASMA_E2E === '1') {
+    log.initialize();
+  }
 
   log.info('[plasma] logger initialized at', log.transports.file.getFile().path);
   return log;

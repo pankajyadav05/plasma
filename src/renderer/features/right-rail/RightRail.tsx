@@ -1,10 +1,11 @@
 import { Button } from '@/components/ui/button';
 import { Kbd } from '@/components/ui/kbd';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { IconButton, MenuItem, Pill, Segmented } from '@/components/ui/workbench';
 import { AiPanel } from '@/features/ai/AiPanel';
 import { SidebarResizer } from '@/features/app-shell/SidebarResizer';
 import { MonacoEditor } from '@/features/editor/MonacoEditor';
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { IconButton, MenuItem, Pill, Segmented } from '@/components/ui/workbench';
+import { SidebarSearch } from '@/features/sidebar/sidebar-parts';
 import { cn } from '@/lib/cn';
 import { ipc } from '@/lib/ipc';
 import { kbd } from '@/lib/platform';
@@ -29,10 +30,43 @@ import {
   X,
 } from 'lucide-react';
 import { useEffect, useState } from 'react';
-import { SidebarSearch } from '@/features/sidebar/sidebar-parts';
 import { DetailsPanel } from './DetailsPanel';
 
 const NOOP = () => {};
+
+/** Below this window width the right sidebar starts collapsed (VF19). */
+export const NARROW_WINDOW_PX = 1200;
+/** Width the right sidebar is held to while the window is narrow. */
+const NARROW_RIGHT_WIDTH = 260;
+
+/**
+ * Tracks whether the window is narrow and auto-hides the right sidebar
+ * once each time the window becomes narrow (or starts narrow). Reopening
+ * it with ⇧⌘B while narrow sticks — the collapse only fires on the
+ * wide → narrow transition.
+ */
+let narrowCollapseDone = false;
+function useNarrowWindow(): boolean {
+  const [narrow, setNarrow] = useState(() => window.innerWidth < NARROW_WINDOW_PX);
+  useEffect(() => {
+    const check = () => {
+      const isNarrow = window.innerWidth < NARROW_WINDOW_PX;
+      setNarrow(isNarrow);
+      if (!isNarrow) {
+        narrowCollapseDone = false;
+        return;
+      }
+      if (narrowCollapseDone) return;
+      narrowCollapseDone = true;
+      const st = useSession.getState();
+      if (st.rightPanelMode) st.setRightPanelMode(null);
+    };
+    check();
+    window.addEventListener('resize', check);
+    return () => window.removeEventListener('resize', check);
+  }, []);
+  return narrow;
+}
 
 type PrimaryPane = 'details' | 'ai' | 'none';
 
@@ -51,15 +85,12 @@ export function RightRail() {
   const tab = useActiveTab();
   const isTable = tab?.kind === 'table';
   const postgres = engine === 'postgres';
+  const narrow = useNarrowWindow();
   // Details + Assistant exist for every engine (Redis elements and
   // OpenSearch documents publish into Details too); the Postgres session
   // tools (compiled SQL, role, RLS) fall back to Details elsewhere.
   const effective =
-    mode === null
-      ? null
-      : postgres || mode === 'details' || mode === 'ai'
-        ? mode
-        : 'details';
+    mode === null ? null : postgres || mode === 'details' || mode === 'ai' ? mode : 'details';
 
   // RLS / compiled SQL are table-scoped — fall back to Details elsewhere.
   useEffect(() => {
@@ -77,7 +108,7 @@ export function RightRail() {
       <SidebarResizer side="right" />
       <aside
         className="flex shrink-0 flex-col self-stretch border-l border-[var(--wb-separator)] bg-[var(--wb-sidebar)] text-[var(--wb-text)]"
-        style={{ width }}
+        style={{ width: narrow ? Math.min(width, NARROW_RIGHT_WIDTH) : width }}
         aria-label="Right sidebar"
       >
         <div className="grid shrink-0 grid-cols-[1fr_auto_1fr] items-center gap-1.5 px-2.5 pb-2 pt-2">
@@ -238,11 +269,11 @@ function QueryPanel() {
           <Bookmark />
         </IconButton>
         {running ? (
-          <Button variant="destructive" size="xs" className="h-6" onClick={handleAction}>
+          <Pill onClick={handleAction}>
             <Square className="fill-current" />
             Cancel
-            <Kbd className="border-0 bg-transparent text-destructive-foreground/80">{kbd('.')}</Kbd>
-          </Button>
+            <Kbd className="bg-transparent">{kbd('.')}</Kbd>
+          </Pill>
         ) : isTable ? (
           <Pill onClick={handleAction} disabled={!canRun}>
             <RefreshCw />
@@ -252,7 +283,7 @@ function QueryPanel() {
           <Pill onClick={handleAction} disabled={!canRun}>
             <Play className="fill-current" />
             Run
-            <Kbd className="border-0 bg-transparent text-[var(--wb-text-2)]">{kbd('⏎')}</Kbd>
+            <Kbd className="bg-transparent">{kbd('⏎')}</Kbd>
           </Pill>
         )}
       </PanelHeader>
@@ -301,6 +332,7 @@ function RolePanel() {
   const activeRole = useSession((s) => s.activeRole);
   const availableRoles = useSession((s) => s.availableRoles);
   const setActiveRole = useSession((s) => s.setActiveRole);
+  const roleError = useSession((s) => s.roleError);
   const setMode = useSession((s) => s.setRightPanelMode);
   const [filter, setFilter] = useState('');
 
@@ -322,6 +354,16 @@ function RolePanel() {
           ariaLabel="Filter roles"
         />
       </div>
+
+      {roleError && (
+        <div
+          role="alert"
+          data-testid="role-error"
+          className="mx-2.5 mb-1 rounded-[6px] bg-[color-mix(in_srgb,var(--destructive)_14%,transparent)] px-2.5 py-1.5 text-[12px] leading-snug text-[var(--wb-text)]"
+        >
+          {roleError}
+        </div>
+      )}
 
       <div className="min-h-0 flex-1 overflow-y-auto p-1">
         <RoleRow
@@ -558,7 +600,7 @@ function PanelFooter({ children }: { children: React.ReactNode }) {
 function PanelEmpty({ title, hint }: { title: string; hint?: string }) {
   return (
     <div className="flex h-full flex-col items-center justify-center gap-1 px-6 text-center">
-      <div className="text-[16px] text-[var(--wb-text-2)]">{title}</div>
+      <div className="text-[15px] text-[var(--wb-text-2)]">{title}</div>
       {hint && <div className="text-[12px] text-[var(--wb-text-3)]">{hint}</div>}
     </div>
   );

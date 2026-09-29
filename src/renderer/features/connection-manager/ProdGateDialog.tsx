@@ -11,6 +11,7 @@ export function ProdGateDialog() {
   const activeConfig = useSession((s) => s.activeConfig);
   const confirmProdGate = useSession((s) => s.confirmProdGate);
   const cancelProdGate = useSession((s) => s.cancelProdGate);
+  const isCommit = gate?.kind === 'commitEdits';
 
   return (
     <ConfirmDialog
@@ -18,18 +19,28 @@ export function ProdGateDialog() {
       onOpenChange={(o) => {
         if (!o) cancelProdGate();
       }}
-      title="Run destructive query on production?"
+      title={isCommit ? 'Commit changes to production?' : 'Run destructive query on production?'}
       description={
-        <span>
-          You're about to run a destructive statement on{' '}
-          <span className="font-mono font-semibold text-destructive">
-            {activeConfig?.name ?? 'this connection'}
-          </span>{' '}
-          (tagged <span className="text-destructive">prod</span>). This may delete or rewrite data.
-          Verify your <code>WHERE</code> clause first.
-        </span>
+        isCommit ? (
+          <span>
+            You're about to write {gate?.summary ?? 'pending changes'} to{' '}
+            <span className="font-mono font-semibold text-destructive">
+              {activeConfig?.name ?? 'this connection'}
+            </span>{' '}
+            (tagged <span className="text-destructive">prod</span>) in one transaction.
+          </span>
+        ) : (
+          <span>
+            You're about to run a destructive statement on{' '}
+            <span className="font-mono font-semibold text-destructive">
+              {activeConfig?.name ?? 'this connection'}
+            </span>{' '}
+            (tagged <span className="text-destructive">prod</span>). This may delete or rewrite
+            data. Verify your <code>WHERE</code> clause first.
+          </span>
+        )
       }
-      confirmLabel="Run anyway"
+      confirmLabel={isCommit ? 'Commit' : 'Run anyway'}
       cancelLabel="Cancel"
       variant="destructive"
       onConfirm={confirmProdGate}

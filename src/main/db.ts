@@ -116,16 +116,26 @@ function migrate(d: Database.Database): void {
     d.pragma('wal_checkpoint(TRUNCATE)');
     d.exec('VACUUM');
     d.pragma(`user_version = ${CURRENT_SCHEMA_VERSION}`);
-    logger.info('[plasma] schema v3 migration complete (secrets encrypted, WAL checkpointed, vacuumed)');
+    logger.info(
+      '[plasma] schema v3 migration complete (secrets encrypted, WAL checkpointed, vacuumed)',
+    );
   }
 
   // Future migrations go here, each bumping user_version.
   // U25 owns schema v4 (open_tabs) — do not add it in U07.
   ensureReadOnlyColumn(d);
+  ensureTlsColumn(d);
+}
+
+/** C9: TLS mode + CA/cert/key file paths as JSON (additive, like read_only). */
+function ensureTlsColumn(d: Database.Database): void {
+  const cols = d.prepare('PRAGMA table_info(connections)').all() as Array<{ name: string }>;
+  if (cols.some((c) => c.name === 'tls_json')) return;
+  d.exec('ALTER TABLE connections ADD COLUMN tls_json TEXT');
 }
 
 function ensureReadOnlyColumn(d: Database.Database): void {
-  const cols = d.prepare("PRAGMA table_info(connections)").all() as Array<{ name: string }>;
-  if (cols.some((c) => c.name === "read_only")) return;
-  d.exec("ALTER TABLE connections ADD COLUMN read_only INTEGER NOT NULL DEFAULT 0");
+  const cols = d.prepare('PRAGMA table_info(connections)').all() as Array<{ name: string }>;
+  if (cols.some((c) => c.name === 'read_only')) return;
+  d.exec('ALTER TABLE connections ADD COLUMN read_only INTEGER NOT NULL DEFAULT 0');
 }

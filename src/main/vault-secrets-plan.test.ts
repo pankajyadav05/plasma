@@ -1,5 +1,5 @@
+import { type Settings, SettingsShape } from '@shared/protocol';
 import { describe, expect, it } from 'vitest';
-import type { Settings } from '@shared/protocol';
 import { planSecretsMigration, redactSettingsWithPresence } from './vault-secrets-plan';
 
 /**
@@ -61,6 +61,7 @@ describe('planSecretsMigration (U07)', () => {
 
 describe('redactSettingsWithPresence (U07)', () => {
   const base: Settings = {
+    ...SettingsShape.parse({}),
     theme: 'light',
     themeName: 'default',
     fontSans: 'theme',
@@ -123,5 +124,40 @@ describe('redactSettingsWithPresence (U07)', () => {
       hasPrivateKey: false,
       hasPassphrase: true,
     });
+  });
+});
+
+describe('C3/C17/C27 vault helpers', () => {
+  it('hasPlaintextSecrets detects lingering keys and SSH secrets', async () => {
+    const { hasPlaintextSecrets } = await import('./vault-secrets-plan');
+    expect(hasPlaintextSecrets({ openrouterApiKey: 'sk-or-1' })).toBe(true);
+    expect(
+      hasPlaintextSecrets({
+        connectionSsh: { a: { host: 'h', user: 'u', port: 22, privateKey: 'k' } },
+      }),
+    ).toBe(true);
+    expect(
+      hasPlaintextSecrets({
+        openrouterApiKey: '',
+        connectionSsh: { a: { host: 'h', user: 'u', port: 22 } },
+      }),
+    ).toBe(false);
+  });
+
+  it('isWeakSecretBackend flags Linux basic_text only', async () => {
+    const { isWeakSecretBackend } = await import('./vault-secrets-plan');
+    expect(isWeakSecretBackend('linux', 'basic_text')).toBe(true);
+    expect(isWeakSecretBackend('linux', 'gnome_libsecret')).toBe(false);
+    expect(isWeakSecretBackend('darwin', null)).toBe(false);
+  });
+
+  it('canReuseStoredPassword requires the same server and login', async () => {
+    const { canReuseStoredPassword } = await import('./vault-secrets-plan');
+    const saved = { id: 'c', engine: 'postgres', host: 'db', port: 5432, user: 'app' };
+    expect(canReuseStoredPassword(saved, { ...saved })).toBe(true);
+    expect(canReuseStoredPassword(saved, { ...saved, host: 'evil' })).toBe(false);
+    expect(canReuseStoredPassword(saved, { ...saved, port: 6543 })).toBe(false);
+    expect(canReuseStoredPassword(saved, { ...saved, user: 'root' })).toBe(false);
+    expect(canReuseStoredPassword(saved, { ...saved, id: 'other' })).toBe(false);
   });
 });

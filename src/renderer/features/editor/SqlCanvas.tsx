@@ -1,20 +1,26 @@
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { MenuItem, Pill, PillChevron, SplitPill } from '@/components/ui/workbench';
 import { ExplainDialog } from '@/features/explain/ExplainDialog';
-import { kbd } from '@/lib/platform';
+import { openSqlFileInTab, runCommand, saveActiveSqlTab } from '@/features/keymap/commands';
+import { shortcut } from '@/lib/platform';
 import { type RunMode, resolveRunTarget, statementPosition } from '@/lib/sql-split';
 import { useActiveTab, useSession } from '@/stores/session';
 import { ROW_LIMIT_CHOICES, useWorkbench } from '@/stores/workbench';
+import { MAX_RESULT_ROWS } from '@shared/result-bounds';
 import {
   ChevronDown,
+  FolderOpen,
   Gauge,
   ListOrdered,
   Play,
+  Save,
   SlidersHorizontal,
   Sparkles,
   Square,
   TextSelect,
+  Type,
   Wand2,
+  WrapText,
 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { MonacoEditor } from './MonacoEditor';
@@ -48,6 +54,8 @@ export function SqlCanvas({ expanded = false }: { expanded?: boolean }) {
   const refreshTable = useSession((s) => s.refreshTable);
   const formatActiveSql = useSession((s) => s.formatActiveSql);
   const setRightPanelMode = useSession((s) => s.setRightPanelMode);
+  const wordWrap = useWorkbench((s) => s.wordWrap);
+  const focusNonce = useWorkbench((s) => s.editorFocusNonce);
   const aiAsk = useSession((s) => s.aiAsk);
   const theme = useSession((s) => s.settings.theme);
   const fontSize = useSession((s) => s.settings.editorFontSize);
@@ -56,14 +64,6 @@ export function SqlCanvas({ expanded = false }: { expanded?: boolean }) {
   const setCaret = useWorkbench((s) => s.setCaret);
   const tabIds = useSession((s) => s.tabs.map((t) => t.id).join('|'));
   const [explainOpen, setExplainOpen] = useState(false);
-
-  // If the right-rail query panel is open, close it — Monaco is now
-  // rendered inline here and the side pane would be a duplicate. Other
-  // right-rail panes (Details, Assistant, Role, RLS) stay untouched.
-  const rightPanelMode = useSession((s) => s.rightPanelMode);
-  useEffect(() => {
-    if (rightPanelMode === 'query') setRightPanelMode(null);
-  }, [rightPanelMode, setRightPanelMode]);
 
   // The caret readout belongs to this editor only — clear it on unmount
   // so a stale "Ln 40" never lingers after switching to a table tab.
@@ -138,7 +138,8 @@ export function SqlCanvas({ expanded = false }: { expanded?: boolean }) {
           onChange={isTable ? () => {} : setSql}
           onRun={handleAction}
           onRunAll={handleRunAll}
-          onToggle={() => {}}
+          wordWrap={wordWrap}
+          focusNonce={focusNonce}
           runningRange={tab.queryRunningRange}
           errorRange={tab.queryErrorRange}
           errorMessage={tab.queryError}
@@ -171,7 +172,7 @@ export function SqlCanvas({ expanded = false }: { expanded?: boolean }) {
 /**
  * Bottom strip of the SQL editor (TablePlus layout):
  *
- *   line 12, column 4, location 318 · statement 2 of 3    [No limit ▾] [Beautify ▾] [▶ Run Current ⌘⏎ ▾]
+ *   Ln 12, Col 4 · statement 2 of 3    [No limit ▾] [Beautify ▾] [▶ Run Current ⌘⏎ ▾]
  *
  * The primary button follows the editor: "Run Selected" while text is
  * selected, otherwise "Run Current" (the statement tinted in the editor).
@@ -200,6 +201,8 @@ function EditorActionBar({
   const [runMenu, setRunMenu] = useState(false);
   const [beautifyMenu, setBeautifyMenu] = useState(false);
   const [limitMenu, setLimitMenu] = useState(false);
+  const wordWrap = useWorkbench((s) => s.wordWrap);
+  const fontSize = useSession((s) => s.settings.editorFontSize);
 
   if (!tab) return null;
 
@@ -240,7 +243,7 @@ function EditorActionBar({
       <span className="min-w-0 truncate font-mono text-[12px] tabular-nums text-[var(--wb-text-2)]">
         {(hasSelection || (position && position.total > 1)) && cursor ? '· ' : ''}
         {cursor
-          ? `line ${cursor.line}, column ${cursor.column}, location ${cursor.offset}`
+          ? `Ln ${cursor.line}, Col ${cursor.column}`
           : isTable
             ? 'compiled from the table browser — read-only'
             : ''}
@@ -257,11 +260,21 @@ function EditorActionBar({
                 <ChevronDown className="!h-3.5 !w-3.5 opacity-70" />
               </Pill>
             </PopoverTrigger>
-            <PopoverContent align="end" side="top" sideOffset={6} className="w-[180px] p-1" role="menu">
+            <PopoverContent
+              align="end"
+              side="top"
+              sideOffset={6}
+              className="w-[180px] p-1"
+              role="menu"
+            >
               {ROW_LIMIT_CHOICES.map((n) => (
                 <MenuItem
                   key={String(n)}
-                  label={n === null ? 'No limit' : `${n.toLocaleString()} rows`}
+                  label={
+                    n === null
+                      ? `No limit (max ${MAX_RESULT_ROWS.toLocaleString()})`
+                      : `${n.toLocaleString()} rows`
+                  }
                   checked={rowLimit === n}
                   onClick={() => {
                     setRowLimit(n);
@@ -275,17 +288,23 @@ function EditorActionBar({
           <SplitPill>
             <Pill onClick={() => void formatActiveSql()} disabled={!hasSql} title="Beautify SQL">
               Beautify
-              <span className="font-mono text-[12px] opacity-70">{kbd('⇧F')}</span>
+              <span className="font-mono text-[12px] opacity-70">{shortcut('formatSql')}</span>
             </Pill>
             <Popover open={beautifyMenu} onOpenChange={setBeautifyMenu}>
               <PopoverTrigger asChild>
                 <PillChevron aria-label="More editor actions" title="More editor actions" />
               </PopoverTrigger>
-              <PopoverContent align="end" side="top" sideOffset={6} className="w-[230px] p-1" role="menu">
+              <PopoverContent
+                align="end"
+                side="top"
+                sideOffset={6}
+                className="w-[230px] p-1"
+                role="menu"
+              >
                 <MenuItem
                   icon={<Wand2 />}
                   label="Beautify"
-                  hint={kbd('⇧F')}
+                  hint={shortcut('formatSql')}
                   disabled={!hasSql}
                   onClick={() => {
                     setBeautifyMenu(false);
@@ -295,11 +314,57 @@ function EditorActionBar({
                 <MenuItem
                   icon={<Sparkles />}
                   label="Ask AI about this SQL"
-                  hint={kbd('I')}
+                  hint={shortcut('askAi')}
                   onClick={() => {
                     setBeautifyMenu(false);
                     onAskAi();
                   }}
+                />
+                <div className="my-1 h-px bg-[var(--wb-separator)]" />
+                <MenuItem
+                  icon={<FolderOpen />}
+                  label="Open SQL File…"
+                  hint={shortcut('openFile')}
+                  onClick={() => {
+                    setBeautifyMenu(false);
+                    void openSqlFileInTab();
+                  }}
+                />
+                <MenuItem
+                  icon={<Save />}
+                  label={tab.fileName ? `Save ${tab.fileName}` : 'Save to File…'}
+                  hint={shortcut('commitEdits')}
+                  onClick={() => {
+                    setBeautifyMenu(false);
+                    void saveActiveSqlTab(false);
+                  }}
+                />
+                <MenuItem
+                  label="Save As…"
+                  hint={shortcut('saveFileAs')}
+                  onClick={() => {
+                    setBeautifyMenu(false);
+                    void saveActiveSqlTab(true);
+                  }}
+                />
+                <div className="my-1 h-px bg-[var(--wb-separator)]" />
+                <MenuItem
+                  icon={<WrapText />}
+                  label="Word Wrap"
+                  hint={shortcut('wordWrap')}
+                  checked={wordWrap ? true : undefined}
+                  onClick={() => runCommand('wordWrap')}
+                />
+                <MenuItem
+                  icon={<Type />}
+                  label={`Larger Font (${fontSize}px)`}
+                  hint={shortcut('fontBigger')}
+                  onClick={() => runCommand('fontBigger')}
+                />
+                <MenuItem
+                  label="Smaller Font"
+                  hint={shortcut('fontSmaller')}
+                  onClick={() => runCommand('fontSmaller')}
                 />
               </PopoverContent>
             </Popover>
@@ -308,10 +373,10 @@ function EditorActionBar({
       )}
 
       {running ? (
-        <Pill onClick={onRun} className="bg-destructive text-white hover:bg-destructive/90">
+        <Pill onClick={onRun} data-testid="run-cancel">
           <Square className="fill-current" />
           Cancel
-          <span className="font-mono text-[10px] opacity-75">{kbd('.')}</span>
+          <span className="font-mono text-[12px] opacity-70">{shortcut('cancelQuery')}</span>
         </Pill>
       ) : (
         <SplitPill>
@@ -323,12 +388,12 @@ function EditorActionBar({
               isTable
                 ? 'Refresh the table query'
                 : hasSelection
-                  ? `Run the selected text (${kbd('⏎')})`
-                  : `Run the highlighted statement at the cursor (${kbd('⏎')})`
+                  ? `Run the selected text (${shortcut('runQuery')})`
+                  : `Run the highlighted statement at the cursor (${shortcut('runQuery')})`
             }
           >
             {primaryLabel}
-            <span className="font-mono text-[12px] opacity-70">{kbd('⏎')}</span>
+            <span className="font-mono text-[12px] opacity-70">{shortcut('runQuery')}</span>
           </Pill>
           {!isTable && (
             <Popover open={runMenu} onOpenChange={setRunMenu}>
@@ -339,11 +404,17 @@ function EditorActionBar({
                   title="More run options"
                 />
               </PopoverTrigger>
-              <PopoverContent align="end" side="top" sideOffset={6} className="w-[260px] p-1" role="menu">
+              <PopoverContent
+                align="end"
+                side="top"
+                sideOffset={6}
+                className="w-[260px] p-1"
+                role="menu"
+              >
                 <MenuItem
                   icon={<TextSelect />}
                   label="Run Selected"
-                  hint={hasSelection ? kbd('⏎') : 'select text first'}
+                  hint={hasSelection ? shortcut('runQuery') : 'select text first'}
                   disabled={!hasSelection}
                   onClick={() => pick('selection')}
                 />
@@ -354,7 +425,7 @@ function EditorActionBar({
                       ? `Run Current (statement ${position.index})`
                       : 'Run Current'
                   }
-                  hint={hasSelection ? undefined : kbd('⏎')}
+                  hint={hasSelection ? undefined : shortcut('runQuery')}
                   onClick={() => pick('current')}
                 />
                 <MenuItem
@@ -364,7 +435,7 @@ function EditorActionBar({
                       ? `Run All (${position.total} statements)`
                       : 'Run All'
                   }
-                  hint={kbd('⇧⏎')}
+                  hint={shortcut('runQueryAll')}
                   onClick={() => pick('buffer')}
                 />
                 <div className="my-1 h-px bg-[var(--hairline)]" />

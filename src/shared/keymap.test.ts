@@ -4,10 +4,13 @@ import {
   accelerator,
   binding,
   cheatSheetSections,
+  formatBinding,
   formatChord,
+  formatKeys,
   matchGlobalBinding,
   matchesBinding,
   matchesChord,
+  selectTabIndex,
 } from './keymap';
 
 function ev(partial: {
@@ -91,7 +94,20 @@ describe('keymap', () => {
     const sections = cheatSheetSections();
     const ids = sections.flatMap((s) => s.items.map((i) => i.id));
     expect(ids.sort()).toEqual([...KEYMAP.map((b) => b.id)].sort());
-    expect(sections.map((s) => s.category)).toEqual(['General', 'Query', 'View', 'Editor']);
+    expect(sections.map((s) => s.category)).toEqual([
+      'General',
+      'Query',
+      'Tabs',
+      'View',
+      'Editor',
+      'Grid',
+    ]);
+  });
+
+  it('filters the cheat-sheet by label or keys', () => {
+    const ids = cheatSheetSections('wrap').flatMap((s) => s.items.map((i) => i.id));
+    expect(ids).toEqual(['wordWrap']);
+    expect(cheatSheetSections('zzz-nothing')).toEqual([]);
   });
 
   it('matchesChord requires mod when declared', () => {
@@ -119,5 +135,58 @@ describe('keymap', () => {
     expect(matchGlobalBinding(ev({ key: 'B', metaKey: true, shiftKey: true }))?.id).toBe(
       'toggleRightSidebar',
     );
+  });
+
+  it('formats glyph strings per platform (K5)', () => {
+    expect(formatKeys('⌘⇧F', true)).toBe('⌘⇧F');
+    expect(formatKeys('⌘⇧F', false)).toBe('Ctrl+Shift+F');
+    expect(formatKeys('⇧F', false)).toBe('Shift+F');
+    expect(formatKeys('⌘⏎', false)).toBe('Ctrl+Enter');
+    expect(formatKeys('Esc', false)).toBe('Esc');
+    expect(formatKeys('⌥← / ⌥→', false)).toBe('Alt+← / Alt+→');
+    expect(formatKeys('Tab / ⇧Tab', false)).toBe('Tab / Shift+Tab');
+    expect(formatChord({ key: 'Enter', mod: true }, false)).toBe('Ctrl+Enter');
+    expect(formatChord({ key: 'z', alt: true }, true)).toBe('⌥Z');
+    expect(formatBinding('gridMove', false)).toBe('↑ ↓ ← →');
+    expect(formatBinding('settings', true)).toBe('⌘,');
+  });
+
+  it('adds the standard shortcuts (K3) as global bindings', () => {
+    expect(matchGlobalBinding(ev({ key: ',', metaKey: true }))?.id).toBe('settings');
+    expect(matchGlobalBinding(ev({ key: 's', ctrlKey: true }))?.id).toBe('commitEdits');
+    expect(matchGlobalBinding(ev({ key: 'S', ctrlKey: true, shiftKey: true }))?.id).toBe(
+      'saveFileAs',
+    );
+    expect(matchGlobalBinding(ev({ key: 'r', metaKey: true }))?.id).toBe('refresh');
+    expect(matchGlobalBinding(ev({ key: 'w', metaKey: true }))?.id).toBe('closeTab');
+    // Documentation-only grid keys are never dispatched globally.
+    expect(matchGlobalBinding(ev({ key: 'c', metaKey: true }))).toBeUndefined();
+    expect(matchGlobalBinding(ev({ key: 'Escape' }))).toBeUndefined();
+  });
+
+  it('accepts alternate chords and physical keys for alt letters', () => {
+    expect(matchesBinding(ev({ key: 'i', metaKey: true }), 'formatSql')).toBe(true);
+    expect(matchesBinding(ev({ key: 'F', ctrlKey: true, shiftKey: true }), 'formatSql')).toBe(true);
+    expect(matchesBinding(ev({ key: 'Ω', code: 'KeyZ', altKey: true }), 'wordWrap')).toBe(true);
+  });
+
+  it('resolves ⌘1…⌘9 to a tab index', () => {
+    expect(selectTabIndex(ev({ key: '1', metaKey: true }))).toBe(0);
+    expect(selectTabIndex(ev({ key: '9', ctrlKey: true }))).toBe(8);
+    expect(
+      selectTabIndex(ev({ key: '!', code: 'Digit1', ctrlKey: true, shiftKey: true })),
+    ).toBeNull();
+    expect(selectTabIndex(ev({ key: '1' }))).toBeNull();
+  });
+
+  it('never gives two dispatched bindings the same chord', () => {
+    const seen = new Map<string, string>();
+    for (const b of KEYMAP.filter((k) => k.scope === 'global' || k.scope === 'editor')) {
+      for (const c of [b.chord, ...(b.altChords ?? [])]) {
+        const key = `${b.scope === 'global' ? 'g' : 'e'}:${!!c.mod}${!!c.shift}${!!c.alt}${c.key.toLowerCase()}`;
+        expect(seen.get(key), `${b.id} vs ${seen.get(key)}`).toBeUndefined();
+        seen.set(key, b.id);
+      }
+    }
   });
 });

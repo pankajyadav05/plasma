@@ -1,37 +1,96 @@
-import type { ColumnMeta, QueryResult } from '@shared/protocol';
+import { exportMime, formatResultString } from '@shared/export-format';
+import type { QueryResult } from '@shared/protocol';
+import { isSingleSqlStatement, looksLikeWriteSql } from '@shared/sql-statements';
+import { type Filter, type TableSort, buildDataSql, quoteIdent } from './table-query';
 
 /**
- * Result set export helpers. All synchronous — streams are M3 territory.
- * Writes to an in-browser Blob and triggers a download via a synthetic
- * anchor click. Works in Electron renderer without any main-process help.
+ * Result set export helpers. CSV / JSON / SQL formatting lives in
+ * `@shared/export-format` (one implementation for clipboard, in-renderer
+ * download and the worker's streamed file export — F7). The worker
+ * returns Postgres text for dates, timestamps, intervals, bytea, numeric
+ * and arrays, so values are written exactly as the server printed them.
  */
 
 export type ExportFormat = 'csv' | 'json' | 'sql';
 
-interface FormatSpec {
-  content: string;
-  mime: string;
-  extension: string;
+export interface ExportOptions {
+  /** Quoted INSERT target for SQL (see `exportTargetTable`). */
+  targetTable?: string;
 }
 
-function formatResult(result: QueryResult, format: ExportFormat): FormatSpec {
-  switch (format) {
-    case 'csv':
-      return { content: toCsv(result), mime: 'text/csv;charset=utf-8', extension: 'csv' };
-    case 'json':
-      return {
-        content: toJson(result),
-        mime: 'application/json;charset=utf-8',
-        extension: 'json',
-      };
-    case 'sql':
-      return { content: toSqlInserts(result), mime: 'text/plain;charset=utf-8', extension: 'sql' };
-  }
+/** `"schema"."table"` for SQL INSERT export, or undefined if unknown. */
+export function exportTargetTable(
+  schema?: string | null,
+  table?: string | null,
+): string | undefined {
+  if (!schema || !table) return undefined;
+  return `${quoteIdent(schema)}.${quoteIdent(table)}`;
 }
 
-export function exportResult(result: QueryResult, format: ExportFormat, filename = 'plasma') {
-  const { content, mime, extension } = formatResult(result, format);
-  download(content, `${filename}.${extension}`, mime);
+/**
+ * Server-side "export everything" source (F7 / PF9): the worker streams the
+ * query straight to the file, so the export is not limited to the loaded
+ * page or the 10k-row display cap.
+ */
+export interface FullExportSource {
+  sql: string;
+  params?: unknown[];
+  /** Scope label, e.g. "Whole table" or "Full result". */
+  label: string;
+  targetTable?: string;
+}
+
+/** Table tab → unpaged SELECT with the tab's filters, sort and columns. */
+export function tableFullExport(input: {
+  schema: string;
+  table: string;
+  allColumns: string[];
+  hiddenColumns: Set<string>;
+  sort: TableSort[];
+  filters: Filter[];
+  primaryKey?: string[];
+}): FullExportSource {
+  const { sql, params } = buildDataSql({
+    ...input,
+    page: 0,
+    pageSize: 1,
+    unpaged: true,
+  });
+  const filtered = input.filters.length > 0;
+  return {
+    sql,
+    params,
+    label: filtered ? 'All matching' : 'Whole table',
+    targetTable: exportTargetTable(input.schema, input.table),
+  };
+}
+
+/**
+ * SQL result → re-run the statement unbounded, but only when it is a
+ * single read-only query and the loaded result was truncated. DML is
+ * never re-executed for an export.
+ */
+export function queryFullExport(result: QueryResult): FullExportSource | null {
+  const sql = result.sql?.trim();
+  if (!result.truncated || !sql) return null;
+  if (!isSingleSqlStatement(sql) || looksLikeWriteSql(sql)) return null;
+  return { sql, label: 'Full result' };
+}
+
+function formatResult(result: QueryResult, format: ExportFormat, opts?: ExportOptions): string {
+  return formatResultString(result.columns, result.rows, format, {
+    targetTable: opts?.targetTable,
+    bom: false,
+  });
+}
+
+export function exportResult(
+  result: QueryResult,
+  format: ExportFormat,
+  filename = 'plasma',
+  opts?: ExportOptions,
+) {
+  download(formatResult(result, format, opts), `${filename}.${format}`, exportMime(format));
 }
 
 /**
@@ -41,9 +100,9 @@ export function exportResult(result: QueryResult, format: ExportFormat, filename
 export async function copyResultToClipboard(
   result: QueryResult,
   format: ExportFormat,
+  opts?: ExportOptions,
 ): Promise<void> {
-  const { content } = formatResult(result, format);
-  await navigator.clipboard.writeText(content);
+  await navigator.clipboard.writeText(formatResult(result, format, opts));
 }
 
 /** Clipboard-only table formats (no file download counterpart). */
@@ -119,68 +178,6 @@ export function pickRows(result: QueryResult, indices: Iterable<number>): QueryR
   const ordered = Array.from(indices).sort((a, b) => a - b);
   const rows = ordered.filter((i) => i >= 0 && i < result.rows.length).map((i) => result.rows[i]);
   return { ...result, rows, rowCount: rows.length };
-}
-
-function toCsv(result: QueryResult): string {
-  const header = result.columns.map((c) => csvEscape(c.name)).join(',');
-  const body = result.rows.map((row) => row.map(csvEscape).join(','));
-  return [header, ...body].join('\r\n');
-}
-
-function csvEscape(value: unknown): string {
-  if (value === null || value === undefined) return '';
-  let str: string;
-  if (typeof value === 'object') {
-    try {
-      str = JSON.stringify(value);
-    } catch {
-      str = String(value);
-    }
-  } else {
-    str = String(value);
-  }
-  // Quote if contains comma, quote, newline, or carriage return
-  if (/[",\r\n]/.test(str)) {
-    return `"${str.replace(/"/g, '""')}"`;
-  }
-  return str;
-}
-
-function toJson(result: QueryResult): string {
-  const objects = result.rows.map((row) => {
-    const obj: Record<string, unknown> = {};
-    result.columns.forEach((col, i) => {
-      obj[col.name] = row[i];
-    });
-    return obj;
-  });
-  return JSON.stringify(objects, null, 2);
-}
-
-function toSqlInserts(result: QueryResult): string {
-  // We don't know the table name — emit as placeholder `target_table`.
-  const colList = result.columns.map((c) => `"${c.name.replace(/"/g, '""')}"`).join(', ');
-  const lines: string[] = [];
-  for (const row of result.rows) {
-    const vals = row.map((v) => sqlLiteral(v, result.columns)).join(', ');
-    lines.push(`INSERT INTO target_table (${colList}) VALUES (${vals});`);
-  }
-  return lines.join('\n');
-}
-
-function sqlLiteral(value: unknown, _columns: ColumnMeta[]): string {
-  if (value === null || value === undefined) return 'NULL';
-  if (typeof value === 'number') return String(value);
-  if (typeof value === 'boolean') return value ? 'TRUE' : 'FALSE';
-  if (value instanceof Date) return `'${value.toISOString()}'`;
-  if (typeof value === 'object') {
-    try {
-      return `'${JSON.stringify(value).replace(/'/g, "''")}'::jsonb`;
-    } catch {
-      return `'${String(value).replace(/'/g, "''")}'`;
-    }
-  }
-  return `'${String(value).replace(/'/g, "''")}'`;
 }
 
 function download(content: string, filename: string, mime: string) {

@@ -7,20 +7,14 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { EmptyState } from '@/components/ui/view-parts';
 import { formatDuration } from '@/lib/format';
 import { useSession } from '@/stores/session';
-import type {
-  HistoryDurationFacet,
-  HistoryEntry,
-  HistoryStatusFacet,
-} from '@shared/protocol';
+import type { HistoryDurationFacet, HistoryEntry, HistoryStatusFacet } from '@shared/protocol';
 import { BookmarkPlus, Search } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 
-/**
- * Shared history list + server-side facets (U35). Used by the ⌘H sheet
- * and the full-window History canvas.
- */
+/** History list + server-side facets (U35), shown on the History canvas. */
 export function HistoryBrowser({
   onReuse,
   compact = false,
@@ -73,14 +67,14 @@ export function HistoryBrowser({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex shrink-0 flex-col gap-2 border-b border-border px-4 py-3">
-        <div className="relative">
-          <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+      <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-[var(--wb-separator)] px-2.5 py-2">
+        <div className="relative min-w-[200px] flex-1">
+          <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--wb-text-2)]" />
           <Input
             value={searchDraft}
             onChange={(e) => setSearchDraft(e.target.value)}
             placeholder="Search SQL…"
-            className="h-8 pl-8"
+            className="pl-7"
             aria-label="Search query history"
           />
         </div>
@@ -92,7 +86,7 @@ export function HistoryBrowser({
               setFacet({ connectionId });
             }}
           >
-            <SelectTrigger className="h-8 w-[160px]" aria-label="Connection facet">
+            <SelectTrigger className="w-[160px]" aria-label="Connection facet">
               <SelectValue placeholder="Connection" />
             </SelectTrigger>
             <SelectContent>
@@ -112,7 +106,7 @@ export function HistoryBrowser({
             value={(filter.status as HistoryStatusFacet | undefined) ?? 'all'}
             onValueChange={(v) => setFacet({ status: v as HistoryStatusFacet })}
           >
-            <SelectTrigger className="h-8 w-[120px]" aria-label="Status facet">
+            <SelectTrigger className="w-[120px]" aria-label="Status facet">
               <SelectValue placeholder="Status" />
             </SelectTrigger>
             <SelectContent>
@@ -126,7 +120,7 @@ export function HistoryBrowser({
             value={(filter.duration as HistoryDurationFacet | undefined) ?? 'all'}
             onValueChange={(v) => setFacet({ duration: v as HistoryDurationFacet })}
           >
-            <SelectTrigger className="h-8 w-[130px]" aria-label="Duration facet">
+            <SelectTrigger className="w-[130px]" aria-label="Duration facet">
               <SelectValue placeholder="Duration" />
             </SelectTrigger>
             <SelectContent>
@@ -137,7 +131,7 @@ export function HistoryBrowser({
             </SelectContent>
           </Select>
 
-          <span className="ml-auto text-xs text-muted-foreground">
+          <span className="text-[12px] text-[var(--wb-text-2)]" aria-live="polite">
             {history.length.toLocaleString()} shown
           </span>
         </div>
@@ -145,9 +139,10 @@ export function HistoryBrowser({
 
       <div className="min-h-0 flex-1 overflow-y-auto">
         {history.length === 0 ? (
-          <div className="flex h-full items-center justify-center p-10 text-center font-display text-base italic text-muted-foreground">
-            no matching history — run a query or clear filters
-          </div>
+          <EmptyState
+            title="No matching history"
+            hint="Run a query, or clear the search and filters."
+          />
         ) : (
           <ul className="flex flex-col">
             {history.map((entry) => (
@@ -212,20 +207,21 @@ function HistoryRow({
   onReuse: () => void;
 }) {
   return (
-    <li className="border-b border-border">
-      <div className="flex items-start gap-2 px-4 py-3">
+    <li className="group/hist border-b border-[var(--wb-separator)] hover:bg-[color-mix(in_srgb,var(--wb-text)_4%,transparent)]">
+      <div className="flex items-start gap-2 px-3 py-2">
         <button
           type="button"
           onClick={onReuse}
-          className="min-w-0 flex-1 cursor-pointer text-left transition-colors hover:opacity-90 focus-visible:outline-none"
+          title="Open in a new SQL tab"
+          className="min-w-0 flex-1 cursor-pointer rounded-[5px] text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
-          <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
+          <div className="flex flex-wrap items-center gap-3 text-[12px] text-[var(--wb-text-2)]">
             <span>{new Date(entry.executedAt).toLocaleString()}</span>
-            <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] uppercase tracking-wide">
+            <span className="rounded-[4px] bg-[var(--wb-control)] px-1.5 py-0.5 text-[11px]">
               {connLabel}
             </span>
             {entry.error ? (
-              <span className="text-destructive">error</span>
+              <span className="text-destructive">Error</span>
             ) : (
               <>
                 {entry.rowCount !== null && <span>{entry.rowCount.toLocaleString()} rows</span>}
@@ -233,18 +229,19 @@ function HistoryRow({
               </>
             )}
           </div>
-          <pre className="mt-1 max-h-24 overflow-hidden whitespace-pre-wrap break-words font-mono text-xs text-foreground">
+          <pre className="mt-1 max-h-24 overflow-hidden whitespace-pre-wrap break-words font-mono text-[12px] text-[var(--wb-text)]">
             {entry.sql.slice(0, previewLen)}
             {entry.sql.length > previewLen ? '…' : ''}
           </pre>
           {entry.error && (
-            <div className="mt-1 font-mono text-xs text-destructive">{entry.error}</div>
+            <div className="mt-1 font-mono text-[12px] text-destructive">{entry.error}</div>
           )}
         </button>
         <Button
           type="button"
           variant="ghost"
-          size="icon-sm"
+          size="icon-24"
+          className="opacity-0 group-hover/hist:opacity-100 focus-visible:opacity-100"
           title="Save as snippet"
           aria-label="Save as snippet"
           onClick={(e) => {
@@ -252,11 +249,11 @@ function HistoryRow({
             onStartSave();
           }}
         >
-          <BookmarkPlus className="h-4 w-4" />
+          <BookmarkPlus />
         </Button>
       </div>
       {naming && (
-        <div className="flex items-center gap-2 border-t border-border bg-muted/30 px-4 py-2">
+        <div className="flex items-center gap-2 border-t border-[var(--wb-separator)] bg-[var(--wb-sidebar)] px-3 py-2">
           <Input
             autoFocus
             value={snippetName}
@@ -266,7 +263,7 @@ function HistoryRow({
               else if (e.key === 'Escape') onCancelSave();
             }}
             placeholder="Snippet name…"
-            className="h-8"
+            className="max-w-[360px]"
             aria-label="Snippet name"
           />
           <Button

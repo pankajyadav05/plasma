@@ -1,10 +1,16 @@
 import { randomUUID } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CONNECTION_LOST, ConnectionLostError } from '@shared/connection-loss';
 import {
   AiChatRequest,
   type AppMeta,
+  AppUnsavedState,
+  ConnectionSshConfig,
+  type SshHostKeyPrompt,
+  CommitEditBatchRequest,
+  ExplainRequest,
   ConnectionConfig,
   type ConnectionConfig as ConnectionConfigType,
   type ConnectionInfo,
@@ -14,6 +20,7 @@ import {
   type ExportSaveResult,
   type HistoryEntry,
   HistoryListOpts,
+  IntrospectOpts,
   IpcChannel,
   type PingRequest,
   type PingResponse,
@@ -27,11 +34,16 @@ import {
   type WorkerResponse,
 } from '@shared/protocol';
 import { MAX_RESULT_ROWS } from '@shared/result-bounds';
+import { assertTlsAllowedForTag, resolveTls, withTunnelServername } from '@shared/tls';
+import { isSingleSqlStatement, looksLikeWriteSql } from '@shared/sql-statements';
 import { BrowserWindow, app, dialog, ipcMain, nativeImage } from 'electron';
 import {
   cancelAiChat,
+  capAiToolJson,
+  isAiRowDataAllowed,
   isReadOnlyRedisCommand,
   isReadOnlySql,
+  serializeAiToolRows,
   setAiToolExecutor,
   startAiChat,
 } from './ai';
@@ -43,19 +55,46 @@ import {
 import { closeDb, getDb } from './db';
 import { clearHistory, latestHistory, listHistory, recordHistory } from './history';
 import { initLogger, logger } from './logger';
+import {
+  assertOsWritable,
+  parseOsRequestArgs,
+  parseOsSearchArgs,
+  parseOsSqlArgs,
+} from './opensearch-ipc';
 import { buildAppMenu } from './menu';
-import { getAllSettings, setSetting } from './settings';
+import {
+  assertRedisCommandAllowed,
+  assertRedisWritable,
+  clampAnalyzeSample,
+  parseRedisBulkDeleteArgs,
+  parseRedisCommandArgs,
+  parseRedisGetKeyArgs,
+  parseRedisKeyArgs,
+  parseRedisPatternDeleteArgs,
+  parseRedisScanArgs,
+  parseRedisSetTtlArgs,
+  parseRedisWriteArgs,
+} from './redis-ipc-args';
+import { applySettingsPatch, getAllSettings, getPublicSettings } from './settings';
 import { formatSql } from './sql-format';
-import { closeAllTunnels, closeTunnel, openTunnel } from './ssh-tunnel';
+import { closeAllTunnels, closeTunnel, openTunnel, setHostKeyPrompt } from './ssh-tunnel';
+import { assertAllowedOnReadOnly } from './read-only-guard';
 import { registerE2EHooks } from './e2e-hooks';
 import { disposeUpdater, initUpdater } from './updater';
 import {
   deleteConnection as vaultDelete,
+  getApiKey,
+  getConnectionForEdit,
   getFullConnection as vaultGetFull,
+  getFullSshConfig,
   listConnections as vaultList,
+  confirmWeakSecretStorage,
+  migrateLingeringPlaintextSecrets,
   saveConnection as vaultSave,
+  withStoredPassword,
 } from './vault';
-import { applyThemeToWindow, createMainWindow, resolveIconPath } from './window';
+import { applyThemeToWindow, createMainWindow, rendererEntry, resolveIconPath } from './window';
+import { guardIpcSenders, installWebSecurity } from './web-security';
 import { WorkerSupervisor } from './worker-supervisor';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -82,6 +121,11 @@ let activeEngine: 'postgres' | 'redis' | 'opensearch' | null = null;
  * requires; scoped to the live session and dropped on disconnect.
  */
 let retainedSession: RetainedSession | null = null;
+/**
+ * C11: bumped whenever the user starts a connect or disconnect, so a
+ * transparent recovery that is still in flight can tell it is stale.
+ */
+let sessionEpoch = 0;
 
 // ─── App lifecycle ────────────────────────────────────────────────────
 
@@ -99,8 +143,26 @@ if (process.env.PLASMA_USER_DATA) {
   app.setPath('userData', process.env.PLASMA_USER_DATA);
 }
 
+// C34: one instance per profile — a second one would share plasma.db and
+// the worker. The lock is per userData dir, so isolated E2E runs coexist.
+const hasInstanceLock = app.requestSingleInstanceLock();
+if (!hasInstanceLock) {
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.focus();
+  });
+}
+
 app.whenReady().then(async () => {
+  if (!hasInstanceLock) return;
   initLogger();
+  // C19/C34: navigation + window.open + permission guards, and IPC only
+  // from the app's own page. Before any window or handler exists.
+  installWebSecurity(rendererEntry());
+  guardIpcSenders(rendererEntry());
   registerE2EHooks(() => workerSupervisor);
   logger.info('[plasma] app ready, version', app.getVersion());
 
@@ -126,6 +188,17 @@ app.whenReady().then(async () => {
 
   // Touch the DB early so migrations run before any IPC handlers can read it
   getDb();
+  // C27: warn (and let the user refuse) when Linux has no keyring.
+  await confirmWeakSecretStorage().catch((err) => {
+    logger.error('[plasma] vault: keyring check failed:', err);
+  });
+  // C3: installs already at schema v3 may still hold plaintext secrets that
+  // older builds wrote into settings — move them into the vault.
+  try {
+    migrateLingeringPlaintextSecrets();
+  } catch (err) {
+    logger.error('[plasma] vault: re-migration of plaintext secrets failed:', err);
+  }
 
   await workerSupervisor.start(join(__dirname, 'workers/index.js'));
 
@@ -171,16 +244,14 @@ app.whenReady().then(async () => {
         });
       }
       try {
-        const res = await callWorker({ kind: 'sidebandQuery', sql, revision: ++queryRequestRevision }, 'queryResult');
-        const cols = res.result.columns.map((c) => c.name);
-        const rows = res.result.rows
-          .slice(0, 50)
-          .map((r) => Object.fromEntries(cols.map((cn, i) => [cn, r[i]])));
-        return JSON.stringify({
+        // aiQuery runs on the aux client inside BEGIN … READ ONLY and
+        // rejects multi-statement SQL (C18) — the regex above is only a
+        // pre-filter.
+        const res = await callWorker({ kind: 'aiQuery', sql }, 'queryResult');
+        return serializeAiToolRows({
+          columns: res.result.columns.map((c) => c.name),
+          rows: res.result.rows,
           rowCount: res.result.rowCount,
-          columns: cols,
-          rows,
-          truncated: res.result.rows.length > 50,
         });
       } catch (err) {
         return JSON.stringify({
@@ -203,7 +274,7 @@ app.whenReady().then(async () => {
       }
       try {
         const res = await callWorker({ kind: 'redisCommand', parts }, 'redisCommand');
-        return JSON.stringify({
+        return capAiToolJson({
           command: res.result.command,
           args: res.result.args,
           reply: res.result.reply,
@@ -225,7 +296,7 @@ app.whenReady().then(async () => {
       if (!index || !body) return JSON.stringify({ error: 'index + body required' });
       try {
         const res = await callWorker({ kind: 'osSearch', index, body, size: 50 }, 'osSearch');
-        return JSON.stringify({
+        return capAiToolJson({
           total: res.result.total,
           took: res.result.took,
           hits: res.result.hits.slice(0, 50),
@@ -255,7 +326,7 @@ app.whenReady().then(async () => {
         const rowsObj = res.result.rows
           .slice(0, 50)
           .map((row) => Object.fromEntries(res.result.columns.map((c, i) => [c.name, row[i]])));
-        return JSON.stringify({
+        return capAiToolJson({
           rowCount: res.result.rows.length,
           columns: res.result.columns,
           rows: rowsObj,
@@ -273,6 +344,7 @@ app.whenReady().then(async () => {
   });
 
   mainWindow = createMainWindow();
+  attachWindowGuards(mainWindow);
   buildAppMenu();
   registerIpcHandlers();
   initUpdater(mainWindow);
@@ -280,6 +352,7 @@ app.whenReady().then(async () => {
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       mainWindow = createMainWindow();
+      attachWindowGuards(mainWindow);
     }
   });
 }).catch((err) => {
@@ -302,7 +375,9 @@ app.on('window-all-closed', () => {
   }
 });
 
-app.on('before-quit', () => {
+// C32: 'will-quit', not 'before-quit' — a window can still cancel the
+// quit from its close guard, and the worker must survive that.
+app.on('will-quit', () => {
   closeAllTunnels();
   workerSupervisor.stop();
   closeDb();
@@ -324,19 +399,31 @@ async function callWorker<K extends WorkerResponse['kind']>(
 ): Promise<Extract<WorkerResponse, { kind: K }>> {
   // U27: a request that died with the transport is retried once on a
   // freshly re-established session; see connection-recovery.ts.
-  return connectionRecovery.run(req.kind, async () => {
-    const id = randomUUID();
-    const res = await workerSupervisor.request({ ...req, id } as WorkerRequest);
-    if (res.kind === 'error') {
-      throw res.fatal === CONNECTION_LOST
-        ? new ConnectionLostError(res.message)
-        : new Error(res.message);
-    }
-    if (res.kind !== expected) {
-      throw new Error(`unexpected worker response: ${res.kind} (expected ${expected})`);
-    }
-    return res as Extract<WorkerResponse, { kind: K }>;
-  });
+  const loose = req as { kind: WorkerRequest['kind'] } & Record<string, unknown>;
+  // C1: one guard for every engine and every route — whatever handler
+  // issued it, a write never reaches the worker on a read-only session.
+  if (retainedSession?.config.readOnly === true) assertAllowedOnReadOnly(loose);
+  return connectionRecovery.run(
+    req.kind,
+    async () => {
+      const id = randomUUID();
+      const res = await workerSupervisor.request({ ...req, id } as WorkerRequest);
+      if (res.kind === 'error') {
+        if (res.fatal === CONNECTION_LOST) {
+          const lost = new ConnectionLostError(res.message);
+          // C5: recovery must not replay into a fresh session.
+          if (res.txnLost) Object.assign(lost, { txnLost: true });
+          throw lost;
+        }
+        throw new Error(res.message);
+      }
+      if (res.kind !== expected) {
+        throw new Error(`unexpected worker response: ${res.kind} (expected ${expected})`);
+      }
+      return res as Extract<WorkerResponse, { kind: K }>;
+    },
+    loose,
+  );
 }
 
 /**
@@ -347,9 +434,10 @@ async function callWorker<K extends WorkerResponse['kind']>(
  */
 const connectionRecovery = new ConnectionRecovery({
   session: () => retainedSession,
+  epoch: () => sessionEpoch,
   reopenTunnel: async (session) => {
     const settings = SettingsShape.parse(getAllSettings());
-    const ssh = settings.connectionSsh?.[session.id];
+    const ssh = getFullSshConfig(session.id, settings.connectionSsh);
     if (!ssh) throw new Error(`ssh config for ${session.id} is gone — reconnect manually`);
     // The old tunnel's sockets are dead; drop them before re-forwarding.
     closeTunnel(session.id);
@@ -370,8 +458,6 @@ const connectionRecovery = new ConnectionRecovery({
       { kind: 'connect', config, statementTimeoutMs: currentQueryTimeoutMs() },
       'connected',
     );
-    activeConnectionId = session.id;
-    activeEngine = res.engine;
     return {
       serverVersion: res.serverVersion,
       engine: res.engine,
@@ -380,6 +466,9 @@ const connectionRecovery = new ConnectionRecovery({
     };
   },
   onRecovered: (recovered: RecoveredSession) => {
+    // Only reached when the epoch is unchanged (C11), i.e. still this session.
+    if (recovered.connectionId) activeConnectionId = recovered.connectionId;
+    activeEngine = recovered.engine;
     const payload: ConnectionRecovered = recovered;
     mainWindow?.webContents.send(IpcChannel.ConnectionRecoveredEvent, payload);
   },
@@ -413,6 +502,211 @@ async function applyStatementTimeout(timeoutMs = currentQueryTimeoutMs()): Promi
 
 // ─── IPC handlers ─────────────────────────────────────────────────────
 
+// ─── Connection session helpers (C2/C4/C9/C10/C11/C12/C13/C21) ─────────
+
+/** One connect/disconnect at a time from main (C12). */
+let sessionChain: Promise<unknown> = Promise.resolve();
+function serializeSessionChange<T>(fn: () => Promise<T>): Promise<T> {
+  const run = sessionChain.then(fn, fn);
+  sessionChain = run.catch(() => undefined);
+  return run;
+}
+
+/** Parse a renderer config, with a readable message instead of Zod JSON (F6). */
+function parseConnectionConfig(raw: unknown): ConnectionConfigType {
+  const parsed = ConnectionConfig.safeParse(raw);
+  if (parsed.success) return parsed.data;
+  const first = parsed.error.issues[0];
+  const field = first?.path.join('.') || 'connection';
+  throw new Error(`Invalid ${field}: ${first?.message ?? 'check the connection details'}`);
+}
+
+/** C9: read the CA / client cert / key files the user picked into PEM text. */
+async function withTlsFiles(config: ConnectionConfigType): Promise<ConnectionConfigType> {
+  const tls = config.tls;
+  if (!config.ssl || !tls) return config;
+  const read = async (path: string | undefined, what: string): Promise<string | undefined> => {
+    if (!path?.trim()) return undefined;
+    try {
+      return await readFile(path, 'utf8');
+    } catch (err) {
+      throw new Error(`Could not read the TLS ${what} file ${path}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  };
+  const [ca, cert, key] = await Promise.all([
+    read(tls.caFile, 'CA'),
+    read(tls.certFile, 'client certificate'),
+    read(tls.keyFile, 'client key'),
+  ]);
+  return {
+    ...config,
+    tls: { ...tls, ca: ca ?? tls.ca, cert: cert ?? tls.cert, key: key ?? tls.key },
+  };
+}
+
+type SshTarget = NonNullable<ReturnType<typeof getFullSshConfig>>;
+
+/**
+ * SSH config for a Test. `rawSsh` is what the dialog holds right now:
+ * null = SSH off, undefined = use what is saved, an object = the form's
+ * values with blank secrets meaning "the saved ones".
+ */
+function testSshConfig(id: string, rawSsh: unknown): SshTarget | null {
+  const settings = SettingsShape.parse(getAllSettings());
+  const saved = getFullSshConfig(id, settings.connectionSsh);
+  if (rawSsh === undefined) return saved;
+  if (rawSsh === null) return null;
+  const form = ConnectionSshConfig.parse(rawSsh);
+  if (!form.host || !form.user) return null;
+  return {
+    ...form,
+    password: form.password || saved?.password || '',
+    privateKey: form.privateKey || saved?.privateKey || '',
+    passphrase: form.passphrase || saved?.passphrase || '',
+  };
+}
+
+/** Drop main's idea of the live session (and its tunnel). */
+function clearSession(): void {
+  const id = activeConnectionId;
+  activeConnectionId = null;
+  activeEngine = null;
+  retainedSession = null;
+  if (id) closeTunnel(id);
+}
+
+/**
+ * Open the worker session for `config`: TLS policy + files, tunnel (with
+ * the real host as TLS servername), connect, and record it for recovery.
+ * Callers hold `serializeSessionChange`.
+ */
+async function establishSession(config: ConnectionConfigType) {
+  sessionEpoch++;
+  const settings = SettingsShape.parse(getAllSettings());
+  // C4: unverified TLS is refused for prod-tagged connections.
+  assertTlsAllowedForTag(resolveTls(config), settings.connectionTags?.[config.id]);
+  const withFiles = await withTlsFiles(config);
+  const ssh = getFullSshConfig(config.id, settings.connectionSsh);
+
+  // C13: switching connection closes the previous one's tunnel; a
+  // reconnect to the same one gets a fresh tunnel rather than a stale one.
+  const previousId = activeConnectionId;
+  if (previousId && previousId !== config.id) closeTunnel(previousId);
+  if (ssh) closeTunnel(config.id);
+
+  let effective: ConnectionConfigType = { ...withFiles, readOnly: config.readOnly ?? false };
+  try {
+    if (ssh) {
+      const local = await openTunnel({
+        id: config.id,
+        ssh,
+        pgHost: config.host,
+        pgPort: config.port,
+      });
+      // C10: the certificate names the real host, not 127.0.0.1.
+      effective = { ...withTunnelServername(effective, config.host), host: local.host, port: local.port };
+    }
+    const res = await callWorker(
+      {
+        kind: 'connect',
+        config: { ...effective, readOnly: config.readOnly ?? false },
+        statementTimeoutMs: currentQueryTimeoutMs(),
+      },
+      'connected',
+    );
+    activeConnectionId = config.id;
+    activeEngine = res.engine;
+    // U27: keep what it takes to rebuild this session after a transport
+    // loss. Host/port are the pre-tunnel ones so a retry re-forwards
+    // through a fresh tunnel.
+    retainedSession = {
+      id: config.id,
+      config: { ...effective, host: config.host, port: config.port },
+      tunnelled: Boolean(ssh),
+    };
+    return res;
+  } catch (err) {
+    // C21: the worker tore the previous session down before dialling, so
+    // main must not keep claiming it.
+    clearSession();
+    if (ssh) closeTunnel(config.id);
+    throw err;
+  }
+}
+
+// ─── SSH host-key prompt (C8) ─────────────────────────────────────────
+
+const hostKeyWaiters = new Map<string, (accept: boolean) => void>();
+/** Longer than a user needs to read a fingerprint, shorter than ssh readyTimeout. */
+const HOST_KEY_PROMPT_TIMEOUT_MS = 50_000;
+
+setHostKeyPrompt((info) => {
+  const win = mainWindow;
+  if (!win || win.isDestroyed()) return Promise.resolve(false);
+  const requestId = randomUUID();
+  const payload: SshHostKeyPrompt = { requestId, ...info };
+  return new Promise<boolean>((resolve) => {
+    const timer = setTimeout(() => {
+      hostKeyWaiters.delete(requestId);
+      resolve(false);
+    }, HOST_KEY_PROMPT_TIMEOUT_MS);
+    hostKeyWaiters.set(requestId, (accept) => {
+      clearTimeout(timer);
+      resolve(accept);
+    });
+    win.webContents.send(IpcChannel.SshHostKeyPromptEvent, payload);
+  });
+});
+
+// ─── Quit / close guard (C32) ─────────────────────────────────────────
+
+let unsavedState: AppUnsavedState = { openTransaction: false, pendingEdits: 0 };
+let closeConfirmed = false;
+
+function describeUnsaved(state: AppUnsavedState): string | null {
+  const parts: string[] = [];
+  if (state.openTransaction) parts.push('an open transaction (it will be rolled back)');
+  if (state.pendingEdits > 0) {
+    parts.push(`${state.pendingEdits} unsaved grid edit${state.pendingEdits === 1 ? '' : 's'}`);
+  }
+  return parts.length > 0 ? `You have ${parts.join(' and ')}.` : null;
+}
+
+function attachWindowGuards(win: BrowserWindow): void {
+  win.on('close', (e) => {
+    if (closeConfirmed) return;
+    const detail = describeUnsaved(unsavedState);
+    if (!detail) return;
+    e.preventDefault();
+    const choice = dialog.showMessageBoxSync(win, {
+      type: 'warning',
+      buttons: ['Cancel', 'Discard and close'],
+      defaultId: 0,
+      cancelId: 0,
+      message: 'Close Plasma and discard your work?',
+      detail,
+    });
+    if (choice === 1) {
+      closeConfirmed = true;
+      win.close();
+    }
+  });
+  // C33: on macOS the app outlives its window. The next window starts
+  // idle, so drop the session it can no longer see instead of leaving the
+  // worker and tunnel connected behind it.
+  win.on('closed', () => {
+    if (mainWindow === win) mainWindow = null;
+    unsavedState = { openTransaction: false, pendingEdits: 0 };
+    closeConfirmed = false;
+    if (!retainedSession && !activeConnectionId) return;
+    void serializeSessionChange(async () => {
+      sessionEpoch++;
+      clearSession();
+      await callWorker({ kind: 'disconnect' }, 'disconnected').catch(() => undefined);
+    });
+  });
+}
+
 function registerIpcHandlers() {
   ipcMain.handle(
     IpcChannel.AppMeta,
@@ -429,40 +723,11 @@ function registerIpcHandlers() {
 
   ipcMain.handle(
     IpcChannel.ConnectionConnect,
-    async (_e, rawConfig: unknown): Promise<ConnectionInfo> => {
-      const config = ConnectionConfig.parse(rawConfig);
-      const settings = SettingsShape.parse(getAllSettings());
-      const ssh = settings.connectionSsh?.[config.id];
-      const effective = { ...config, readOnly: config.readOnly ?? false };
-      if (ssh) {
-        const local = await openTunnel({
-          id: config.id,
-          ssh,
-          pgHost: config.host,
-          pgPort: config.port,
-        });
-        effective.host = local.host;
-        effective.port = local.port;
-      }
-      try {
-        const res = await callWorker(
-          {
-            kind: 'connect',
-            config: effective,
-            statementTimeoutMs: currentQueryTimeoutMs(),
-          },
-          'connected',
-        );
-        activeConnectionId = config.id;
-        activeEngine = res.engine;
-        // U27: keep what it takes to rebuild this session after a
-        // transport loss. Host/port are the pre-tunnel ones so a retry
-        // re-forwards through a fresh tunnel.
-        retainedSession = {
-          id: config.id,
-          config: { ...effective, host: config.host, port: config.port },
-          tunnelled: Boolean(ssh),
-        };
+    (_e, rawConfig: unknown): Promise<ConnectionInfo> =>
+      serializeSessionChange(async () => {
+        // Blank password = keep the saved one (C17: the renderer never has it).
+        const config = withStoredPassword(parseConnectionConfig(rawConfig));
+        const res = await establishSession(config);
         try {
           vaultSave(config);
         } catch (err) {
@@ -473,33 +738,52 @@ function registerIpcHandlers() {
           engine: res.engine,
           connectionGen: res.connectionGen,
         };
-      } catch (err) {
-        if (ssh) closeTunnel(config.id);
-        throw err;
-      }
-    },
+      }),
   );
 
-  ipcMain.handle(IpcChannel.ConnectionDisconnect, async (): Promise<void> => {
-    const id = activeConnectionId;
-    activeConnectionId = null;
-    activeEngine = null;
-    retainedSession = null;
-    await callWorker({ kind: 'disconnect' }, 'disconnected');
-    if (id) closeTunnel(id);
-  });
+  ipcMain.handle(IpcChannel.ConnectionDisconnect, (): Promise<void> =>
+    serializeSessionChange(async () => {
+      sessionEpoch++;
+      const id = activeConnectionId;
+      activeConnectionId = null;
+      activeEngine = null;
+      retainedSession = null;
+      // C22: the tunnel goes even when the worker call fails or times out.
+      try {
+        await callWorker({ kind: 'disconnect' }, 'disconnected');
+      } finally {
+        if (id) closeTunnel(id);
+      }
+    }),
+  );
 
   ipcMain.handle(
     IpcChannel.ConnectionTest,
-    async (_e, rawConfig: unknown): Promise<ConnectionTestResult> => {
+    async (_e, rawConfig: unknown, rawSsh: unknown): Promise<ConnectionTestResult> => {
+      // C2: a throwaway driver in the worker (`testConnect`) and, for SSH,
+      // a throwaway tunnel — the live session is never touched.
+      const tunnelKey = `test:${randomUUID()}`;
+      let tunnelled = false;
       try {
-        const config = ConnectionConfig.parse(rawConfig);
+        const config = await withTlsFiles(withStoredPassword(parseConnectionConfig(rawConfig)));
+        const ssh = testSshConfig(config.id, rawSsh);
+        let effective: ConnectionConfigType = config;
+        if (ssh) {
+          const local = await openTunnel({
+            id: tunnelKey,
+            ssh,
+            pgHost: config.host,
+            pgPort: config.port,
+          });
+          tunnelled = true;
+          effective = {
+            ...withTunnelServername(config, config.host),
+            host: local.host,
+            port: local.port,
+          };
+        }
         const res = await callWorker(
-          {
-            kind: 'connect',
-            config,
-            statementTimeoutMs: currentQueryTimeoutMs(),
-          },
+          { kind: 'testConnect', config: { ...effective, readOnly: effective.readOnly ?? false } },
           'connected',
         );
         return { ok: true, serverVersion: res.serverVersion, engine: res.engine };
@@ -508,14 +792,39 @@ function registerIpcHandlers() {
           ok: false,
           message: err instanceof Error ? err.message : String(err),
         };
+      } finally {
+        if (tunnelled) closeTunnel(tunnelKey);
       }
     },
   );
 
+  ipcMain.handle(IpcChannel.ConnectionPickFile, async (e, title: unknown): Promise<string | null> => {
+    const win = BrowserWindow.fromWebContents(e.sender);
+    const opts = {
+      title: typeof title === 'string' && title ? title : 'Choose a file',
+      properties: ['openFile' as const, 'showHiddenFiles' as const],
+    };
+    const picked = win ? await dialog.showOpenDialog(win, opts) : await dialog.showOpenDialog(opts);
+    return picked.canceled ? null : (picked.filePaths[0] ?? null);
+  });
+
+  ipcMain.handle(IpcChannel.SshHostKeyRespond, (_e, raw: unknown): void => {
+    const p = (raw ?? {}) as { requestId?: unknown; accept?: unknown };
+    if (typeof p.requestId !== 'string') return;
+    const waiter = hostKeyWaiters.get(p.requestId);
+    hostKeyWaiters.delete(p.requestId);
+    waiter?.(p.accept === true);
+  });
+
+  ipcMain.handle(IpcChannel.AppSetUnsavedState, (_e, raw: unknown): void => {
+    unsavedState = AppUnsavedState.parse(raw);
+  });
+
   // Postgres-only schema introspect. For redis/opensearch the renderer
   // calls the engine-specific overview channels directly.
-  ipcMain.handle(IpcChannel.ConnectionIntrospect, async (): Promise<SchemaInfo> => {
-    const res = await callWorker({ kind: 'introspect' }, 'schemaInfo');
+  ipcMain.handle(IpcChannel.ConnectionIntrospect, async (_e, opts: unknown): Promise<SchemaInfo> => {
+    const parsed = opts === undefined || opts === null ? undefined : IntrospectOpts.parse(opts);
+    const res = await callWorker({ kind: 'introspect', opts: parsed }, 'schemaInfo');
     return res.info;
   });
 
@@ -530,35 +839,12 @@ function registerIpcHandlers() {
 
   ipcMain.handle(
     IpcChannel.VaultConnectById,
-    async (_e, id: unknown): Promise<{ info: ConnectionInfo; config: SavedConnection }> => {
-      if (typeof id !== 'string') throw new Error('id must be a string');
-      const config = vaultGetFull(id);
-      if (!config) throw new Error(`no saved connection with id ${id}`);
-      const settings = SettingsShape.parse(getAllSettings());
-      const ssh = settings.connectionSsh?.[id];
-      const effective = { ...config, readOnly: config.readOnly ?? false };
-      if (ssh) {
-        const local = await openTunnel({ id, ssh, pgHost: config.host, pgPort: config.port });
-        effective.host = local.host;
-        effective.port = local.port;
-      }
-      try {
-        const res = await callWorker(
-          {
-            kind: 'connect',
-            config: effective,
-            statementTimeoutMs: currentQueryTimeoutMs(),
-          },
-          'connected',
-        );
-        activeConnectionId = config.id;
-        activeEngine = res.engine;
-        // U27: see ConnectionConnect — retained for transparent recovery.
-        retainedSession = {
-          id: config.id,
-          config: { ...effective, host: config.host, port: config.port },
-          tunnelled: Boolean(ssh),
-        };
+    (_e, id: unknown): Promise<{ info: ConnectionInfo; config: SavedConnection }> =>
+      serializeSessionChange(async () => {
+        if (typeof id !== 'string') throw new Error('id must be a string');
+        const config = vaultGetFull(id);
+        if (!config) throw new Error(`no saved connection with id ${id}`);
+        const res = await establishSession(config);
         const { password: _pwd, ...safeConfig } = config;
         return {
           info: {
@@ -568,18 +854,14 @@ function registerIpcHandlers() {
           },
           config: safeConfig,
         };
-      } catch (err) {
-        if (ssh) closeTunnel(id);
-        throw err;
-      }
-    },
+      }),
   );
 
   ipcMain.handle(IpcChannel.VaultGetConfig, (_e, id: unknown): ConnectionConfigType | null => {
     if (typeof id !== 'string') throw new Error('id must be a string');
-    // Returns the decrypted config including password — used only by
-    // the renderer's Edit flow so users don't need to re-type passwords.
-    return vaultGetFull(id);
+    // Edit flow: the password is never sent to the renderer (C17). A blank
+    // password on connect/test means "keep the saved one" (withStoredPassword).
+    return getConnectionForEdit(id);
   });
 
   // ── Query execution + history ──
@@ -608,8 +890,11 @@ function registerIpcHandlers() {
     const executedAt = Date.now();
     try {
       const revision = ++queryRequestRevision;
+      // F9: Transaction mode applies to the user's own SQL only; the
+      // worker BEGINs when the session is idle and reports txnState.
+      const autoBegin = !internal && SettingsShape.parse(getAllSettings()).transactionMode === true;
       const res = await callWorker(
-        { kind: 'query', sql, params, revision, maxRows },
+        { kind: 'query', sql, params, revision, maxRows, autoBegin },
         'queryResult',
       );
       if (!internal) {
@@ -654,17 +939,55 @@ function registerIpcHandlers() {
   ipcMain.handle(IpcChannel.QuerySideband, async (_e, payload: unknown): Promise<QueryResult> => {
     let sql: string;
     let params: unknown[] | undefined;
+    let timeoutMs: number | undefined;
     if (typeof payload === 'string') {
       sql = payload;
     } else if (payload && typeof payload === 'object' && 'sql' in payload) {
-      const p = payload as { sql: unknown; params?: unknown };
+      const p = payload as { sql: unknown; params?: unknown; timeoutMs?: unknown };
       if (typeof p.sql !== 'string') throw new Error('sql must be a string');
       sql = p.sql;
       params = Array.isArray(p.params) ? p.params : undefined;
+      if (typeof p.timeoutMs === 'number' && Number.isInteger(p.timeoutMs) && p.timeoutMs > 0) {
+        timeoutMs = Math.min(p.timeoutMs, 600_000);
+      }
     } else {
       throw new Error('invalid sideband payload');
     }
-    const res = await callWorker({ kind: 'sidebandQuery', sql, params, revision: ++queryRequestRevision }, 'queryResult');
+    const res = await callWorker({ kind: 'sidebandQuery', sql, params, timeoutMs, revision: ++queryRequestRevision }, 'queryResult');
+    return res.result;
+  });
+
+  // C7: grid edit commits. The worker runs the batch in one transaction
+  // (a savepoint inside the user's own), requires rowCount === 1 per
+  // statement and rolls everything back naming the failing edit.
+  ipcMain.handle(
+    IpcChannel.QueryCommitEditBatch,
+    async (_e, raw: unknown): Promise<{ state: TxnState; applied: number }> => {
+      const req = CommitEditBatchRequest.parse(raw);
+      if (retainedSession?.config.readOnly === true) {
+        throw new Error('This connection is read-only — edits cannot be committed.');
+      }
+      const res = await callWorker(
+        { kind: 'commitEditBatch', connectionGen: req.connectionGen, updates: req.updates },
+        'editBatchResult',
+      );
+      return { state: res.state, applied: res.applied };
+    },
+  );
+
+  // F2: EXPLAIN never runs through query.run. Plain EXPLAIN doesn't
+  // execute; ANALYZE executes inside a transaction the worker rolls back.
+  ipcMain.handle(IpcChannel.QueryExplain, async (_e, raw: unknown): Promise<QueryResult> => {
+    const req = ExplainRequest.parse(raw);
+    if (req.analyze && retainedSession?.config.readOnly === true && looksLikeWriteSql(req.sql)) {
+      throw new Error(
+        'This connection is read-only — EXPLAIN ANALYZE of a data-changing statement is not allowed.',
+      );
+    }
+    const res = await callWorker(
+      { kind: 'explain', sql: req.sql, analyze: req.analyze },
+      'queryResult',
+    );
     return res.result;
   });
 
@@ -672,9 +995,16 @@ function registerIpcHandlers() {
     const req = ExportSaveRequest.parse(raw);
     const extension = req.format;
     const defaultPath = req.defaultPath.toLowerCase().endsWith("." .concat(extension)) ? req.defaultPath : req.defaultPath .concat(".", extension);
+    if (!req.rows) {
+      // F7: full-result export re-runs SQL on the primary — only ever a
+      // single read-only statement, never the user's DML again.
+      if (!req.sql || !isSingleSqlStatement(req.sql) || looksLikeWriteSql(req.sql)) {
+        throw new Error('Full export needs a single read-only query.');
+      }
+    }
     const picked = await dialog.showSaveDialog({ defaultPath, filters: [{ name: extension.toUpperCase(), extensions: [extension] }] });
     if (picked.canceled || !picked.filePath) return { ok: false, canceled: true };
-    const res = await callWorker(req.rows ? { kind: "exportRows", format: req.format, filePath: picked.filePath, columns: req.columns, rows: req.rows } : { kind: "exportQuery", format: req.format, filePath: picked.filePath, sql: req.sql!, params: req.params }, "exportDone");
+    const res = await callWorker(req.rows ? { kind: "exportRows", format: req.format, filePath: picked.filePath, columns: req.columns, rows: req.rows, targetTable: req.targetTable } : { kind: "exportQuery", format: req.format, filePath: picked.filePath, sql: req.sql!, params: req.params, targetTable: req.targetTable }, "exportDone");
     return { ok: true, filePath: res.filePath, rowCount: res.rowCount, bytesWritten: res.bytesWritten };
   });
 
@@ -683,13 +1013,13 @@ function registerIpcHandlers() {
   ipcMain.handle(IpcChannel.AiChat, async (_e, raw: unknown): Promise<{ accepted: boolean }> => {
     const parsed = AiChatRequest.parse(raw);
     const settings = SettingsShape.parse(getAllSettings());
-    // Prefer the OpenRouter key. Fall back to the legacy claudeApiKey
-    // field so users upgrading from v0.0.10 keep working without
-    // touching settings — `claude-3-5-*` model ids on OpenRouter route
-    // to Anthropic, so the key (sk-or-...) is the only thing that
-    // really has to change.
-    const apiKey = settings.openrouterApiKey || settings.claudeApiKey;
-    const result = await startAiChat(mainWindow, parsed, apiKey, settings.openrouterModel);
+    // Keys live in the encrypted vault (C3). Prefers the OpenRouter key and
+    // falls back to the legacy claudeApiKey slot from v0.0.10.
+    const apiKey = getApiKey();
+    // Row-data tools only when the active connection opted in (C18).
+    const result = await startAiChat(mainWindow, parsed, apiKey, settings.openrouterModel, {
+      allowRowData: isAiRowDataAllowed(activeConnectionId, settings.connectionAiRowData),
+    });
     if (!result.accepted && result.reason) {
       // Surface the failure as a stream event too, so the UI shows it
       // even if the renderer awaits the promise without checking the
@@ -736,17 +1066,14 @@ function registerIpcHandlers() {
 
   // ── Settings ──
 
-  ipcMain.handle(IpcChannel.SettingsGet, (): Settings => {
-    const raw = getAllSettings();
-    return SettingsShape.parse(raw);
-  });
+  // Secrets never cross IPC in either direction's response: API keys and
+  // SSH credentials go to the encrypted vault, the renderer gets presence
+  // flags only (C3).
+  ipcMain.handle(IpcChannel.SettingsGet, (): Settings => getPublicSettings());
 
   ipcMain.handle(IpcChannel.SettingsSet, (_e, patch: unknown): Settings => {
     const prev = SettingsShape.parse(getAllSettings());
-    const merged = SettingsShape.parse({ ...prev, ...(patch as Record<string, unknown>) });
-    for (const [k, v] of Object.entries(merged)) {
-      setSetting(k, v);
-    }
+    const merged = applySettingsPatch(patch);
     // Side effect: if theme changed, update the native window background +
     // title bar overlay so the native window controls follow suit.
     if (merged.theme !== prev.theme && mainWindow && !mainWindow.isDestroyed()) {
@@ -776,7 +1103,9 @@ function registerIpcHandlers() {
     return res.state;
   });
 
-  // ── Redis ──
+  // ── Redis ── (argument parsing + read-only policy: redis-ipc-args.ts)
+
+  const redisReadOnly = (): boolean => retainedSession?.config.readOnly === true;
 
   ipcMain.handle(IpcChannel.RedisOverview, async () => {
     const res = await callWorker({ kind: 'redisOverview' }, 'redisOverview');
@@ -784,61 +1113,42 @@ function registerIpcHandlers() {
   });
 
   ipcMain.handle(IpcChannel.RedisScan, async (_e, raw: unknown) => {
-    const opts = (raw ?? {}) as {
-      cursor?: string;
-      match?: string;
-      count?: number;
-      db?: number;
-    };
-    const res = await callWorker(
-      {
-        kind: 'redisScan',
-        cursor: opts.cursor ?? '0',
-        match: typeof opts.match === 'string' && opts.match ? opts.match : undefined,
-        count: typeof opts.count === 'number' ? opts.count : 500,
-        db: typeof opts.db === 'number' ? opts.db : undefined,
-      },
-      'redisScan',
-    );
+    const res = await callWorker({ kind: 'redisScan', ...parseRedisScanArgs(raw) }, 'redisScan');
     return res.result;
   });
 
-  ipcMain.handle(IpcChannel.RedisGetKey, async (_e, key: unknown) => {
-    if (typeof key !== 'string') throw new Error('key must be a string');
-    const res = await callWorker({ kind: 'redisGetKey', key }, 'redisKey');
+  ipcMain.handle(IpcChannel.RedisGetKey, async (_e, raw: unknown) => {
+    const res = await callWorker({ kind: 'redisGetKey', ...parseRedisGetKeyArgs(raw) }, 'redisKey');
     return res.result;
   });
 
-  ipcMain.handle(IpcChannel.RedisDeleteKey, async (_e, key: unknown) => {
-    if (typeof key !== 'string') throw new Error('key must be a string');
-    await callWorker({ kind: 'redisDeleteKey', key }, 'redisAck');
+  ipcMain.handle(IpcChannel.RedisDeleteKey, async (_e, raw: unknown) => {
+    const args = parseRedisKeyArgs(raw);
+    assertRedisWritable(redisReadOnly(), 'delete');
+    await callWorker({ kind: 'redisDeleteKey', ...args }, 'redisAck');
   });
 
   ipcMain.handle(IpcChannel.RedisSetTtl, async (_e, raw: unknown) => {
-    const p = (raw ?? {}) as { key?: unknown; seconds?: unknown };
-    if (typeof p.key !== 'string') throw new Error('key must be a string');
-    if (typeof p.seconds !== 'number') throw new Error('seconds must be a number');
-    await callWorker(
-      { kind: 'redisSetTtl', key: p.key, seconds: Math.floor(p.seconds) },
-      'redisAck',
-    );
+    const args = parseRedisSetTtlArgs(raw);
+    assertRedisWritable(redisReadOnly(), 'set TTL');
+    await callWorker({ kind: 'redisSetTtl', ...args }, 'redisAck');
   });
 
   ipcMain.handle(IpcChannel.RedisCommand, async (_e, raw: unknown) => {
-    if (!Array.isArray(raw)) throw new Error('parts must be an array');
-    const parts = raw.map((p) => String(p));
-    if (parts.length === 0) throw new Error('empty command');
-    const res = await callWorker({ kind: 'redisCommand', parts }, 'redisCommand');
+    const args = parseRedisCommandArgs(raw);
+    assertRedisCommandAllowed(args.parts, redisReadOnly());
+    const res = await callWorker({ kind: 'redisCommand', ...args }, 'redisCommand');
     return res.result;
   });
 
   ipcMain.handle(IpcChannel.RedisAnalyze, async (_e, raw: unknown) => {
-    const opts = (raw ?? {}) as { sampleCap?: number; match?: string };
+    const opts = (raw ?? {}) as { sampleCap?: unknown; match?: unknown; db?: unknown };
     const res = await callWorker(
       {
         kind: 'redisAnalyze',
-        sampleCap: typeof opts.sampleCap === 'number' ? opts.sampleCap : 5000,
+        sampleCap: clampAnalyzeSample(opts.sampleCap),
         match: typeof opts.match === 'string' && opts.match ? opts.match : undefined,
+        db: typeof opts.db === 'number' && opts.db >= 0 ? Math.floor(opts.db) : undefined,
       },
       'redisAnalyze',
     );
@@ -852,15 +1162,30 @@ function registerIpcHandlers() {
   });
 
   ipcMain.handle(IpcChannel.RedisBulkDelete, async (_e, raw: unknown) => {
-    if (!Array.isArray(raw)) throw new Error('keys must be an array');
-    const keys = raw.map((k) => String(k));
-    if (keys.length === 0) return;
-    await callWorker({ kind: 'redisBulkDelete', keys }, 'redisAck');
+    const args = parseRedisBulkDeleteArgs(raw);
+    if (args.keys.length === 0) return { deleted: [], failed: [] };
+    assertRedisWritable(redisReadOnly(), 'delete');
+    // R1: the worker answers `redisBulkDelete` (with per-key failures), not `redisAck`.
+    const res = await callWorker({ kind: 'redisBulkDelete', ...args }, 'redisBulkDelete');
+    return res.result;
+  });
+
+  ipcMain.handle(IpcChannel.RedisDeleteByPattern, async (_e, raw: unknown) => {
+    const args = parseRedisPatternDeleteArgs(raw);
+    if (!args.dryRun) assertRedisWritable(redisReadOnly(), 'delete');
+    const res = await callWorker({ kind: 'redisDeleteByPattern', ...args }, 'redisPatternDelete');
+    return res.result;
+  });
+
+  ipcMain.handle(IpcChannel.RedisCancel, async () => {
+    await callWorker({ kind: 'redisCancel' }, 'redisAck');
   });
 
   ipcMain.handle(IpcChannel.RedisWrite, async (_e, raw: unknown) => {
-    // The worker re-parses via Zod, so we forward as-is.
-    await callWorker({ kind: 'redisWrite', op: raw as never }, 'redisAck');
+    const args = parseRedisWriteArgs(raw);
+    assertRedisWritable(redisReadOnly(), 'write');
+    // The worker re-parses the op via Zod.
+    await callWorker({ kind: 'redisWrite', op: args.op as never, db: args.db }, 'redisAck');
   });
 
   ipcMain.handle(IpcChannel.RedisSubscribe, async (_e, raw: unknown) => {
@@ -895,21 +1220,27 @@ function registerIpcHandlers() {
   });
 
   ipcMain.handle(IpcChannel.OsSearch, async (_e, raw: unknown) => {
-    const p = (raw ?? {}) as { index?: unknown; body?: unknown; size?: unknown };
-    if (typeof p.index !== 'string') throw new Error('index must be a string');
-    if (typeof p.body !== 'string') throw new Error('body must be a string');
-    const size = typeof p.size === 'number' ? p.size : 100;
-    const res = await callWorker(
-      { kind: 'osSearch', index: p.index, body: p.body, size },
-      'osSearch',
-    );
+    const res = await callWorker({ kind: 'osSearch', ...parseOsSearchArgs(raw) }, 'osSearch');
     return res.result;
   });
 
   ipcMain.handle(IpcChannel.OsSql, async (_e, raw: unknown) => {
-    if (typeof raw !== 'string' || !raw) throw new Error('query required');
-    const res = await callWorker({ kind: 'osSql', query: raw }, 'osSql');
+    // S1: the SQL plugin can DELETE — read-only sessions only run reads.
+    const args = parseOsSqlArgs(raw, retainedSession?.config.readOnly === true);
+    const res = await callWorker({ kind: 'osSql', ...args }, 'osSql');
     return res.result;
+  });
+
+  ipcMain.handle(IpcChannel.OsRequest, async (_e, raw: unknown) => {
+    // O14: Dev Tools console / doc CRUD / index ops; writes gated (S1).
+    const args = parseOsRequestArgs(raw, retainedSession?.config.readOnly === true);
+    const res = await callWorker({ kind: 'osRequest', ...args }, 'osResponse');
+    return res.response;
+  });
+
+  ipcMain.handle(IpcChannel.OsCancel, async (_e, raw: unknown) => {
+    if (typeof raw !== 'string' || !raw) throw new Error('requestId required');
+    await callWorker({ kind: 'osCancel', requestId: raw }, 'cancelled');
   });
 
   ipcMain.handle(IpcChannel.OsAliases, async () => {
@@ -925,6 +1256,7 @@ function registerIpcHandlers() {
   ipcMain.handle(IpcChannel.OsCreateIndex, async (_e, raw: unknown) => {
     const p = (raw ?? {}) as { name?: unknown; body?: unknown };
     if (typeof p.name !== 'string' || !p.name) throw new Error('index name required');
+    assertOsWritable(retainedSession?.config.readOnly === true);
     const body =
       p.body && typeof p.body === 'object' && !Array.isArray(p.body)
         ? (p.body as Record<string, unknown>)
@@ -935,6 +1267,7 @@ function registerIpcHandlers() {
 
   ipcMain.handle(IpcChannel.OsDeleteIndex, async (_e, raw: unknown) => {
     if (typeof raw !== 'string' || !raw) throw new Error('index name required');
+    assertOsWritable(retainedSession?.config.readOnly === true);
     const res = await callWorker({ kind: 'osDeleteIndex', name: raw }, 'osDeleteIndex');
     return { acknowledged: res.acknowledged };
   });
@@ -944,6 +1277,7 @@ function registerIpcHandlers() {
       index?: unknown;
       fields?: unknown;
       queryString?: unknown;
+      query?: unknown;
     };
     if (typeof p.index !== 'string') throw new Error('index required');
     if (!Array.isArray(p.fields) || p.fields.length === 0) throw new Error('fields required');
@@ -954,6 +1288,7 @@ function registerIpcHandlers() {
         index: p.index,
         fields,
         queryString: typeof p.queryString === 'string' && p.queryString ? p.queryString : undefined,
+        query: typeof p.query === 'string' && p.query ? p.query : undefined,
       },
       'osFieldStats',
     );

@@ -1,9 +1,11 @@
 import { cn } from '@/lib/cn';
+import { cleanIpcError } from '@/lib/errors';
 import { formatDuration } from '@/lib/format';
 import { useActiveTab, useSession } from '@/stores/session';
 import type { PgNotice, QueryResult } from '@shared/protocol';
 import { AlertCircle, CheckCircle2, MessageSquareWarning } from 'lucide-react';
 import { useEffect, useMemo } from 'react';
+import { hasPartialResults, hideErrorTab, isErrorTabActive, showErrorTab } from './result-view';
 
 type StatementRow = { index: number; result: QueryResult; notices: PgNotice[] };
 
@@ -11,7 +13,8 @@ type StatementRow = { index: number; result: QueryResult; notices: PgNotice[] };
 function useStatementRows(): StatementRow[] {
   const tab = useActiveTab();
   const results: QueryResult[] = tab?.queryResults ?? [];
-  const streamingNotices: Array<{ statementIndex: number; notice: PgNotice }> = tab?.queryNotices ?? [];
+  const streamingNotices: Array<{ statementIndex: number; notice: PgNotice }> =
+    tab?.queryNotices ?? [];
   return useMemo(
     () =>
       results.map((r, i) => {
@@ -27,7 +30,9 @@ function useStatementRows(): StatementRow[] {
 /**
  * Result tabs above the grid — one per statement of a multi-statement
  * run (TablePlus "split results into tabs"). Click or ⌥←/→ focuses a
- * statement. Hidden for single-statement runs.
+ * statement. Hidden for single-statement runs. When a script fails
+ * part-way, the failure gets its own "Error" tab and the statements that
+ * succeeded stay reachable (E6 / VF4).
  */
 export function ResultTabs() {
   const tab = useActiveTab();
@@ -36,7 +41,13 @@ export function ResultTabs() {
   const rows = useStatementRows();
   const active = tab?.activeResultIndex ?? 0;
   const isSql = tab?.kind === 'sql';
-  const multi = isSql && rows.length > 1;
+  const partial = hasPartialResults(tab);
+  const errorActive = isErrorTabActive(tab);
+  const multi = isSql && (rows.length > 1 || partial);
+  const selectResult = (index: number) => {
+    setActiveResultIndex(index);
+    if (tab && partial) hideErrorTab(tab);
+  };
 
   // ⌥← / ⌥→ cycle statements while focus is outside Monaco (Monaco owns
   // those chords inside the editor). Alt alone only — ⌘⌥← is history.
@@ -51,6 +62,8 @@ export function ResultTabs() {
       if (target?.classList?.contains('inputarea')) return;
       e.preventDefault();
       cycleActiveResult(e.key === 'ArrowLeft' ? -1 : 1);
+      const t = useSession.getState().tabs.find((x) => x.id === useSession.getState().activeTabId);
+      if (t && hasPartialResults(t)) hideErrorTab(t);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -66,14 +79,14 @@ export function ResultTabs() {
         aria-label="Statement results · ⌥←/→ to switch"
       >
         {rows.map(({ index, result, notices }) => {
-          const isActive = index === active;
+          const isActive = index === active && !errorActive;
           return (
             <button
               key={index}
               type="button"
               role="tab"
               aria-selected={isActive}
-              onClick={() => setActiveResultIndex(index)}
+              onClick={() => selectResult(index)}
               title={`${summarizeResult(result)} — ⌥←/→ to switch`}
               className={cn(
                 'flex min-w-[120px] flex-1 items-center justify-center gap-1.5 rounded-[7px] px-3 text-[13px] transition-colors',
@@ -92,6 +105,26 @@ export function ResultTabs() {
             </button>
           );
         })}
+        {partial && tab && (
+          <button
+            type="button"
+            role="tab"
+            aria-selected={errorActive}
+            onClick={() => showErrorTab(tab)}
+            title={cleanIpcError(tab.queryError ?? '')}
+            data-testid="result-tab-error"
+            className={cn(
+              'flex min-w-[120px] flex-1 items-center justify-center gap-1.5 rounded-[7px] px-3 text-[13px] transition-colors',
+              errorActive
+                ? 'bg-[var(--wb-control-active)] text-[var(--wb-text)]'
+                : 'text-[var(--wb-text-2)] hover:bg-[var(--wb-control-hover)] hover:text-[var(--wb-text)]',
+            )}
+          >
+            <AlertCircle className="h-3.5 w-3.5 text-destructive" />
+            <span>Error</span>
+            <span className="font-mono text-[12px] opacity-60">statement {rows.length + 1}</span>
+          </button>
+        )}
       </div>
     </div>
   );
@@ -119,7 +152,10 @@ export function ResultMessagesPanel() {
         <button
           key={index}
           type="button"
-          onClick={() => setActiveResultIndex(index)}
+          onClick={() => {
+            setActiveResultIndex(index);
+            if (hasPartialResults(tab)) hideErrorTab(tab);
+          }}
           className={cn(
             'mb-1 flex w-full flex-col gap-1 rounded-[6px] px-2.5 py-2 text-left transition-colors',
             index === active ? 'bg-[var(--wb-selected)]' : 'hover:bg-[var(--wb-control)]',
@@ -147,7 +183,7 @@ export function ResultMessagesPanel() {
         <div className="flex items-start gap-2 rounded-[6px] bg-destructive/10 px-2.5 py-2 text-destructive">
           <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
           <pre className="whitespace-pre-wrap break-words font-mono text-[12px]">
-            {tab.queryError}
+            {cleanIpcError(tab.queryError)}
           </pre>
         </div>
       )}

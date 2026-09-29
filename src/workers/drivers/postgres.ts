@@ -1,5 +1,6 @@
 import { ConnectionLostError } from '@shared/connection-loss';
-import type { ConnectionConfig, PgNotice, QueryResult, SchemaInfo, TxnState } from '@shared/protocol';
+import type { ConnectionConfig, IntrospectOpts, PgNotice, QueryResult, SchemaInfo, TxnState } from '@shared/protocol';
+import { introspectPostgres } from './postgres-introspect';
 import {
   MAX_RESULT_ROWS,
   RESULT_CURSOR_CHUNK,
@@ -9,7 +10,19 @@ import {
 import pg from 'pg';
 import Cursor from 'pg-cursor';
 import { formatStatementTimeoutSql } from '@shared/worker-policy';
-import { isSingleSqlStatement } from '@shared/sql-statements';
+import { isSingleSqlStatement, isTxnExemptSql } from '@shared/sql-statements';
+import { pgTypeName } from '@shared/pg-type-oids';
+import { plasmaPgTypes } from './pg-type-parsers';
+import { type EditUpdate, type TxnStatus, runEditBatch, runExplain, txnStateFromStatus } from './pg-txn';
+import {
+  type PlasmaTlsOptions,
+  buildNodeTlsOptions,
+  insecureTlsWarning,
+  isUnverifiedTlsMode,
+  resolveTls,
+} from '@shared/tls';
+
+const errorMessage = (err: unknown): string => (err instanceof Error ? err.message : String(err));
 
 const { Client } = pg;
 type ClientT = InstanceType<typeof Client>;
@@ -48,7 +61,14 @@ type QueryOpts = {
   onChunk?: QueryChunkHandler;
   /** Editor row limit; defaults to the MAX_RESULT_ROWS safety cap. */
   maxRows?: number;
+  /** Transaction mode (F9): BEGIN first when the session is idle. */
+  autoBegin?: boolean;
+  /** Sideband only: run read-only under this statement_timeout (F12). */
+  timeoutMs?: number;
 };
+
+/** F11: at most this many notices are kept / streamed per statement. */
+export const MAX_NOTICES_PER_STATEMENT = 1000;
 
 function readCursorBatch(
   cursor: Cursor<unknown[]>,
@@ -103,6 +123,8 @@ export class PostgresDriver {
   private noticeListener: ((notice: PgNotice) => void) | null = null;
   /** Why the transport died, once known — reported to every later caller (U27). */
   private lostReason: string | null = null;
+  /** The transport died while a user transaction was open (C5). */
+  private lostInTxn = false;
   /** Timestamp of the last statement the server actually answered (U27). */
   private lastActivityAt = 0;
   private readonly idleProbeAfterMs: number;
@@ -118,11 +140,40 @@ export class PostgresDriver {
     this.noticeListener = listener;
   }
 
+  /** Notices dropped past MAX_NOTICES_PER_STATEMENT for the in-flight statement (F11). */
+  private droppedNotices = 0;
+  /** Serialises aux work so multi-statement sideband/AI runs never interleave (F12/F19). */
+  private auxChain: Promise<unknown> = Promise.resolve();
+
   private handleNotice = (raw: PgNoticeRaw): void => {
+    // F11: a DO loop raising 100k notices must not flood memory or IPC.
+    if (this.pendingNotices.length >= MAX_NOTICES_PER_STATEMENT) {
+      this.droppedNotices++;
+      return;
+    }
     const notice = toPgNotice(raw);
     this.pendingNotices.push(notice);
     this.noticeListener?.(notice);
   };
+
+  /**
+   * F4/C31: the server's ReadyForQuery status (I/T/E) is the only source
+   * of truth for the primary's transaction state — no SQL prefix guessing.
+   */
+  private handleReadyForQuery = (msg: { status?: string }): void => {
+    const status = (msg.status === 'T' || msg.status === 'E' ? msg.status : 'I') as TxnStatus;
+    this.txnState = txnStateFromStatus(status);
+  };
+
+  private txnStatus(): TxnStatus {
+    return this.txnState === 'active' ? 'T' : this.txnState === 'error' ? 'E' : 'I';
+  }
+
+  private withAux<T>(fn: (client: ClientT) => Promise<T>): Promise<T> {
+    const run = this.auxChain.then(async () => fn(await this.requireClient('aux')));
+    this.auxChain = run.catch(() => {});
+    return run;
+  }
 
   isConnected(): boolean {
     return this.primary !== null;
@@ -132,20 +183,29 @@ export class PostgresDriver {
     return this.txnState;
   }
 
-  private clientOpts(config: ConnectionConfig, application_name: string) {
+  private clientOpts(
+    config: ConnectionConfig,
+    application_name: string,
+    ssl: PlasmaTlsOptions | false = buildNodeTlsOptions(config) ?? false,
+  ) {
     return {
       host: config.host,
       port: config.port,
       database: config.database,
       user: config.user,
       password: config.password,
-      ssl: config.ssl ? { rejectUnauthorized: false } : false,
+      // C4: honour the connection's TLS mode (verify-full by default)
+      // instead of always skipping certificate checks.
+      ssl,
       connectionTimeoutMillis: 10_000,
       // U27: without keepalive a VPN drop leaves an idle socket that
       // looks writable forever. The kernel probes and fails it instead.
       keepAlive: true,
       keepAliveInitialDelayMillis: KEEPALIVE_INITIAL_DELAY_MS,
       application_name,
+      // F6: keep Postgres text for dates, timestamps, intervals, bytea,
+      // numeric, arrays… — no JS Date conversion (see pg-type-parsers.ts).
+      types: plasmaPgTypes,
     };
   }
 
@@ -166,6 +226,7 @@ export class PostgresDriver {
 
     console.error('[plasma] postgres connection lost:', reason);
     this.lostReason = reason;
+    this.lostInTxn = this.txnState === 'active';
     this.txnState = 'none';
     this.primaryBackendPid = null;
     this.pendingNotices = [];
@@ -176,6 +237,7 @@ export class PostgresDriver {
     for (const client of clients) {
       if (!client) continue;
       client.removeListener('notice', this.handleNotice);
+      client.connection.removeListener('readyForQuery', this.handleReadyForQuery);
       // end() waits for a Terminate round trip the dead peer will never
       // complete, so release the fd directly and swallow the fallout.
       client.connection.stream.destroy();
@@ -229,6 +291,11 @@ export class PostgresDriver {
     }
   }
 
+  /** True when the session was lost with a transaction open (C5). */
+  lostDuringTransaction(): boolean {
+    return this.lostInTxn;
+  }
+
   async connect(config: ConnectionConfig, statementTimeoutMs?: number): Promise<string> {
     // Hang up any previous clients first
     await this.disconnect();
@@ -237,39 +304,80 @@ export class PostgresDriver {
       this.statementTimeoutMs = Math.max(0, Math.floor(statementTimeoutMs));
     }
 
-    const primary = new Client(this.clientOpts(config, 'plasma'));
-    await primary.connect();
-    // U26: capture RAISE NOTICE / server notices for the messages strip
-    // and stream them to the worker's broadcast channel.
-    primary.on('notice', this.handleNotice);
-    this.attachLifecycle(primary, 'primary');
-    this.primary = primary;
+    let ssl: PlasmaTlsOptions | false = buildNodeTlsOptions(config) ?? false;
+    const mode = resolveTls(config)?.mode;
+    if (isUnverifiedTlsMode(mode)) console.warn(insecureTlsWarning(config.host));
 
-    // Grab the backend pid so control can cancel it
-    const pidRes = await primary.query<{ pid: number }>('SELECT pg_backend_pid() AS pid');
-    this.primaryBackendPid = pidRes.rows[0]?.pid ?? null;
+    // C23: build all three clients locally and publish them only once the
+    // whole session is up, so a failed control/aux connect can't leave a
+    // half-open driver that claims to be connected.
+    const opened: ClientT[] = [];
+    const open = async (name: string): Promise<ClientT> => {
+      const client = new Client(this.clientOpts(config, name, ssl));
+      opened.push(client);
+      // Swallow socket errors until attachLifecycle takes over; an
+      // unhandled 'error' would kill the worker.
+      client.on('error', () => {});
+      await client.connect();
+      return client;
+    };
 
-    // Control connection — cancel capacity only (U19)
-    const control = new Client(this.clientOpts(config, 'plasma-control'));
-    await control.connect();
-    this.attachLifecycle(control, 'control');
-    this.control = control;
+    try {
+      let primary: ClientT;
+      try {
+        primary = await open('plasma');
+      } catch (err) {
+        // libpq `prefer`: fall back to plaintext when the server has no TLS.
+        if (mode !== 'prefer' || !/does not support ssl/i.test(errorMessage(err))) throw err;
+        opened.length = 0;
+        ssl = false;
+        primary = await open('plasma');
+      }
+      // Grab the backend pid so control can cancel it
+      const pidRes = await primary.query<{ pid: number }>('SELECT pg_backend_pid() AS pid');
+      // Control connection — cancel capacity only (U19)
+      const control = await open('plasma-control');
+      // Aux connection — AI / monitor execution budget, separate from cancel
+      const aux = await open('plasma-aux');
 
-    // Aux connection — AI / monitor execution budget, separate from cancel
-    const aux = new Client(this.clientOpts(config, 'plasma-aux'));
-    await aux.connect();
-    this.attachLifecycle(aux, 'aux');
-    this.aux = aux;
+      // C1: a read-only connection is enforced by the server, not just by
+      // hidden buttons. Every transaction on primary + aux starts READ ONLY.
+      if (config.readOnly) {
+        for (const client of [primary, aux]) {
+          await client.query('SET default_transaction_read_only = on');
+        }
+      }
 
-    await this.applyStatementTimeout();
+      // U26: capture RAISE NOTICE / server notices for the messages strip
+      // and stream them to the worker's broadcast channel.
+      primary.on('notice', this.handleNotice);
+      primary.connection.on('readyForQuery', this.handleReadyForQuery);
+      this.attachLifecycle(primary, 'primary');
+      this.attachLifecycle(control, 'control');
+      this.attachLifecycle(aux, 'aux');
+      this.primary = primary;
+      this.control = control;
+      this.aux = aux;
+      this.primaryBackendPid = pidRes.rows[0]?.pid ?? null;
 
-    const res = await primary.query<{ version: string }>('SELECT version()');
-    this.lastActivityAt = Date.now();
-    return res.rows[0]?.version ?? 'unknown';
+      await this.applyStatementTimeout();
+
+      const res = await primary.query<{ version: string }>('SELECT version()');
+      this.lastActivityAt = Date.now();
+      return res.rows[0]?.version ?? 'unknown';
+    } catch (err) {
+      if (this.primary) {
+        await this.disconnect();
+      } else {
+        await Promise.allSettled(opened.map((c) => c.end()));
+      }
+      throw err;
+    }
   }
 
   async disconnect(): Promise<void> {
     this.txnState = 'none';
+    this.lostInTxn = false;
     this.primaryBackendPid = null;
     this.pendingNotices = [];
     this.lostReason = null;
@@ -280,7 +388,10 @@ export class PostgresDriver {
     // Leave the 'error'/'end' listeners attached: end() can still fail
     // on a dead socket, and an unhandled 'error' kills the worker. They
     // no-op now that the refs below are cleared.
-    if (p) p.removeListener('notice', this.handleNotice);
+    if (p) {
+      p.removeListener('notice', this.handleNotice);
+      p.connection.removeListener('readyForQuery', this.handleReadyForQuery);
+    }
     this.primary = null;
     this.control = null;
     this.aux = null;
@@ -310,22 +421,41 @@ export class PostgresDriver {
   async query(sql: string, params?: unknown[], opts?: QueryOpts): Promise<QueryResult> {
     const client = await this.requireClient('primary');
 
+    // F9: Transaction mode — open a transaction before the first statement
+    // of a unit of work, unless the statement manages transactions itself
+    // or cannot run inside one (VACUUM, CREATE INDEX CONCURRENTLY, …).
+    if (opts?.autoBegin && this.txnStatus() === 'I' && !isTxnExemptSql(sql)) {
+      await client.query('BEGIN');
+    }
+
     this.pendingNotices = [];
+    this.droppedNotices = 0;
     const start = Date.now();
     const result = await this.runBounded(client, sql, params, opts);
     const durationMs = Date.now() - start;
+    const notices = this.takeNotices();
+
+    // F4/C31: txnState is kept current by handleReadyForQuery.
+    return {
+      ...result,
+      durationMs,
+      notices: notices.length > 0 ? notices : undefined,
+      txnState: this.txnState,
+    };
+  }
+
+  /** Drain the in-flight statement's notices, noting any that were capped (F11). */
+  private takeNotices(): PgNotice[] {
     const notices = this.pendingNotices;
-    this.pendingNotices = [];
-
-    // BEGIN/COMMIT/ROLLBACK statements flow through this path too.
-    const upper = sql.trim().toUpperCase();
-    if (upper.startsWith('BEGIN') || upper.startsWith('START TRANSACTION')) {
-      this.txnState = 'active';
-    } else if (upper.startsWith('COMMIT') || upper.startsWith('ROLLBACK')) {
-      this.txnState = 'none';
+    if (this.droppedNotices > 0) {
+      notices.push({
+        message: `${this.droppedNotices.toLocaleString('en-US')} more notices were not shown (limit ${MAX_NOTICES_PER_STATEMENT} per statement).`,
+        severity: 'NOTICE',
+      });
     }
-
-    return { ...result, durationMs, notices: notices.length > 0 ? notices : undefined };
+    this.pendingNotices = [];
+    this.droppedNotices = 0;
+    return notices;
   }
 
   /**
@@ -335,10 +465,42 @@ export class PostgresDriver {
    * Aux never participates in the primary's transaction state.
    */
   async sidebandQuery(sql: string, params?: unknown[], opts?: QueryOpts): Promise<QueryResult> {
-    const client = await this.requireClient('aux');
+    return this.withAux(async (client) => {
+      const start = Date.now();
+      if (!opts?.timeoutMs) {
+        const result = await this.runBounded(client, sql, params, opts);
+        return { ...result, durationMs: Date.now() - start };
+      }
+      // F12: Plasma's own lookups (counts, autocomplete, role lists) run
+      // read-only and under a short timeout so they can never write or
+      // hog the aux session.
+      const timeout = Math.max(1, Math.floor(opts.timeoutMs));
+      try {
+        await client.query('BEGIN READ ONLY');
+        await client.query(`SET LOCAL statement_timeout = ${timeout}`);
+        const result = await this.runBounded(client, sql, params, opts);
+        await client.query('COMMIT');
+        return { ...result, durationMs: Date.now() - start };
+      } catch (err) {
+        try {
+          await client.query('ROLLBACK');
+        } catch {}
+        throw err;
+      }
+    });
+  }
+
+  /**
+   * EXPLAIN one statement on the primary (F2). ANALYZE executes it inside
+   * a transaction (or savepoint) that is always rolled back.
+   */
+  async explain(sql: string, analyze: boolean): Promise<QueryResult> {
+    const client = await this.requireClient('primary');
     const start = Date.now();
-    const result = await this.runBounded(client, sql, params, opts);
-    return { ...result, durationMs: Date.now() - start };
+    const result = await runExplain(client, this.txnStatus(), sql, analyze, (text) =>
+      this.runBounded(client, text, undefined),
+    );
+    return { ...result, durationMs: Date.now() - start, txnState: this.txnState };
   }
 
   /**
@@ -445,6 +607,7 @@ export class PostgresDriver {
     const client = await this.requireClient('primary');
     const cursor = client.query(new Cursor(sql, params ?? [], { rowMode: "array" }));
     let columns: QueryResult["columns"] = [];
+    let first = true;
     try {
       while (true) {
         const batch = await readCursorBatch(cursor, RESULT_CURSOR_CHUNK);
@@ -455,7 +618,10 @@ export class PostgresDriver {
             dataTypeName: pgTypeName(f.dataTypeID),
           }));
         }
-        if (batch.rows.length === 0) break;
+        // Always yield the first batch so an empty result still exports
+        // its header / column list.
+        if (batch.rows.length === 0 && !first) break;
+        first = false;
         yield { columns, rows: batch.rows };
         if (batch.rows.length < RESULT_CURSOR_CHUNK) break;
       }
@@ -469,7 +635,6 @@ export class PostgresDriver {
   async beginTransaction(): Promise<TxnState> {
     const client = await this.requireClient('primary');
     await client.query('BEGIN');
-    this.txnState = 'active';
     this.lastActivityAt = Date.now();
     return this.txnState;
   }
@@ -477,7 +642,6 @@ export class PostgresDriver {
   async commitTransaction(): Promise<TxnState> {
     const client = await this.requireClient('primary');
     await client.query('COMMIT');
-    this.txnState = 'none';
     this.lastActivityAt = Date.now();
     return this.txnState;
   }
@@ -485,36 +649,42 @@ export class PostgresDriver {
   async rollbackTransaction(): Promise<TxnState> {
     const client = await this.requireClient('primary');
     await client.query('ROLLBACK');
-    this.txnState = 'none';
     this.lastActivityAt = Date.now();
     return this.txnState;
   }
 
   setConnectionGen(gen: number): void { this.connectionGen = gen; }
 
-  async commitEditBatch(expectedGen: number, updates: Array<{ sql: string; params?: unknown[] }>): Promise<TxnState> {
+  /**
+   * Apply a grid edit batch atomically (C7/F4/F5). See runEditBatch: every
+   * UPDATE must hit exactly one row; a user's open transaction gets a
+   * SAVEPOINT and is never committed by the tray.
+   */
+  async commitEditBatch(
+    expectedGen: number,
+    updates: EditUpdate[],
+  ): Promise<{ state: TxnState; applied: number }> {
     const client = await this.requireClient('primary');
     if (expectedGen !== this.connectionGen) throw new Error(`connection generation mismatch: edit batch is for generation ${expectedGen}, current is ${this.connectionGen}`);
-    const savepoint = this.txnState === "active";
-    if (savepoint) await client.query("SAVEPOINT plasma_edit_batch"); else await client.query("BEGIN");
-    try {
-      for (const update of updates) await client.query({ text: update.sql, values: update.params });
-      if (savepoint) await client.query("RELEASE SAVEPOINT plasma_edit_batch"); else await client.query("COMMIT");
-      this.lastActivityAt = Date.now();
-      return this.txnState;
-    } catch (err) {
-      try { await client.query(savepoint ? "ROLLBACK TO SAVEPOINT plasma_edit_batch" : "ROLLBACK"); } catch {}
-      throw err;
-    }
+    const applied = await runEditBatch(client, this.txnStatus(), updates);
+    this.lastActivityAt = Date.now();
+    return { state: this.txnState, applied };
   }
 
   async aiQuery(sql: string, params?: unknown[]): Promise<QueryResult> {
-    const client = await this.requireClient('aux');
     if (!isSingleSqlStatement(sql)) throw new Error("rejected: AI queries must be a single SQL statement");
+    // F12: serialised with other aux work so a sideband lookup can't land
+    // inside this read-only transaction (or vice versa).
+    return this.withAux((client) => this.runAiQuery(client, sql, params));
+  }
+
+  private async runAiQuery(client: ClientT, sql: string, params?: unknown[]): Promise<QueryResult> {
     const start = Date.now();
     try {
-      await client.query("BEGIN");
-      await client.query("SET TRANSACTION READ ONLY");
+      // F19: one statement, so nothing can land between BEGIN and READ ONLY.
+      await client.query("BEGIN READ ONLY");
+      // C18: a model-written query must not hold the aux session forever.
+      await client.query("SET LOCAL statement_timeout = 30000");
       const result = await this.runBounded(client, sql, params);
       await client.query("COMMIT");
       return { ...result, durationMs: Date.now() - start };
@@ -524,166 +694,10 @@ export class PostgresDriver {
     }
   }
 
-  async introspect(): Promise<SchemaInfo> {
+  async introspect(opts?: IntrospectOpts): Promise<SchemaInfo> {
     const client = await this.requireClient('primary');
-
-    // IMPORTANT: pg.Client serializes queries internally but DOES warn
-    // (and in pg@9 will error) if you call .query() while another is
-    // in-flight. Run these sequentially, not via Promise.all.
-    const schemas = await client.query<{ schema_name: string }>(
-      `SELECT nspname AS schema_name
-       FROM pg_namespace
-       WHERE nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
-         AND nspname NOT LIKE 'pg_temp_%'
-         AND nspname NOT LIKE 'pg_toast_temp_%'
-       ORDER BY nspname`,
-    );
-    const tables = await client.query<{
-      schema: string;
-      name: string;
-      kind: 'r' | 'v' | 'm' | 'f' | 'p';
-      row_count: string | null;
-    }>(
-      `SELECT n.nspname AS schema,
-              c.relname  AS name,
-              c.relkind  AS kind,
-              NULLIF(c.reltuples, -1)::bigint::text AS row_count
-       FROM pg_class c
-       JOIN pg_namespace n ON n.oid = c.relnamespace
-       WHERE c.relkind IN ('r', 'v', 'm', 'f', 'p')
-         AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
-         AND n.nspname NOT LIKE 'pg_temp_%'
-       ORDER BY n.nspname, c.relname`,
-    );
-    const columns = await client.query<{
-      schema: string;
-      table: string;
-      name: string;
-      data_type: string;
-      ordinal: number;
-      is_pk: boolean;
-      is_nullable: boolean;
-      has_default: boolean;
-    }>(
-      `SELECT n.nspname AS schema,
-              c.relname  AS "table",
-              a.attname  AS name,
-              format_type(a.atttypid, a.atttypmod) AS data_type,
-              a.attnum   AS ordinal,
-              COALESCE(pk.is_pk, false) AS is_pk,
-              NOT a.attnotnull AS is_nullable,
-              a.atthasdef AS has_default
-       FROM pg_attribute a
-       JOIN pg_class c ON c.oid = a.attrelid
-       JOIN pg_namespace n ON n.oid = c.relnamespace
-       LEFT JOIN LATERAL (
-         SELECT true AS is_pk
-         FROM pg_constraint con
-         WHERE con.conrelid = c.oid
-           AND con.contype = 'p'
-           AND a.attnum = ANY (con.conkey)
-         LIMIT 1
-       ) pk ON true
-       WHERE a.attnum > 0
-         AND NOT a.attisdropped
-         AND c.relkind IN ('r', 'v', 'm', 'f', 'p')
-         AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
-         AND n.nspname NOT LIKE 'pg_temp_%'
-       ORDER BY n.nspname, c.relname, a.attnum`,
-    );
-
-    // Foreign keys — one row per FK column. `unnest` with WITH ORDINALITY
-    // pairs each `conkey` index to its matching `confkey` index so a
-    // composite FK (two columns) yields two rows sharing a constraint
-    // oid. Filters to system schemas are the same as above.
-    const foreignKeys = await client.query<{
-      schema: string;
-      table: string;
-      column: string;
-      ref_schema: string;
-      ref_table: string;
-      ref_column: string;
-    }>(
-      `SELECT n.nspname   AS schema,
-              c.relname   AS "table",
-              a.attname   AS column,
-              fn.nspname  AS ref_schema,
-              fc.relname  AS ref_table,
-              fa.attname  AS ref_column
-       FROM pg_constraint con
-       JOIN pg_class     c  ON c.oid  = con.conrelid
-       JOIN pg_namespace n  ON n.oid  = c.relnamespace
-       JOIN pg_class     fc ON fc.oid = con.confrelid
-       JOIN pg_namespace fn ON fn.oid = fc.relnamespace
-       JOIN LATERAL unnest(con.conkey)  WITH ORDINALITY AS k(attnum, ord) ON true
-       JOIN LATERAL unnest(con.confkey) WITH ORDINALITY AS fk(attnum, ord) ON fk.ord = k.ord
-       JOIN pg_attribute a  ON a.attrelid  = c.oid  AND a.attnum  = k.attnum
-       JOIN pg_attribute fa ON fa.attrelid = fc.oid AND fa.attnum = fk.attnum
-       WHERE con.contype = 'f'
-         AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
-         AND n.nspname NOT LIKE 'pg_temp_%'
-       ORDER BY n.nspname, c.relname, a.attnum`,
-    );
+    const info = await introspectPostgres(client, opts);
     this.lastActivityAt = Date.now();
-
-    const kindMap = {
-      r: 'table',
-      v: 'view',
-      m: 'matview',
-      f: 'foreign',
-      p: 'partitioned',
-    } as const;
-
-    return {
-      schemas: schemas.rows.map((r) => ({ name: r.schema_name })),
-      tables: tables.rows.map((r) => ({
-        schema: r.schema,
-        name: r.name,
-        kind: kindMap[r.kind],
-        rowCountEstimate: r.row_count !== null ? Number(r.row_count) : null,
-      })),
-      columns: columns.rows.map((r) => ({
-        schema: r.schema,
-        table: r.table,
-        name: r.name,
-        dataType: r.data_type,
-        ordinal: r.ordinal,
-        isPrimaryKey: r.is_pk,
-        isNullable: r.is_nullable,
-        hasDefault: r.has_default,
-      })),
-      foreignKeys: foreignKeys.rows.map((r) => ({
-        schema: r.schema,
-        table: r.table,
-        column: r.column,
-        refSchema: r.ref_schema,
-        refTable: r.ref_table,
-        refColumn: r.ref_column,
-      })),
-    };
+    return info;
   }
-}
-
-function pgTypeName(oid: number): string {
-  const map: Record<number, string> = {
-    16: 'bool',
-    17: 'bytea',
-    20: 'int8',
-    21: 'int2',
-    23: 'int4',
-    25: 'text',
-    114: 'json',
-    700: 'float4',
-    701: 'float8',
-    1043: 'varchar',
-    1082: 'date',
-    1083: 'time',
-    1114: 'timestamp',
-    1184: 'timestamptz',
-    1186: 'interval',
-    1700: 'numeric',
-    2950: 'uuid',
-    3802: 'jsonb',
-  };
-  return map[oid] ?? `oid:${oid}`;
 }

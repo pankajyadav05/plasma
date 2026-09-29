@@ -5,7 +5,7 @@ import { Download, Loader2, RotateCw } from 'lucide-react';
 import { useState } from 'react';
 
 /**
- * StatusBar pill that surfaces auto-update state. Renders nothing
+ * Toolbar badge that surfaces auto-update state. Renders nothing
  * unless something interesting is happening (downloading or ready
  * to install). The Settings → About section handles all the manual
  * controls + the "no update available" wording.
@@ -17,11 +17,11 @@ export function UpdateBadge() {
   if (status.kind === 'downloading') {
     return (
       <span
-        className="flex items-center gap-1.5 px-3 text-xs text-muted-foreground"
+        className="no-drag flex items-center gap-1.5 px-2 text-[12px] text-[var(--wb-text-2)]"
         title={`Downloading update — ${Math.round(status.percent)}%`}
       >
-        <Loader2 className="h-3 w-3 animate-spin text-primary" />
-        <span className="tabular-nums">downloading {Math.round(status.percent)}%</span>
+        <Loader2 className="h-3 w-3 animate-spin" />
+        <span className="tabular-nums">Downloading update {Math.round(status.percent)}%</span>
       </span>
     );
   }
@@ -30,20 +30,20 @@ export function UpdateBadge() {
     return (
       <>
         <Button
-          variant="ghost"
-          size="xs"
+          variant="secondary"
+          size="pill"
           onClick={() => setConfirmInstall(true)}
           title={`Restart to install v${status.version}`}
-          className="border border-primary text-primary"
+          className="no-drag"
         >
-          <Download className="h-3 w-3" />
-          update ready · v{status.version}
+          <Download />
+          Update ready · v{status.version}
         </Button>
         <ConfirmDialog
           open={confirmInstall}
           onOpenChange={setConfirmInstall}
           title={`Install Plasma v${status.version}?`}
-          description="The app will restart to apply the update. Unsaved query tabs will be reopened automatically."
+          description="Plasma will restart to apply the update. Copy or save any SQL you want to keep first."
           confirmLabel="Restart & install"
           variant="primary"
           onConfirm={() => void install()}
@@ -55,11 +55,11 @@ export function UpdateBadge() {
   if (status.kind === 'available') {
     return (
       <span
-        className="flex items-center gap-1.5 px-3 text-xs text-muted-foreground"
+        className="no-drag flex items-center gap-1.5 px-2 text-[12px] text-[var(--wb-text-2)]"
         title={`Update v${status.version} available — downloading…`}
       >
-        <RotateCw className="h-3 w-3 animate-spin text-primary" />
-        <span>update v{status.version} downloading…</span>
+        <RotateCw className="h-3 w-3 animate-spin" />
+        <span>Downloading v{status.version}…</span>
       </span>
     );
   }

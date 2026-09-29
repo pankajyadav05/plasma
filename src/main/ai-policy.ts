@@ -134,13 +134,13 @@ const REDIS_READ_ONLY = new Set([
   'XREVRANGE',
   'INFO',
   'DBSIZE',
-  'KEYS',
+  // No KEYS (blocks the server on big keyspaces) and no CONFIG (CONFIG GET
+  // returns requirepass / masterauth, which would be sent to the model).
   'SCAN',
   'HSCAN',
   'SSCAN',
   'ZSCAN',
   'MEMORY',
-  'CONFIG',
   'CLIENT',
   'SLOWLOG',
   'COMMAND',
@@ -154,7 +154,6 @@ const REDIS_READ_ONLY = new Set([
  * but the second token must be a known read sub-action.
  */
 const REDIS_READ_ONLY_SUBCOMMANDS = new Map<string, Set<string>>([
-  ['CONFIG', new Set(['GET'])],
   ['CLIENT', new Set(['LIST', 'GETNAME', 'ID', 'INFO'])],
   ['MEMORY', new Set(['USAGE', 'STATS', 'DOCTOR'])],
   ['SLOWLOG', new Set(['GET', 'LEN', 'HELP'])],
@@ -174,17 +173,27 @@ export function isReadOnlyRedisCommand(parts: readonly string[]): boolean {
 }
 
 /**
- * Cheap pre-filter for tool-driven queries (U04). Allow EXPLAIN / SELECT /
- * SHOW / WITH / VALUES / TABLE. Not a safety boundary — the dedicated AI
- * client enforces `SET TRANSACTION READ ONLY` and rejects multi-statement
- * SQL. CTEs wrapping DELETE / EXPLAIN ANALYZE mutations can still pass
- * this predicate.
+ * Pre-filter for tool-driven queries (U04/C18). Allows EXPLAIN / SELECT /
+ * SHOW / WITH / VALUES / TABLE, rejects data-modifying CTEs and functions
+ * with side effects outside the transaction. The worker's `aiQuery` is the
+ * real boundary: single statement, inside `BEGIN … READ ONLY`.
  */
 export function isReadOnlySql(sql: string): boolean {
   const stripped = sql
     .replace(/\/\*[\s\S]*?\*\//g, '')
-    .replace(/^\s*--.*$/gm, '')
+    .replace(/--.*$/gm, '')
     .trim()
     .toLowerCase();
-  return /^(select|explain|show|with|values|table)\b/.test(stripped);
+  if (!/^(select|explain|show|with|values|table)\b/.test(stripped)) return false;
+  // Data-modifying CTEs (`WITH x AS (DELETE …)`) — the worker's READ ONLY
+  // transaction rejects them too, this just fails fast.
+  if (/\b(insert|update|delete|merge)\b/.test(stripped) && stripped.startsWith('with'))
+    return false;
+  // Functions that act outside the transaction, so READ ONLY doesn't stop
+  // them (kill sessions, read server files, reach other hosts, …).
+  // Checked on the raw text too, so a `'--'` string can't hide a call.
+  return !UNSAFE_SQL_FUNCTIONS.test(stripped) && !UNSAFE_SQL_FUNCTIONS.test(sql.toLowerCase());
 }
+
+const UNSAFE_SQL_FUNCTIONS =
+  /\b(pg_terminate_backend|pg_cancel_backend|pg_reload_conf|pg_rotate_logfile|pg_promote|pg_read_file|pg_read_binary_file|pg_ls_\w+|pg_stat_file|lo_import|lo_export|dblink\w*|set_config|pg_sleep\w*|pg_advisory\w*|pg_notify|pg_switch_wal|pg_create_\w+|pg_drop_\w+|pg_replication_\w+|query_to_xml\w*|pg_file_\w+)"?\s*\(/;

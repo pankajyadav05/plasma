@@ -1,4 +1,5 @@
 import { Client } from '@opensearch-project/opensearch';
+import { OS_READ_ONLY_MESSAGE, isOsReadRequest, isReadOnlyOsSql } from '@shared/os-write-policy';
 import type {
   ConnectionConfig,
   OsAlias,
@@ -7,11 +8,38 @@ import type {
   OsIlmPolicy,
   OsMappingNode,
   OsOverview,
+  OsRawResponse,
   OsSearchResult,
   OsSqlResult,
 } from '@shared/protocol';
-import { buildNodeTlsOptions, insecureTlsWarning, resolveTls } from "@shared/tls";
-import { buildFieldStatsAggs, isMissingSqlEndpointError, readFieldStat } from "./opensearch-helpers";
+import { buildNodeTlsOptions, insecureTlsWarning, resolveTls } from '@shared/tls';
+import {
+  encodeIndexPath,
+  flattenMappingProps,
+  isMissingSqlEndpointError,
+  isNdjsonPath,
+  mergeMappingTrees,
+  normalisePath,
+  parseTotal,
+  prepareSearchBody,
+  readMsearchFieldStat,
+  resolveAggField,
+  responseFromError,
+  statsQuery,
+} from './opensearch-helpers';
+
+/** Default per-request timeout when neither the request nor settings set one (O6). */
+const DEFAULT_TIMEOUT_MS = 60_000;
+
+type Abortable<T> = Promise<T> & { abort?: () => void };
+
+interface TransportParams {
+  method: string;
+  path: string;
+  body?: unknown;
+  bulkBody?: string;
+  querystring?: Record<string, unknown>;
+}
 
 /**
  * OpenSearch driver — wraps the official @opensearch-project/opensearch
@@ -21,12 +49,19 @@ import { buildFieldStatsAggs, isMissingSqlEndpointError, readFieldStat } from ".
  * The same client also speaks Elasticsearch 7.x — most read APIs match.
  * Things that differ (composable index templates, distribution-only
  * fields) we surface best-effort.
+ *
+ * Write safety (S1/O1): a read-only connection refuses every mutating
+ * call here too, independent of main's guard.
  */
 export class OpenSearchDriver {
   private client: Client | null = null;
   private cachedVersion = 'unknown';
+  private readOnly = false;
+  private defaultTimeoutMs = DEFAULT_TIMEOUT_MS;
+  /** In-flight abortable requests keyed by the renderer's request id (O6). */
+  private inflight = new Map<string, () => void>();
 
-  async connect(config: ConnectionConfig): Promise<string> {
+  async connect(config: ConnectionConfig, timeoutMs?: number): Promise<string> {
     await this.disconnect();
     const protocol = config.ssl ? 'https' : 'http';
     const auth =
@@ -38,25 +73,30 @@ export class OpenSearchDriver {
     if (resolveTls(config)?.mode === 'insecure') {
       console.warn(insecureTlsWarning(config.host));
     }
+    this.defaultTimeoutMs = timeoutMs && timeoutMs > 0 ? timeoutMs : DEFAULT_TIMEOUT_MS;
     const client = new Client({
       node,
       auth,
       ssl,
-      requestTimeout: 10_000,
+      requestTimeout: this.defaultTimeoutMs,
     });
-    // Validate the connection eagerly with a /_info request.
-    const info = (await client.info()).body as {
+    // Validate the connection eagerly with a /_info request (short timeout).
+    const info = (await client.info({}, { requestTimeout: 10_000 })).body as {
       cluster_name?: string;
       version?: { distribution?: string; number?: string };
     };
     this.client = client;
+    this.readOnly = config.readOnly === true;
     this.cachedVersion = info.version?.number ?? 'unknown';
     return this.cachedVersion;
   }
 
   async disconnect(): Promise<void> {
+    for (const abort of this.inflight.values()) abort();
+    this.inflight.clear();
     const c = this.client;
     this.client = null;
+    this.readOnly = false;
     if (c) {
       try {
         await c.close();
@@ -66,22 +106,110 @@ export class OpenSearchDriver {
     }
   }
 
-  async overview(): Promise<OsOverview> {
+  private requireClient(): Client {
     if (!this.client) throw new Error('not connected');
-    const info = (await this.client.info()).body as {
+    return this.client;
+  }
+
+  private assertWritable(): void {
+    if (this.readOnly) throw new Error(OS_READ_ONLY_MESSAGE);
+  }
+
+  /**
+   * Run a transport request that `cancel(requestId)` can abort. Aborts
+   * surface as "request cancelled"; the timeout is per request.
+   */
+  private async transport(
+    params: TransportParams,
+    opts: { timeoutMs?: number; requestId?: string } = {},
+  ): Promise<{ statusCode: number; body: unknown }> {
+    const client = this.requireClient();
+    const requestTimeout = opts.timeoutMs && opts.timeoutMs > 0 ? opts.timeoutMs : undefined;
+    const promise = client.transport.request(
+      params as unknown as Parameters<Client['transport']['request']>[0],
+      {
+        ...(requestTimeout ? { requestTimeout } : {}),
+        maxRetries: 0,
+        ...(opts.requestId ? { opaqueId: `plasma-${opts.requestId}` } : {}),
+      },
+    ) as unknown as Abortable<{ statusCode: number | null; body: unknown }>;
+    let aborted = false;
+    if (opts.requestId) {
+      this.inflight.set(opts.requestId, () => {
+        aborted = true;
+        promise.abort?.();
+      });
+    }
+    try {
+      const res = await promise;
+      return { statusCode: res.statusCode ?? 200, body: res.body };
+    } catch (err) {
+      if (aborted) throw new Error('request cancelled');
+      const name = err && typeof err === 'object' ? (err as { name?: string }).name : undefined;
+      if (name === 'TimeoutError') {
+        throw new Error(
+          `request timed out after ${Math.round((requestTimeout ?? this.defaultTimeoutMs) / 1000)} s`,
+        );
+      }
+      throw err;
+    } finally {
+      if (opts.requestId) this.inflight.delete(opts.requestId);
+    }
+  }
+
+  /**
+   * Abort an in-flight request (O6) and best-effort cancel the matching
+   * server-side search task so it stops consuming the cluster.
+   */
+  async cancel(requestId: string): Promise<void> {
+    const abort = this.inflight.get(requestId);
+    this.inflight.delete(requestId);
+    abort?.();
+    const client = this.client;
+    if (!client) return;
+    try {
+      const res = await client.transport.request(
+        { method: 'GET', path: '/_tasks', querystring: { detailed: 'true', actions: '*search*' } },
+        { requestTimeout: 5_000, maxRetries: 0 },
+      );
+      const body = res.body as {
+        nodes?: Record<string, { tasks?: Record<string, { headers?: Record<string, string> }> }>;
+      };
+      const opaque = `plasma-${requestId}`;
+      for (const nodeInfo of Object.values(body.nodes ?? {})) {
+        for (const [taskId, task] of Object.entries(nodeInfo.tasks ?? {})) {
+          if (task.headers?.['X-Opaque-Id'] === opaque) {
+            await client.transport
+              .request(
+                { method: 'POST', path: `/_tasks/${encodeURIComponent(taskId)}/_cancel` },
+                { requestTimeout: 5_000, maxRetries: 0 },
+              )
+              .catch(() => undefined);
+          }
+        }
+      }
+    } catch {
+      // Task lookup is best-effort; the client-side abort already happened.
+    }
+  }
+
+  async overview(): Promise<OsOverview> {
+    const client = this.requireClient();
+    const info = (await client.info()).body as {
       cluster_name?: string;
       version?: { distribution?: string; number?: string };
     };
-    const health = (await this.client.cluster.health({})).body as {
+    const health = (await client.cluster.health({})).body as {
       status?: string;
       number_of_nodes?: number;
     };
 
     // cat.indices returns one row per index with live counts/sizes.
     const cat = (
-      await this.client.cat.indices({
+      await client.cat.indices({
         format: 'json',
         bytes: 'b',
+        expand_wildcards: 'all',
         h: [
           'index',
           'health',
@@ -93,9 +221,11 @@ export class OpenSearchDriver {
           'docs.deleted',
           'store.size',
         ],
-      })
+      } as Parameters<Client['cat']['indices']>[0])
     ).body as unknown as Array<Record<string, string | null | undefined>>;
 
+    // System indices (including `.security*`) are hidden in the UI, not
+    // here, so "Show system indices" can reveal them (O10).
     const indices = cat
       .map((row) => ({
         index: row.index ?? '',
@@ -108,7 +238,7 @@ export class OpenSearchDriver {
         docsDeleted: Number(row['docs.deleted'] ?? 0) || 0,
         storeBytes: Number(row['store.size'] ?? 0) || 0,
       }))
-      .filter((i) => i.index && !i.index.startsWith('.security'));
+      .filter((i) => i.index);
 
     return {
       clusterName: info.cluster_name ?? 'unknown',
@@ -121,22 +251,18 @@ export class OpenSearchDriver {
   }
 
   async mapping(index: string): Promise<OsMappingNode> {
-    if (!this.client) throw new Error('not connected');
-    const res = (await this.client.indices.getMapping({ index })).body as Record<
+    const client = this.requireClient();
+    const res = (await client.indices.getMapping({ index })).body as Record<
       string,
       { mappings?: { properties?: Record<string, unknown> } }
     >;
-    // res is keyed by concrete index name (resolves wildcards). Merge
-    // properties from all matched indices into one root.
-    const merged: Record<string, unknown> = {};
-    for (const entry of Object.values(res)) {
-      const props = entry.mappings?.properties ?? {};
-      Object.assign(merged, props);
-    }
+    // res is keyed by concrete index name (resolves wildcards/aliases).
+    // Merge per path and flag conflicting types instead of hiding them (O5).
+    const perIndex = Object.values(res).map((entry) => entry.mappings?.properties ?? {});
     return {
       name: index,
       type: null,
-      children: buildMappingChildren(merged),
+      children: mergeMappingTrees(perIndex),
     };
   }
 
@@ -144,56 +270,47 @@ export class OpenSearchDriver {
     index: string;
     body: string;
     size: number;
+    timeoutMs?: number;
+    requestId?: string;
   }): Promise<OsSearchResult> {
-    if (!this.client) throw new Error('not connected');
-    const trimmed = opts.body.trim();
-    let body: Record<string, unknown>;
-    if (!trimmed) {
-      body = { query: { match_all: {} }, size: opts.size };
-    } else {
-      try {
-        body = JSON.parse(trimmed) as Record<string, unknown>;
-      } catch (err) {
-        throw new Error(
-          `invalid query DSL JSON: ${err instanceof Error ? err.message : String(err)}`,
-        );
-      }
-    }
-    if (body.size === undefined) body.size = opts.size;
-
+    const body = prepareSearchBody(opts.body, opts.size);
     const start = Date.now();
-    const res = (await this.client.search({ index: opts.index, body })).body as unknown as {
+    const res = await this.transport(
+      { method: 'POST', path: `/${encodeIndexPath(opts.index)}/_search`, body },
+      { timeoutMs: opts.timeoutMs, requestId: opts.requestId },
+    );
+    const payload = res.body as {
       took?: number;
       hits?: {
-        total?: number | { value: number };
-        hits?: Array<{ _id: string; _index: string; _score: number | null; _source: unknown }>;
+        total?: unknown;
+        hits?: Array<{
+          _id: string;
+          _index: string;
+          _score: number | null;
+          _source: unknown;
+          sort?: unknown[];
+        }>;
       };
       aggregations?: unknown;
     };
-    const took = res.took ?? Date.now() - start;
-    const totalRaw = res.hits?.total;
-    const total =
-      typeof totalRaw === 'number'
-        ? totalRaw
-        : totalRaw && typeof totalRaw === 'object'
-          ? (totalRaw.value ?? 0)
-          : 0;
+    const took = payload.took ?? Date.now() - start;
+    const { total, relation } = parseTotal(payload.hits?.total);
 
-    const hits: OsHit[] = (res.hits?.hits ?? []).map((h) => ({
+    const hits: OsHit[] = (payload.hits?.hits ?? []).map((h) => ({
       index: h._index,
       id: h._id,
       score: typeof h._score === 'number' ? h._score : null,
       source: h._source,
+      ...(Array.isArray(h.sort) ? { sort: h.sort } : {}),
     }));
-
-    const fields = extractTopLevelFields(hits);
 
     return {
       total,
+      totalRelation: relation,
       took,
       hits,
-      aggregations: res.aggregations ?? null,
-      fields,
+      aggregations: payload.aggregations ?? null,
+      fields: extractTopLevelFields(hits),
     };
   }
 
@@ -202,34 +319,41 @@ export class OpenSearchDriver {
    * path first (`/_plugins/_sql`); on 404 falls back to the legacy ES
    * plugin endpoint (`/_sql`) so the same code works on both forks.
    *
-   * Returns a tabular shape mirroring our QueryResult so the renderer
-   * can reuse the existing grid plumbing.
+   * `fetchSize` turns on cursor paging; pass the returned `cursor` back
+   * (with an empty query) for the next page (O20).
    */
-  async sql(query: string): Promise<OsSqlResult> {
-    if (!this.client) throw new Error('not connected');
+  async sql(opts: {
+    query: string;
+    fetchSize?: number;
+    cursor?: string;
+    timeoutMs?: number;
+    requestId?: string;
+  }): Promise<OsSqlResult> {
     const start = Date.now();
-    const body = { query };
-    let res;
+    let body: Record<string, unknown>;
+    if (opts.cursor) {
+      body = { cursor: opts.cursor };
+    } else {
+      if (!opts.query.trim()) throw new Error('query required');
+      if (this.readOnly && !isReadOnlyOsSql(opts.query)) throw new Error(OS_READ_ONLY_MESSAGE);
+      body = { query: opts.query };
+      if (opts.fetchSize) body.fetch_size = opts.fetchSize;
+    }
+    const call = { timeoutMs: opts.timeoutMs, requestId: opts.requestId };
+    let res: { body: unknown };
     try {
-      res = await this.client.transport.request({
-        method: 'POST',
-        path: '/_plugins/_sql',
-        body,
-      });
+      res = await this.transport({ method: 'POST', path: '/_plugins/_sql', body }, call);
     } catch (err) {
       // Only the missing-plugin 404 should fall back to legacy `/_sql`.
       // Auth failures, invalid SQL, timeouts, etc. must keep their original error.
       if (!isMissingSqlEndpointError(err)) throw err;
-      res = await this.client.transport.request({
-        method: 'POST',
-        path: '/_sql',
-        body,
-      });
+      res = await this.transport({ method: 'POST', path: '/_sql', body }, call);
     }
-    const payload = res.body as unknown as {
+    const payload = res.body as {
       schema?: Array<{ name: string; type: string }>;
       datarows?: unknown[][];
       total?: number;
+      cursor?: string;
       // ES 7 SQL flavor uses these instead.
       columns?: Array<{ name: string; type: string }>;
       rows?: unknown[][];
@@ -245,7 +369,54 @@ export class OpenSearchDriver {
       rows,
       total,
       durationMs: Date.now() - start,
+      cursor: typeof payload.cursor === 'string' && payload.cursor ? payload.cursor : null,
     };
+  }
+
+  /**
+   * Arbitrary REST call for the Dev Tools console, document CRUD and
+   * index/cluster operations (O13–O17). HTTP error responses come back
+   * as `{ status, body }` rather than throwing so the console can show
+   * them; transport failures (timeout, refused, aborted) still throw.
+   */
+  async request(opts: {
+    method: string;
+    path: string;
+    body?: string;
+    timeoutMs?: number;
+    requestId?: string;
+  }): Promise<OsRawResponse> {
+    const path = normalisePath(opts.path);
+    const text = opts.body?.trim() ? opts.body : undefined;
+    if (this.readOnly && !isOsReadRequest(opts.method, path, text)) {
+      throw new Error(OS_READ_ONLY_MESSAGE);
+    }
+    const [pathOnly, qs] = splitQuery(path);
+    const params: TransportParams = { method: opts.method.toUpperCase(), path: pathOnly };
+    if (qs) params.querystring = qs;
+    if (text !== undefined) {
+      if (isNdjsonPath(pathOnly)) {
+        params.bulkBody = text.endsWith('\n') ? text : `${text}\n`;
+      } else {
+        try {
+          params.body = JSON.parse(text);
+        } catch (err) {
+          throw new Error(`invalid JSON body: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+    }
+    const start = Date.now();
+    try {
+      const res = await this.transport(params, {
+        timeoutMs: opts.timeoutMs,
+        requestId: opts.requestId,
+      });
+      return { status: res.statusCode, body: res.body ?? null, durationMs: Date.now() - start };
+    } catch (err) {
+      const http = responseFromError(err);
+      if (http) return { ...http, durationMs: Date.now() - start };
+      throw err;
+    }
   }
 
   /**
@@ -258,8 +429,9 @@ export class OpenSearchDriver {
     name: string,
     body: Record<string, unknown> | undefined,
   ): Promise<{ acknowledged: boolean; index: string }> {
-    if (!this.client) throw new Error('not connected');
-    const res = (await this.client.indices.create({ index: name, body })).body as {
+    const client = this.requireClient();
+    this.assertWritable();
+    const res = (await client.indices.create({ index: name, body })).body as {
       acknowledged?: boolean;
       index?: string;
     };
@@ -270,17 +442,18 @@ export class OpenSearchDriver {
   }
 
   async deleteIndex(name: string): Promise<{ acknowledged: boolean }> {
-    if (!this.client) throw new Error('not connected');
-    const res = (await this.client.indices.delete({ index: name })).body as {
+    const client = this.requireClient();
+    this.assertWritable();
+    const res = (await client.indices.delete({ index: name })).body as {
       acknowledged?: boolean;
     };
     return { acknowledged: res.acknowledged === true };
   }
 
   async aliases(): Promise<OsAlias[]> {
-    if (!this.client) throw new Error('not connected');
+    const client = this.requireClient();
     const cat = (
-      await this.client.cat.aliases({
+      await client.cat.aliases({
         format: 'json',
         h: ['alias', 'index', 'filter', 'is_write_index'],
       })
@@ -299,10 +472,10 @@ export class OpenSearchDriver {
    * walks it as a JSON tree.
    */
   async ilm(): Promise<OsIlmPolicy[]> {
-    if (!this.client) throw new Error('not connected');
+    const client = this.requireClient();
     // OpenSearch ISM path
     try {
-      const res = await this.client.transport.request({
+      const res = await client.transport.request({
         method: 'GET',
         path: '/_plugins/_ism/policies',
       });
@@ -323,7 +496,7 @@ export class OpenSearchDriver {
       // Fall through to ES ILM
     }
     try {
-      const res = await this.client.transport.request({
+      const res = await client.transport.request({
         method: 'GET',
         path: '/_ilm/policy',
       });
@@ -347,70 +520,85 @@ export class OpenSearchDriver {
   }
 
   /**
-   * Per-field stats used by the Discover canvas. One terms agg + one
-   * cardinality agg per requested field, all in a single search call so
-   * we round-trip once regardless of field count.
+   * Per-field stats used by the Discover canvas (O2). Each field is its
+   * own `_msearch` sub-request, so one field that can't be aggregated
+   * (text without keyword, geo_point, object…) no longer blanks every
+   * other field. `text` fields aggregate their keyword multi-field.
    */
   async fieldStats(opts: {
     index: string;
     fields: string[];
     queryString?: string;
+    query?: string;
   }): Promise<OsFieldStats[]> {
-    if (!this.client) throw new Error('not connected');
+    const client = this.requireClient();
 
-    // Pull the mapping so we can label types + spot date fields.
-    const mappingRes = (await this.client.indices.getMapping({ index: opts.index })).body as Record<
+    const mappingRes = (await client.indices.getMapping({ index: opts.index })).body as Record<
       string,
-      { mappings?: { properties?: Record<string, { type?: string }> } }
+      { mappings?: { properties?: Record<string, unknown> } }
     >;
-    const props: Record<string, { type?: string }> = {};
+    const flat: ReturnType<typeof flattenMappingProps> = {};
     for (const v of Object.values(mappingRes)) {
-      Object.assign(props, v.mappings?.properties ?? {});
+      flattenMappingProps(v.mappings?.properties ?? {}, '', flat);
     }
 
-    // Request-local index IDs (card_0 / top_0 …) — never collide across
-    // fields whose lossy-sanitized names would match (user.id vs user_id).
-    const aggs = buildFieldStatsAggs(opts.fields);
+    const query = statsQuery(opts.query, opts.queryString);
+    const plans = opts.fields.map((f) => resolveAggField(f, flat));
+    const runnable = plans.filter((p): p is typeof p & { field: string } => p.field !== null);
 
-    const body: Record<string, unknown> = {
-      size: 0,
-      aggs,
-    };
-    if (opts.queryString) {
-      body.query = { query_string: { query: opts.queryString } };
+    let responses: unknown[] = [];
+    if (runnable.length > 0) {
+      const lines: string[] = [];
+      for (const p of runnable) {
+        lines.push(JSON.stringify({ index: opts.index }));
+        lines.push(
+          JSON.stringify({
+            size: 0,
+            track_total_hits: false,
+            ...(query ? { query } : {}),
+            aggs: {
+              card_0: { cardinality: { field: p.field } },
+              top_0: { terms: { field: p.field, size: 10 } },
+            },
+          }),
+        );
+      }
+      const res = await this.transport({
+        method: 'POST',
+        path: '/_msearch',
+        bulkBody: `${lines.join('\n')}\n`,
+      });
+      responses = (res.body as { responses?: unknown[] }).responses ?? [];
     }
 
-    let raw: { aggregations?: Record<string, unknown> } = {};
-    try {
-      raw = (await this.client.search({ index: opts.index, body })).body as unknown as {
-        aggregations?: Record<string, unknown>;
-      };
-    } catch (err) {
-      // If a single bad field tanks the whole agg, surface zeros
-      // instead of throwing — the Discover sidebar can still render.
-      console.error('[plasma-os] fieldStats failed', err);
-    }
-
-    const aggData = raw.aggregations ?? {};
-    return opts.fields.map((f, i) => {
-      const type = props[f]?.type ?? null;
-      return readFieldStat(f, i, aggData, type);
+    let r = 0;
+    return plans.map((p, i) => {
+      const requested = opts.fields[i]!;
+      if (p.field === null) {
+        return {
+          field: requested,
+          type: p.type,
+          cardinality: null,
+          topValues: [],
+          isTime: false,
+          aggField: null,
+          error: p.reason,
+        };
+      }
+      const response = responses[r++];
+      return readMsearchFieldStat(requested, p.type, p.field, response);
     });
   }
 }
 
-function buildMappingChildren(props: Record<string, unknown>): OsMappingNode[] {
-  const out: OsMappingNode[] = [];
-  for (const [name, raw] of Object.entries(props)) {
-    if (!raw || typeof raw !== 'object') continue;
-    const node = raw as { type?: string; properties?: Record<string, unknown> };
-    out.push({
-      name,
-      type: node.type ?? (node.properties ? 'object' : null),
-      children: node.properties ? buildMappingChildren(node.properties) : [],
-    });
-  }
-  return out;
+/** Split `/a/b?x=1&y` into the path and a querystring object. */
+function splitQuery(path: string): [string, Record<string, string> | null] {
+  const q = path.indexOf('?');
+  if (q < 0) return [path, null];
+  const params = new URLSearchParams(path.slice(q + 1));
+  const out: Record<string, string> = {};
+  for (const [k, v] of params) out[k] = v;
+  return [path.slice(0, q), Object.keys(out).length > 0 ? out : null];
 }
 
 function extractTopLevelFields(hits: OsHit[]): string[] {

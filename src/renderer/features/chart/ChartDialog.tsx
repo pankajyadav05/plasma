@@ -1,5 +1,3 @@
-import { Button } from '@/components/ui/button';
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import {
   Select,
   SelectContent,
@@ -7,6 +5,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { EmptyState } from '@/components/ui/view-parts';
 import { cn } from '@/lib/cn';
 import type { QueryResult } from '@shared/protocol';
 import { useEffect, useMemo, useState } from 'react';
@@ -24,39 +23,9 @@ type ChartKind = 'bar' | 'line' | 'area';
  * Y axes: one or more numeric columns. We auto-pick the first two
  * numeric columns on open so the user usually doesn't have to configure
  * anything before seeing a chart.
- */
-export function ChartDialog({
-  result,
-  open,
-  onOpenChange,
-  defaultTitle,
-}: {
-  result: QueryResult | null;
-  open: boolean;
-  onOpenChange: (v: boolean) => void;
-  defaultTitle?: string;
-}) {
-  if (!result) return null;
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-3xl">
-        <DialogHeader>
-          <DialogTitle>{defaultTitle ?? 'Chart'}</DialogTitle>
-        </DialogHeader>
-        {open && <ChartBody result={result} />}
-        <div className="flex justify-end pt-3">
-          <Button variant="outline" size="sm" onClick={() => onOpenChange(false)}>
-            Close
-          </Button>
-        </div>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-/**
+ *
  * Chart controls + SVG for a result. Used inline by the result footer's
- * Chart view and inside ChartDialog. State resets when the result
+ * Chart view. State resets when the result
  * changes (the component is keyed by its caller).
  */
 export function ChartBody({ result, tall = false }: { result: QueryResult; tall?: boolean }) {
@@ -123,16 +92,20 @@ export function ChartBody({ result, tall = false }: { result: QueryResult; tall?
       <div
         className={
           tall
-            ? 'mt-3 flex min-h-0 flex-1 items-center rounded-md border border-border bg-background p-3'
-            : 'mt-3 rounded-md border border-border bg-background p-3'
+            ? 'mt-3 flex min-h-0 flex-1 items-center rounded-[7px] border border-[var(--wb-separator)] bg-[var(--wb-content)] p-3'
+            : 'mt-3 rounded-[7px] border border-[var(--wb-separator)] bg-[var(--wb-content)] p-3'
         }
       >
         {empty ? (
-          <div className="flex h-[280px] w-full items-center justify-center text-sm text-muted-foreground">
-            {numericCols.length === 0
-              ? 'No numeric columns to plot.'
-              : 'Pick at least one numeric Y column.'}
-          </div>
+          <EmptyState
+            className="h-[280px] w-full"
+            title={numericCols.length === 0 ? 'No numeric columns' : 'No Y column selected'}
+            hint={
+              numericCols.length === 0
+                ? 'No numeric columns to plot.'
+                : 'Pick at least one numeric Y column.'
+            }
+          />
         ) : (
           <ChartSvg kind={kind} series={series} yLabels={yCols} />
         )}
@@ -144,9 +117,7 @@ export function ChartBody({ result, tall = false }: { result: QueryResult; tall?
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="flex flex-col gap-1">
-      <span className="font-display text-[11px] uppercase tracking-wider text-muted-foreground">
-        {label}
-      </span>
+      <span className="text-[12px] font-medium text-[var(--wb-text-2)]">{label}</span>
       {children}
     </div>
   );
@@ -165,8 +136,8 @@ function YPicker({
     onChange(selected.includes(col) ? selected.filter((c) => c !== col) : [...selected, col]);
   };
   return (
-    <div className="flex max-h-9 min-h-9 items-center gap-1 overflow-x-auto rounded-md border border-input bg-background px-2 text-xs">
-      {numericCols.length === 0 && <span className="text-muted-foreground">none</span>}
+    <div className="flex h-[26px] items-center gap-1 overflow-x-auto rounded-[7px] bg-[var(--wb-field)] px-1 text-[12px] shadow-[inset_0_0_0_1px_var(--wb-toolbar-group-edge)]">
+      {numericCols.length === 0 && <span className="px-1 text-[var(--wb-text-3)]">none</span>}
       {numericCols.map((c) => {
         const on = selected.includes(c);
         return (
@@ -174,11 +145,12 @@ function YPicker({
             key={c}
             type="button"
             onClick={() => toggle(c)}
+            aria-pressed={on}
             className={cn(
-              'shrink-0 rounded-sm px-1.5 py-0.5 font-mono transition-colors',
+              'shrink-0 rounded-[5px] px-1.5 py-0.5 font-mono transition-colors',
               on
-                ? 'bg-primary text-primary-foreground'
-                : 'text-muted-foreground hover:bg-accent hover:text-foreground',
+                ? 'bg-[var(--wb-control-active)] text-[var(--wb-text)]'
+                : 'text-[var(--wb-text-2)] hover:bg-[var(--wb-control-hover)] hover:text-[var(--wb-text)]',
             )}
           >
             {c}
@@ -252,11 +224,11 @@ function findNumericColumns(result: QueryResult): string[] {
 }
 
 const PALETTE = [
-  'oklch(0.7122 0.1809 21.6630)',
-  'oklch(0.6500 0.1500 240)',
-  'oklch(0.6500 0.1500 145)',
-  'oklch(0.6500 0.1500 80)',
-  'oklch(0.6500 0.1500 305)',
+  'var(--chart-1)',
+  'var(--chart-2)',
+  'var(--chart-3)',
+  'var(--chart-4)',
+  'var(--chart-5)',
 ];
 
 function ChartSvg({
@@ -306,13 +278,13 @@ function ChartSvg({
               x2={W - PAD.right}
               y1={y}
               y2={y}
-              className="stroke-border"
+              stroke="var(--wb-separator)"
               strokeDasharray={t === 0 ? '0' : '2 3'}
             />
             <text
               x={PAD.left - 6}
               y={y + 3}
-              className="fill-muted-foreground"
+              fill="var(--wb-text-3)"
               textAnchor="end"
               fontSize={10}
               fontFamily="ui-monospace,monospace"
@@ -381,7 +353,7 @@ function ChartSvg({
             x={PAD.left + i * xStep + (kind === 'bar' ? xStep / 2 : 0)}
             y={H - 14}
             textAnchor="middle"
-            className="fill-muted-foreground"
+            fill="var(--wb-text-3)"
             fontSize={10}
             fontFamily="ui-monospace,monospace"
           >
@@ -398,7 +370,7 @@ function ChartSvg({
             <text
               x={14}
               y={-4}
-              className="fill-foreground"
+              fill="var(--wb-text-2)"
               fontSize={10}
               fontFamily="ui-monospace,monospace"
             >

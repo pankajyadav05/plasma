@@ -1,5 +1,11 @@
 import { Button } from '@/components/ui/button';
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import {
   Select,
@@ -8,11 +14,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { cn } from '@/lib/cn';
 import { useSession } from '@/stores/session';
 import type { SchemaInfo, Settings } from '@shared/protocol';
 import { Camera, Check, Copy, Trash2 } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
 type Snapshot = Settings['schemaSnapshots'][number];
 
@@ -39,6 +44,12 @@ export function SchemaDiffDialog({
   const activeConfig = useSession((s) => s.activeConfig);
   const snapshots = useSession((s) => s.settings.schemaSnapshots ?? []);
   const updateSettings = useSession((s) => s.updateSettings);
+  const ensureAllSchemaColumns = useSession((s) => s.ensureAllSchemaColumns);
+
+  // Columns load per schema on demand (F16); a diff needs all of them.
+  useEffect(() => {
+    if (open) void ensureAllSchemaColumns();
+  }, [open, ensureAllSchemaColumns]);
 
   const [snapshotName, setSnapshotName] = useState('');
   const [leftId, setLeftId] = useState<string>(LIVE_KEY);
@@ -111,13 +122,15 @@ export function SchemaDiffDialog({
       <DialogContent className="max-w-4xl">
         <DialogHeader>
           <DialogTitle>Schema diff</DialogTitle>
+          <DialogDescription>
+            Compare two schema snapshots (or a snapshot and the live schema) and generate a
+            migration.
+          </DialogDescription>
         </DialogHeader>
 
         <div className="grid grid-cols-2 gap-3">
-          <div className="flex flex-col gap-2">
-            <span className="font-display text-xs uppercase tracking-wider text-muted-foreground">
-              From (old)
-            </span>
+          <div className="flex flex-col gap-1">
+            <span className="text-[12px] font-medium text-[var(--wb-text-2)]">From (old)</span>
             <Select value={leftId} onValueChange={setLeftId}>
               <SelectTrigger>
                 <SelectValue />
@@ -131,10 +144,8 @@ export function SchemaDiffDialog({
               </SelectContent>
             </Select>
           </div>
-          <div className="flex flex-col gap-2">
-            <span className="font-display text-xs uppercase tracking-wider text-muted-foreground">
-              To (new)
-            </span>
+          <div className="flex flex-col gap-1">
+            <span className="text-[12px] font-medium text-[var(--wb-text-2)]">To (new)</span>
             <Select value={rightId} onValueChange={setRightId}>
               <SelectTrigger>
                 <SelectValue placeholder="Pick a snapshot…" />
@@ -150,17 +161,17 @@ export function SchemaDiffDialog({
           </div>
         </div>
 
-        <div className="flex items-center gap-2 rounded-md border border-border bg-muted/30 p-2">
-          <Camera className="h-3.5 w-3.5 text-muted-foreground" />
+        <div className="flex items-center gap-2 rounded-[7px] bg-[var(--wb-sidebar)] p-2 shadow-[inset_0_0_0_1px_var(--wb-separator)]">
+          <Camera className="h-3.5 w-3.5 shrink-0 text-[var(--wb-text-2)]" />
           <Input
             value={snapshotName}
             onChange={(e) => setSnapshotName(e.target.value)}
             placeholder="Snapshot name (optional)"
-            className="h-7 flex-1 text-xs"
+            className="flex-1"
           />
           <Button
             variant="primary"
-            size="xs"
+            size="sm"
             onClick={() => void takeSnapshot()}
             disabled={!liveSchema}
           >
@@ -169,15 +180,17 @@ export function SchemaDiffDialog({
         </div>
 
         {snapshots.length > 0 && (
-          <div className="max-h-[120px] overflow-y-auto rounded-md border border-border">
+          <div className="max-h-[120px] overflow-y-auto rounded-[7px] border border-[var(--wb-separator)]">
             {snapshots.map((s) => (
               <div
                 key={s.id}
-                className="flex items-center gap-2 border-b border-border/60 px-2 py-1 text-xs last:border-b-0"
+                className="flex items-center gap-2 border-b border-[var(--wb-separator)] px-2 py-1 text-[12px] last:border-b-0"
               >
-                <span className="font-mono text-foreground">{s.name}</span>
-                <span className="text-muted-foreground">{s.connectionName}</span>
-                <span className="ml-auto font-mono text-[10px] text-muted-foreground">
+                <span className="truncate font-mono text-[var(--wb-text)]" title={s.name}>
+                  {s.name}
+                </span>
+                <span className="truncate text-[var(--wb-text-2)]">{s.connectionName}</span>
+                <span className="ml-auto shrink-0 font-mono text-[11px] text-[var(--wb-text-3)]">
                   {new Date(s.createdAt).toLocaleString()}
                 </span>
                 <Button
@@ -193,23 +206,29 @@ export function SchemaDiffDialog({
           </div>
         )}
 
-        <div className="rounded-md border border-border">
-          <div className="flex items-center gap-2 border-b border-border px-2 py-1.5 font-display text-xs italic text-muted-foreground">
-            <span>{diff ? `${summary(diff)}` : 'pick two sources to diff'}</span>
+        <div className="overflow-hidden rounded-[7px] border border-[var(--wb-separator)]">
+          <div className="flex h-8 items-center gap-2 border-b border-[var(--wb-separator)] bg-[var(--wb-sidebar)] px-2 text-[12px] text-[var(--wb-text-2)]">
+            <span>{diff ? `${summary(diff)}` : 'Pick two sources to diff'}</span>
             <div className="flex-1" />
             {migration && (
-              <Button variant="ghost" size="icon-xs" onClick={handleCopy} title="Copy migration">
-                {copied ? <Check className="text-primary" /> : <Copy />}
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                onClick={handleCopy}
+                title="Copy migration"
+                aria-label="Copy migration"
+              >
+                {copied ? <Check /> : <Copy />}
               </Button>
             )}
           </div>
-          <pre className="max-h-[320px] min-h-[160px] overflow-auto bg-muted/20 p-3 font-mono text-[11px] leading-relaxed text-foreground">
+          <pre className="max-h-[320px] min-h-[160px] overflow-auto bg-[var(--wb-content)] p-3 font-mono text-[12px] leading-relaxed text-[var(--wb-text)]">
             {migration || '-- (no diff)'}
           </pre>
         </div>
 
         <div className="flex justify-end pt-2">
-          <Button variant="outline" size="sm" onClick={() => onOpenChange(false)}>
+          <Button variant="secondary" onClick={() => onOpenChange(false)}>
             Close
           </Button>
         </div>
@@ -378,6 +397,3 @@ function freshId(): string {
   }
   return `snap-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
-
-// Suppress unused import warning when cn isn't used inline.
-void cn;

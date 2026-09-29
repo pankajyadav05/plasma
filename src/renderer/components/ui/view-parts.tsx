@@ -137,12 +137,14 @@ export function Badge({
   return (
     <span
       className={cn(
-        'inline-flex shrink-0 items-center rounded-[4px] px-1.5 py-px font-mono text-[10px] font-semibold uppercase tracking-wide',
+        'inline-flex shrink-0 items-center rounded-[4px] px-1.5 py-px font-mono text-[10px] font-semibold uppercase',
         tone === 'neutral' && 'bg-[var(--wb-control)] text-[var(--wb-text-2)]',
         tone === 'accent' &&
           'bg-[color-mix(in_srgb,var(--wb-accent)_22%,transparent)] text-[var(--wb-text)]',
-        tone === 'warn' && 'bg-[color-mix(in_srgb,var(--status-staging)_35%,transparent)] text-[var(--wb-text)]',
-        tone === 'danger' && 'bg-[color-mix(in_srgb,var(--destructive)_30%,transparent)] text-[var(--wb-text)]',
+        tone === 'warn' &&
+          'bg-[color-mix(in_srgb,var(--status-staging)_35%,transparent)] text-[var(--wb-text)]',
+        tone === 'danger' &&
+          'bg-[color-mix(in_srgb,var(--destructive)_30%,transparent)] text-[var(--wb-text)]',
         className,
       )}
     >

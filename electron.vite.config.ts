@@ -1,6 +1,24 @@
 import { resolve } from 'node:path';
 import { defineConfig, externalizeDepsPlugin } from 'electron-vite';
 import react from '@vitejs/plugin-react';
+import type { Plugin } from 'vite';
+
+/**
+ * index.html carries the production CSP (no CDN, no inline/eval script).
+ * The dev server needs two relaxations: @vitejs/plugin-react injects an
+ * inline React-Refresh preamble, and HMR talks over ws://localhost.
+ */
+function devCspPlugin(): Plugin {
+  return {
+    name: 'plasma-dev-csp',
+    apply: 'serve',
+    transformIndexHtml(html) {
+      return html
+        .replace("script-src 'self'", "script-src 'self' 'unsafe-inline'")
+        .replace("connect-src 'self'", "connect-src 'self' ws://localhost:* http://localhost:*");
+    },
+  };
+}
 
 export default defineConfig({
   main: {
@@ -24,7 +42,10 @@ export default defineConfig({
     },
   },
   preload: {
-    plugins: [externalizeDepsPlugin()],
+    // The window runs with `sandbox: true`, where a preload can only
+    // require('electron'). Bundle zod (pulled in via @shared/protocol)
+    // instead of leaving a require('zod') that would fail at load.
+    plugins: [externalizeDepsPlugin({ exclude: ['zod'] })],
     resolve: {
       alias: {
         '@shared': resolve(__dirname, 'src/shared'),
@@ -57,13 +78,19 @@ export default defineConfig({
     // duplicating files into a separate `public/` directory.
     publicDir: resolve(__dirname, 'logo'),
     resolve: {
-      alias: {
-        '@': resolve(__dirname, 'src/renderer'),
-        '@shared': resolve(__dirname, 'src/shared'),
-        '@logo': resolve(__dirname, 'logo'),
-      },
+      alias: [
+        { find: '@', replacement: resolve(__dirname, 'src/renderer') },
+        { find: '@shared', replacement: resolve(__dirname, 'src/shared') },
+        { find: '@logo', replacement: resolve(__dirname, 'logo') },
+        // C16: route every `@monaco-editor/react` import through a shim that
+        // points its loader at the bundled monaco-editor (no jsDelivr).
+        {
+          find: /^@monaco-editor\/react$/,
+          replacement: resolve(__dirname, 'src/renderer/lib/monaco/monaco-react.ts'),
+        },
+      ],
     },
-    plugins: [react()],
+    plugins: [react(), devCspPlugin()],
     build: {
       rollupOptions: {
         input: resolve(__dirname, 'src/renderer/index.html'),
@@ -72,7 +99,10 @@ export default defineConfig({
           // app-code updates. Monaco is the big one (~3MB) and deserves its own
           // chunk since it's lazy-loaded behind a Suspense boundary.
           manualChunks: {
-            'vendor-monaco': ['@monaco-editor/react', 'monaco-editor'],
+            // `@monaco-editor/react` resolves to the local-Monaco shim; name
+            // the core entry it imports rather than `monaco-editor`, whose
+            // main entry would drag in the TS/CSS/HTML language services.
+            'vendor-monaco': ['@monaco-editor/react', 'monaco-editor/esm/vs/editor/edcore.main'],
             'vendor-radix': [
               '@radix-ui/react-checkbox',
               '@radix-ui/react-dialog',

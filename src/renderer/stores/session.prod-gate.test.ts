@@ -117,7 +117,7 @@ describe('prod gate (U11)', () => {
     });
     expect(queryRun).toHaveBeenCalledWith('DELETE FROM users');
     expect(useSession.getState().prodGate).toBeNull();
-    expect(useSession.getState().tabs[0]?.queryResult).toEqual(sampleResult);
+    expect(useSession.getState().tabs[0]?.queryResult).toMatchObject(sampleResult);
   });
 
   it('confirm still runs the captured SQL even if the tab text changed', async () => {
@@ -133,5 +133,45 @@ describe('prod gate (U11)', () => {
     });
     expect(queryRun).toHaveBeenCalledWith('DELETE FROM users');
     expect(useSession.getState().prodGate).toBeNull();
+  });
+});
+
+describe('prod gate outside the editor (A7/F8)', () => {
+  beforeEach(() => {
+    queryRun.mockReset();
+    queryRun.mockResolvedValue(sampleResult);
+    resetStore();
+  });
+
+  it('confirmUserSql passes harmless SQL straight through', async () => {
+    await expect(useSession.getState().confirmUserSql('SELECT 1')).resolves.toBe(true);
+    expect(useSession.getState().prodGate).toBeNull();
+  });
+
+  it('confirmUserSql waits for the dialog on destructive / forced SQL', async () => {
+    const pending = useSession.getState().confirmUserSql('DELETE FROM t');
+    expect(useSession.getState().prodGate?.kind).toBe('external');
+    useSession.getState().confirmProdGate();
+    await expect(pending).resolves.toBe(true);
+
+    const forced = useSession.getState().confirmUserSql('INSERT INTO t VALUES (1)', { force: true });
+    useSession.getState().cancelProdGate();
+    await expect(forced).resolves.toBe(false);
+    expect(queryRun).not.toHaveBeenCalled();
+  });
+
+  it('drops an approval when the connection changed before confirming', async () => {
+    await useSession.getState().runQuery();
+    useSession.setState({ connectionGen: 5 });
+    useSession.getState().confirmProdGate();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(queryRun).not.toHaveBeenCalled();
+  });
+
+  it('does not gate non-prod connections', async () => {
+    useSession.setState({
+      settings: { ...useSession.getState().settings, connectionTags: {} },
+    });
+    await expect(useSession.getState().confirmUserSql('DROP TABLE t', { force: true })).resolves.toBe(true);
   });
 });

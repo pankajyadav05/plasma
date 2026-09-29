@@ -1,23 +1,22 @@
-import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Pill } from '@/components/ui/workbench';
 import { cn } from '@/lib/cn';
 import { ipc } from '@/lib/ipc';
+import { useSession } from '@/stores/session';
+import { looksLikeWrite } from '@/stores/session-sql-heuristics';
 import type { ExplainNode } from '@shared/protocol';
-import { ChevronDown, ChevronRight, Loader2 } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { Check, ChevronDown, ChevronRight, Copy, Loader2 } from 'lucide-react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 /**
- * EXPLAIN ANALYZE viewer.
+ * Query plan viewer (F2 / A4 / E7 / VF29).
  *
- * Wraps the user's SQL in `EXPLAIN (ANALYZE, BUFFERS, VERBOSE, FORMAT JSON)`,
- * parses the JSON tree, and renders a collapsible plan with hot nodes
- * highlighted by their share of total time. Each node shows: type,
- * relation, planned vs actual rows (with mis-estimate factor), shared
- * read/hit blocks, and a delta bar relative to the slowest node.
- *
- * IMPORTANT: ANALYZE actually executes the query, including any
- * mutations. We surface a one-line warning under the title so the user
- * doesn't accidentally run an EXPLAIN ANALYZE against a DELETE.
+ * Opening the dialog runs a plain `EXPLAIN (VERBOSE, FORMAT JSON)`, which
+ * never executes the statement. "Run with ANALYZE" is opt-in: the worker
+ * executes the statement inside a transaction (or savepoint) that is
+ * always rolled back, so writes are undone. Data-changing statements
+ * still go through the prod-tag confirmation, and read-only connections
+ * refuse ANALYZE for them. Closing the dialog cancels a running ANALYZE.
  */
 export function ExplainDialog({
   sql,
@@ -31,62 +30,107 @@ export function ExplainDialog({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [plan, setPlan] = useState<ExplainNode | null>(null);
+  const [rawPlan, setRawPlan] = useState<unknown>(null);
+  const [analyzed, setAnalyzed] = useState(false);
   const [planMs, setPlanMs] = useState<number | null>(null);
   const [execMs, setExecMs] = useState<number | null>(null);
+  const [copied, setCopied] = useState(false);
+  const runId = useRef(0);
+  const analyzing = useRef(false);
+  const readOnly = useSession((s) => Boolean(s.activeConfig?.readOnly));
+  const confirmUserSql = useSession((s) => s.confirmUserSql);
+  const writes = looksLikeWrite(sql);
 
-  useEffect(() => {
-    if (!open) return;
-    let cancelled = false;
-    setLoading(true);
-    setError(null);
-    setPlan(null);
-    setPlanMs(null);
-    setExecMs(null);
-
-    (async () => {
+  const run = useCallback(
+    async (analyze: boolean) => {
+      const id = ++runId.current;
+      setError(null);
+      if (analyze && writes) {
+        if (readOnly) {
+          setError('This connection is read-only, so ANALYZE is off for data-changing statements.');
+          return;
+        }
+        const ok = await confirmUserSql(sql, {
+          force: true,
+          summary: 'EXPLAIN ANALYZE (rolled back)',
+        });
+        if (!ok || id !== runId.current) return;
+      }
+      setLoading(true);
+      analyzing.current = analyze;
       try {
-        const stripped = sql.trim().replace(/;\s*$/, '');
-        const wrapped = `EXPLAIN (ANALYZE, BUFFERS, VERBOSE, FORMAT JSON) ${stripped}`;
-        const res = await ipc.query.run(wrapped, undefined, { internal: true });
-        if (cancelled) return;
-        // Postgres returns the JSON plan in a single-row, single-column
-        // result. The driver may already JSON.parse it (jsonb) or hand
-        // back a string — handle both.
+        const res = await ipc.query.explain({ sql, analyze });
+        if (id !== runId.current) return;
+        // FORMAT JSON comes back as one json cell (parsed) or its text.
         const raw = res.rows[0]?.[0];
         const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
         const root = Array.isArray(parsed) ? parsed[0] : parsed;
-        if (!root || typeof root !== 'object') {
-          throw new Error('unexpected EXPLAIN payload');
-        }
-        const planRoot = (root.Plan ?? root) as ExplainNode;
-        setPlan(planRoot);
+        if (!root || typeof root !== 'object') throw new Error('unexpected EXPLAIN payload');
+        setRawPlan(parsed);
+        setPlan((root.Plan ?? root) as ExplainNode);
+        setAnalyzed(analyze);
         setPlanMs(typeof root['Planning Time'] === 'number' ? root['Planning Time'] : null);
         setExecMs(typeof root['Execution Time'] === 'number' ? root['Execution Time'] : null);
       } catch (err) {
-        if (!cancelled) setError(err instanceof Error ? err.message : String(err));
+        if (id === runId.current) setError(err instanceof Error ? err.message : String(err));
       } finally {
-        if (!cancelled) setLoading(false);
+        if (id === runId.current) {
+          setLoading(false);
+          analyzing.current = false;
+        }
       }
-    })();
+    },
+    [sql, writes, readOnly, confirmUserSql],
+  );
 
+  // Plain EXPLAIN on open — safe, nothing executes.
+  useEffect(() => {
+    if (!open) return;
+    setPlan(null);
+    setRawPlan(null);
+    setAnalyzed(false);
+    setPlanMs(null);
+    setExecMs(null);
+    void run(false);
     return () => {
-      cancelled = true;
+      runId.current++;
+      // A running ANALYZE executes on the server — stop it, don't just
+      // ignore its answer.
+      if (analyzing.current) void ipc.query.cancel().catch(() => undefined);
+      analyzing.current = false;
     };
-  }, [open, sql]);
+  }, [open, run]);
+
+  const onCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(rawPlan, null, 2));
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1200);
+    } catch {
+      /* clipboard unavailable */
+    }
+  };
 
   const totalActualMs = plan ? collectMaxActual(plan) : 0;
+  const analyzeRunning = loading && analyzing.current;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-4xl">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            EXPLAIN ANALYZE
-            {loading && <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />}
+            {analyzed ? 'Query plan with timing' : 'Query plan'}
+            {loading && <Loader2 className="h-3.5 w-3.5 animate-spin text-[var(--wb-text-2)]" />}
           </DialogTitle>
-          <p className="font-display text-[11px] italic text-muted-foreground">
-            Runs the query for real (including mutations). Cancel to abort.
-          </p>
+          {!analyzed && (
+            <p className="text-[12px] text-[var(--wb-text-2)]">
+              {analyzeRunning
+                ? 'Running the statement for timing. Its changes are rolled back. Close to cancel.'
+                : writes
+                  ? 'Estimated plan. Running with ANALYZE executes this statement inside a transaction that is rolled back.'
+                  : 'Estimated plan. Run with ANALYZE to execute the query and see real timings.'}
+            </p>
+          )}
         </DialogHeader>
 
         <div className="-mx-2 max-h-[68vh] overflow-y-auto px-2">
@@ -97,20 +141,38 @@ export function ExplainDialog({
           )}
           {plan && (
             <>
-              <div className="mb-3 grid grid-cols-3 gap-2 text-[11px]">
-                <Stat label="Planning" value={fmtMs(planMs)} />
-                <Stat label="Execution" value={fmtMs(execMs)} />
-                <Stat label="Total" value={fmtMs((planMs ?? 0) + (execMs ?? 0))} />
-              </div>
+              {analyzed && (
+                <div className="mb-3 grid grid-cols-3 gap-2 text-[11px]">
+                  <Stat label="Planning" value={fmtMs(planMs)} />
+                  <Stat label="Execution" value={fmtMs(execMs)} />
+                  <Stat label="Total" value={fmtMs((planMs ?? 0) + (execMs ?? 0))} />
+                </div>
+              )}
               <PlanNode node={plan} depth={0} totalActualMs={totalActualMs} />
             </>
           )}
         </div>
 
-        <div className="flex justify-end pt-3">
-          <Button variant="outline" size="sm" onClick={() => onOpenChange(false)}>
-            Close
-          </Button>
+        <div className="flex items-center justify-end gap-2 pt-3">
+          <Pill onClick={() => void onCopy()} disabled={!rawPlan} title="Copy the plan as JSON">
+            {copied ? <Check /> : <Copy />}
+            Copy JSON
+          </Pill>
+          <div className="flex-1" />
+          {!analyzed && (
+            <Pill
+              onClick={() => void run(true)}
+              disabled={loading || (writes && readOnly)}
+              title={
+                writes && readOnly
+                  ? 'Read-only connection'
+                  : 'Execute the statement (rolled back) and show real timings'
+              }
+            >
+              Run with ANALYZE
+            </Pill>
+          )}
+          <Pill onClick={() => onOpenChange(false)}>Close</Pill>
         </div>
       </DialogContent>
     </Dialog>
@@ -120,7 +182,7 @@ export function ExplainDialog({
 function Stat({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-md border border-border bg-muted/40 px-3 py-2">
-      <div className="font-display text-[10px] uppercase italic text-muted-foreground">{label}</div>
+      <div className="text-[11px] text-[var(--wb-text-2)]">{label}</div>
       <div className="font-mono tabular-nums text-foreground">{value}</div>
     </div>
   );
@@ -200,7 +262,9 @@ function PlanNode({
         </div>
         <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 pl-6 font-mono text-[10px] text-muted-foreground">
           <Detail label="rows planned">{planRows.toLocaleString()}</Detail>
-          <Detail label="rows actual">{actualRows.toLocaleString()}</Detail>
+          {typeof node['Actual Rows'] === 'number' && (
+            <Detail label="rows actual">{actualRows.toLocaleString()}</Detail>
+          )}
           {misestimate !== null && (
             <Detail label="misestimate" tone={skewBad ? 'bad' : undefined}>
               ×{misestimate >= 1 ? misestimate.toFixed(1) : misestimate.toFixed(2)}
@@ -247,7 +311,7 @@ function Detail({
 }) {
   return (
     <span className={cn('inline-flex items-baseline gap-1', tone === 'bad' && 'text-destructive')}>
-      <span className="font-display italic">{label}</span>
+      <span>{label}</span>
       <span className="tabular-nums">{children}</span>
     </span>
   );

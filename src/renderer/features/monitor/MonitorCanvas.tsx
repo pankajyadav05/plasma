@@ -1,12 +1,32 @@
-import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
+import { Input } from '@/components/ui/input';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import { EmptyState, ViewTitle, ViewToolbar } from '@/components/ui/view-parts';
+import { IconButton } from '@/components/ui/workbench';
 import { cn } from '@/lib/cn';
 import { ipc } from '@/lib/ipc';
 import { useSession } from '@/stores/session';
 import type { ActivityRow } from '@shared/protocol';
-import { Activity, AlertCircle, Pause, Play, RefreshCw, Skull, X } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import {
+  AlertCircle,
+  Copy,
+  FileCode2,
+  Pause,
+  Play,
+  RefreshCw,
+  Search,
+  Skull,
+  X,
+} from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { filterActivity, isPlasmaSession, killSucceeded } from './monitor-filter';
 
 const POLL_INTERVAL_MS = 2000;
 
@@ -39,19 +59,24 @@ ORDER BY duration_ms DESC NULLS LAST, query_start DESC NULLS LAST
  * Live activity monitor canvas. Polls pg_stat_activity over the
  * worker's sideband connection (so it never queues behind the user's
  * primary query). Each row exposes state, user, db, wait event, age,
- * and a one-line query preview. Active queries can be cancelled
- * (pg_cancel_backend) or terminated (pg_terminate_backend).
+ * and the query (ellipsised, full text on hover / copy / open in a tab).
+ * Other sessions' queries can be cancelled (pg_cancel_backend) or
+ * terminated (pg_terminate_backend); Plasma's own sessions can't.
  *
  * Defensive: polling stops while a confirm dialog is open so the row
  * the user is targeting doesn't shift out from under them.
  */
 export function MonitorCanvas() {
   const setCanvasMode = useSession((s) => s.setCanvasMode);
+  const reuseHistoryQuery = useSession((s) => s.reuseHistoryQuery);
   const [rows, setRows] = useState<ActivityRow[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [paused, setPaused] = useState(false);
   const [showIdle, setShowIdle] = useState(true);
   const [showSelf, setShowSelf] = useState(false);
+  const [search, setSearch] = useState('');
+  const [database, setDatabase] = useState<string>('all');
   const [terminating, setTerminating] = useState<{
     pid: number;
     mode: 'cancel' | 'terminate';
@@ -102,18 +127,38 @@ export function MonitorCanvas() {
     return () => clearInterval(t);
   }, [paused, terminating]);
 
-  const visibleRows = rows.filter((r) => {
-    if (!showSelf && r.isCurrent) return false;
-    if (!showIdle && r.state === 'idle') return false;
-    return true;
+  const databases = useMemo(
+    () => [...new Set(rows.map((r) => r.database).filter((d): d is string => Boolean(d)))].sort(),
+    [rows],
+  );
+
+  const visibleRows = filterActivity(rows, {
+    showIdle,
+    showSelf,
+    search,
+    database: database === 'all' ? null : database,
   });
 
   const onConfirmKill = async () => {
     if (!terminating) return;
     setBusy(true);
+    setNotice(null);
     try {
       const fn = terminating.mode === 'terminate' ? 'pg_terminate_backend' : 'pg_cancel_backend';
-      await ipc.query.sideband(`SELECT ${fn}($1)`, [terminating.pid]);
+      const res = await ipc.query.sideband(`SELECT ${fn}($1)`, [terminating.pid]);
+      // H3: these functions return false (not an error) when the backend
+      // is gone or you lack permission — say so instead of implying success.
+      if (killSucceeded(res.rows)) {
+        setNotice(
+          terminating.mode === 'terminate'
+            ? `Terminated pid ${terminating.pid}.`
+            : `Sent cancel to pid ${terminating.pid}.`,
+        );
+      } else {
+        setError(
+          `Postgres did not ${terminating.mode} pid ${terminating.pid} — the session has ended, or your role lacks permission (pg_signal_backend or superuser).`,
+        );
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -124,177 +169,228 @@ export function MonitorCanvas() {
   };
 
   return (
-    <main className="flex min-h-0 flex-1 flex-col bg-background">
-      <div className="flex h-11 shrink-0 items-center gap-2 border-b border-border bg-background px-3">
-        <Activity className="h-4 w-4 text-primary" />
-        <span className="font-display text-sm italic text-foreground">Live activity</span>
-        <span
-          className="rounded-md bg-muted px-1.5 py-0.5 font-mono text-[10px] uppercase text-muted-foreground"
-          title="Connections shown"
-        >
-          {visibleRows.length}/{rows.length}
-        </span>
-        {lastPoll && (
-          <span
-            className="font-display text-[11px] italic text-muted-foreground"
-            title="Last refresh"
-          >
-            updated {fmtAgo(lastPoll)}
-          </span>
-        )}
+    <main className="flex min-h-0 min-w-0 flex-1 flex-col bg-[var(--wb-content)]">
+      <ViewToolbar>
+        <ViewTitle
+          title="Live activity"
+          meta={
+            <>
+              {visibleRows.length} of {rows.length} sessions
+              {lastPoll && ` · updated ${fmtAgo(lastPoll)}`}
+              {paused && ' · paused'}
+            </>
+          }
+        />
         <div className="flex-1" />
-        <label
-          htmlFor="mon-show-idle"
-          className="flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground"
+        <IconButton variant="plain" label="Refresh now" onClick={() => void refresh()}>
+          <RefreshCw className={busy ? 'animate-spin' : ''} />
+        </IconButton>
+        <IconButton
+          variant="plain"
+          label={paused ? 'Resume polling' : 'Pause polling'}
+          active={paused}
+          onClick={() => setPaused((v) => !v)}
         >
+          {paused ? <Play /> : <Pause />}
+        </IconButton>
+        <IconButton
+          variant="plain"
+          label="Close monitor"
+          title="Close (Esc)"
+          onClick={() => setCanvasMode('database')}
+        >
+          <X />
+        </IconButton>
+      </ViewToolbar>
+
+      <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-[var(--wb-separator)] px-2.5 py-2">
+        <div className="relative min-w-[200px] max-w-[360px] flex-1">
+          <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--wb-text-2)]" />
+          <Input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Filter by query, user, app or pid…"
+            aria-label="Filter sessions"
+            className="pl-7"
+          />
+        </div>
+        <Select value={database} onValueChange={setDatabase}>
+          <SelectTrigger className="w-[180px]" aria-label="Database">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All databases</SelectItem>
+            {databases.map((d) => (
+              <SelectItem key={d} value={d}>
+                {d}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <div className="flex items-center gap-1.5">
           <Checkbox
             id="mon-show-idle"
             checked={showIdle}
-            onCheckedChange={(v) => setShowIdle(Boolean(v))}
+            onCheckedChange={(v) => setShowIdle(v === true)}
           />
-          idle
-        </label>
-        <label
-          htmlFor="mon-show-self"
-          className="flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground"
-        >
+          <label
+            htmlFor="mon-show-idle"
+            className="cursor-pointer text-[13px] text-[var(--wb-text)]"
+          >
+            Idle sessions
+          </label>
+        </div>
+        <div className="flex items-center gap-1.5">
           <Checkbox
             id="mon-show-self"
             checked={showSelf}
-            onCheckedChange={(v) => setShowSelf(Boolean(v))}
+            onCheckedChange={(v) => setShowSelf(v === true)}
           />
-          self
-        </label>
-        <Button
-          variant="ghost"
-          size="icon-xs"
-          onClick={() => void refresh()}
-          title="Refresh now"
-          aria-label="Refresh"
-        >
-          <RefreshCw className={busy ? 'animate-spin' : ''} />
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon-xs"
-          onClick={() => setPaused((v) => !v)}
-          title={paused ? 'Resume polling' : 'Pause polling'}
-          aria-label="Pause/resume"
-        >
-          {paused ? <Play /> : <Pause />}
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon-xs"
-          onClick={() => setCanvasMode('database')}
-          title="Close monitor"
-          aria-label="Close"
-        >
-          <X />
-        </Button>
+          <label
+            htmlFor="mon-show-self"
+            className="cursor-pointer text-[13px] text-[var(--wb-text)]"
+          >
+            This monitor
+          </label>
+        </div>
       </div>
 
       {error && (
-        <div className="flex shrink-0 items-center gap-2 border-b border-border bg-destructive/10 px-3 py-2 font-mono text-xs text-destructive">
-          <AlertCircle className="h-3.5 w-3.5" />
-          {error}
+        <div
+          className="flex shrink-0 items-center gap-2 border-b border-[var(--wb-separator)] bg-[color-mix(in_srgb,var(--destructive)_10%,transparent)] px-3 py-1.5 text-[12px] text-destructive"
+          role="alert"
+        >
+          <AlertCircle className="h-3.5 w-3.5 shrink-0" />
+          <span className="min-w-0 flex-1">{error}</span>
+          <IconButton variant="plain" label="Dismiss" onClick={() => setError(null)}>
+            <X />
+          </IconButton>
         </div>
       )}
+      <div className="sr-only" aria-live="polite">
+        {notice}
+      </div>
 
       <div className="min-h-0 flex-1 overflow-auto">
-        <table className="w-full table-fixed font-mono text-[12px]">
-          <thead className="sticky top-0 z-10 bg-background">
-            <tr className="border-b border-border text-left text-[10px] uppercase tracking-wider text-muted-foreground">
-              <Th width={70}>pid</Th>
-              <Th width={90}>state</Th>
-              <Th width={100}>user</Th>
-              <Th width={120}>db</Th>
-              <Th width={140}>wait</Th>
-              <Th width={90}>age</Th>
-              <Th>query</Th>
-              <Th width={88} />
+        <table className="w-full table-fixed text-[12px]">
+          <thead className="sticky top-0 z-10 bg-[var(--wb-content)]">
+            <tr className="text-left text-[12px] font-medium text-[var(--wb-text-2)]">
+              <Th width={80}>PID</Th>
+              <Th width={110}>State</Th>
+              <Th width={110}>User</Th>
+              <Th width={120}>Database</Th>
+              <Th width={150}>Wait</Th>
+              <Th width={80}>Age</Th>
+              <Th>Query</Th>
+              <Th width={112}>
+                <span className="sr-only">Actions</span>
+              </Th>
             </tr>
           </thead>
           <tbody>
-            {visibleRows.map((r) => (
-              <tr
-                key={r.pid}
-                className={cn(
-                  'border-b border-border/60 align-top hover:bg-accent/20',
-                  r.isCurrent && 'bg-primary/5',
-                  r.state === 'active' && !r.isCurrent && 'bg-amber-500/5',
-                )}
-              >
-                <Td>
-                  {r.pid}
-                  {r.isCurrent && (
-                    <span className="ml-1 rounded-sm border border-primary/40 bg-primary/10 px-1 text-[9px] text-primary">
-                      self
-                    </span>
+            {visibleRows.map((r, i) => {
+              const own = r.isCurrent || isPlasmaSession(r);
+              const oneLine = r.query?.replace(/\s+/g, ' ').trim() ?? '';
+              return (
+                <tr
+                  key={r.pid}
+                  className={cn(
+                    'group/act align-top font-mono',
+                    i % 2 === 1 && 'bg-[var(--grid-row-a)]',
                   )}
-                </Td>
-                <Td>
-                  <StateBadge state={r.state} />
-                </Td>
-                <Td>{r.user ?? '—'}</Td>
-                <Td>{r.database ?? '—'}</Td>
-                <Td>
-                  {r.waitEvent ? (
-                    <span className="text-muted-foreground">
-                      {r.waitEventType}:{r.waitEvent}
-                    </span>
-                  ) : (
-                    <span className="text-muted-foreground/50">—</span>
-                  )}
-                </Td>
-                <Td>{fmtMs(r.durationMs)}</Td>
-                <Td>
-                  <pre
-                    className="overflow-hidden whitespace-nowrap text-foreground"
-                    title={r.query ?? ''}
-                  >
-                    {r.query?.replace(/\s+/g, ' ').slice(0, 240) ?? '—'}
-                  </pre>
-                </Td>
-                <Td>
-                  {!r.isCurrent && (
-                    <div className="flex justify-end gap-1">
-                      <Button
-                        variant="ghost"
-                        size="icon-xs"
+                >
+                  <Td>
+                    {r.pid}
+                    {r.isCurrent && (
+                      <span className="ml-1 rounded-[4px] bg-[var(--wb-control)] px-1 font-sans text-[10px] text-[var(--wb-text-2)]">
+                        this
+                      </span>
+                    )}
+                  </Td>
+                  <Td>
+                    <StateBadge state={r.state} />
+                  </Td>
+                  <Td title={r.user ?? undefined}>{r.user ?? '—'}</Td>
+                  <Td title={r.database ?? undefined}>{r.database ?? '—'}</Td>
+                  <Td title={r.waitEvent ? `${r.waitEventType}:${r.waitEvent}` : undefined}>
+                    {r.waitEvent ? (
+                      <span className="text-[var(--wb-text-2)]">
+                        {r.waitEventType}:{r.waitEvent}
+                      </span>
+                    ) : (
+                      <span className="text-[var(--wb-text-3)]">—</span>
+                    )}
+                  </Td>
+                  <Td>{fmtMs(r.durationMs)}</Td>
+                  <Td title={r.query ?? undefined}>
+                    <span className="block truncate text-[var(--wb-text)]">{oneLine || '—'}</span>
+                    {r.applicationName && (
+                      <span className="block truncate font-sans text-[11px] text-[var(--wb-text-3)]">
+                        {r.applicationName}
+                        {r.clientAddr ? ` · ${r.clientAddr}` : ''}
+                      </span>
+                    )}
+                  </Td>
+                  <td className="px-2 py-1">
+                    <div className="flex justify-end gap-0.5">
+                      <IconButton
+                        variant="plain"
+                        label={`Copy query of pid ${r.pid}`}
+                        title="Copy query"
+                        disabled={!r.query}
+                        onClick={() => void navigator.clipboard?.writeText(r.query ?? '')}
+                      >
+                        <Copy />
+                      </IconButton>
+                      <IconButton
+                        variant="plain"
+                        label={`Open query of pid ${r.pid} in a new SQL tab`}
+                        title="Open in a new SQL tab"
+                        disabled={!r.query}
+                        onClick={() => r.query && reuseHistoryQuery(r.query)}
+                      >
+                        <FileCode2 />
+                      </IconButton>
+                      <IconButton
+                        variant="plain"
+                        label={`Cancel query of pid ${r.pid}`}
+                        title={
+                          own
+                            ? "Plasma's own session — cancel it from the editor"
+                            : 'Cancel query (pg_cancel_backend)'
+                        }
+                        disabled={own}
                         onClick={() => setTerminating({ pid: r.pid, mode: 'cancel' })}
-                        title="pg_cancel_backend"
-                        aria-label="Cancel"
                       >
                         <X />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="icon-xs"
-                        className="text-destructive hover:bg-destructive/10"
+                      </IconButton>
+                      <IconButton
+                        variant="plain"
+                        label={`Terminate session ${r.pid}`}
+                        title={
+                          own
+                            ? "Plasma's own session — disconnect instead"
+                            : 'Terminate session (pg_terminate_backend)'
+                        }
+                        disabled={own}
+                        className="hover:text-destructive"
                         onClick={() => setTerminating({ pid: r.pid, mode: 'terminate' })}
-                        title="pg_terminate_backend"
-                        aria-label="Terminate"
                       >
                         <Skull />
-                      </Button>
+                      </IconButton>
                     </div>
-                  )}
-                </Td>
-              </tr>
-            ))}
-            {visibleRows.length === 0 && (
-              <tr>
-                <td
-                  colSpan={8}
-                  className="px-3 py-8 text-center font-display italic text-muted-foreground"
-                >
-                  no activity
-                </td>
-              </tr>
-            )}
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
+        {visibleRows.length === 0 && (
+          <EmptyState
+            title={rows.length === 0 ? 'No activity' : 'No sessions match'}
+            hint={rows.length === 0 ? undefined : 'Clear the filter or show idle sessions.'}
+          />
+        )}
       </div>
 
       <ConfirmDialog
@@ -302,13 +398,13 @@ export function MonitorCanvas() {
         onOpenChange={(v) => !v && setTerminating(null)}
         title={
           terminating?.mode === 'terminate'
-            ? `Terminate pid ${terminating?.pid}?`
-            : `Cancel pid ${terminating?.pid}?`
+            ? `Terminate session ${terminating?.pid}?`
+            : `Cancel the query of session ${terminating?.pid}?`
         }
         description={
           terminating?.mode === 'terminate'
-            ? 'pg_terminate_backend will close the connection. Any in-progress transaction will roll back.'
-            : 'pg_cancel_backend asks the backend to abort its current query. Connection stays open.'
+            ? 'pg_terminate_backend closes the connection. Any open transaction rolls back.'
+            : 'pg_cancel_backend asks the backend to stop its current query. The connection stays open.'
         }
         confirmLabel={terminating?.mode === 'terminate' ? 'Terminate' : 'Cancel query'}
         variant="destructive"
@@ -322,29 +418,35 @@ function Th({ children, width }: { children?: React.ReactNode; width?: number })
   return (
     <th
       style={{ width: width ? `${width}px` : undefined }}
-      className="sticky top-0 z-10 border-b border-border bg-background px-2 py-1.5 font-display"
+      className="h-[26px] border-b border-[var(--wb-separator)] px-2 font-medium"
     >
       {children}
     </th>
   );
 }
 
-function Td({ children }: { children?: React.ReactNode }) {
-  return <td className="overflow-hidden truncate px-2 py-1.5 align-top">{children}</td>;
+function Td({ children, title }: { children?: React.ReactNode; title?: string }) {
+  return (
+    <td className="overflow-hidden truncate px-2 py-1 text-[var(--wb-text)]" title={title}>
+      {children}
+    </td>
+  );
 }
 
 function StateBadge({ state }: { state: string | null }) {
-  if (!state) return <span className="text-muted-foreground/50">—</span>;
+  if (!state) return <span className="text-[var(--wb-text-3)]">—</span>;
   const map: Record<string, string> = {
-    active: 'bg-amber-500/15 text-amber-700 dark:text-amber-300',
-    idle: 'bg-muted text-muted-foreground',
-    'idle in transaction': 'bg-orange-500/15 text-orange-700 dark:text-orange-300',
-    'idle in transaction (aborted)': 'bg-destructive/15 text-destructive',
+    active: 'bg-[color-mix(in_srgb,var(--status-warn)_18%,transparent)] text-[var(--wb-text)]',
+    idle: 'bg-[var(--wb-control)] text-[var(--wb-text-2)]',
+    'idle in transaction':
+      'bg-[color-mix(in_srgb,var(--status-staging)_30%,transparent)] text-[var(--wb-text)]',
+    'idle in transaction (aborted)':
+      'bg-[color-mix(in_srgb,var(--destructive)_20%,transparent)] text-[var(--wb-text)]',
   };
-  const cls = map[state] ?? 'bg-muted text-muted-foreground';
+  const cls = map[state] ?? 'bg-[var(--wb-control)] text-[var(--wb-text-2)]';
   return (
-    <span className={cn('rounded-sm px-1.5 py-0.5 text-[10px] uppercase tracking-wider', cls)}>
-      {state.replace('idle in transaction', 'idle-txn')}
+    <span className={cn('rounded-[4px] px-1.5 py-0.5 font-sans text-[11px]', cls)} title={state}>
+      {state.replace('idle in transaction', 'idle in txn')}
     </span>
   );
 }

@@ -1,11 +1,7 @@
 import type { WorkerRequest } from './protocol';
 
 /** Exponential backoff for worker respawn (U20). */
-export function nextBackoffMs(
-  currentMs: number,
-  baseMs = 250,
-  maxMs = 10_000,
-): number {
+export function nextBackoffMs(currentMs: number, baseMs = 250, maxMs = 10_000): number {
   return Math.min(currentMs === 0 ? baseMs : currentMs * 2, maxMs);
 }
 
@@ -29,6 +25,11 @@ export function ipcDeadlineMs(kind: WorkerRequest['kind']): number | null {
   switch (kind) {
     case 'query':
     case 'sidebandQuery':
+      return null;
+    // C30: exports stream to disk for as long as the data takes; a blanket
+    // deadline rejected in main while the worker kept writing the file.
+    case 'exportQuery':
+    case 'exportRows':
       return null;
     case 'ping':
       return 5_000;

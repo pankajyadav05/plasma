@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   evaluateHostKey,
   fingerprintSha256,
+  hostKeyType,
   knownHostKey,
   rememberHostKey,
 } from './ssh-known-hosts';
@@ -36,5 +37,14 @@ describe('ssh known hosts', () => {
       expect(decision.fingerprint).toBe(fingerprintSha256(keyB));
       expect(decision.expectedFingerprint).toBe(fingerprintSha256(keyA));
     }
+  });
+
+  it('reads the key algorithm from an SSH wire-format blob', () => {
+    const type = Buffer.from('ssh-ed25519');
+    const len = Buffer.alloc(4);
+    len.writeUInt32BE(type.length, 0);
+    const blob = Buffer.concat([len, type, Buffer.from([0, 0, 0, 32]), Buffer.alloc(32, 7)]);
+    expect(hostKeyType(blob)).toBe('ssh-ed25519');
+    expect(hostKeyType(Buffer.from('xx'))).toBeUndefined();
   });
 });

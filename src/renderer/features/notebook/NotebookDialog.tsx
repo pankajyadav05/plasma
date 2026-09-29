@@ -1,5 +1,12 @@
 import { Button } from '@/components/ui/button';
-import { Dialog, DialogContent } from '@/components/ui/dialog';
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { IconButton } from '@/components/ui/workbench';
 import { cn } from '@/lib/cn';
 import { ipc } from '@/lib/ipc';
 import { useSession } from '@/stores/session';
@@ -18,20 +25,35 @@ import {
   Trash2,
   X,
 } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  type NotebookCellKind,
+  type StoredCell,
+  hasCellContent,
+  loadDraft,
+  saveDraft,
+} from './notebook-storage';
 
-type CellKind = 'sql' | 'md';
+type CellKind = NotebookCellKind;
 
-interface Cell {
-  id: string;
-  kind: CellKind;
-  content: string;
+interface Cell extends StoredCell {
   result?: QueryResult;
   error?: string;
   running?: boolean;
 }
 
-const STORAGE_KEY = 'plasma:notebook:draft';
+function storage(): Storage | null {
+  try {
+    return typeof localStorage === 'undefined' ? null : localStorage;
+  } catch {
+    return null;
+  }
+}
+
+function loadCells(connectionId: string | undefined): Cell[] {
+  const s = storage();
+  return s ? loadDraft(s, connectionId) : [];
+}
 
 function freshId(): string {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
@@ -44,9 +66,9 @@ function freshId(): string {
  * Lightweight notebook view. Cells alternate between Markdown and SQL.
  * SQL cells run against the active connection (not the sideband — we
  * want history + transactions to mirror the user's expectations from
- * the main editor). Cells persist in localStorage so a refresh doesn't
- * lose work; "Export" emits a `.plasma.md` Markdown file with frontmatter
- * suitable for committing alongside the project.
+ * the main editor). Cells persist in localStorage per connection so a
+ * refresh doesn't lose work; "Export" emits a `.plasma.md` Markdown file
+ * with frontmatter suitable for committing alongside the project.
  */
 export function NotebookDialog({
   open,
@@ -56,16 +78,32 @@ export function NotebookDialog({
   onOpenChange: (v: boolean) => void;
 }) {
   const activeConfig = useSession((s) => s.activeConfig);
-  const [cells, setCells] = useState<Cell[]>(() => loadCells());
+  const connectionId = useSession((s) => s.activeConfig?.id);
+  // The draft remembers which connection it was loaded for, so a
+  // connection switch never writes the old cells under the new key.
+  const [draft, setDraft] = useState<{ connectionId: string | undefined; cells: Cell[] }>(() => ({
+    connectionId,
+    cells: loadCells(connectionId),
+  }));
+  const cells = draft.cells;
+  const contentRef = useRef<HTMLDivElement>(null);
+
+  const setCells = useCallback((fn: (prev: Cell[]) => Cell[]) => {
+    setDraft((d) => ({ ...d, cells: fn(d.cells) }));
+  }, []);
+
+  useEffect(() => {
+    if (draft.connectionId === connectionId) return;
+    setDraft({ connectionId, cells: loadCells(connectionId) });
+  }, [connectionId, draft.connectionId]);
 
   useEffect(() => {
     if (!open) return;
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(cells.map(stripRuntime)));
-    } catch {
-      // Ignore quota / disabled storage — losing draft is acceptable.
-    }
-  }, [cells, open]);
+    const s = storage();
+    if (s) saveDraft(s, draft.connectionId, draft.cells);
+  }, [draft, open]);
+
+  const hasContent = hasCellContent(cells);
 
   const addCell = (kind: CellKind, idx?: number) => {
     setCells((prev) => {
@@ -100,6 +138,9 @@ export function NotebookDialog({
   const runCell = async (id: string) => {
     const cell = cells.find((c) => c.id === id);
     if (!cell || cell.kind !== 'sql' || !cell.content.trim()) return;
+    // A7: notebook SQL goes through the same prod-tag confirmation as the
+    // editor (read-only connections are enforced by the server).
+    if (!(await useSession.getState().confirmUserSql(cell.content))) return;
     updateCell(id, { running: true, error: undefined, result: undefined });
     try {
       const result = await ipc.query.run(cell.content);
@@ -113,11 +154,13 @@ export function NotebookDialog({
   };
 
   const exportMarkdown = () => {
+    if (!hasContent) return;
     const md = cellsToMarkdown(cells, activeConfig?.name);
     void navigator.clipboard?.writeText(md);
   };
 
   const downloadMarkdown = () => {
+    if (!hasContent) return;
     const md = cellsToMarkdown(cells, activeConfig?.name);
     const blob = new Blob([md], { type: 'text/markdown' });
     const url = URL.createObjectURL(blob);
@@ -130,27 +173,46 @@ export function NotebookDialog({
 
   const clear = () => {
     if (cells.length === 0) return;
-    setCells([]);
-    try {
-      localStorage.removeItem(STORAGE_KEY);
-    } catch {
-      // best-effort
-    }
+    setCells(() => []);
+  };
+
+  // F34: don't land focus (and a focus ring) on the Copy button. Focus the
+  // first cell editor when there is one, otherwise the dialog itself.
+  const onOpenAutoFocus = (e: Event) => {
+    e.preventDefault();
+    const root = contentRef.current;
+    const first = root?.querySelector<HTMLTextAreaElement>('textarea');
+    (first ?? root)?.focus({ preventScroll: true });
   };
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="h-[90vh] w-[92vw] max-w-none p-0">
-        <div className="flex h-full flex-col">
-          <div className="flex h-11 shrink-0 items-center gap-2 border-b border-border px-3">
-            <BookText className="h-4 w-4 text-primary" />
-            <span className="font-display text-sm italic text-foreground">Notebook</span>
-            <span className="font-display text-xs italic text-muted-foreground">
-              {activeConfig?.name ?? 'no connection'} · {cells.length} cell
+      <DialogContent
+        ref={contentRef}
+        hideClose
+        onOpenAutoFocus={onOpenAutoFocus}
+        className="h-[90vh] w-[92vw] max-w-none gap-0 p-0"
+      >
+        <div className="flex h-full min-h-0 flex-col">
+          <div className="flex h-11 shrink-0 items-center gap-2 border-b border-[var(--wb-separator)] px-3">
+            <BookText className="h-4 w-4 text-[var(--wb-text-2)]" aria-hidden />
+            <DialogTitle>Notebook</DialogTitle>
+            <span className="truncate text-[12px] text-[var(--wb-text-2)]">
+              {activeConfig?.name ?? 'No connection'} · {cells.length} cell
               {cells.length === 1 ? '' : 's'}
             </span>
+            <DialogDescription className="sr-only">
+              Markdown and SQL cells run against the active connection. Drafts are saved per
+              connection.
+            </DialogDescription>
             <div className="flex-1" />
-            <Button variant="ghost" size="xs" onClick={exportMarkdown} title="Copy as Markdown">
+            <Button
+              variant="ghost"
+              size="xs"
+              onClick={exportMarkdown}
+              disabled={!hasContent}
+              title="Copy as Markdown"
+            >
               <Copy />
               Copy
             </Button>
@@ -158,31 +220,45 @@ export function NotebookDialog({
               variant="ghost"
               size="xs"
               onClick={downloadMarkdown}
+              disabled={!hasContent}
               title="Download .plasma.md"
             >
               <Download />
               Save
             </Button>
-            <Button variant="ghost" size="xs" onClick={clear} title="Clear all cells">
+            <Button
+              variant="ghost"
+              size="xs"
+              onClick={clear}
+              disabled={!hasContent}
+              title="Clear all cells"
+            >
               <Trash2 />
               Clear
             </Button>
-            <Button variant="ghost" size="icon-xs" onClick={() => onOpenChange(false)}>
-              <X />
-            </Button>
+            <DialogClose asChild>
+              <IconButton label="Close notebook" variant="plain" className="ml-1">
+                <X />
+              </IconButton>
+            </DialogClose>
           </div>
 
           <div className="min-h-0 flex-1 overflow-y-auto p-4">
             {cells.length === 0 && (
               <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
-                <BookText className="h-8 w-8 text-muted-foreground" />
-                <div className="font-display text-sm italic text-foreground">Start a notebook</div>
+                <BookText className="h-8 w-8 text-[var(--wb-text-3)]" aria-hidden />
+                <div className="text-[13px] font-medium text-[var(--wb-text)]">
+                  Start a notebook
+                </div>
+                <div className="text-[12px] text-[var(--wb-text-2)]">
+                  Add a Markdown note or a SQL cell to begin.
+                </div>
                 <div className="flex gap-2">
-                  <Button variant="primary" size="sm" onClick={() => addCell('md')}>
+                  <Button variant="secondary" size="sm" onClick={() => addCell('md')}>
                     <Hash />
                     Markdown
                   </Button>
-                  <Button variant="primary" size="sm" onClick={() => addCell('sql')}>
+                  <Button variant="secondary" size="sm" onClick={() => addCell('sql')}>
                     <FileCode />
                     SQL
                   </Button>
@@ -245,26 +321,19 @@ function CellView({
 }) {
   const isSql = cell.kind === 'sql';
   return (
-    <div className="group/cell mb-3 rounded-md border border-border bg-background">
-      <div className="flex h-7 items-center gap-1.5 border-b border-border bg-muted/30 px-2 font-mono text-[10px] uppercase text-muted-foreground">
-        <span
-          className={
-            isSql
-              ? 'rounded-sm bg-primary px-1 py-0.5 text-[9px] text-primary-foreground'
-              : 'rounded-sm bg-foreground/10 px-1 py-0.5 text-[9px]'
-          }
-        >
-          {isSql ? 'sql' : 'md'}
+    <div className="group/cell mb-3 overflow-hidden rounded-[8px] border border-[var(--wb-separator)] bg-[var(--wb-content)] focus-within:border-[var(--wb-accent)]">
+      <div className="flex h-8 items-center gap-1.5 border-b border-[var(--wb-separator)] bg-[var(--wb-sidebar)] px-2 text-[12px] text-[var(--wb-text-2)]">
+        <span className="rounded-[4px] bg-[var(--wb-control)] px-1.5 py-0.5 text-[11px] font-medium text-[var(--wb-text-2)]">
+          {isSql ? 'SQL' : 'Markdown'}
         </span>
-        <span>cell {index + 1}</span>
+        <span>Cell {index + 1}</span>
         <div className="flex-1" />
         {isSql && (
           <Button
-            variant="primary"
+            variant="secondary"
             size="xs"
-            className="h-5 px-1.5"
             onClick={onRun}
-            disabled={cell.running}
+            disabled={cell.running || !cell.content.trim()}
             title="Run cell"
           >
             {cell.running ? (
@@ -281,6 +350,7 @@ function CellView({
           onClick={onMoveUp}
           disabled={index === 0}
           title="Move up"
+          aria-label="Move up"
         >
           <ChevronUp />
         </Button>
@@ -290,10 +360,17 @@ function CellView({
           onClick={onMoveDown}
           disabled={index === total - 1}
           title="Move down"
+          aria-label="Move down"
         >
           <ChevronDown />
         </Button>
-        <Button variant="ghost" size="icon-xs" onClick={onRemove} title="Remove cell">
+        <Button
+          variant="ghost"
+          size="icon-xs"
+          onClick={onRemove}
+          title="Remove cell"
+          aria-label="Remove cell"
+        >
           <Trash2 />
         </Button>
       </div>
@@ -301,31 +378,30 @@ function CellView({
         value={cell.content}
         onChange={(e) => onChange(e.target.value)}
         rows={Math.max(3, Math.min(20, cell.content.split('\n').length + 1))}
+        aria-label={`Cell ${index + 1} (${isSql ? 'SQL' : 'Markdown'})`}
         placeholder={
           isSql ? 'SELECT 1;' : '# Heading\n\nMarkdown text. Cell renders as plain text for now.'
         }
         className={cn(
-          'w-full resize-none border-0 bg-background px-3 py-2 outline-none',
-          isSql
-            ? 'font-mono text-[12px] text-foreground'
-            : 'font-display text-sm leading-relaxed text-foreground',
+          'block w-full resize-none border-0 bg-[var(--wb-content)] px-3 py-2 text-[var(--wb-text)] outline-none placeholder:text-[var(--wb-text-3)]',
+          isSql ? 'font-mono text-[12px]' : 'text-[13px] leading-relaxed',
         )}
       />
       {isSql && cell.error && (
-        <div className="border-t border-destructive/40 bg-destructive/10 px-3 py-2 font-mono text-[11px] text-destructive">
+        <div className="border-t border-destructive/40 bg-destructive/10 px-3 py-2 font-mono text-[12px] text-destructive">
           {cell.error}
         </div>
       )}
       {isSql && cell.result && <CellResult result={cell.result} />}
-      <div className="flex items-center gap-1 border-t border-border/60 px-2 py-1">
-        <span className="font-display text-[10px] italic text-muted-foreground">add below:</span>
-        <Button variant="ghost" size="xs" className="h-5 px-1.5" onClick={() => onAddBelow('md')}>
+      <div className="flex items-center gap-1 border-t border-[var(--wb-separator)] px-2 py-1">
+        <span className="text-[12px] text-[var(--wb-text-3)]">Add below</span>
+        <Button variant="ghost" size="xs" onClick={() => onAddBelow('md')}>
           <Hash />
-          md
+          Markdown
         </Button>
-        <Button variant="ghost" size="xs" className="h-5 px-1.5" onClick={() => onAddBelow('sql')}>
+        <Button variant="ghost" size="xs" onClick={() => onAddBelow('sql')}>
           <FileCode />
-          sql
+          SQL
         </Button>
       </div>
     </div>
@@ -335,12 +411,12 @@ function CellView({
 function CellResult({ result }: { result: QueryResult }) {
   const rows = result.rows.slice(0, 50);
   return (
-    <div className="overflow-x-auto border-t border-border bg-muted/20">
-      <table className="w-full font-mono text-[11px]">
-        <thead className="sticky top-0 bg-muted/40">
-          <tr className="border-b border-border text-left text-muted-foreground">
+    <div className="overflow-x-auto border-t border-[var(--wb-separator)] bg-[var(--wb-content)]">
+      <table className="w-full font-mono text-[12px] text-[var(--wb-text)]">
+        <thead className="sticky top-0 bg-[var(--wb-sidebar)]">
+          <tr className="border-b border-[var(--wb-separator)] text-left text-[var(--wb-text-2)]">
             {result.columns.map((c) => (
-              <th key={c.name} className="px-2 py-1 font-display italic">
+              <th key={c.name} className="px-2 py-1 font-sans text-[12px] font-medium">
                 {c.name}
               </th>
             ))}
@@ -351,7 +427,7 @@ function CellResult({ result }: { result: QueryResult }) {
             <tr
               // biome-ignore lint/suspicious/noArrayIndexKey: row identity comes from server order
               key={i}
-              className="border-b border-border/60"
+              className="border-b border-[var(--wb-separator)] even:bg-[var(--grid-row-a)]"
             >
               {row.map((v, j) => (
                 <td
@@ -367,8 +443,8 @@ function CellResult({ result }: { result: QueryResult }) {
         </tbody>
       </table>
       {result.rows.length > 50 && (
-        <div className="border-t border-border bg-muted/40 px-2 py-1 font-display text-[11px] italic text-muted-foreground">
-          showing first 50 of {result.rowCount.toLocaleString()} rows · open in a tab to see all
+        <div className="border-t border-[var(--wb-separator)] bg-[var(--wb-sidebar)] px-2 py-1 text-[12px] text-[var(--wb-text-2)]">
+          Showing first 50 of {result.rowCount.toLocaleString()} rows. Open in a tab to see all.
         </div>
       )}
     </div>
@@ -381,25 +457,10 @@ function fmtCell(v: unknown): string {
   return String(v);
 }
 
-function stripRuntime(c: Cell): Cell {
-  return { id: c.id, kind: c.kind, content: c.content };
-}
-
-function loadCells(): Cell[] {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw) as Cell[];
-    return Array.isArray(parsed) ? parsed.map(stripRuntime) : [];
-  } catch {
-    return [];
-  }
-}
-
 function cellsToMarkdown(cells: Cell[], connection?: string): string {
   const lines: string[] = [
     '---',
-    `format: plasma-notebook`,
+    'format: plasma-notebook',
     `connection: ${connection ?? ''}`,
     `created: ${new Date().toISOString()}`,
     '---',

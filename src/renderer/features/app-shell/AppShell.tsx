@@ -1,15 +1,18 @@
+import { ChartBody } from '@/features/chart/ChartDialog';
 import { CodegenDialog } from '@/features/codegen/CodegenDialog';
 import { CommandPalette } from '@/features/command-palette/CommandPalette';
 import { ConnectionDialog } from '@/features/connection-manager/ConnectionDialog';
 import { DeleteConfirmDialog } from '@/features/connection-manager/DeleteConfirmDialog';
 import { PendingEditsGateDialog } from '@/features/connection-manager/PendingEditsGateDialog';
 import { ProdGateDialog } from '@/features/connection-manager/ProdGateDialog';
+import { CloseTabsDialog } from '@/features/editor/CloseTabsDialog';
 import { EditorResizer } from '@/features/editor/EditorResizer';
+import { RunningPlaceholder } from '@/features/editor/RunningPlaceholder';
 import { SqlCanvas } from '@/features/editor/SqlCanvas';
 import { TabStrip } from '@/features/editor/TabStrip';
 import { HistoryCanvas } from '@/features/history/HistoryCanvas';
-import { HistorySheet } from '@/features/history/HistorySheet';
 import { ShortcutCheatSheet } from '@/features/keymap/ShortcutCheatSheet';
+import { runCommand, selectTabAt } from '@/features/keymap/commands';
 import { MonitorCanvas } from '@/features/monitor/MonitorCanvas';
 import { NotebookDialog } from '@/features/notebook/NotebookDialog';
 import { DeleteIndexDialog } from '@/features/opensearch/DeleteIndexDialog';
@@ -17,19 +20,17 @@ import { NewIndexDialog } from '@/features/opensearch/NewIndexDialog';
 import { OsCanvas } from '@/features/opensearch/OsCanvas';
 import { RedisCanvas } from '@/features/redis/RedisCanvas';
 import { FilterRow } from '@/features/result-grid/FilterRow';
-import { ResultGrid } from '@/features/result-grid/ResultGrid';
 import { ResultFooter } from '@/features/result-grid/ResultFooter';
+import { ResultGrid } from '@/features/result-grid/ResultGrid';
 import { ResultMessagesPanel, ResultTabs } from '@/features/result-grid/ResultTabs';
 import { RightRail } from '@/features/right-rail/RightRail';
 import { SchemaDiffDialog } from '@/features/schema-diff/SchemaDiffDialog';
 import { SettingsCanvas } from '@/features/settings/SettingsCanvas';
-import { SettingsSheet } from '@/features/settings/SettingsSheet';
 import { Sidebar } from '@/features/sidebar/Sidebar';
-import { ChartBody } from '@/features/chart/ChartDialog';
-import { useActiveTab, useSession } from '@/stores/session';
-import { useWorkbench } from '@/stores/workbench';
-import { matchGlobalBinding } from '@shared/keymap';
-import { useEffect, useState } from 'react';
+import { useActiveTabSelect, useSession } from '@/stores/session';
+import { type Overlay, useWorkbench } from '@/stores/workbench';
+import { type KeyId, matchGlobalBinding, selectTabIndex } from '@shared/keymap';
+import { useEffect } from 'react';
 import { DisconnectedHome } from './DisconnectedHome';
 import { IconRail } from './IconRail';
 import { SidebarResizer } from './SidebarResizer';
@@ -50,17 +51,30 @@ import { TopBar } from './TopBar';
 export function AppShell() {
   const dialogOpen = useSession((s) => s.dialogOpen);
   const connectionState = useSession((s) => s.connectionState);
-  const [codegenOpen, setCodegenOpen] = useState(false);
-  const [notebookOpen, setNotebookOpen] = useState(false);
-  const [schemaDiffOpen, setSchemaDiffOpen] = useState(false);
-  const [cheatSheetOpen, setCheatSheetOpen] = useState(false);
+  const overlay = useWorkbench((s) => s.overlay);
+  const setOverlay = useWorkbench((s) => s.setOverlay);
+  const overlayProps = (name: NonNullable<Overlay>) => ({
+    open: overlay === name,
+    onOpenChange: (open: boolean) => setOverlay(open ? name : null),
+  });
 
-  // Global shortcuts — chords come from `@shared/keymap`. ⌘K is the
-  // command palette (DESIGN.md); AI panel is ⌘L; ⌘/ opens this cheat-sheet.
+  // Global shortcuts — chords come from `@shared/keymap` and dispatch
+  // through `runCommand`, the same table the native menu and the palette
+  // use. Handled chords are preventDefault-ed so the native accelerator
+  // never fires a second time. Monaco handles its own keys (and forwards
+  // the global chords it would otherwise swallow — see MonacoEditor).
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      const tag = (document.activeElement?.tagName ?? '').toLowerCase();
-      const inInput = tag === 'input' || tag === 'textarea' || tag === 'select';
+      if (e.defaultPrevented) return;
+      const target = e.target instanceof HTMLElement ? e.target : null;
+      if (target?.closest('.monaco-editor')) return;
+      const tag = (target?.tagName ?? '').toLowerCase();
+      const inInput =
+        tag === 'input' ||
+        tag === 'textarea' ||
+        tag === 'select' ||
+        Boolean(target?.isContentEditable);
+
       if (e.key === 'Escape' && !inInput) {
         const m = useSession.getState().canvasMode;
         if (m === 'settings' || m === 'history' || m === 'monitor') {
@@ -71,113 +85,30 @@ export function AppShell() {
       }
 
       // ⌘1…⌘9 jump straight to a tab (⌘9 = last, browser convention).
-      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && /^[1-9]$/.test(e.key)) {
-        const { tabs, setActiveTab } = useSession.getState();
-        const n = Number(e.key);
-        const target = n === 9 ? tabs[tabs.length - 1] : tabs[n - 1];
-        if (target) {
-          e.preventDefault();
-          setActiveTab(target.id);
-        }
+      const tabIndex = selectTabIndex(e);
+      if (tabIndex !== null) {
+        if (useSession.getState().connectionState !== 'connected') return;
+        e.preventDefault();
+        selectTabAt(tabIndex);
         return;
       }
 
       const hit = matchGlobalBinding(e);
       if (!hit) return;
-
-      // Skip editor-adjacent toggles while typing in a plain input, but
-      // always allow palette / AI / cheat-sheet (Linear/Raycast pattern)
-      // and pane/tab navigation.
-      const allowInInput =
-        hit.id === 'palette' ||
-        hit.id === 'toggleAi' ||
-        hit.id === 'cheatSheet' ||
-        hit.id === 'nextTab' ||
-        hit.id === 'prevTab' ||
-        hit.id === 'toggleRightSidebar';
-      if (inInput && !allowInInput) return;
-
-      // Menu-owned run/cancel/new-tab/etc. still arrive via IPC; only
-      // handle the DOM-primary actions here to avoid double-firing when
-      // a native accelerator also delivers a keydown.
-      switch (hit.id) {
-        case 'palette':
-          e.preventDefault();
-          useSession.getState().togglePalette();
-          break;
-        case 'toggleAi':
-          e.preventDefault();
-          {
-            const cur = useSession.getState().rightPanelMode;
-            useSession.getState().setRightPanelMode(cur === 'ai' ? null : 'ai');
-          }
-          break;
-        case 'cheatSheet':
-          e.preventDefault();
-          setCheatSheetOpen((v) => !v);
-          break;
-        case 'nextTab':
-        case 'prevTab': {
-          e.preventDefault();
-          const { tabs, activeTabId, setActiveTab } = useSession.getState();
-          if (tabs.length < 2) break;
-          const idx = tabs.findIndex((t) => t.id === activeTabId);
-          const step = hit.id === 'nextTab' ? 1 : -1;
-          const next = tabs[(idx + step + tabs.length) % tabs.length];
-          if (next) setActiveTab(next.id);
-          break;
-        }
-        case 'toggleRightSidebar': {
-          e.preventDefault();
-          const st = useSession.getState();
-          if (st.canvasMode !== 'database') break;
-          st.setRightPanelMode(st.rightPanelMode ? null : 'details');
-          break;
-        }
-        case 'toggleEditor':
-          e.preventDefault();
-          useSession.getState().toggleEditor();
-          break;
-        case 'toggleSidebar':
-          e.preventDefault();
-          void useSession.getState().toggleSidebar();
-          break;
-        case 'codegen':
-          e.preventDefault();
-          setCodegenOpen(true);
-          break;
-        case 'notebook':
-          e.preventDefault();
-          setNotebookOpen(true);
-          break;
-        case 'schemaDiff':
-          e.preventDefault();
-          setSchemaDiffOpen(true);
-          break;
-        default:
-          // runQuery / cancelQuery / history / tabs / export — menu IPC
-          break;
-      }
+      // Plain inputs keep Enter-ish chords (run / cancel / export) for
+      // themselves; navigation and panel chords work everywhere.
+      if (inInput && TYPING_CHORDS.has(hit.id)) return;
+      if (runCommand(hit.id)) e.preventDefault();
     };
     document.addEventListener('keydown', handler);
     return () => document.removeEventListener('keydown', handler);
   }, []);
 
-  // Native menu → cheat-sheet / AI (channels registered in preload).
-  useEffect(() => {
-    const unsub = [
-      window.plasmaEvents.on('plasma:menu:cheatSheet', () => setCheatSheetOpen(true)),
-      window.plasmaEvents.on('plasma:menu:toggleAi', () => {
-        const cur = useSession.getState().rightPanelMode;
-        useSession.getState().setRightPanelMode(cur === 'ai' ? null : 'ai');
-      }),
-    ];
-    return () => {
-      for (const fn of unsub) fn();
-    };
-  }, []);
-
   const disconnected = connectionState !== 'connected';
+  // Settings is reachable without a connection (palette / menu / home).
+  const settingsWhileDisconnected = useSession(
+    (s) => s.canvasMode === 'settings' && s.connectionState !== 'connected',
+  );
 
   return (
     <>
@@ -186,31 +117,37 @@ export function AppShell() {
 
         {disconnected ? (
           <div className="flex min-h-0 flex-1 flex-col">
-            <DisconnectedHome />
+            {settingsWhileDisconnected ? <SettingsCanvas /> : <DisconnectedHome />}
           </div>
         ) : (
           <ConnectedShell />
         )}
-
       </div>
 
       {/* Overlays */}
       {dialogOpen && <ConnectionDialog />}
       <CommandPalette />
-      <SettingsSheet />
-      <HistorySheet />
       <DeleteConfirmDialog />
       <ProdGateDialog />
       <PendingEditsGateDialog />
       <NewIndexDialog />
       <DeleteIndexDialog />
-      <CodegenDialog open={codegenOpen} onOpenChange={setCodegenOpen} />
-      <SchemaDiffDialog open={schemaDiffOpen} onOpenChange={setSchemaDiffOpen} />
-      <NotebookDialog open={notebookOpen} onOpenChange={setNotebookOpen} />
-      <ShortcutCheatSheet open={cheatSheetOpen} onOpenChange={setCheatSheetOpen} />
+      <CloseTabsDialog />
+      <CodegenDialog {...overlayProps('codegen')} />
+      <SchemaDiffDialog {...overlayProps('schemaDiff')} />
+      <NotebookDialog {...overlayProps('notebook')} />
+      <ShortcutCheatSheet {...overlayProps('cheatSheet')} />
     </>
   );
 }
+
+/** Chords a focused plain input keeps (e.g. ⌘⏎ in a filter field). */
+const TYPING_CHORDS: ReadonlySet<KeyId> = new Set<KeyId>([
+  'runQuery',
+  'runQueryAll',
+  'cancelQuery',
+  'exportCsv',
+]);
 
 function ConnectedShell() {
   const sidebarCollapsed = useSession((s) => s.settings.sidebarCollapsed);
@@ -255,15 +192,13 @@ function ConnectedShell() {
         <HistoryCanvas />
       ) : canvasMode === 'monitor' ? (
         <MonitorCanvas />
-      ) : canvasMode === 'sql' ? (
-        <SqlOnlyCanvas />
       ) : (
         <EngineCanvas />
       )}
 
       {/* RightRail only makes sense for relational (Postgres) databases —
           Query / Role / RLS are scoped to a table or active SQL query.
-          Hidden for redis/opensearch and for SQL / Settings / History modes. */}
+          Hidden for the full-page Settings / History / Monitor modes. */}
       {canvasMode === 'database' && <PostgresRightRail />}
     </div>
   );
@@ -290,47 +225,32 @@ function EngineCanvas() {
   return <DatabaseCanvas />;
 }
 
-function SqlOnlyCanvas() {
-  const tab = useActiveTab();
-  const hasResultOrError = Boolean(
-    tab?.queryResult ||
-    (tab?.queryResults && tab.queryResults.length > 0) ||
-    tab?.queryError,
-  );
-  return (
-    <main className="flex min-h-0 min-w-0 flex-1 flex-col bg-[var(--wb-content)]">
-      <TabStrip />
-      <SqlCanvas expanded={!hasResultOrError} />
-      {hasResultOrError && (
-        <>
-          <EditorResizer />
-          <ResultTabs />
-          <ResultBody />
-          <ResultFooter />
-        </>
-      )}
-    </main>
-  );
-}
-
 function DatabaseCanvas() {
-  const tab = useActiveTab();
-  const isTableData = tab?.kind === 'table' && tab.viewMode === 'data';
-  // SQL tabs get Monaco inline. When there's no result yet, the editor
-  // expands to fill the canvas. Once a query has run, the editor keeps
-  // its user-sized height and the results take the rest.
-  const isSqlTab = tab?.kind === 'sql';
-  const hasResultOrError = Boolean(
-    tab?.queryResult ||
-    (tab?.queryResults && tab.queryResults.length > 0) ||
-    tab?.queryError,
-  );
-  const showGrid = !isSqlTab || hasResultOrError;
+  // Narrow selectors (F13): typing in the editor patches `sql` on every
+  // keystroke; this layout only re-renders when its shape changes.
+  const { kind, viewMode, hasResultOrError, running } = useActiveTabSelect((t) => ({
+    kind: t?.kind,
+    viewMode: t?.viewMode,
+    hasResultOrError: Boolean(
+      t?.queryResult || (t?.queryResults?.length ?? 0) > 0 || t?.queryError,
+    ),
+    running: t?.queryRunState === 'running',
+  }));
+  const editorHidden = useWorkbench((s) => s.editorHidden);
+  const isTableData = kind === 'table' && viewMode === 'data';
+  // SQL tabs get Monaco inline. Before the first run the editor fills the
+  // canvas; once a query runs (VF20: already while it runs, so the layout
+  // doesn't jump) the editor keeps its user-sized height and the results
+  // take the rest. ⌘J hides the editor while there are results to show.
+  const isSqlTab = kind === 'sql';
+  const hasResults = hasResultOrError || running;
+  const showEditor = isSqlTab && (!editorHidden || !hasResults);
+  const showGrid = !isSqlTab || hasResults;
   return (
     <main className="flex min-h-0 min-w-0 flex-1 flex-col bg-[var(--wb-content)]">
       <TabStrip />
-      {isSqlTab && <SqlCanvas expanded={!hasResultOrError} />}
-      {isSqlTab && hasResultOrError && <EditorResizer />}
+      {showEditor && <SqlCanvas expanded={!hasResults} />}
+      {showEditor && hasResults && <EditorResizer />}
       {isTableData && <FilterRow />}
       {showGrid && isSqlTab && <ResultTabs />}
       {showGrid && <ResultBody />}
@@ -344,11 +264,25 @@ function DatabaseCanvas() {
  * footer's Message / Chart views (TablePlus Data · Message · Chart).
  */
 function ResultBody() {
-  const tab = useActiveTab();
-  const view = useWorkbench((s) => (tab ? (s.resultViews[tab.id] ?? 'data') : 'data'));
-  if (tab?.kind === 'sql' && view === 'message') return <ResultMessagesPanel />;
-  if (tab?.kind === 'sql' && view === 'chart') {
-    const result = tab.queryResult;
+  const tab = useActiveTabSelect((t) => ({
+    id: t?.id,
+    kind: t?.kind,
+    result: t?.queryResult ?? null,
+    resultCount: t?.queryResults?.length ?? 0,
+    error: t?.queryError ?? null,
+    running: t?.queryRunState === 'running',
+    runStartedAt: (t?.runStartedAt as number | undefined) ?? null,
+    activeResultIndex: t?.activeResultIndex ?? 0,
+  }));
+  const view = useWorkbench((s) => (tab.id ? (s.resultViews[tab.id] ?? 'data') : 'data'));
+  // VF20: while the first statement runs, keep the pane with an elapsed
+  // timer instead of collapsing it.
+  if (tab.kind === 'sql' && tab.running && tab.resultCount === 0 && !tab.error) {
+    return <RunningPlaceholder startedAt={tab.runStartedAt} />;
+  }
+  if (tab.kind === 'sql' && view === 'message') return <ResultMessagesPanel />;
+  if (tab.kind === 'sql' && view === 'chart') {
+    const result = tab.result;
     return (
       <div className="min-h-0 flex-1 overflow-auto bg-[var(--wb-content)] p-4">
         {result && result.columns.length > 0 ? (

@@ -1,6 +1,6 @@
 import { type DataColumn, DataTable } from '@/components/ui/data-table';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import {
-  Badge,
   EmptyState,
   SectionHeading,
   StatTile,
@@ -8,62 +8,51 @@ import {
   ViewTitle,
   ViewToolbar,
 } from '@/components/ui/view-parts';
-import { IconButton, Pill } from '@/components/ui/workbench';
+import { IconButton, MenuItem, Pill, Segmented } from '@/components/ui/workbench';
 import { ipc } from '@/lib/ipc';
 import { useSession } from '@/stores/session';
 import type { OsAlias, OsIlmPolicy, OsIndex } from '@shared/protocol';
-import { Loader2, Plus, RefreshCw, SquareTerminal } from 'lucide-react';
+import { Loader2, Plus, RefreshCw, SquareTerminal, Terminal, Timer } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
+import { NodesView, ShardsView, SnapshotsView, TasksView, TemplatesView } from './OsClusterViews';
+import { capitalise, fmtBytes, healthTone } from './os-format';
+import { OsBadge as Badge, errMessage as errText } from './os-parts';
+import { useOsStore } from './os-store';
+import { useOsWriteAccess } from './os-write';
 
-function fmtBytes(n: number): string {
-  if (!Number.isFinite(n)) return '—';
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
-  if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`;
-  return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`;
-}
+type HomeSection = 'overview' | 'nodes' | 'shards' | 'tasks' | 'snapshots' | 'templates';
 
-function healthTone(health: string): 'neutral' | 'warn' | 'danger' {
-  const h = health.toLowerCase();
-  if (h === 'red') return 'danger';
-  if (h === 'yellow') return 'warn';
-  return 'neutral';
-}
-
-function errText(err: unknown): string {
-  const msg = err instanceof Error ? err.message : String(err);
-  return msg.replace(/^Error invoking remote method '[^']+':\s*/i, '').replace(/^Error:\s*/i, '');
-}
+const REFRESH_CHOICES = [0, 5_000, 15_000, 30_000, 60_000] as const;
 
 const INDEX_COLUMNS: DataColumn<OsIndex>[] = [
-  { key: 'index', label: 'Index', width: 260, render: (r) => r.index, titleOf: (r) => r.index },
+  { key: 'index', label: 'Index', width: 220, render: (r) => r.index, titleOf: (r) => r.index },
   {
     key: 'health',
     label: 'Health',
-    width: 80,
+    width: 76,
     sans: true,
     render: (r) => <Badge tone={healthTone(r.health)}>{r.health}</Badge>,
   },
-  { key: 'status', label: 'Status', width: 70, render: (r) => r.status },
+  { key: 'status', label: 'Status', width: 64, render: (r) => r.status },
   {
     key: 'docs',
     label: 'Docs',
     align: 'right',
-    width: 100,
+    width: 90,
     render: (r) => r.docsCount.toLocaleString(),
   },
   {
     key: 'deleted',
     label: 'Deleted',
     align: 'right',
-    width: 80,
+    width: 72,
     render: (r) => r.docsDeleted.toLocaleString(),
   },
   {
     key: 'size',
     label: 'Size',
     align: 'right',
-    width: 90,
+    width: 84,
     render: (r) => fmtBytes(r.storeBytes),
   },
   {
@@ -71,7 +60,7 @@ const INDEX_COLUMNS: DataColumn<OsIndex>[] = [
     label: 'Pri',
     title: 'Primary shards',
     align: 'right',
-    width: 50,
+    width: 44,
     render: (r) => r.primaries,
   },
   {
@@ -79,7 +68,7 @@ const INDEX_COLUMNS: DataColumn<OsIndex>[] = [
     label: 'Rep',
     title: 'Replicas',
     align: 'right',
-    width: 50,
+    width: 44,
     render: (r) => r.replicas,
   },
   { key: 'uuid', label: 'UUID', render: (r) => r.uuid, titleOf: (r) => r.uuid ?? undefined },
@@ -113,40 +102,36 @@ const ILM_COLUMNS: DataColumn<OsIlmPolicy>[] = [
 ];
 
 /**
- * OpenSearch home — dense cluster overview: stat tiles, then the index
- * list, aliases and lifecycle policies as data grids. Clicking an index
- * row opens its mapping/stats view.
+ * OpenSearch home — dense cluster overview (stat tiles, indices, aliases,
+ * lifecycle policies) plus Nodes / Shards / Tasks / Snapshots /
+ * Templates views (O15/O17). The overview can auto-refresh and shows
+ * when it was loaded (S3).
  */
 export function OsHomeView() {
   const overview = useSession((s) => s.osOverview);
   const loading = useSession((s) => s.osLoading);
   const refreshOverview = useSession((s) => s.refreshOsOverview);
-  const openIndex = useSession((s) => s.openOsIndex);
   const openOsSql = useSession((s) => s.openOsSql);
+  const openOsConsole = useSession((s) => s.openOsConsole);
   const openNewIndex = useSession((s) => s.openOsNewIndex);
+  const refreshMs = useOsStore((s) => s.overviewRefreshMs);
+  const setRefreshMs = useOsStore((s) => s.setOverviewRefreshMs);
+  const loadedAt = useOsStore((s) => s.overviewLoadedAt);
+  const access = useOsWriteAccess();
+  const [section, setSection] = useState<HomeSection>('overview');
+  const [refreshMenu, setRefreshMenu] = useState(false);
 
-  const indices = useMemo(
-    () => (overview ? [...overview.indices].sort((a, b) => b.docsCount - a.docsCount) : []),
-    [overview],
-  );
-
-  const totals = useMemo(() => {
-    let docs = 0;
-    let deleted = 0;
-    let bytes = 0;
-    let primaries = 0;
-    let replicaShards = 0;
-    let system = 0;
-    for (const i of indices) {
-      docs += i.docsCount;
-      deleted += i.docsDeleted;
-      bytes += i.storeBytes;
-      primaries += i.primaries;
-      replicaShards += i.primaries * i.replicas;
-      if (i.index.startsWith('.')) system += 1;
-    }
-    return { docs, deleted, bytes, primaries, replicaShards, system };
-  }, [indices]);
+  // S3: stamp each overview load and optionally poll it.
+  useEffect(() => {
+    if (overview) useOsStore.getState().markOverviewLoaded();
+  }, [overview]);
+  useEffect(() => {
+    if (!refreshMs) return;
+    const t = setInterval(() => {
+      if (!useSession.getState().osLoading) void useSession.getState().refreshOsOverview();
+    }, refreshMs);
+    return () => clearInterval(t);
+  }, [refreshMs]);
 
   if (!overview) {
     return (
@@ -167,78 +152,93 @@ export function OsHomeView() {
   }
 
   return (
-    <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-[var(--wb-content)]">
-      <ViewToolbar>
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-[var(--wb-content)]">
+      <ViewToolbar className="min-w-0 overflow-hidden">
         <ViewTitle
           title={overview.clusterName}
-          meta={`${overview.distribution} ${overview.version}`}
+          meta={`${capitalise(overview.distribution)} ${overview.version}`}
         />
         <Badge tone={healthTone(overview.health)}>{overview.health}</Badge>
         <div className="flex-1" />
+        <Pill onClick={openOsConsole} title="Dev Tools console">
+          <Terminal />
+          Console
+        </Pill>
         <Pill onClick={openOsSql}>
           <SquareTerminal />
           SQL
         </Pill>
-        <Pill onClick={openNewIndex}>
+        <Pill
+          onClick={openNewIndex}
+          disabled={!access.canWrite}
+          title={access.reason ?? 'Create an index'}
+        >
           <Plus />
           New index
         </Pill>
       </ViewToolbar>
 
-      <div className="min-h-0 flex-1 overflow-y-auto pb-4">
-        <div className="grid grid-cols-[repeat(auto-fill,minmax(130px,1fr))] gap-2 px-4 pt-3">
-          <StatTile label="Cluster" value={overview.clusterName} hint={overview.distribution} />
-          <StatTile label="Health" value={overview.health} />
-          <StatTile label="Version" value={overview.version} />
-          <StatTile label="Nodes" value={overview.nodes.toLocaleString()} />
-          <StatTile
-            label="Indices"
-            value={indices.length.toLocaleString()}
-            hint={totals.system > 0 ? `${totals.system} system` : undefined}
-          />
-          <StatTile
-            label="Documents"
-            value={totals.docs.toLocaleString()}
-            hint={totals.deleted > 0 ? `${totals.deleted.toLocaleString()} deleted` : undefined}
-          />
-          <StatTile label="Store size" value={fmtBytes(totals.bytes)} />
-          <StatTile
-            label="Shards"
-            value={(totals.primaries + totals.replicaShards).toLocaleString()}
-            hint={`${totals.primaries} primary · ${totals.replicaShards} replica`}
-          />
-        </div>
-
-        <SectionHeading
-          action={
-            <span className="text-[12px] text-[var(--wb-text-2)]">
-              {indices.length} {indices.length === 1 ? 'index' : 'indices'}
-            </span>
-          }
-        >
-          Indices
-        </SectionHeading>
-        <DataTable
-          ariaLabel="Indices"
-          columns={INDEX_COLUMNS}
-          rows={indices}
-          rowKey={(r) => r.index}
-          onSelect={(r) => openIndex(r.index)}
-          stripeFill={false}
-          empty="No indices"
-          className="flex-none border-y border-[var(--wb-separator)]"
+      <div className="flex shrink-0 items-center overflow-x-auto px-4 pb-2 pt-3">
+        <Segmented<HomeSection>
+          ariaLabel="Cluster section"
+          value={section}
+          onChange={setSection}
+          options={[
+            { value: 'overview', label: 'Overview' },
+            { value: 'nodes', label: 'Nodes' },
+            { value: 'shards', label: 'Shards' },
+            { value: 'tasks', label: 'Tasks' },
+            { value: 'snapshots', label: 'Snapshots' },
+            { value: 'templates', label: 'Templates' },
+          ]}
         />
-
-        <AliasesSection />
-        <IlmSection />
       </div>
 
-      <ViewFooter>
-        <span>
-          {indices.length} {indices.length === 1 ? 'index' : 'indices'} ·{' '}
-          {totals.docs.toLocaleString()} docs · {fmtBytes(totals.bytes)}
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col border-t border-[var(--wb-separator)]">
+        {section === 'overview' && <OverviewBody />}
+        {section === 'nodes' && <NodesView />}
+        {section === 'shards' && <ShardsView />}
+        {section === 'tasks' && <TasksView />}
+        {section === 'snapshots' && <SnapshotsView />}
+        {section === 'templates' && <TemplatesView />}
+      </div>
+
+      <ViewFooter className="whitespace-nowrap">
+        <span className="min-w-0 truncate">
+          {overview.indices.length} {overview.indices.length === 1 ? 'index' : 'indices'}
+          {loadedAt ? ` · updated ${new Date(loadedAt).toLocaleTimeString()}` : ''}
         </span>
         <div className="flex-1" />
+        <Popover open={refreshMenu} onOpenChange={setRefreshMenu}>
+          <PopoverTrigger asChild>
+            <IconButton
+              variant="plain"
+              label={refreshMs ? `Auto-refresh every ${refreshMs / 1000} s` : 'Auto-refresh off'}
+              active={refreshMs > 0}
+            >
+              <Timer />
+            </IconButton>
+          </PopoverTrigger>
+          <PopoverContent
+            align="end"
+            side="top"
+            sideOffset={6}
+            className="w-[170px] p-1"
+            role="menu"
+          >
+            {REFRESH_CHOICES.map((ms) => (
+              <MenuItem
+                key={ms}
+                label={ms === 0 ? 'Off' : `Every ${ms / 1000} s`}
+                checked={refreshMs === ms}
+                onClick={() => {
+                  setRefreshMs(ms);
+                  setRefreshMenu(false);
+                }}
+              />
+            ))}
+          </PopoverContent>
+        </Popover>
         <IconButton
           label="Refresh cluster overview"
           onClick={() => void refreshOverview()}
@@ -247,6 +247,108 @@ export function OsHomeView() {
           {loading ? <Loader2 className="animate-spin" /> : <RefreshCw />}
         </IconButton>
       </ViewFooter>
+    </div>
+  );
+}
+
+function OverviewBody() {
+  const overview = useSession((s) => s.osOverview);
+  const openIndex = useSession((s) => s.openOsIndex);
+  const [showSystem, setShowSystem] = useState(false);
+
+  const indices = useMemo(
+    () =>
+      overview
+        ? [...overview.indices]
+            .filter((i) => showSystem || !i.index.startsWith('.'))
+            .sort((a, b) => b.docsCount - a.docsCount)
+        : [],
+    [overview, showSystem],
+  );
+
+  const totals = useMemo(() => {
+    let docs = 0;
+    let deleted = 0;
+    let bytes = 0;
+    let primaries = 0;
+    let replicaShards = 0;
+    let system = 0;
+    for (const i of overview?.indices ?? []) {
+      docs += i.docsCount;
+      deleted += i.docsDeleted;
+      bytes += i.storeBytes;
+      primaries += i.primaries;
+      replicaShards += i.primaries * i.replicas;
+      if (i.index.startsWith('.')) system += 1;
+    }
+    return { docs, deleted, bytes, primaries, replicaShards, system };
+  }, [overview]);
+
+  if (!overview) return null;
+
+  return (
+    <div className="min-h-0 flex-1 overflow-y-auto pb-4">
+      <div className="grid grid-cols-[repeat(auto-fill,minmax(130px,1fr))] gap-2 px-4 pt-3">
+        <StatTile
+          label="Cluster"
+          value={overview.clusterName}
+          hint={capitalise(overview.distribution)}
+        />
+        <StatTile label="Health" value={overview.health} />
+        <StatTile label="Version" value={overview.version} />
+        <StatTile label="Nodes" value={overview.nodes.toLocaleString()} />
+        <StatTile
+          label="Indices"
+          value={overview.indices.length.toLocaleString()}
+          hint={totals.system > 0 ? `${totals.system} system` : undefined}
+        />
+        <StatTile
+          label="Documents"
+          value={totals.docs.toLocaleString()}
+          hint={totals.deleted > 0 ? `${totals.deleted.toLocaleString()} deleted` : undefined}
+        />
+        <StatTile label="Store size" value={fmtBytes(totals.bytes)} />
+        <StatTile
+          label="Shards"
+          value={(totals.primaries + totals.replicaShards).toLocaleString()}
+          hint={`${totals.primaries} primary · ${totals.replicaShards} replica`}
+        />
+      </div>
+
+      <SectionHeading
+        action={
+          <span className="flex items-center gap-3 text-[12px] text-[var(--wb-text-2)]">
+            {totals.system > 0 && (
+              <label className="flex items-center gap-1.5">
+                <input
+                  type="checkbox"
+                  checked={showSystem}
+                  onChange={(e) => setShowSystem(e.target.checked)}
+                />
+                System indices
+              </label>
+            )}
+            <span>
+              {indices.length} {indices.length === 1 ? 'index' : 'indices'}
+            </span>
+          </span>
+        }
+      >
+        Indices
+      </SectionHeading>
+      <DataTable
+        ariaLabel="Indices"
+        columns={INDEX_COLUMNS}
+        rows={indices}
+        rowKey={(r) => r.index}
+        onSelect={(r) => openIndex(r.index)}
+        stripeFill={false}
+        empty="No indices"
+        className="flex-none border-y border-[var(--wb-separator)]"
+      />
+
+      <AliasesSection />
+      <IlmSection />
     </div>
   );
 }

@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
   compareCells,
+  compareNumericText,
   slicePageSorted,
   slicePageUnsorted,
+  sortKindFor,
   sortRowsWithIndex,
 } from './display-rows';
 
@@ -59,5 +61,47 @@ describe('compareCells', () => {
     expect(compareCells(1, 2, 'asc')).toBeLessThan(0);
     expect(compareCells(1, 2, 'desc')).toBeGreaterThan(0);
     expect(compareCells('a', 'b', 'asc')).toBeLessThan(0);
+  });
+});
+
+describe('type-aware compareCells (F4)', () => {
+  it('orders int8 / numeric strings numerically and exactly', () => {
+    const vals = ['10', '9', '-3', '100', '9007199254740993', '9007199254740992', '0.5', '-0.25'];
+    const sorted = [...vals].sort((a, b) => compareCells(a, b, 'asc', 'numeric'));
+    expect(sorted).toEqual([
+      '-3',
+      '-0.25',
+      '0.5',
+      '9',
+      '10',
+      '100',
+      '9007199254740992',
+      '9007199254740993',
+    ]);
+    expect(compareNumericText('1.50', '1.5')).toBe(0);
+    expect(compareNumericText('-0', '0')).toBe(0);
+  });
+
+  it('orders dates chronologically (Date objects and text)', () => {
+    const d = [new Date(2026, 1, 1), new Date(2025, 11, 31), new Date(2026, 0, 15)];
+    const sorted = [...d].sort((a, b) => compareCells(a, b, 'asc', 'temporal'));
+    expect(sorted.map((x) => x.getMonth())).toEqual([11, 0, 1]);
+    const text = ['2026-02-01 10:00:00', '2025-12-31 23:59:59', '2026-01-15 00:00:00'];
+    expect([...text].sort((a, b) => compareCells(a, b, 'desc', 'temporal'))).toEqual([
+      '2026-02-01 10:00:00',
+      '2026-01-15 00:00:00',
+      '2025-12-31 23:59:59',
+    ]);
+  });
+
+  it('uses the column type through sortRowsWithIndex', () => {
+    const ordered = sortRowsWithIndex(
+      [['10'], ['9'], ['100']],
+      { index: 0, direction: 'asc' },
+      'int8',
+    );
+    expect(ordered.map((e) => e.row[0])).toEqual(['9', '10', '100']);
+    expect(sortKindFor('numeric(10,2)')).toBe('numeric');
+    expect(sortKindFor('timestamptz')).toBe('temporal');
   });
 });

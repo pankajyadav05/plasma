@@ -1,5 +1,5 @@
 import { getDb } from './db';
-import { type HistoryListOpts, buildHistoryListQuery } from './history-query';
+import { type HistoryListOpts, buildHistoryListQuery, redactSqlSecrets } from './history-query';
 
 /**
  * Query history — records every executed query (success or failure)
@@ -60,7 +60,7 @@ export function recordHistory(entry: Omit<HistoryEntry, 'id'>): void {
       `INSERT INTO query_history
          (connection_id, sql, row_count, duration_ms, error, executed_at)
          VALUES (@connectionId, @sql, @rowCount, @durationMs, @error, @executedAt)`,
-    ).run(entry);
+    ).run({ ...entry, sql: redactSqlSecrets(entry.sql) });
     // Prune if we're over the cap
     db.prepare(
       `DELETE FROM query_history
@@ -85,10 +85,12 @@ export function listHistory(opts: HistoryListOpts = {}): HistoryEntry[] {
  * Most recent successful (or any) statement for a connection — used by
  * ⌘↑ recall when the editor buffer is empty (psql muscle memory).
  */
-export function latestHistory(opts: {
-  connectionId?: string;
-  preferOk?: boolean;
-} = {}): HistoryEntry | null {
+export function latestHistory(
+  opts: {
+    connectionId?: string;
+    preferOk?: boolean;
+  } = {},
+): HistoryEntry | null {
   const preferOk = opts.preferOk !== false;
   const entries = listHistory({
     limit: preferOk ? 20 : 1,

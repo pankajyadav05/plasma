@@ -63,10 +63,11 @@ const LOST_PATTERNS = [
 
 /**
  * Error class names used by the OpenSearch transport for transport-level
- * failures. Its messages ("Response timeout", "read ECONNRESET") are not
- * reliably distinctive, the class name is.
+ * failures. Its messages ("read ECONNRESET") are not reliably distinctive,
+ * the class name is. `TimeoutError` is deliberately absent (C29): a slow
+ * search is not a dead connection, and treating it as one re-ran it.
  */
-const LOST_ERROR_NAMES = ['connectionerror', 'timeouterror'];
+const LOST_ERROR_NAMES = ['connectionerror'];
 
 /** True when `message` describes a dead transport rather than a bad statement. */
 export function isConnectionLostMessage(message: string): boolean {

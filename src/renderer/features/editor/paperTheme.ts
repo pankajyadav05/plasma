@@ -69,6 +69,10 @@ function buildTheme(mode: 'light' | 'dark'): MonacoType.editor.IStandaloneThemeD
   const accentFg = resolveCssColor('--accent-foreground', fg);
   const card = resolveCssColor('--card', bg);
   const cardFg = resolveCssColor('--card-foreground', fg);
+  // The app accent (grid selection outline, focus rings, links). The
+  // editor's selection / bracket / suggest highlights follow it so the
+  // editor and grid never disagree on the accent colour (V8).
+  const wbAccent = resolveCssColor('--wb-accent', primary);
 
   // Monaco token rules expect colors WITHOUT the leading `#`.
   const hex6 = (h: string) => (h.startsWith('#') ? h.slice(1, 7) : h);
@@ -127,8 +131,9 @@ function buildTheme(mode: 'light' | 'dark'): MonacoType.editor.IStandaloneThemeD
         };
 
   // Editor chrome colours. Default theme: TablePlus graphite (bg #242424,
-  // grey line numbers, white active number, near-invisible current line,
-  // system-blue cursor/selection). Named themes: derived as before.
+  // grey line numbers, white active number, near-invisible current line)
+  // with selection / bracket match tinted by the app accent. Named
+  // themes: derived from their palette.
   const ed = isDefault
     ? mode === 'dark'
       ? {
@@ -137,9 +142,9 @@ function buildTheme(mode: 'light' | 'dark'): MonacoType.editor.IStandaloneThemeD
           lineNumber: '#7F7F7F',
           lineNumberActive: '#FFFFFF',
           lineHighlight: '#2A2A2A',
-          selection: '#0A84FF4D',
+          selection: `${wbAccent}4D`,
           cursor: '#E0E0E0',
-          accent: '#0A84FF',
+          accent: wbAccent,
         }
       : {
           bg: '#FFFFFF',
@@ -147,9 +152,9 @@ function buildTheme(mode: 'light' | 'dark'): MonacoType.editor.IStandaloneThemeD
           lineNumber: '#8E8E93',
           lineNumberActive: '#1D1D1F',
           lineHighlight: '#F7F7F7',
-          selection: '#007AFF33',
+          selection: `${wbAccent}33`,
           cursor: '#1D1D1F',
-          accent: '#007AFF',
+          accent: wbAccent,
         }
     : {
         bg,
@@ -158,8 +163,8 @@ function buildTheme(mode: 'light' | 'dark'): MonacoType.editor.IStandaloneThemeD
         lineNumberActive: primary,
         lineHighlight: `${muted}80`,
         selection: accent,
-        cursor: primary,
-        accent: primary,
+        cursor: wbAccent,
+        accent: wbAccent,
       };
 
   return {

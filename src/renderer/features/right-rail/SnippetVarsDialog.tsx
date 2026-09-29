@@ -1,5 +1,11 @@
 import { Button } from '@/components/ui/button';
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useEffect, useState } from 'react';
@@ -48,6 +54,9 @@ export function SnippetVarsDialog({
       <DialogContent className="max-w-md">
         <DialogHeader>
           <DialogTitle>Fill snippet variables</DialogTitle>
+          <DialogDescription>
+            Values replace each :name placeholder in the snippet.
+          </DialogDescription>
         </DialogHeader>
         <form
           onSubmit={(e) => {
@@ -58,7 +67,7 @@ export function SnippetVarsDialog({
         >
           {varNames.map((v) => (
             <div key={v} className="flex flex-col gap-1.5">
-              <Label htmlFor={`var-${v}`} className="font-mono text-xs">
+              <Label htmlFor={`var-${v}`} className="font-mono text-[12px]">
                 :{v}
               </Label>
               <Input

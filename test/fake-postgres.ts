@@ -72,6 +72,14 @@ export class FakePostgres {
     let buffer = Buffer.alloc(0);
     let started = false;
     let prepared = '';
+    // Transaction status reported in ReadyForQuery (I/T), so the driver's
+    // server-driven txn tracking sees BEGIN/COMMIT like a real server.
+    let txn: 'I' | 'T' = 'I';
+    const track = (sql: string) => {
+      const head = sql.trim().toLowerCase().split(/\s+/)[0] ?? '';
+      if (head === 'begin' || head === 'start') txn = 'T';
+      else if (['commit', 'rollback', 'end', 'abort'].includes(head)) txn = 'I';
+    };
 
     socket.on('data', (chunk) => {
       buffer = Buffer.concat([buffer, chunk]);
@@ -113,7 +121,10 @@ export class FakePostgres {
           const sql = body.subarray(0, body.length - 1).toString('utf8');
           this.queries.push(sql);
           if (stalledSocket) continue;
-          socket.write(Buffer.concat(answerSimpleQuery(sql)));
+          track(sql);
+          const parts = answerSimpleQuery(sql);
+          parts[parts.length - 1] = readyForQuery(txn);
+          socket.write(Buffer.concat(parts));
           continue;
         }
 
@@ -144,7 +155,8 @@ export class FakePostgres {
           continue;
         }
         if (type === 'S') {
-          if (!stalledSocket) socket.write(readyForQuery());
+          track(prepared);
+          if (!stalledSocket) socket.write(readyForQuery(txn));
         }
       }
     });
@@ -179,8 +191,8 @@ function backendKeyData(pid: number, secret: number): Buffer {
   return message('K', payload);
 }
 
-function readyForQuery(): Buffer {
-  return message('Z', Buffer.from('I', 'latin1'));
+function readyForQuery(status: 'I' | 'T' = 'I'): Buffer {
+  return message('Z', Buffer.from(status, 'latin1'));
 }
 
 /** One text column named `col` holding `value`. */

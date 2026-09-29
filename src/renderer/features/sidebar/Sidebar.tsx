@@ -1,10 +1,10 @@
 import { Button } from '@/components/ui/button';
+import { Segmented } from '@/components/ui/workbench';
 import { OsSidebar } from '@/features/opensearch/OsSidebar';
 import { RedisSidebar } from '@/features/redis/RedisSidebar';
 import { cn } from '@/lib/cn';
 import { useSession } from '@/stores/session';
 import { type SidebarMode, useWorkbench } from '@/stores/workbench';
-import { Segmented } from '@/components/ui/workbench';
 import { Circle, Pencil, Plus } from 'lucide-react';
 import { EntityList } from './EntityList';
 import { HistoryList } from './HistoryList';

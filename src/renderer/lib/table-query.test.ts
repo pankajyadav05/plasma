@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
+  betweenBounds,
+  splitFilterList,
   type BuildInput,
   type Filter,
   buildCountSql,
@@ -201,5 +203,93 @@ describe('buildUpdateSql', () => {
     expect(() =>
       buildUpdateSql({ schema: 'public', table: 'users', set: {}, pkValues: { id: 1 } }),
     ).toThrow(/nothing to update/);
+  });
+});
+
+describe('deterministic paging (B5/F17) and bounded lookups (A7)', () => {
+  const base = {
+    schema: 'public',
+    table: 't',
+    allColumns: ['id', 'a'],
+    hiddenColumns: new Set<string>(),
+    sort: [] as import('./table-query').TableSort[],
+    filters: [],
+    page: 1,
+    pageSize: 10,
+  };
+
+  it('orders by the primary key when nothing is sorted', async () => {
+    const { buildDataSql } = await import('./table-query');
+    expect(buildDataSql({ ...base, primaryKey: ['id'] }).sql).toContain('ORDER BY "id" ASC\nLIMIT 10 OFFSET 10');
+  });
+
+  it('adds the primary key as a tie-breaker after the user sort', async () => {
+    const { buildDataSql } = await import('./table-query');
+    const sql = buildDataSql({ ...base, sort: [{ column: 'a', direction: 'desc' }], primaryKey: ['id'] }).sql;
+    expect(sql).toContain('ORDER BY "a" DESC, "id" ASC');
+  });
+
+  it('falls back to ctid and supports unpaged export', async () => {
+    const { buildDataSql } = await import('./table-query');
+    const sql = buildDataSql({ ...base, ctidFallback: true, unpaged: true }).sql;
+    expect(sql).toContain('ORDER BY ctid');
+    expect(sql).not.toContain('LIMIT');
+  });
+
+  it('escapes LIKE wildcards and always samples', async () => {
+    const { buildDistinctValuesSql } = await import('./table-query');
+    const built = buildDistinctValuesSql('s', 't', 'c', '50%_off');
+    expect(built.params).toEqual(['50\\%\\_off%']);
+    expect(built.sql).toContain('LIMIT 5000');
+  });
+
+  it('filters a loaded sample locally, prefix matches first', async () => {
+    const { filterSuggestions } = await import('./table-query');
+    expect(filterSuggestions(['banana', 'apple', 'pineapple'], 'app')).toEqual(['apple', 'pineapple']);
+  });
+});
+
+describe('F6 filter operators', () => {
+  const base = {
+    schema: 'public',
+    table: 't',
+    allColumns: ['id', 'name'],
+    hiddenColumns: new Set<string>(),
+    sort: [],
+    page: 0,
+    pageSize: 10,
+  };
+  it('builds IN / NOT IN / BETWEEN / NOT ILIKE with bind params', () => {
+    const { sql, params } = buildDataSql({
+      ...base,
+      filters: [
+        { id: 'a', column: 'id', op: 'IN', value: '1, 2,"3,4"' },
+        { id: 'b', column: 'id', op: 'BETWEEN', value: '5 and 9' },
+        { id: 'c', column: 'name', op: 'NOT ILIKE', value: 'x' },
+        { id: 'd', column: 'name', op: 'NOT IN', value: "'a'" },
+      ],
+    });
+    expect(sql).toContain('"id" IN ($1, $2, $3)');
+    expect(sql).toContain('"id" BETWEEN $4 AND $5');
+    expect(sql).toContain('"name"::text NOT ILIKE $6');
+    expect(sql).toContain('"name" NOT IN ($7)');
+    expect(params).toEqual(['1', '2', '3,4', '5', '9', '%x%', 'a']);
+  });
+
+  it('skips disabled filters and incomplete BETWEEN', () => {
+    const { sql } = buildDataSql({
+      ...base,
+      filters: [
+        { id: 'a', column: 'id', op: '=', value: '1', enabled: false },
+        { id: 'b', column: 'id', op: 'BETWEEN', value: '5' },
+      ],
+    });
+    expect(sql).not.toContain('WHERE');
+  });
+
+  it('splits lists and between bounds', () => {
+    expect(splitFilterList("a, 'b,c', \"d\"")).toEqual(['a', 'b,c', 'd']);
+    expect(betweenBounds('1, 2')).toEqual(['1', '2']);
+    expect(betweenBounds('1')).toBeNull();
   });
 });

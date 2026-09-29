@@ -1,14 +1,29 @@
-import type { ConnectionConfig, ConnectionEngine, SavedConnection, Settings } from '@shared/protocol';
+import type {
+  ConnectionConfig,
+  ConnectionEngine,
+  SavedConnection,
+  Settings,
+} from '@shared/protocol';
+import { ConnectionTls } from '@shared/protocol';
 import type Database from 'better-sqlite3';
-import { safeStorage } from 'electron';
+import { dialog, safeStorage } from 'electron';
 import { getDb } from './db';
 import { logger } from './logger';
 import {
+  canReuseStoredPassword,
+  hasPlaintextSecrets,
+  isWeakSecretBackend,
   planSecretsMigration,
   redactSettingsWithPresence,
 } from './vault-secrets-plan';
 
-export { planSecretsMigration, redactSettingsWithPresence } from './vault-secrets-plan';
+export {
+  canReuseStoredPassword,
+  hasPlaintextSecrets,
+  isWeakSecretBackend,
+  planSecretsMigration,
+  redactSettingsWithPresence,
+} from './vault-secrets-plan';
 
 /**
  * Connection + secrets vault — backed by SQLite + Electron `safeStorage`.
@@ -29,8 +44,90 @@ function assertEncryptionAvailable(): void {
   }
 }
 
+/**
+ * The selected safeStorage backend. Linux only — other platforms always
+ * use the OS keychain. `basic_text` means Chromium found no keyring and
+ * encrypts with a hardcoded key (C27).
+ */
+export function secretStorageBackend(): string | null {
+  if (process.platform !== 'linux') return null;
+  try {
+    return safeStorage.getSelectedStorageBackend();
+  } catch {
+    return null;
+  }
+}
+
+export function isSecretStorageWeak(): boolean {
+  return isWeakSecretBackend(process.platform, secretStorageBackend());
+}
+
+/**
+ * Set at startup when the Linux keyring is missing and the user declined
+ * weak storage: new secrets are refused instead of being "encrypted" with
+ * a key every local program knows. Existing ciphertext still decrypts.
+ */
+let weakStorageRefused = false;
+
+export function setWeakSecretStorageRefused(refused: boolean): void {
+  weakStorageRefused = refused;
+}
+
+/** Settings key remembering that the user accepted weak Linux storage. */
+const WEAK_STORAGE_ACCEPTED_KEY = 'weakSecretStorageAccepted';
+
+/**
+ * Startup check for C27: when Linux has no keyring, ask once whether to
+ * store secrets with Chromium's fixed fallback key or refuse to store them.
+ * The choice is remembered; "Don't store secrets" is re-asked next launch
+ * so installing a keyring later just works.
+ */
+export async function confirmWeakSecretStorage(d: Database.Database = getDb()): Promise<void> {
+  if (!isSecretStorageWeak()) return;
+  const backend = secretStorageBackend();
+  logger.warn(
+    `[plasma] vault: safeStorage backend is "${backend}" — no system keyring; secrets would use a fixed key`,
+  );
+  const accepted = d
+    .prepare<[string], { value: string }>('SELECT value FROM settings WHERE key = ?')
+    .get(WEAK_STORAGE_ACCEPTED_KEY);
+  if (accepted?.value === 'true') return;
+  // Headless E2E runs have no keyring and nobody to answer a dialog.
+  if (process.env.PLASMA_E2E === '1') return;
+
+  const { response } = await dialog.showMessageBox({
+    type: 'warning',
+    title: 'No system keyring found',
+    message: 'Plasma cannot reach GNOME Keyring or KWallet.',
+    detail:
+      'Without a keyring, saved database passwords, SSH keys and API keys are only obscured ' +
+      'with a key that every program on this computer knows.\n\n' +
+      'Install and unlock a keyring (for example gnome-keyring), then restart Plasma. ' +
+      'Or continue and store secrets with weak protection.',
+    buttons: ["Don't store secrets", 'Store with weak protection'],
+    defaultId: 0,
+    cancelId: 0,
+    noLink: true,
+  });
+  if (response === 1) {
+    d.prepare(
+      `INSERT INTO settings (key, value) VALUES (?, 'true')
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+    ).run(WEAK_STORAGE_ACCEPTED_KEY);
+    setWeakSecretStorageRefused(false);
+  } else {
+    setWeakSecretStorageRefused(true);
+  }
+}
+
 function encryptString(plaintext: string): Buffer {
   assertEncryptionAvailable();
+  if (weakStorageRefused && isSecretStorageWeak()) {
+    throw new Error(
+      'No system keyring (GNOME Keyring / KWallet) is available, so Plasma will not store ' +
+        'passwords or keys. Install and unlock a keyring, then restart Plasma.',
+    );
+  }
   return safeStorage.encryptString(plaintext);
 }
 
@@ -51,6 +148,8 @@ interface ConnectionRow {
   user: string;
   ssl: number;
   read_only: number;
+  /** C9: TLS mode + file paths (never PEM contents). Null for older rows. */
+  tls_json: string | null;
   password_ciphertext: Buffer;
   created_at: number;
   updated_at: number;
@@ -100,7 +199,9 @@ export function putSecret(key: SecretKey, plaintext: string, d: Database.Databas
 }
 
 export function getSecret(key: SecretKey, d: Database.Database = getDb()): string | null {
-  const row = d.prepare<[string], SecretRow>('SELECT key, ciphertext, updated_at FROM secrets WHERE key = ?').get(key);
+  const row = d
+    .prepare<[string], SecretRow>('SELECT key, ciphertext, updated_at FROM secrets WHERE key = ?')
+    .get(key);
   if (!row) return null;
   try {
     return decryptString(row.ciphertext);
@@ -111,7 +212,9 @@ export function getSecret(key: SecretKey, d: Database.Database = getDb()): strin
 }
 
 export function hasSecret(key: SecretKey, d: Database.Database = getDb()): boolean {
-  const row = d.prepare<[string], { key: string }>('SELECT key FROM secrets WHERE key = ?').get(key);
+  const row = d
+    .prepare<[string], { key: string }>('SELECT key FROM secrets WHERE key = ?')
+    .get(key);
   return Boolean(row);
 }
 
@@ -120,7 +223,7 @@ export function deleteSecret(key: SecretKey, d: Database.Database = getDb()): vo
 }
 
 export function deleteSshSecrets(connectionId: string, d: Database.Database = getDb()): void {
-  d.prepare("DELETE FROM secrets WHERE key LIKE ?").run(`ssh:${connectionId}:%`);
+  d.prepare('DELETE FROM secrets WHERE key LIKE ?').run(`ssh:${connectionId}:%`);
 }
 
 export function getApiKey(d: Database.Database = getDb()): string {
@@ -176,7 +279,10 @@ export function setSshSecrets(
  * Strip secret material from a Settings object for renderer/IPC responses.
  * Presence flags tell the UI a value is stored without exposing it.
  */
-export function redactSettingsForRenderer(settings: Settings, d: Database.Database = getDb()): Settings {
+export function redactSettingsForRenderer(
+  settings: Settings,
+  d: Database.Database = getDb(),
+): Settings {
   return redactSettingsWithPresence(settings, (key) => hasSecret(key, d));
 }
 
@@ -217,6 +323,32 @@ export function migratePlaintextSettingsSecrets(d: Database.Database): void {
   }
 }
 
+/**
+ * Re-run the plaintext → vault migration on installs already at schema v3
+ * whose settings table picked up plaintext secrets afterwards (older
+ * builds wrote SettingsSet patches verbatim). Checkpoints WAL + vacuums so
+ * the old plaintext pages are gone. Returns true when anything moved.
+ */
+export function migrateLingeringPlaintextSecrets(d: Database.Database = getDb()): boolean {
+  const rows = d
+    .prepare<[], { key: string; value: string }>('SELECT key, value FROM settings')
+    .all();
+  const raw: Record<string, unknown> = {};
+  for (const row of rows) {
+    try {
+      raw[row.key] = JSON.parse(row.value);
+    } catch {
+      raw[row.key] = row.value;
+    }
+  }
+  if (!hasPlaintextSecrets(raw)) return false;
+  d.transaction(() => migratePlaintextSettingsSecrets(d))();
+  d.pragma('wal_checkpoint(TRUNCATE)');
+  d.exec('VACUUM');
+  logger.info('[plasma] vault: moved lingering plaintext secrets out of settings');
+  return true;
+}
+
 // ─── Public connection vault API ─────────────────────────────────────
 
 export function listConnections(): SavedConnection[] {
@@ -233,7 +365,26 @@ export function listConnections(): SavedConnection[] {
     user: r.user,
     ssl: Boolean(r.ssl),
     readOnly: Boolean(r.read_only),
+    ...tlsFromRow(r),
   }));
+}
+
+/** C9: persist the TLS mode and file paths; key/cert contents stay on disk. */
+function tlsToJson(config: ConnectionConfig): string | null {
+  const tls = config.tls;
+  if (!tls) return null;
+  const { mode, caFile, certFile, keyFile, servername } = tls;
+  return JSON.stringify({ mode, caFile, certFile, keyFile, servername });
+}
+
+function tlsFromRow(row: ConnectionRow): { tls?: ConnectionConfig['tls'] } {
+  if (!row.tls_json) return {};
+  try {
+    const parsed = ConnectionTls.safeParse(JSON.parse(row.tls_json));
+    return parsed.success ? { tls: parsed.data } : {};
+  } catch {
+    return {};
+  }
 }
 
 export function saveConnection(config: ConnectionConfig): void {
@@ -253,6 +404,7 @@ export function saveConnection(config: ConnectionConfig): void {
         `UPDATE connections
             SET name = @name, engine = @engine, host = @host, port = @port, database = @database,
                 user = @user, ssl = @ssl, password_ciphertext = @password_ciphertext,
+                read_only = @read_only, tls_json = @tls_json,
                 updated_at = @updated_at
           WHERE id = @id`,
       )
@@ -265,6 +417,8 @@ export function saveConnection(config: ConnectionConfig): void {
         database: config.database,
         user: config.user,
         ssl: config.ssl ? 1 : 0,
+        read_only: config.readOnly ? 1 : 0,
+        tls_json: tlsToJson(config),
         password_ciphertext: ciphertext,
         updated_at: now,
       });
@@ -272,9 +426,9 @@ export function saveConnection(config: ConnectionConfig): void {
     getDb()
       .prepare(
         `INSERT INTO connections
-           (id, name, engine, host, port, database, user, ssl, password_ciphertext, created_at, updated_at)
+           (id, name, engine, host, port, database, user, ssl, read_only, tls_json, password_ciphertext, created_at, updated_at)
            VALUES
-           (@id, @name, @engine, @host, @port, @database, @user, @ssl, @password_ciphertext, @created_at, @updated_at)`,
+           (@id, @name, @engine, @host, @port, @database, @user, @ssl, @read_only, @tls_json, @password_ciphertext, @created_at, @updated_at)`,
       )
       .run({
         id: config.id,
@@ -285,6 +439,8 @@ export function saveConnection(config: ConnectionConfig): void {
         database: config.database,
         user: config.user,
         ssl: config.ssl ? 1 : 0,
+        read_only: config.readOnly ? 1 : 0,
+        tls_json: tlsToJson(config),
         password_ciphertext: ciphertext,
         created_at: now,
         updated_at: now,
@@ -300,16 +456,21 @@ export function deleteConnection(id: string): void {
 }
 
 /**
- * Read a full connection including decrypted password. Used only by
- * the `vault.connectById` IPC handler — the plaintext password is
- * immediately forwarded to the worker and never returned to the renderer
- * from SettingsGet. (VaultGetConfig still returns it for the edit form.)
+ * Read a full connection including decrypted password. Main-only: the
+ * plaintext is forwarded to the worker and never returned to the
+ * renderer (VaultGetConfig blanks it — see `getConnectionForEdit`).
  */
 export function getFullConnection(id: string): ConnectionConfig | null {
-  const row = getDb()
-    .prepare<[string], ConnectionRow>('SELECT * FROM connections WHERE id = ?')
-    .get(id);
+  const row = readConnectionRow(id);
   if (!row) return null;
+  return rowToConfig(row, decryptString(row.password_ciphertext));
+}
+
+function readConnectionRow(id: string): ConnectionRow | undefined {
+  return getDb().prepare<[string], ConnectionRow>('SELECT * FROM connections WHERE id = ?').get(id);
+}
+
+function rowToConfig(row: ConnectionRow, password: string): ConnectionConfig {
   return {
     id: row.id,
     name: row.name,
@@ -320,6 +481,31 @@ export function getFullConnection(id: string): ConnectionConfig | null {
     user: row.user,
     ssl: Boolean(row.ssl),
     readOnly: Boolean(row.read_only),
-    password: decryptString(row.password_ciphertext),
+    ...tlsFromRow(row),
+    password,
   };
+}
+
+/** Saved config for the renderer's Edit form — password always blank (C17). */
+export function getConnectionForEdit(id: string): ConnectionConfig | null {
+  const row = readConnectionRow(id);
+  return row ? rowToConfig(row, '') : null;
+}
+
+/**
+ * The renderer sends a blank password to mean "keep the saved one" (C17).
+ * Fill it from the vault when the config still targets the same server
+ * and login; otherwise return the config unchanged.
+ */
+export function withStoredPassword<T extends ConnectionConfig>(config: T): T {
+  if (config.password) return config;
+  let saved: ConnectionConfig | null = null;
+  try {
+    saved = getFullConnection(config.id);
+  } catch (err) {
+    logger.error('[plasma] vault: could not read saved password', config.id, err);
+    return config;
+  }
+  if (!saved || !canReuseStoredPassword(saved, config)) return config;
+  return { ...config, password: saved.password };
 }

@@ -8,6 +8,7 @@ import {
 } from '@/features/right-rail/SnippetVarsDialog';
 import { cn } from '@/lib/cn';
 import { useActiveTab, useSession } from '@/stores/session';
+import { savedQueryFolders } from '@/stores/session-saved-queries';
 import type { SavedQuery } from '@shared/protocol';
 import {
   BookmarkPlus,
@@ -16,19 +17,31 @@ import {
   File,
   FilePlus2,
   Folder,
+  FolderInput,
+  FolderMinus,
+  FolderPlus,
+  Pencil,
   Plus,
+  Save,
   SlidersHorizontal,
+  Star,
   Table2,
   Trash2,
 } from 'lucide-react';
 import { useState } from 'react';
+import { type ContextMenuState, type MenuEntry, SidebarContextMenu } from './SidebarContextMenu';
+import { fuzzyFilter } from './fuzzy';
 import { SidebarEmpty, SidebarSearch, SidebarSearchRow, sidebarRowClass } from './sidebar-parts';
+
+/** Inline edit in progress: rename a query, or name a new folder for it. */
+type Editing = { id: string; mode: 'rename' | 'folder'; draft: string } | null;
 
 /**
  * Sidebar "Queries" mode — saved SQL snippets and saved table views for
- * the active connection. Grouped into SQL / Table views sections, with
- * a save-current-tab action at the top (TablePlus keeps its query
- * library in the left sidebar next to Items and History).
+ * the active connection (PC6). Grouped as Favourites, user folders and
+ * Ungrouped; each row has a right-click menu to rename, move to a
+ * folder, favourite, update from the current tab, or delete. A tab that
+ * was opened from (or saved as) a query can be written back in place.
  */
 export function SavedQueriesList() {
   const tab = useActiveTab();
@@ -37,28 +50,32 @@ export function SavedQueriesList() {
   const saveCurrentTab = useSession((s) => s.saveCurrentTab);
   const deleteSavedQuery = useSession((s) => s.deleteSavedQuery);
   const openSavedQuery = useSession((s) => s.openSavedQuery);
+  const updateSavedQuery = useSession((s) => s.updateSavedQuery);
+  const updateSavedQueryFromTab = useSession((s) => s.updateSavedQueryFromTab);
   const addTab = useSession((s) => s.addTab);
   const setSql = useSession((s) => s.setSql);
-  const runQuery = useSession((s) => s.runQuery);
+  const renameActiveTab = useSession((s) => s.renameActiveTab);
 
   const [naming, setNaming] = useState(false);
   const [draft, setDraft] = useState('');
   const [filter, setFilter] = useState('');
-  const [varPrompt, setVarPrompt] = useState<{ sql: string; vars: string[] } | null>(null);
+  const [varPrompt, setVarPrompt] = useState<{ sql: string; vars: string[]; name: string } | null>(
+    null,
+  );
+  const [menu, setMenu] = useState<ContextMenuState | null>(null);
+  const [editing, setEditing] = useState<Editing>(null);
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
 
-  const list = (connId && savedMap?.[connId]) || [];
-  const q = filter.trim().toLowerCase();
-  const visible = q
-    ? list.filter(
-        (s) =>
-          s.name.toLowerCase().includes(q) ||
-          (s.kind === 'sql' ? s.sql : `${s.tableSchema}.${s.tableName}`).toLowerCase().includes(q),
-      )
-    : list;
-  const sqlQueries = visible.filter((s) => s.kind === 'sql');
-  const tableViews = visible.filter((s) => s.kind === 'table');
+  const list: SavedQuery[] = (connId && savedMap?.[connId]) || [];
+  const visible = fuzzyFilter(list, filter, (s) =>
+    s.kind === 'sql' ? `${s.name} ${s.sql}` : `${s.name} ${s.tableSchema}.${s.tableName}`,
+  );
+  const folders = savedQueryFolders(list);
+  const favourites = visible.filter((s) => s.favorite);
+  const ungrouped = visible.filter((s) => !s.folder && !s.favorite);
 
   const canSave = !!tab && !!connId && (tab.kind === 'table' ? true : tab.sql.trim().length > 0);
+  const linked = tab?.savedQueryId ? list.find((q) => q.id === tab.savedQueryId) : undefined;
 
   const defaultName = (() => {
     if (!tab) return '';
@@ -91,16 +108,115 @@ export function SavedQueriesList() {
     setDraft('');
   };
 
+  // PC7: with or without :vars, opening only opens — never runs.
   const open = (s: SavedQuery) => {
     if (s.kind === 'sql') {
       const vars = extractSnippetVars(s.sql);
       if (vars.length > 0) {
-        setVarPrompt({ sql: s.sql, vars });
+        setVarPrompt({ sql: s.sql, vars, name: s.name });
         return;
       }
     }
     openSavedQuery(s.id);
   };
+
+  const commitEdit = () => {
+    if (!editing) return;
+    const value = editing.draft.trim();
+    if (value) {
+      void updateSavedQuery(
+        editing.id,
+        editing.mode === 'rename' ? { name: value } : { folder: value },
+      );
+    }
+    setEditing(null);
+  };
+
+  const menuFor = (q: SavedQuery): MenuEntry[] => {
+    const entries: MenuEntry[] = [
+      { type: 'item', label: 'Open', icon: <File />, onSelect: () => open(q) },
+      {
+        type: 'item',
+        label: 'Rename…',
+        icon: <Pencil />,
+        onSelect: () => setEditing({ id: q.id, mode: 'rename', draft: q.name }),
+      },
+      {
+        type: 'item',
+        label: 'Update with current tab',
+        icon: <Save />,
+        disabled: !canSave || (tab?.kind === 'table') !== (q.kind === 'table'),
+        onSelect: () => void updateSavedQueryFromTab(q.id),
+      },
+      {
+        type: 'item',
+        label: q.favorite ? 'Remove from favourites' : 'Add to favourites',
+        icon: <Star />,
+        onSelect: () => void updateSavedQuery(q.id, { favorite: !q.favorite }),
+      },
+      { type: 'separator' },
+      { type: 'label', label: 'Move to folder' },
+      ...folders
+        .filter((f) => f !== q.folder)
+        .map(
+          (f): MenuEntry => ({
+            type: 'item',
+            label: f,
+            icon: <FolderInput />,
+            onSelect: () => void updateSavedQuery(q.id, { folder: f }),
+          }),
+        ),
+      {
+        type: 'item',
+        label: 'New folder…',
+        icon: <FolderPlus />,
+        onSelect: () => setEditing({ id: q.id, mode: 'folder', draft: '' }),
+      },
+    ];
+    if (q.folder) {
+      entries.push({
+        type: 'item',
+        label: 'Remove from folder',
+        icon: <FolderMinus />,
+        onSelect: () => void updateSavedQuery(q.id, { folder: null }),
+      });
+    }
+    entries.push(
+      { type: 'separator' },
+      {
+        type: 'item',
+        label: 'Delete…',
+        icon: <Trash2 />,
+        destructive: true,
+        onSelect: () => setConfirmDelete(q.id),
+      },
+    );
+    return entries;
+  };
+
+  const renderRow = (s: SavedQuery) => (
+    <SavedRow
+      key={s.id}
+      query={s}
+      editing={editing?.id === s.id ? editing : null}
+      confirming={confirmDelete === s.id}
+      linked={linked?.id === s.id}
+      onOpen={() => open(s)}
+      onEditChange={(d) => setEditing((e) => (e ? { ...e, draft: d } : e))}
+      onEditCommit={commitEdit}
+      onEditCancel={() => setEditing(null)}
+      onAskDelete={() => setConfirmDelete(s.id)}
+      onDelete={() => {
+        setConfirmDelete(null);
+        void deleteSavedQuery(s.id);
+      }}
+      onKeep={() => setConfirmDelete(null)}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        setMenu({ x: e.clientX, y: e.clientY, entries: menuFor(s) });
+      }}
+    />
+  );
 
   return (
     <div className="flex h-full flex-col">
@@ -114,7 +230,9 @@ export function SavedQueriesList() {
         <QueryActionsMenu
           align="end"
           canSave={canSave}
+          linkedName={linked?.name}
           onSave={startNaming}
+          onUpdate={() => linked && void updateSavedQueryFromTab(linked.id)}
           onNewQuery={addTab}
           trigger={
             <IconButton variant="plain" label="Query options" className="[&_svg]:h-4 [&_svg]:w-4">
@@ -159,28 +277,23 @@ export function SavedQueriesList() {
           <SidebarEmpty title={`nothing matches "${filter}"`} />
         ) : (
           <>
-            {sqlQueries.length > 0 && (
-              <Section label="SQL queries" count={sqlQueries.length}>
-                {sqlQueries.map((s) => (
-                  <SavedRow
-                    key={s.id}
-                    query={s}
-                    onOpen={() => open(s)}
-                    onDelete={() => void deleteSavedQuery(s.id)}
-                  />
-                ))}
+            {favourites.length > 0 && (
+              <Section label="Favourites" count={favourites.length} favourite>
+                {favourites.map(renderRow)}
               </Section>
             )}
-            {tableViews.length > 0 && (
-              <Section label="Table views" count={tableViews.length}>
-                {tableViews.map((s) => (
-                  <SavedRow
-                    key={s.id}
-                    query={s}
-                    onOpen={() => open(s)}
-                    onDelete={() => void deleteSavedQuery(s.id)}
-                  />
-                ))}
+            {folders.map((f) => {
+              const items = visible.filter((s) => s.folder === f && !s.favorite);
+              if (items.length === 0) return null;
+              return (
+                <Section key={`folder:${f}`} label={f} count={items.length}>
+                  {items.map(renderRow)}
+                </Section>
+              );
+            })}
+            {ungrouped.length > 0 && (
+              <Section label="Ungrouped" count={ungrouped.length}>
+                {ungrouped.map(renderRow)}
               </Section>
             )}
           </>
@@ -201,7 +314,9 @@ export function SavedQueriesList() {
         <QueryActionsMenu
           align="start"
           canSave={canSave}
+          linkedName={linked?.name}
           onSave={startNaming}
+          onUpdate={() => linked && void updateSavedQueryFromTab(linked.id)}
           onNewQuery={addTab}
           trigger={
             <IconButton variant="plain" label="More query actions" className="w-5">
@@ -211,6 +326,8 @@ export function SavedQueriesList() {
         />
       </div>
 
+      <SidebarContextMenu state={menu} onClose={() => setMenu(null)} />
+
       <SnippetVarsDialog
         open={Boolean(varPrompt)}
         varNames={varPrompt?.vars ?? []}
@@ -218,13 +335,11 @@ export function SavedQueriesList() {
         onConfirm={(values) => {
           if (!varPrompt) return;
           const filled = applySnippetVars(varPrompt.sql, values);
-          // Open as a fresh SQL tab and run it; the saved snippet stays
-          // parametric for next time.
+          // Open as a fresh SQL tab (not run — same as snippets without
+          // vars); the saved snippet stays parametric for next time.
           addTab();
-          queueMicrotask(() => {
-            setSql(filled);
-            void runQuery();
-          });
+          setSql(filled);
+          renameActiveTab(varPrompt.name);
           setVarPrompt(null);
         }}
       />
@@ -232,18 +347,23 @@ export function SavedQueriesList() {
   );
 }
 
-/** Save / new-query actions — opened from the sliders button and the bottom "⌄". */
+/** Save / update / new-query actions — opened from the sliders button and the bottom "⌄". */
 function QueryActionsMenu({
   trigger,
   align,
   canSave,
+  linkedName,
   onSave,
+  onUpdate,
   onNewQuery,
 }: {
   trigger: React.ReactNode;
   align: 'start' | 'end';
   canSave: boolean;
+  /** Name of the saved query the active tab came from, if any. */
+  linkedName?: string;
   onSave: () => void;
+  onUpdate: () => void;
   onNewQuery: () => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -254,10 +374,18 @@ function QueryActionsMenu({
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>{trigger}</PopoverTrigger>
-      <PopoverContent align={align} sideOffset={4} className="w-[220px] p-1" role="menu">
+      <PopoverContent align={align} sideOffset={4} className="w-[240px] p-1" role="menu">
+        {linkedName && (
+          <MenuItem
+            icon={<Save />}
+            label={`Update “${linkedName}”`}
+            disabled={!canSave}
+            onClick={() => run(onUpdate)}
+          />
+        )}
         <MenuItem
           icon={<BookmarkPlus />}
-          label="Save current tab…"
+          label={linkedName ? 'Save as new query…' : 'Save current tab…'}
           disabled={!canSave}
           onClick={() => run(onSave)}
         />
@@ -271,10 +399,12 @@ function QueryActionsMenu({
 function Section({
   label,
   count,
+  favourite,
   children,
 }: {
   label: string;
   count: number;
+  favourite?: boolean;
   children: React.ReactNode;
 }) {
   const [open, setOpen] = useState(true);
@@ -292,7 +422,11 @@ function Section({
             open && 'rotate-90',
           )}
         />
-        <Folder className="h-4 w-4 shrink-0 fill-[var(--icon-folder)] text-[var(--icon-folder)]" />
+        {favourite ? (
+          <Star className="h-4 w-4 shrink-0 fill-[#d9b44a] text-[#d9b44a]" />
+        ) : (
+          <Folder className="h-4 w-4 shrink-0 fill-[var(--icon-folder)] text-[var(--icon-folder)]" />
+        )}
         <span className="flex-1 truncate">{label}</span>
         <span className="text-[11px] tabular-nums text-[var(--wb-text-3)]">{count}</span>
       </button>
@@ -303,22 +437,65 @@ function Section({
 
 function SavedRow({
   query,
+  editing,
+  confirming,
+  linked,
   onOpen,
+  onEditChange,
+  onEditCommit,
+  onEditCancel,
+  onAskDelete,
   onDelete,
+  onKeep,
+  onContextMenu,
 }: {
   query: SavedQuery;
+  editing: NonNullable<Editing> | null;
+  confirming: boolean;
+  linked: boolean;
   onOpen: () => void;
+  onEditChange: (draft: string) => void;
+  onEditCommit: () => void;
+  onEditCancel: () => void;
+  onAskDelete: () => void;
   onDelete: () => void;
+  onKeep: () => void;
+  onContextMenu: (e: React.MouseEvent) => void;
 }) {
-  const [confirming, setConfirming] = useState(false);
   const isTable = query.kind === 'table';
   const Icon = isTable ? Table2 : File;
   const detail = isTable
     ? `${query.tableSchema}.${query.tableName}`
     : query.sql.replace(/\s+/g, ' ').trim().slice(0, 80) || '(empty)';
 
+  if (editing) {
+    return (
+      <div className={cn('gap-1', sidebarRowClass(true))}>
+        <Icon className="ml-1 h-4 w-4 shrink-0 text-[var(--wb-text-2)]" />
+        <input
+          // biome-ignore lint/a11y/noAutofocus: inline edit opens on explicit user action
+          autoFocus
+          type="text"
+          value={editing.draft}
+          onChange={(e) => onEditChange(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') onEditCommit();
+            else if (e.key === 'Escape') onEditCancel();
+          }}
+          onBlur={onEditCommit}
+          placeholder={editing.mode === 'rename' ? 'Query name…' : 'Folder name…'}
+          aria-label={editing.mode === 'rename' ? `Rename ${query.name}` : 'New folder name'}
+          className="h-5 min-w-0 flex-1 rounded-[4px] border-0 bg-[var(--wb-field)] px-1.5 text-[13px] text-[var(--wb-text)] outline-none shadow-[0_0_0_2px_color-mix(in_srgb,var(--wb-accent)_55%,transparent)]"
+        />
+      </div>
+    );
+  }
+
   return (
-    <div className={cn('group/saved gap-1', sidebarRowClass(confirming))}>
+    <div
+      className={cn('group/saved gap-1', sidebarRowClass(confirming))}
+      onContextMenu={onContextMenu}
+    >
       <button
         type="button"
         onClick={onOpen}
@@ -327,18 +504,20 @@ function SavedRow({
       >
         <Icon className="h-4 w-4 shrink-0 text-[var(--wb-text-2)]" />
         <span className="min-w-0 flex-1 truncate">{query.name}</span>
+        {linked && (
+          <span
+            className="h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--wb-text-3)]"
+            title="Open in the current tab"
+            aria-label="Open in the current tab"
+          />
+        )}
       </button>
       {confirming ? (
         <div className="flex shrink-0 items-center gap-0.5 pr-1">
           <Button variant="destructive" size="xs" className="h-5 px-1.5" onClick={onDelete}>
             Delete
           </Button>
-          <Button
-            variant="ghost"
-            size="xs"
-            className="h-5 px-1.5"
-            onClick={() => setConfirming(false)}
-          >
+          <Button variant="ghost" size="xs" className="h-5 px-1.5" onClick={onKeep}>
             Keep
           </Button>
         </div>
@@ -347,7 +526,7 @@ function SavedRow({
           variant="plain"
           label={`Delete ${query.name}`}
           title="Delete"
-          onClick={() => setConfirming(true)}
+          onClick={onAskDelete}
           className="mr-0.5 h-5 w-5 opacity-0 transition-opacity group-hover/saved:opacity-100 focus-visible:opacity-100"
         >
           <Trash2 />

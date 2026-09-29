@@ -5,6 +5,7 @@ import { cn } from '@/lib/cn';
 import { kbd } from '@/lib/platform';
 import { useReconnect } from '@/stores/reconnect';
 import { useActiveTab, useSession } from '@/stores/session';
+import { summarizeEdits } from '@/stores/session-pending-edits';
 import type { ConnectionEngine, SavedConnection } from '@shared/protocol';
 import {
   Activity,
@@ -26,8 +27,9 @@ import {
   Undo2,
   X,
 } from 'lucide-react';
-import { forwardRef, useEffect, useState } from 'react';
+import { forwardRef, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { BrandMark } from './BrandMark';
+import { LiveAnnouncer } from './LiveAnnouncer';
 import { UpdateBadge } from './UpdateBadge';
 import { WindowControls } from './WindowControls';
 
@@ -49,17 +51,31 @@ const ENGINE_LABEL: Record<ConnectionEngine, string> = {
 const POPOVER =
   'rounded-[10px] border-[var(--wb-toolbar-group-edge)] bg-[var(--wb-toolbar-group)] text-[13px] text-[var(--wb-text)] shadow-[0_10px_30px_rgb(0_0_0/0.35)]';
 
-/** Hover row in a switcher popover (macOS menu highlight). */
+/** Hover row in a switcher popover (macOS menu highlight, AA white text). */
 const MENU_ROW =
-  'flex w-full items-center gap-2 rounded-[5px] px-2 py-1 text-[13px] text-[var(--wb-text)] transition-none hover:bg-[var(--wb-accent)] hover:text-white';
+  'flex w-full items-center gap-2 rounded-[5px] px-2 py-1 text-[13px] text-[var(--wb-text)] transition-none hover:bg-[var(--wb-accent-fill)] hover:text-white focus-visible:bg-[var(--wb-accent-fill)] focus-visible:text-white focus-visible:outline-none';
 
-/** Environment tag → capsule fill (TablePlus colours the whole capsule). */
+/** Environment tag → chip / connection-icon fill. */
 const TAG_FILL: Record<string, string> = {
-  local: 'var(--wb-connected)',
+  local: 'var(--status-local)',
   dev: 'var(--status-dev)',
   staging: 'var(--status-staging)',
   prod: 'var(--status-prod)',
 };
+
+const TAG_LABEL: Record<string, string> = {
+  local: 'Local',
+  dev: 'Dev',
+  staging: 'Staging',
+  prod: 'PROD',
+};
+
+/**
+ * How many low-priority capsule segments to hide when the capsule is too
+ * narrow: 1 = transport (TLS/SSH), 2 = + server version, 3 = + schema.
+ * Only after all three are gone do the remaining segments truncate (F8).
+ */
+const MAX_CAPSULE_DROP = 3;
 
 /**
  * Main toolbar — TablePlus anatomy on glass:
@@ -99,6 +115,7 @@ export function TopBar() {
       <RightClusters connected={connected} />
 
       {!isMac && <WindowControls />}
+      <LiveAnnouncer />
     </header>
   );
 }
@@ -135,15 +152,15 @@ function ChangesCluster() {
   const busy = useSession((s) => s.pendingEditsBusy);
   const commit = useSession((s) => s.commitPendingEdits);
   const revert = useSession((s) => s.revertPendingEdits);
-  const [error, setError] = useState<string | null>(null);
+  // Commit failures live in the store (the grid points at the failing cell).
+  const error = useSession((s) => s.pendingEditsError?.message ?? null);
   const has = edits.length > 0;
 
   const onCommit = async () => {
-    setError(null);
     try {
       await commit();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+    } catch {
+      // surfaced via pendingEditsError (grid banner + this badge)
     }
   };
 
@@ -152,10 +169,7 @@ function ChangesCluster() {
       <ToolbarButton
         label="Discard pending changes"
         disabled={!has || busy}
-        onClick={() => {
-          setError(null);
-          void revert();
-        }}
+        onClick={() => void revert()}
       >
         <X />
       </ToolbarButton>
@@ -171,35 +185,47 @@ function ChangesCluster() {
           className={cn(POPOVER, 'w-[560px] max-w-[90vw] overflow-hidden p-0')}
         >
           <div className="border-b border-[var(--wb-separator)] px-3 py-2 text-[12px] text-[var(--wb-text-2)]">
-            {edits.length} pending UPDATE{edits.length === 1 ? '' : 's'} — commits as one
-            transaction
+            {summarizeEdits(edits)} — commits as one transaction ({kbd('S')})
           </div>
+          {error && (
+            <div
+              className="border-b border-[var(--wb-separator)] px-3 py-2 text-[12px] text-destructive"
+              role="alert"
+            >
+              Commit failed: {error}
+            </div>
+          )}
           <PendingEditsTable edits={edits} />
         </PopoverContent>
       </Popover>
       <ToolbarButton
         label={has ? `Commit ${edits.length} change${edits.length === 1 ? '' : 's'}` : 'Commit'}
+        title={
+          error
+            ? `Commit failed: ${error}`
+            : has
+              ? `Commit ${edits.length} change${edits.length === 1 ? '' : 's'} (${kbd('S')})`
+              : 'Commit'
+        }
         disabled={!has || busy}
-        tone={has ? 'accent' : 'default'}
+        tone={error ? 'danger' : has ? 'accent' : 'default'}
         onClick={() => void onCommit()}
         data-testid="toolbar-commit"
       >
         {busy ? <Loader2 className="animate-spin" /> : <Check />}
       </ToolbarButton>
-      {has && (
-        <span className="px-1.5 font-mono text-[11px] font-semibold tabular-nums text-[var(--wb-accent)]">
-          {edits.length}
-        </span>
-      )}
-      {error && (
-        <span
-          className="px-1 text-[11px] font-medium text-destructive"
-          title={`Commit failed: ${error}`}
-          role="alert"
-        >
-          failed
-        </span>
-      )}
+      {/* Fixed-width count slot so the capsule never shifts (VF14). */}
+      <span
+        className={cn(
+          'w-7 text-center font-mono text-[11px] font-semibold tabular-nums',
+          error ? 'text-destructive' : 'text-[var(--wb-accent)]',
+        )}
+        role={error ? 'alert' : undefined}
+        aria-label={error ? `Commit failed: ${error}` : undefined}
+        title={error ? `Commit failed: ${error}` : undefined}
+      >
+        {has ? (edits.length > 99 ? '99+' : edits.length) : ''}
+      </span>
     </ToolbarGroup>
   );
 }
@@ -266,7 +292,7 @@ function SessionCluster({ postgres }: { postgres: boolean }) {
             addTab();
           }}
         >
-          <span className="text-[10px] font-semibold tracking-wide">SQL</span>
+          <span className="text-[10px] font-semibold">SQL</span>
         </ToolbarButton>
       )}
     </ToolbarGroup>
@@ -351,15 +377,16 @@ function StatusCapsule() {
 
   const engine = activeConfig?.engine ?? 'postgres';
   const connected = connectionState === 'connected';
-  // Connected = the theme's accent (muted), whatever the env tag (the tag still
-  // shows as a chip). Prod keeps its red fill so a production session is
-  // never mistaken for a safe one. Disconnected/connecting stay neutral.
-  const fill = connected
-    ? tag === 'prod'
-      ? 'var(--status-prod)'
-      : 'var(--wb-connected)'
-    : undefined;
-  const surface = fill ?? 'var(--status-none)';
+  // Connected = a neutral surface faintly tinted with the theme accent, text
+  // --wb-text; the env tag shows as a coloured chip. Only PROD fills the
+  // whole capsule red (white text) so a production session is never
+  // mistaken for a safe one — and nothing else reads as "danger" (F9).
+  const prodFill = connected && tag === 'prod';
+  const surface = prodFill
+    ? 'var(--status-prod)'
+    : connected
+      ? 'var(--wb-connected)'
+      : 'var(--status-none)';
   const stateLabel =
     connectionState === 'connected'
       ? 'connected'
@@ -392,12 +419,25 @@ function StatusCapsule() {
             : tab.title
         : null;
 
+  const { outerRef, innerRef, drop } = useCapsuleFit(
+    [
+      serverVersion,
+      transport,
+      activeConfig?.name,
+      activeConfig?.database,
+      object,
+      tag,
+      connected,
+    ].join('\u0000'),
+  );
+
   return (
     <div
+      ref={outerRef}
       className={cn(
         'no-drag flex h-9 min-w-0 flex-1 items-center overflow-hidden rounded-full px-4 font-mono text-[13px] font-semibold leading-none',
         'shadow-[inset_0_1px_0_rgb(255_255_255/0.08)]',
-        fill ? 'text-white' : 'text-[var(--wb-text)]',
+        prodFill ? 'text-white' : 'text-[var(--wb-text)]',
       )}
       style={{ backgroundColor: surface }}
       data-testid="status-capsule"
@@ -407,21 +447,29 @@ function StatusCapsule() {
       </span>
 
       {activeConfig && connected ? (
-        <span className="flex min-w-0 items-center">
-          <Seg>{shortVersion(serverVersion, engine)}</Seg>
-          <Sep />
-          <Seg
-            title={
-              activeConfig.ssl
-                ? 'Encrypted with TLS'
-                : viaSsh
-                  ? 'Tunnelled over SSH'
-                  : 'Unencrypted connection'
-            }
-          >
-            {transport}
-          </Seg>
-          <Sep />
+        <span ref={innerRef} className="flex min-w-0 items-center">
+          {drop < 2 && (
+            <>
+              <Seg>{shortVersion(serverVersion, engine)}</Seg>
+              <Sep />
+            </>
+          )}
+          {drop < 1 && (
+            <>
+              <Seg
+                title={
+                  activeConfig.ssl
+                    ? 'Encrypted with TLS'
+                    : viaSsh
+                      ? 'Tunnelled over SSH'
+                      : 'Unencrypted connection'
+                }
+              >
+                {transport}
+              </Seg>
+              <Sep />
+            </>
+          )}
           <ConnectionSwitcher
             trigger={
               <CapsuleButton title="Switch connection">
@@ -435,7 +483,7 @@ function StatusCapsule() {
               <Seg>{activeConfig.database}</Seg>
             </>
           )}
-          {engine === 'postgres' && <SchemaSwitcher />}
+          {engine === 'postgres' && drop < 3 && <SchemaSwitcher />}
           {object && (
             <>
               <span className="shrink-0 whitespace-pre opacity-60" aria-hidden>
@@ -448,8 +496,15 @@ function StatusCapsule() {
             </>
           )}
           {tag && (
-            <span className="ml-2.5 shrink-0 rounded-[4px] bg-black/20 px-1.5 py-[3px] font-sans text-[10px] font-semibold uppercase tracking-wider">
-              {tag}
+            <span
+              className={cn(
+                'ml-2.5 shrink-0 rounded-[4px] px-1.5 py-[3px] font-sans text-[11px] font-semibold text-white',
+                prodFill && 'bg-black/25',
+              )}
+              style={prodFill ? undefined : { backgroundColor: TAG_FILL[tag] }}
+              data-testid="status-tag"
+            >
+              {TAG_LABEL[tag] ?? tag}
             </span>
           )}
         </span>
@@ -568,6 +623,50 @@ function OfflineCapsule() {
       />
     </span>
   );
+}
+
+/**
+ * Measures the capsule and returns how many low-priority segments to drop
+ * (see MAX_CAPSULE_DROP). Re-measures from zero whenever the capsule width
+ * or its content changes, then drops one more segment per layout pass
+ * while any segment is still truncated — all before paint.
+ */
+function useCapsuleFit(contentKey: string) {
+  const outerRef = useRef<HTMLDivElement>(null);
+  const innerRef = useRef<HTMLSpanElement>(null);
+  const [width, setWidth] = useState(0);
+  const [drop, setDrop] = useState(0);
+  const measured = useRef<string | null>(null);
+
+  useLayoutEffect(() => {
+    const el = outerRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver((entries) => {
+      const w = Math.round(entries[0]?.contentRect.width ?? 0);
+      setWidth((prev) => (prev === w ? prev : w));
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  useLayoutEffect(() => {
+    const key = `${width}|${contentKey}`;
+    if (measured.current !== key) {
+      measured.current = key;
+      if (drop !== 0) {
+        setDrop(0);
+        return;
+      }
+    }
+    const inner = innerRef.current;
+    if (!inner || drop >= MAX_CAPSULE_DROP) return;
+    const truncated = Array.from(inner.querySelectorAll<HTMLElement>('.truncate')).some(
+      (seg) => seg.scrollWidth > seg.clientWidth + 1,
+    );
+    if (truncated) setDrop(drop + 1);
+  }, [width, contentKey, drop]);
+
+  return { outerRef, innerRef, drop };
 }
 
 /** Re-render every `intervalMs` (null = paused); returns Date.now(). */

@@ -48,6 +48,19 @@ function readRowLimit(): number | null {
   }
 }
 
+const WORD_WRAP_KEY = 'plasma.editor.wordWrap';
+
+function readWordWrap(): boolean {
+  try {
+    return globalThis.localStorage?.getItem(WORD_WRAP_KEY) !== 'off';
+  } catch {
+    return true;
+  }
+}
+
+/** App-level dialogs any command (keymap, palette, menu) can open. */
+export type Overlay = 'codegen' | 'notebook' | 'schemaDiff' | 'cheatSheet' | null;
+
 /** Caret for one SQL tab, stamped with the buffer length it was read from. */
 export interface TabCaret extends EditorCaret {
   bufferLength: number;
@@ -64,6 +77,17 @@ interface WorkbenchState {
   inspectedRow: InspectedRow | null;
   rowLimit: number | null;
   resultViews: Record<string, ResultView>;
+  /** ⌘J: hide the SQL tab's inline editor so the results take the room. */
+  editorHidden: boolean;
+  /** Bumped to ask the SQL editor to take focus (history / new tab / ⌘J). */
+  editorFocusNonce: number;
+  wordWrap: boolean;
+  overlay: Overlay;
+  setEditorHidden(hidden: boolean): void;
+  /** Un-hide the editor and focus it. */
+  showEditor(): void;
+  setWordWrap(on: boolean): void;
+  setOverlay(overlay: Overlay): void;
   setSidebarMode(mode: SidebarMode): void;
   setCaret(tabId: string, caret: TabCaret | null): void;
   setEditorCursor(cursor: EditorCursor | null): void;
@@ -79,6 +103,21 @@ export const useWorkbench = create<WorkbenchState>((set) => ({
   inspectedRow: null,
   rowLimit: readRowLimit(),
   resultViews: {},
+  editorHidden: false,
+  editorFocusNonce: 0,
+  wordWrap: readWordWrap(),
+  overlay: null,
+  setEditorHidden: (editorHidden) => set({ editorHidden }),
+  showEditor: () => set((s) => ({ editorHidden: false, editorFocusNonce: s.editorFocusNonce + 1 })),
+  setWordWrap: (wordWrap) => {
+    try {
+      globalThis.localStorage?.setItem(WORD_WRAP_KEY, wordWrap ? 'on' : 'off');
+    } catch {
+      /* storage unavailable */
+    }
+    set({ wordWrap });
+  },
+  setOverlay: (overlay) => set({ overlay }),
   setSidebarMode: (sidebarMode) => set({ sidebarMode }),
   setCaret: (tabId, caret) =>
     set((s) => {

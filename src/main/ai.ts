@@ -39,7 +39,28 @@ export {
  * tool_calls, then the next round continues. Bounded by MAX_TOOL_ROUNDS.
  */
 
-const ENDPOINT = process.env.PLASMA_AI_ENDPOINT ?? 'https://openrouter.ai/api/v1/chat/completions';
+const DEFAULT_ENDPOINT = 'https://openrouter.ai/api/v1/chat/completions';
+
+/**
+ * `PLASMA_AI_ENDPOINT` exists for tests (a local mock server). It carries
+ * the user's API key, so only OpenRouter or a loopback address is honoured
+ * (C34) — an env var can't redirect the key to an arbitrary host.
+ */
+export function resolveAiEndpoint(override: string | undefined): string {
+  if (!override) return DEFAULT_ENDPOINT;
+  try {
+    const url = new URL(override);
+    const loopback = ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname);
+    if (loopback && (url.protocol === 'http:' || url.protocol === 'https:')) return override;
+    if (url.protocol === 'https:' && url.hostname === 'openrouter.ai') return override;
+  } catch {
+    /* fall through */
+  }
+  logger.warn('[plasma-ai] ignoring PLASMA_AI_ENDPOINT — only openrouter.ai or loopback allowed');
+  return DEFAULT_ENDPOINT;
+}
+
+const ENDPOINT = resolveAiEndpoint(process.env.PLASMA_AI_ENDPOINT);
 const REFERER = 'https://plasma.sh';
 const TITLE = 'Plasma';
 const MAX_TOOL_ROUNDS = 5;
@@ -91,7 +112,7 @@ const TOOLS_REDIS = [
     function: {
       name: 'redis_command',
       description:
-        'Execute a read-only Redis command and return the reply as JSON. Allow-list: GET, MGET, EXISTS, TYPE, TTL, PTTL, OBJECT, STRLEN, HGET, HGETALL, HKEYS, HLEN, HMGET, LRANGE, LLEN, SMEMBERS, SCARD, ZRANGE, ZSCORE, ZCARD, XLEN, XRANGE, XREVRANGE, INFO, DBSIZE, KEYS (avoid in prod), SCAN, MEMORY USAGE, CONFIG GET, CLIENT LIST, SLOWLOG GET. Anything else is rejected.',
+        'Execute a read-only Redis command and return the reply as JSON. Allow-list: GET, MGET, EXISTS, TYPE, TTL, PTTL, OBJECT, STRLEN, HGET, HGETALL, HKEYS, HLEN, HMGET, LRANGE, LLEN, SMEMBERS, SCARD, ZRANGE, ZSCORE, ZCARD, XLEN, XRANGE, XREVRANGE, INFO, DBSIZE, SCAN (use this to list keys), MEMORY USAGE, CLIENT LIST, SLOWLOG GET. Anything else is rejected.',
       parameters: {
         type: 'object',
         properties: {

@@ -57,23 +57,23 @@ export class ErrorBoundary extends Component<Props, State> {
     if (!this.state.error) return this.props.children;
 
     return (
-      <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-background p-8">
-        <div className="w-full max-w-2xl rounded-lg border bg-card text-card-foreground shadow-lg">
-          <header className="border-b px-8 py-6">
-            <h1 className="font-display text-3xl italic leading-tight text-destructive">
+      <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-[var(--wb-window)] p-8">
+        <div className="w-full max-w-2xl rounded-[10px] border border-[var(--wb-toolbar-group-edge)] bg-[var(--wb-content)] text-[13px] text-[var(--wb-text)] shadow-xl">
+          <header className="border-b border-[var(--wb-separator)] px-6 py-5">
+            <h1 className="text-[17px] font-semibold leading-tight text-destructive" role="alert">
               Something broke.
             </h1>
-            <p className="mt-1 text-sm text-muted-foreground">
+            <p className="mt-1 text-[13px] text-[var(--wb-text-2)]">
               Plasma hit an unhandled error. Nothing is lost — your saved connections and query
               history are on disk.
             </p>
           </header>
 
-          <div className="grid gap-4 px-8 py-6">
-            <div className="rounded-md border-l-4 border-destructive bg-muted px-4 py-3 font-mono text-sm text-foreground">
+          <div className="grid gap-4 px-6 py-5">
+            <div className="rounded-[7px] border-l-4 border-destructive bg-[var(--wb-control)] px-4 py-3 font-mono text-[12px] text-[var(--wb-text)]">
               {this.state.error.message}
             </div>
-            <details className="font-mono text-xs text-muted-foreground">
+            <details className="font-mono text-[12px] text-[var(--wb-text-2)]">
               <summary className="cursor-pointer">Stack trace</summary>
               <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words">
                 {this.state.error.stack ?? '(no stack)'}
@@ -81,7 +81,7 @@ export class ErrorBoundary extends Component<Props, State> {
             </details>
           </div>
 
-          <footer className="flex items-center justify-end gap-2 border-t px-8 py-4">
+          <footer className="flex items-center justify-end gap-2 border-t border-[var(--wb-separator)] px-6 py-3">
             <Button variant="outline" onClick={this.copyError}>
               Copy report
             </Button>
