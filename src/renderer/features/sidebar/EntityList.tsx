@@ -1,20 +1,11 @@
-import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
+import { IconButton } from '@/components/ui/workbench';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { cn } from '@/lib/cn';
 import { type EntityKind, useSession } from '@/stores/session';
-import {
-  Eye,
-  Filter as FilterIcon,
-  GitBranch,
-  Globe,
-  Layers,
-  Search,
-  Star,
-  Table2,
-  X,
-} from 'lucide-react';
+import { Eye, GitBranch, Globe, Layers, SlidersHorizontal, Star, Table2 } from 'lucide-react';
 import { useMemo, useState } from 'react';
+import { SidebarSearch, SidebarSearchRow, sidebarRowClass } from './sidebar-parts';
 
 /**
  * Tables-mode sidebar content. Replaces the legacy schema tree with:
@@ -44,6 +35,7 @@ export function EntityList() {
 
   const effectiveSchema = currentSchema ?? schema?.schemas[0]?.name ?? null;
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: favoriteTableSet ref shifts every render
   const entities = useMemo(() => {
     if (!schema || !effectiveSchema) return [];
     const q = search.trim().toLowerCase();
@@ -57,26 +49,21 @@ export function EntityList() {
         if (aFav !== bFav) return aFav - bFav;
         return a.name.localeCompare(b.name);
       });
-    // biome-ignore lint/correctness/useExhaustiveDependencies: favoriteTableSet ref shifts every render
   }, [schema, effectiveSchema, entityFilter, search]);
 
   if (!activeConfig) {
     return (
-      <div className="px-4 py-3 text-[13px] text-muted-foreground">
+      <div className="px-4 py-3 text-[13px] text-[var(--wb-text-2)]">
         connect to browse the schema
       </div>
     );
   }
 
   if (!schema && schemaLoading) {
-    return (
-      <div className="px-4 py-3 text-[13px] text-muted-foreground">loading…</div>
-    );
+    return <div className="px-4 py-3 text-[13px] text-[var(--wb-text-2)]">loading…</div>;
   }
   if (!schema) {
-    return (
-      <div className="px-4 py-3 text-[13px] text-muted-foreground">no schema</div>
-    );
+    return <div className="px-4 py-3 text-[13px] text-[var(--wb-text-2)]">no schema</div>;
   }
 
   return (
@@ -84,32 +71,15 @@ export function EntityList() {
       {/* Schema picker lives in the topbar — don't duplicate it here. */}
 
       {/* ── Search + entity filter ── */}
-      <div className="px-2.5 pb-2">
-        <div className="flex items-center gap-1">
-          <div className="relative flex-1">
-            <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-            <input
-              type="text"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search tables…"
-              className="glass h-7 w-full rounded-[7px] border-0 pl-8 pr-7 text-[13px] text-foreground outline-none transition-shadow placeholder:text-muted-foreground focus:ring-2 focus:ring-primary/50"
-              aria-label="Search tables"
-            />
-            {search && (
-              <button
-                type="button"
-                onClick={() => setSearch('')}
-                className="absolute right-1.5 top-1/2 grid h-5 w-5 -translate-y-1/2 place-items-center rounded-sm text-muted-foreground hover:text-foreground"
-                aria-label="Clear search"
-              >
-                <X className="h-3 w-3" />
-              </button>
-            )}
-          </div>
-          <EntityFilterMenu entityFilter={entityFilter} toggle={toggleEntityFilter} />
-        </div>
-      </div>
+      <SidebarSearchRow>
+        <SidebarSearch
+          value={search}
+          onChange={setSearch}
+          placeholder="Search for item…"
+          ariaLabel="Search tables"
+        />
+        <EntityFilterMenu entityFilter={entityFilter} toggle={toggleEntityFilter} />
+      </SidebarSearchRow>
 
       {/* ── Entity list (ARIA tree — DESIGN.md §9 / U38) ── */}
       <div
@@ -118,7 +88,7 @@ export function EntityList() {
         aria-label={effectiveSchema ? `Tables in ${effectiveSchema}` : 'Tables'}
       >
         {entities.length === 0 && (
-          <div className="px-4 py-3 text-[13px] text-muted-foreground">
+          <div className="px-4 py-3 text-[13px] text-[var(--wb-text-2)]">
             {search ? `no entities match "${search}"` : 'empty'}
           </div>
         )}
@@ -167,18 +137,17 @@ function EntityFilterMenu({
   return (
     <Popover>
       <PopoverTrigger asChild>
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          aria-label="Filter entity types"
-          title="Filter entity types"
-          className={!allOn ? 'text-primary' : 'text-muted-foreground'}
+        <IconButton
+          variant="plain"
+          label="Filter entity types"
+          active={!allOn}
+          className="[&_svg]:h-4 [&_svg]:w-4"
         >
-          <FilterIcon />
-        </Button>
+          <SlidersHorizontal />
+        </IconButton>
       </PopoverTrigger>
       <PopoverContent align="end" sideOffset={4} className="w-[220px] p-3">
-        <h3 className="mb-2 font-display text-xs italic text-muted-foreground">
+        <h3 className="mb-2 text-[11px] font-semibold text-[var(--wb-text-2)]">
           Show entity types
         </h3>
         <div className="flex flex-col gap-1">
@@ -188,14 +157,14 @@ function EntityFilterMenu({
               <label
                 key={k}
                 htmlFor={`entity-filter-${k}`}
-                className="flex cursor-pointer items-center gap-2 rounded-sm px-1 py-1 text-sm text-foreground hover:bg-accent"
+                className="flex h-6 cursor-pointer items-center gap-2 rounded-[5px] px-1 text-[13px] text-[var(--wb-text)] hover:bg-[color-mix(in_srgb,var(--wb-text)_6%,transparent)]"
               >
                 <Checkbox
                   id={`entity-filter-${k}`}
                   checked={on}
                   onCheckedChange={() => toggle(k)}
                 />
-                <span className="font-mono text-xs">{ENTITY_KIND_LABELS[k]}</span>
+                <span>{ENTITY_KIND_LABELS[k]}</span>
               </label>
             );
           })}
@@ -236,10 +205,7 @@ function EntityRow({
       role="treeitem"
       aria-level={1}
       aria-selected={active}
-      className={cn(
-        'group/row cv-row-26 relative mx-1.5 flex h-[26px] items-stretch rounded-[6px] transition-colors hover:bg-[var(--glass-fill-hover)]',
-        active && 'raised',
-      )}
+      className={cn('group/row relative items-stretch', sidebarRowClass(active))}
     >
       <button
         type="button"
@@ -248,7 +214,7 @@ function EntityRow({
           onToggleFavorite();
         }}
         aria-label={favorite ? `Unstar ${name}` : `Star ${name}`}
-        className="group/star flex h-full w-7 shrink-0 cursor-pointer items-center justify-center"
+        className="group/star flex h-full w-6 shrink-0 cursor-pointer items-center justify-center"
       >
         <span className="relative grid h-4 w-4 place-items-center">
           <Icon
@@ -257,15 +223,15 @@ function EntityRow({
               favorite
                 ? 'opacity-0'
                 : 'opacity-100 group-hover/row:opacity-0 group-focus-visible/star:opacity-0',
-              active ? 'text-primary' : 'text-muted-foreground',
+              'text-[var(--wb-text-2)]',
             )}
           />
           <Star
             className={cn(
               'absolute inset-0 m-auto h-3.5 w-3.5 transition-opacity duration-150',
               favorite
-                ? 'fill-primary text-primary opacity-100'
-                : 'text-muted-foreground opacity-0 group-hover/row:opacity-100 group-focus-visible/star:opacity-100',
+                ? 'fill-[#d9b44a] text-[#d9b44a] opacity-100'
+                : 'text-[var(--wb-text-2)] opacity-0 group-hover/row:opacity-100 group-focus-visible/star:opacity-100',
             )}
           />
         </span>
@@ -275,8 +241,7 @@ function EntityRow({
         onClick={onClick}
         title={`Open ${name}`}
         className={cn(
-          'flex min-w-0 flex-1 items-center gap-2 pl-0.5 pr-3 text-left text-[13px]',
-          active ? 'font-medium text-foreground' : 'text-foreground/85 group-hover/row:text-foreground',
+          'flex min-w-0 flex-1 items-center gap-2 pl-1 pr-2 text-left text-[13px] text-[var(--wb-text)]',
         )}
       >
         <span className="truncate">{name}</span>

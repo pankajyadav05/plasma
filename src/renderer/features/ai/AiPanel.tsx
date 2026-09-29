@@ -1,4 +1,5 @@
 import { Button } from '@/components/ui/button';
+import { IconButton, Pill } from '@/components/ui/workbench';
 import { cn } from '@/lib/cn';
 import { type AiTurn, useActiveTab, useSession } from '@/stores/session';
 import { Loader2, Send, Sparkles, Square, Trash2 } from 'lucide-react';
@@ -25,7 +26,14 @@ export function AiPanel() {
   const setSql = useSession((s) => s.setSql);
   const runQuery = useSession((s) => s.runQuery);
   const addTab = useSession((s) => s.addTab);
-  const hasApiKey = useSession((s) => Boolean(s.settings.hasOpenrouterApiKey || s.settings.hasClaudeApiKey || s.settings.openrouterApiKey || s.settings.claudeApiKey));
+  const hasApiKey = useSession((s) =>
+    Boolean(
+      s.settings.hasOpenrouterApiKey ||
+        s.settings.hasClaudeApiKey ||
+        s.settings.openrouterApiKey ||
+        s.settings.claudeApiKey,
+    ),
+  );
   const model = useSession((s) => s.settings.openrouterModel);
   const allowAiRowData = useSession((s) => {
     const id = s.activeConfig?.id;
@@ -83,25 +91,16 @@ export function AiPanel() {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex h-9 shrink-0 items-center gap-2 border-b border-[var(--hairline)] pl-3 pr-2">
-        <Sparkles className="h-3.5 w-3.5 text-primary" />
-        <span
-          className="truncate font-mono text-[10px] uppercase text-muted-foreground"
-          title="Active model"
-        >
+      <div className="flex h-8 shrink-0 items-center gap-2 border-b border-[color-mix(in_srgb,var(--wb-text)_8%,transparent)] pl-3 pr-2">
+        <Sparkles className="h-3.5 w-3.5 text-[var(--wb-text-2)]" />
+        <span className="truncate text-[12px] text-[var(--wb-text-2)]" title="Active model">
           {modelLabel(model)}
         </span>
         <div className="flex-1" />
         {aiChat.length > 0 && (
-          <Button
-            variant="ghost"
-            size="icon-xs"
-            onClick={aiClear}
-            title="Clear conversation"
-            aria-label="Clear conversation"
-          >
+          <IconButton variant="plain" label="Clear conversation" onClick={aiClear}>
             <Trash2 />
-          </Button>
+          </IconButton>
         )}
       </div>
 
@@ -112,7 +111,7 @@ export function AiPanel() {
         ))}
       </div>
 
-      <div className="shrink-0 border-t border-border bg-background p-2">
+      <div className="shrink-0 border-t border-[color-mix(in_srgb,var(--wb-text)_8%,transparent)] p-2.5">
         <div className="relative">
           <textarea
             value={draft}
@@ -125,34 +124,32 @@ export function AiPanel() {
             }
             disabled={!hasApiKey}
             rows={3}
-            className="w-full resize-none rounded-md border border-border bg-background px-2 py-1.5 pr-9 font-display text-sm text-foreground outline-none transition-colors placeholder:text-muted-foreground focus:border-primary disabled:cursor-not-allowed disabled:opacity-60"
+            className="w-full resize-none rounded-[7px] border-0 bg-[var(--wb-field)] px-2.5 py-1.5 pr-9 text-[13px] text-[var(--wb-text)] shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--wb-text)_8%,transparent)] outline-none transition-shadow placeholder:text-[var(--wb-text-3)] focus:shadow-[0_0_0_2px_color-mix(in_srgb,var(--wb-accent)_55%,transparent)] disabled:cursor-not-allowed disabled:opacity-60"
           />
           {aiPending ? (
             <Button
               variant="destructive"
               size="icon-xs"
               onClick={() => void aiCancel()}
-              className="absolute bottom-1.5 right-1.5"
+              className="absolute bottom-2 right-1.5 h-6 w-6 rounded-[6px]"
               title="Stop"
               aria-label="Stop"
             >
               <Square className="fill-current" />
             </Button>
           ) : (
-            <Button
-              variant="primary"
-              size="icon-xs"
+            <IconButton
+              label="Send"
+              title="Send (Enter)"
               onClick={submit}
               disabled={!draft.trim() || !hasApiKey}
-              className="absolute bottom-1.5 right-1.5"
-              title="Send (Enter)"
-              aria-label="Send"
+              className="absolute bottom-2 right-1.5"
             >
               <Send />
-            </Button>
+            </IconButton>
           )}
         </div>
-        <p className="mt-1.5 px-1 font-display text-[10px] italic text-muted-foreground">
+        <p className="mt-1.5 px-1 text-[11px] leading-snug text-[var(--wb-text-3)]">
           {allowAiRowData
             ? 'Schema + capped tool row samples may be sent to OpenRouter when tools run.'
             : 'Schema sent as system prompt. Enable "Allow AI tools to read row data" on this connection to let tools send capped row samples.'}
@@ -166,9 +163,9 @@ function EmptyState({ hasKey }: { hasKey: boolean }) {
   if (!hasKey) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-2 px-4 text-center">
-        <Sparkles className="h-6 w-6 text-muted-foreground" />
-        <div className="font-display text-base italic text-foreground">No API key</div>
-        <div className="font-display text-xs italic text-muted-foreground">
+        <Sparkles className="h-6 w-6 text-[var(--wb-text-3)]" />
+        <div className="text-[16px] text-[var(--wb-text-2)]">No API key</div>
+        <div className="text-[12px] text-[var(--wb-text-3)]">
           Add your OpenRouter key in Settings → AI to start asking questions about this database.
         </div>
       </div>
@@ -176,11 +173,9 @@ function EmptyState({ hasKey }: { hasKey: boolean }) {
   }
   return (
     <div className="flex h-full flex-col items-center justify-center gap-2 px-4 text-center">
-      <Sparkles className="h-6 w-6 text-primary/70" />
-      <div className="font-display text-base italic text-foreground">
-        Ask anything about this database.
-      </div>
-      <div className="font-display text-xs italic text-muted-foreground">
+      <Sparkles className="h-6 w-6 text-[var(--wb-text-3)]" />
+      <div className="text-[16px] text-[var(--wb-text-2)]">Ask anything about this database.</div>
+      <div className="text-[12px] text-[var(--wb-text-3)]">
         Try: "top 5 customers by revenue last 30 days" or "why might my query be slow on the orders
         table?"
       </div>
@@ -202,10 +197,10 @@ function ChatTurn({
     <div className={cn('mb-4 flex flex-col gap-1', isUser ? 'items-end' : 'items-start')}>
       <div
         className={cn(
-          'max-w-[92%] rounded-lg px-3 py-2 text-sm',
+          'max-w-[92%] rounded-[8px] px-3 py-2 text-[13px] text-[var(--wb-text)]',
           isUser
-            ? 'bg-primary text-primary-foreground'
-            : 'border border-border bg-muted/30 text-foreground',
+            ? 'bg-[var(--wb-selected)]'
+            : 'bg-[var(--wb-control)]/60 shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--wb-text)_6%,transparent)]',
         )}
       >
         {isUser ? (
@@ -274,9 +269,9 @@ function AssistantContent({
 
 function StreamingDot() {
   return (
-    <span className="inline-flex items-center gap-1 text-muted-foreground">
+    <span className="inline-flex items-center gap-1 text-[var(--wb-text-2)]">
       <Loader2 className="h-3 w-3 animate-spin" />
-      <span className="font-display text-[11px] italic">thinking…</span>
+      <span className="text-[11px]">thinking…</span>
     </span>
   );
 }
@@ -294,22 +289,22 @@ function CodeBlock({
 }) {
   const isSql = !lang || /^sql$|^postgres/i.test(lang);
   return (
-    <div className="overflow-hidden rounded-md border border-border bg-background">
-      <div className="flex h-7 items-center gap-2 border-b border-border bg-muted/40 pl-2 pr-1 font-mono text-[10px] uppercase text-muted-foreground">
+    <div className="overflow-hidden rounded-[6px] bg-[var(--wb-content)] shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--wb-text)_8%,transparent)]">
+      <div className="flex h-7 items-center gap-1 border-b border-[color-mix(in_srgb,var(--wb-text)_8%,transparent)] pl-2 pr-1 font-mono text-[10px] uppercase text-[var(--wb-text-3)]">
         <span>{lang || 'sql'}</span>
         <div className="flex-1" />
         {isSql && (
           <>
-            <Button variant="ghost" size="xs" className="h-5 px-1.5" onClick={onInsert}>
+            <Pill className="h-5 px-1.5 text-[11px] normal-case" onClick={onInsert}>
               Insert
-            </Button>
-            <Button variant="primary" size="xs" className="h-5 px-1.5" onClick={onRun}>
+            </Pill>
+            <Pill className="h-5 px-1.5 text-[11px] normal-case" onClick={onRun}>
               Run
-            </Button>
+            </Pill>
           </>
         )}
       </div>
-      <pre className="overflow-x-auto p-2 font-mono text-[12px] leading-relaxed text-foreground">
+      <pre className="overflow-x-auto p-2 font-mono text-[12px] leading-relaxed text-[var(--wb-text)]">
         {code}
       </pre>
     </div>

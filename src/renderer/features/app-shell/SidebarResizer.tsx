@@ -9,8 +9,8 @@ import { useCallback } from 'react';
  * on pointermove; persistence to settings happens once on pointerup so
  * we don't spam IPC during the drag.
  *
- * Visual: 4px-wide invisible hit area centered over a 1px line. On
- * hover/active, the line thickens and turns accent.
+ * Visual: 6px-wide invisible hit area centred over the aside's 1px
+ * separator. On hover/active a 1px accent line is drawn over it.
  */
 export function SidebarResizer() {
   const sidebarWidth = useSession((s) => s.settings.sidebarWidth);
@@ -79,9 +79,11 @@ export function SidebarResizer() {
           });
         }
       }}
-      className="group/resizer relative z-20 -ml-[3px] flex h-full w-[6px] shrink-0 cursor-col-resize items-stretch justify-center"
+      className="group/resizer relative z-20 -mx-[3px] flex h-full w-[6px] shrink-0 cursor-col-resize items-stretch justify-center outline-none"
     >
-      <div className="h-full w-px bg-border transition-all duration-instant group-hover/resizer:w-0.5 group-hover/resizer:bg-primary group-active/resizer:bg-primary" />
+      {/* The 1px pane separator is the aside's own border; this line only
+          appears on hover / drag, drawn on top of it. */}
+      <div className="h-full w-px bg-transparent transition-colors duration-instant group-hover/resizer:bg-[var(--wb-accent)] group-focus-visible/resizer:bg-[var(--wb-accent)] group-active/resizer:bg-[var(--wb-accent)]" />
     </div>
   );
 }

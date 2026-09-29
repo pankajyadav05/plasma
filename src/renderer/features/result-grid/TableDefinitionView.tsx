@@ -1,4 +1,4 @@
-import { Button } from '@/components/ui/button';
+import { Pill } from '@/components/ui/workbench';
 import { PLASMA_THEME_ID, applyMonacoTheme } from '@/features/editor/paperTheme';
 import { ipc } from '@/lib/ipc';
 import { buildDefinitionQuerySql } from '@/lib/table-query';
@@ -87,43 +87,38 @@ export function TableDefinitionView() {
   if (!tab || tab.kind !== 'table') return null;
 
   return (
-    <div className="relative flex min-h-0 flex-1 flex-col bg-card">
-      <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border bg-background px-3">
-        <span className="text-sm text-muted-foreground">SQL Definition of</span>
-        <span className="font-mono text-sm text-foreground">
+    <div className="relative flex min-h-0 flex-1 flex-col bg-[var(--wb-content)]">
+      <div className="flex h-9 shrink-0 items-center gap-2 border-b border-[var(--wb-separator)] bg-[var(--wb-content)] px-3">
+        <span className="text-[13px] text-[var(--wb-text-2)]">SQL Definition of</span>
+        <span className="font-mono text-[13px] text-[var(--wb-text)]">
           {tab.tableSchema}.{tab.tableName}
         </span>
-        <span className="rounded-sm border border-border px-1.5 py-0.5 font-mono text-[10px] uppercase text-muted-foreground">
+        <span className="rounded-[4px] bg-[var(--wb-control)] px-1.5 py-0.5 font-mono text-[11px] text-[var(--wb-text-2)]">
           read-only
         </span>
         <div className="flex-1" />
-        <Button variant="ghost" size="xs" onClick={onCopy} title="Copy DDL to clipboard">
+        <Pill onClick={onCopy} title="Copy DDL to clipboard">
           <Copy />
           Copy
-        </Button>
-        <Button
-          variant="outline"
-          size="xs"
-          onClick={onOpenInEditor}
-          title="Open in a new SQL editor tab"
-        >
+        </Pill>
+        <Pill onClick={onOpenInEditor} title="Open in a new SQL editor tab">
           Open in SQL Editor
-        </Button>
+        </Pill>
       </div>
 
       {loading && (
-        <div className="flex flex-1 items-center justify-center text-muted-foreground">
+        <div className="flex flex-1 items-center justify-center text-[var(--wb-text-2)]">
           <Loader2 className="h-4 w-4 animate-spin" />
-          <span className="ml-2 text-sm ">building definition…</span>
+          <span className="ml-2 text-[13px]">building definition…</span>
         </div>
       )}
 
       {!loading && error && (
         <div className="p-6">
-          <div className="mb-2 text-lg text-destructive">
+          <div className="mb-2 text-[15px] font-semibold text-destructive">
             could not build definition
           </div>
-          <pre className="whitespace-pre-wrap break-words text-xs text-muted-foreground">
+          <pre className="whitespace-pre-wrap break-words font-mono text-[12px] text-[var(--wb-text-2)]">
             {error}
           </pre>
         </div>
@@ -132,7 +127,7 @@ export function TableDefinitionView() {
       {!loading && !error && (
         <Suspense
           fallback={
-            <div className="flex flex-1 items-center justify-center text-muted-foreground">
+            <div className="flex flex-1 items-center justify-center text-[var(--wb-text-2)]">
               <Loader2 className="h-4 w-4 animate-spin" />
             </div>
           }

@@ -226,13 +226,17 @@ function ConnectedShell() {
     canvasMode === 'settings' || canvasMode === 'history' || canvasMode === 'monitor';
 
   return (
-    <div className="flex min-h-0 flex-1">
+    <div className="flex min-h-0 flex-1 bg-[var(--wb-content)]">
       <IconRail />
 
       {!fullPage && (
         <>
           <aside
-            className="chrome relative shrink-0 overflow-hidden border-r hairline text-sidebar-foreground"
+            className={
+              sidebarCollapsed
+                ? 'relative shrink-0 overflow-hidden bg-[var(--wb-sidebar)] text-[var(--wb-text)]'
+                : 'relative shrink-0 overflow-hidden border-r border-[var(--wb-separator)] bg-[var(--wb-sidebar)] text-[var(--wb-text)]'
+            }
             style={{
               width: sidebarCollapsed ? 0 : sidebarWidth,
               transition: 'width 220ms cubic-bezier(0.16, 1, 0.3, 1)',
@@ -296,7 +300,7 @@ function SqlOnlyCanvas() {
     tab?.queryError,
   );
   return (
-    <main className="flex min-h-0 min-w-0 flex-1 flex-col bg-background">
+    <main className="flex min-h-0 min-w-0 flex-1 flex-col bg-[var(--wb-content)]">
       <TabStrip />
       <SqlCanvas expanded={!hasResultOrError} />
       {hasResultOrError && (
@@ -325,7 +329,7 @@ function DatabaseCanvas() {
   );
   const showGrid = !isSqlTab || hasResultOrError;
   return (
-    <main className="flex min-h-0 min-w-0 flex-1 flex-col bg-background">
+    <main className="flex min-h-0 min-w-0 flex-1 flex-col bg-[var(--wb-content)]">
       <TabStrip />
       {isSqlTab && <SqlCanvas expanded={!hasResultOrError} />}
       {isSqlTab && hasResultOrError && <EditorResizer />}
@@ -348,7 +352,7 @@ function ResultBody() {
   if (tab?.kind === 'sql' && view === 'chart') {
     const result = tab.queryResult;
     return (
-      <div className="min-h-0 flex-1 overflow-auto bg-background p-4">
+      <div className="min-h-0 flex-1 overflow-auto bg-[var(--wb-content)] p-4">
         {result && result.columns.length > 0 ? (
           <ChartBody
             key={`${tab.id}-${tab.activeResultIndex}-${result.durationMs}`}
@@ -356,7 +360,7 @@ function ResultBody() {
             tall
           />
         ) : (
-          <div className="grid h-full place-items-center text-sm text-muted-foreground">
+          <div className="grid h-full place-items-center text-[13px] text-[var(--wb-text-2)]">
             Nothing to chart — run a query that returns rows.
           </div>
         )}

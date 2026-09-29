@@ -287,19 +287,19 @@ export function MonacoEditor({
 
   // Inject a lightweight style for the running decoration once.
   useEffect(() => {
-    const id = 'plasma-monaco-u24-styles-v2';
+    const id = 'plasma-monaco-u24-styles-v3';
     if (document.getElementById(id)) return;
     const style = document.createElement('style');
     style.id = id;
     style.textContent = `
       .monaco-editor .${RUNNING_DECORATION} {
-        background-color: rgba(235, 94, 78, 0.12);
+        background-color: color-mix(in oklch, var(--wb-accent) 14%, transparent);
       }
       .monaco-editor .${CURRENT_STMT_DECORATION} {
-        background-color: color-mix(in oklch, var(--primary) 7%, transparent);
+        background-color: color-mix(in oklch, var(--wb-accent) 6%, transparent);
       }
       .monaco-editor .${CURRENT_STMT_DECORATION}-bar {
-        background-color: var(--primary);
+        background-color: var(--wb-accent);
         width: 2px !important;
         margin-left: 3px;
       }
@@ -336,9 +336,12 @@ export function MonacoEditor({
           </div>
         }
         options={{
-          fontFamily: '"JetBrains Mono", ui-monospace, monospace',
+          fontFamily: '"JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace',
           fontSize,
-          lineHeight: 1.6,
+          // TablePlus: 13px text on a 20px line; scale the line with the
+          // user's font-size setting so larger sizes keep the same rhythm.
+          lineHeight: Math.round((fontSize * 20) / 13),
+          fontLigatures: false,
           minimap: { enabled: false },
           scrollBeyondLastLine: false,
           lineNumbers: 'on',

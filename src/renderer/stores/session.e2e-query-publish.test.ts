@@ -134,7 +134,9 @@ describe('E-QUERY publish boundary (release-main A1/A2)', () => {
     const pending2 = deferred<typeof sampleResult>();
     queryRun.mockReturnValueOnce(Promise.resolve(sampleResult)).mockReturnValueOnce(pending2.promise);
 
-    const runPromise = useSession.getState().runQuery();
+    // Run All: the buffer holds two statements and both must execute
+    // (Run Current without a caret runs only the first).
+    const runPromise = useSession.getState().runQuery({ all: true });
     // Let statement 1 land.
     await Promise.resolve();
     await Promise.resolve();
@@ -165,7 +167,9 @@ describe('E-QUERY publish boundary (release-main A1/A2)', () => {
     const pending = deferred<typeof sampleResult>();
     queryRun.mockReturnValueOnce(pending.promise);
 
-    const runPromise = useSession.getState().runQuery();
+    // Run All: the buffer holds two statements and both must execute
+    // (Run Current without a caret runs only the first).
+    const runPromise = useSession.getState().runQuery({ all: true });
     const genAfterStart = useSession.getState().tabs.find((t) => t.id === 'tab-a')!.queryGeneration;
     expect(genAfterStart).toBe(1);
 

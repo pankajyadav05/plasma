@@ -1,11 +1,12 @@
-import { Button } from '@/components/ui/button';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { IconButton, MenuItem } from '@/components/ui/workbench';
 import { formatDuration } from '@/lib/format';
 import { ipc } from '@/lib/ipc';
 import { useSession } from '@/stores/session';
 import type { HistoryEntry } from '@shared/protocol';
-import { AlertCircle, Maximize2, RefreshCw } from 'lucide-react';
+import { AlertCircle, Maximize2, RefreshCw, SlidersHorizontal } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { SidebarEmpty, SidebarSearch } from './sidebar-parts';
+import { SidebarEmpty, SidebarSearch, SidebarSearchRow } from './sidebar-parts';
 
 const LIMIT = 200;
 
@@ -61,27 +62,18 @@ export function HistoryList() {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex items-center gap-1 px-2.5 pb-2">
-        <SidebarSearch value={search} onChange={setSearch} placeholder="Search history…" />
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          onClick={() => void load(search)}
-          aria-label="Reload history"
-          title="Reload"
-        >
-          <RefreshCw />
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          onClick={() => setCanvasMode('history')}
-          aria-label="Open full history"
-          title="Open full history (all connections, facets)"
-        >
-          <Maximize2 />
-        </Button>
-      </div>
+      <SidebarSearchRow>
+        <SidebarSearch
+          value={search}
+          onChange={setSearch}
+          placeholder="Search for history…"
+          ariaLabel="Search history"
+        />
+        <HistoryActionsMenu
+          onReload={() => void load(search)}
+          onOpenFull={() => setCanvasMode('history')}
+        />
+      </SidebarSearchRow>
 
       <div className="min-h-0 flex-1 overflow-y-auto py-1">
         {entries === null ? (
@@ -94,7 +86,7 @@ export function HistoryList() {
         ) : (
           groups.map((g) => (
             <div key={g.label} className="mb-1">
-              <div className="px-3.5 pb-0.5 pt-2 text-[11px] font-semibold text-muted-foreground">
+              <div className="px-4 pb-1 pt-2 text-[11px] font-semibold text-[var(--wb-text-2)]">
                 {g.label}
               </div>
               {g.entries.map((e) => (
@@ -108,6 +100,39 @@ export function HistoryList() {
   );
 }
 
+/** Reload / open-full-history actions behind the sliders button. */
+function HistoryActionsMenu({
+  onReload,
+  onOpenFull,
+}: {
+  onReload: () => void;
+  onOpenFull: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const run = (fn: () => void) => {
+    setOpen(false);
+    fn();
+  };
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <IconButton variant="plain" label="History options" className="[&_svg]:h-4 [&_svg]:w-4">
+          <SlidersHorizontal />
+        </IconButton>
+      </PopoverTrigger>
+      <PopoverContent align="end" sideOffset={4} className="w-[260px] p-1" role="menu">
+        <MenuItem icon={<RefreshCw />} label="Reload history" onClick={() => run(onReload)} />
+        <MenuItem
+          icon={<Maximize2 />}
+          label="Open full history"
+          hint="all connections"
+          onClick={() => run(onOpenFull)}
+        />
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 function HistoryRow({ entry, onReuse }: { entry: HistoryEntry; onReuse: () => void }) {
   const time = new Date(entry.executedAt).toLocaleTimeString([], {
     hour: '2-digit',
@@ -118,12 +143,12 @@ function HistoryRow({ entry, onReuse }: { entry: HistoryEntry; onReuse: () => vo
       type="button"
       onClick={onReuse}
       title={`${entry.sql}\n\nClick to open in a new tab`}
-      className="mx-1.5 flex w-[calc(100%-0.75rem)] flex-col gap-0.5 rounded-[6px] px-2 py-1.5 text-left transition-colors hover:bg-[var(--glass-fill-hover)]"
+      className="mx-2 flex w-[calc(100%-1rem)] flex-col justify-center gap-px rounded-[5px] px-2 py-1 text-left transition-colors hover:bg-[color-mix(in_srgb,var(--wb-text)_6%,transparent)]"
     >
-      <span className="line-clamp-2 break-all font-mono text-[11px] leading-4 text-foreground">
+      <span className="block w-full truncate font-mono text-[12px] leading-[18px] text-[var(--wb-text)]">
         {entry.sql.replace(/\s+/g, ' ').trim()}
       </span>
-      <span className="flex items-center gap-2 font-mono text-[10px] tabular-nums text-muted-foreground">
+      <span className="flex items-center gap-2 text-[11px] tabular-nums text-[var(--wb-text-3)]">
         <span>{time}</span>
         {entry.error ? (
           <span className="flex items-center gap-1 text-destructive">

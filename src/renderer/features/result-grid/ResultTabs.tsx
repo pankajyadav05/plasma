@@ -59,9 +59,9 @@ export function ResultTabs() {
   if (!multi) return null;
 
   return (
-    <div className="flex h-[34px] shrink-0 items-center border-b hairline bg-background px-2">
+    <div className="flex h-[34px] shrink-0 items-stretch border-b border-[var(--wb-separator)] bg-[var(--wb-tabbar)]">
       <div
-        className="glass scrollbar-none flex h-[26px] min-w-0 items-stretch gap-[2px] overflow-x-auto rounded-[7px] p-[2px]"
+        className="scrollbar-none flex min-w-0 flex-1 items-stretch gap-1 overflow-x-auto px-1 py-1"
         role="tablist"
         aria-label="Statement results · ⌥←/→ to switch"
       >
@@ -76,18 +76,18 @@ export function ResultTabs() {
               onClick={() => setActiveResultIndex(index)}
               title={`${summarizeResult(result)} — ⌥←/→ to switch`}
               className={cn(
-                'flex shrink-0 items-center gap-1.5 rounded-[5px] px-2.5 text-[11px] transition-colors',
+                'flex min-w-[120px] flex-1 items-center justify-center gap-1.5 rounded-[7px] px-3 text-[13px] transition-colors',
                 isActive
-                  ? 'raised font-medium text-foreground'
-                  : 'text-foreground/60 hover:text-foreground',
+                  ? 'bg-[var(--wb-control-active)] text-[var(--wb-text)]'
+                  : 'text-[var(--wb-text-2)] hover:bg-[var(--wb-control-hover)] hover:text-[var(--wb-text)]',
               )}
             >
               <span>Result {index + 1}</span>
-              <span className="font-mono text-[10px] opacity-60">
+              <span className="font-mono text-[12px] opacity-60">
                 {result.command ?? 'OK'} {result.rowCount.toLocaleString()}
               </span>
               {notices.length > 0 && (
-                <MessageSquareWarning className="h-3 w-3 text-amber-600 dark:text-amber-400" />
+                <MessageSquareWarning className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400" />
               )}
             </button>
           );
@@ -111,9 +111,9 @@ export function ResultMessagesPanel() {
   if (!tab) return null;
 
   return (
-    <div className="min-h-0 flex-1 overflow-auto bg-background px-3 py-2 font-mono text-xs">
+    <div className="min-h-0 flex-1 overflow-auto bg-[var(--wb-content)] px-3 py-2 text-[13px] text-[var(--wb-text)]">
       {rows.length === 0 && !tab.queryError && (
-        <div className="px-2 py-3 text-muted-foreground">No messages — run a query first.</div>
+        <div className="px-2 py-3 text-[var(--wb-text-2)]">No messages — run a query first.</div>
       )}
       {rows.map(({ index, result, notices }) => (
         <button
@@ -122,16 +122,16 @@ export function ResultMessagesPanel() {
           onClick={() => setActiveResultIndex(index)}
           className={cn(
             'mb-1 flex w-full flex-col gap-1 rounded-[6px] px-2.5 py-2 text-left transition-colors',
-            index === active ? 'bg-primary/10' : 'hover:bg-[var(--glass-fill-hover)]',
+            index === active ? 'bg-[var(--wb-selected)]' : 'hover:bg-[var(--wb-control)]',
           )}
         >
           <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
             <CheckCircle2 className="h-3.5 w-3.5 text-[var(--status-local)]" />
-            <span className="font-semibold text-foreground">Result {index + 1}</span>
-            <span className="uppercase tracking-wide text-muted-foreground">
+            <span className="font-semibold text-[var(--wb-text)]">Result {index + 1}</span>
+            <span className="font-mono text-[12px] text-[var(--wb-text-2)]">
               {result.command ?? 'OK'}
             </span>
-            <span className="text-muted-foreground">
+            <span className="text-[var(--wb-text-2)]">
               · {result.rowCount.toLocaleString()} rows · {formatDuration(result.durationMs)}
               {result.columns.length > 0 &&
                 ` · ${result.columns.length} col${result.columns.length === 1 ? '' : 's'}`}
@@ -146,7 +146,9 @@ export function ResultMessagesPanel() {
       {tab.queryError && (
         <div className="flex items-start gap-2 rounded-[6px] bg-destructive/10 px-2.5 py-2 text-destructive">
           <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-          <pre className="whitespace-pre-wrap break-words">{tab.queryError}</pre>
+          <pre className="whitespace-pre-wrap break-words font-mono text-[12px]">
+            {tab.queryError}
+          </pre>
         </div>
       )}
     </div>
@@ -161,7 +163,7 @@ export function useNoticeCount(): number {
 function NoticeLine({ notice }: { notice: PgNotice }) {
   const severity = (notice.severity ?? 'NOTICE').toUpperCase();
   return (
-    <div className="flex items-start gap-1.5 pl-5 text-[11px] text-amber-700 dark:text-amber-400">
+    <div className="flex items-start gap-1.5 pl-5 font-mono text-[12px] text-amber-700 dark:text-amber-400">
       <MessageSquareWarning className="mt-0.5 h-3 w-3 shrink-0" />
       <span>
         <span className="font-semibold">{severity}</span>

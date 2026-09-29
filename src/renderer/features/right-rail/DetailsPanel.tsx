@@ -1,11 +1,13 @@
-import { Button } from '@/components/ui/button';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { IconButton, MenuItem } from '@/components/ui/workbench';
+import { SidebarSearch } from '@/features/sidebar/sidebar-parts';
 import { cn } from '@/lib/cn';
 import { ipc } from '@/lib/ipc';
 import { quoteIdent } from '@/lib/table-query';
 import { useActiveTab, useSession } from '@/stores/session';
 import { useWorkbench } from '@/stores/workbench';
 import type { ColumnMeta } from '@shared/protocol';
-import { Braces, Check, Copy, Search } from 'lucide-react';
+import { Braces, Check, Copy, SlidersHorizontal } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 
 /**
@@ -26,6 +28,7 @@ export function DetailsPanel() {
   const inspected = useWorkbench((s) => s.inspectedRow);
   const [query, setQuery] = useState('');
   const [copiedRow, setCopiedRow] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
 
   const current = inspected && tab && inspected.tabId === tab.id ? inspected : null;
 
@@ -45,47 +48,45 @@ export function DetailsPanel() {
     });
     void navigator.clipboard?.writeText(JSON.stringify(obj, null, 2)).then(() => {
       setCopiedRow(true);
-      setTimeout(() => setCopiedRow(false), 1000);
+      setTimeout(() => {
+        setCopiedRow(false);
+        setMenuOpen(false);
+      }, 600);
     });
   };
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex shrink-0 items-center gap-1.5 px-2.5 py-2">
-        <div className="relative min-w-0 flex-1">
-          <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-          <input
-            type="text"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search for field…"
-            aria-label="Search fields"
-            disabled={!current}
-            className="glass h-7 w-full rounded-[7px] border-0 pl-8 pr-2 text-[13px] text-foreground outline-none placeholder:text-muted-foreground focus:ring-2 focus:ring-primary/50 disabled:opacity-60"
-          />
-        </div>
-        {current && (
-          <>
-            <span className="shrink-0 font-mono text-[10px] text-muted-foreground">
-              row {current.rowNumber.toLocaleString()}
-            </span>
-            <button
-              type="button"
+      <div className="flex shrink-0 items-center gap-1.5 px-2.5 pb-2">
+        <SidebarSearch
+          value={query}
+          onChange={setQuery}
+          placeholder="Search for field…"
+          ariaLabel="Search fields"
+          disabled={!current}
+        />
+        <Popover open={menuOpen} onOpenChange={setMenuOpen}>
+          <PopoverTrigger asChild>
+            <IconButton variant="plain" label="Row options" className="[&_svg]:h-4 [&_svg]:w-4">
+              <SlidersHorizontal />
+            </IconButton>
+          </PopoverTrigger>
+          <PopoverContent align="end" sideOffset={4} className="w-[220px] p-1" role="menu">
+            <MenuItem
+              icon={copiedRow ? <Check /> : <Braces />}
+              label="Copy row as JSON"
+              hint={current ? `row ${current.rowNumber.toLocaleString()}` : undefined}
+              disabled={!current}
               onClick={copyRowJson}
-              aria-label="Copy row as JSON"
-              title="Copy row as JSON"
-              className="grid h-7 w-7 shrink-0 place-items-center rounded-[7px] text-muted-foreground transition-colors hover:bg-[var(--glass-fill-hover)] hover:text-foreground"
-            >
-              {copiedRow ? <Check className="h-3.5 w-3.5 text-primary" /> : <Braces className="h-3.5 w-3.5" />}
-            </button>
-          </>
-        )}
+            />
+          </PopoverContent>
+        </Popover>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
         {current ? (
           fields.length === 0 ? (
-            <div className="px-4 py-3 font-display text-sm italic text-muted-foreground">
+            <div className="px-4 py-3 text-[13px] text-[var(--wb-text-2)]">
               no field matches "{query}"
             </div>
           ) : (
@@ -100,9 +101,9 @@ export function DetailsPanel() {
           )
         ) : (
           <>
-            <div className="flex flex-col items-center gap-1 px-6 pb-6 pt-16 text-center">
-              <div className="text-[15px] text-muted-foreground">No row selected</div>
-              <div className="text-xs text-muted-foreground/80">
+            <div className="flex min-h-[120px] flex-1 flex-col items-center justify-center gap-1.5 px-6 text-center">
+              <div className="text-[16px] text-[var(--wb-text-2)]">No row selected</div>
+              <div className="text-[11px] text-[var(--wb-text-3)]">
                 Select a cell in the grid — or press Enter on one — to inspect its row here.
               </div>
             </div>
@@ -142,39 +143,36 @@ function FieldRow({
   return (
     <div
       className={cn(
-        'group/field border-b border-border px-3 py-2',
-        selected && 'bg-accent shadow-[inset_3px_0_0_var(--primary)]',
+        'group/field mx-1.5 rounded-[5px] px-2 py-1.5',
+        selected && 'bg-[var(--wb-selected)]',
       )}
     >
       <div className="flex items-baseline gap-2">
-        <span className="min-w-0 truncate font-mono text-xs font-medium text-foreground">
+        <span className="min-w-0 truncate text-[13px] font-semibold text-[var(--wb-text)]">
           {col.name}
         </span>
-        <span className="shrink-0 font-mono text-[10px] uppercase text-muted-foreground">
-          {col.dataTypeName}
-        </span>
+        <span className="shrink-0 text-[11px] text-[var(--wb-text-3)]">{col.dataTypeName}</span>
         <div className="flex-1" />
-        <Button
-          variant="ghost"
-          size="icon-xs"
-          onClick={copy}
-          aria-label={`Copy ${col.name}`}
+        <IconButton
+          variant="plain"
+          label={`Copy ${col.name}`}
           title="Copy value"
-          className="h-5 w-5 opacity-0 transition-opacity group-hover/field:opacity-100 focus-visible:opacity-100"
+          onClick={copy}
+          className="h-5 w-5 opacity-0 transition-opacity group-hover/field:opacity-100 focus-visible:opacity-100 [&_svg]:h-3 [&_svg]:w-3"
         >
-          {copied ? <Check className="text-primary" /> : <Copy />}
-        </Button>
+          {copied ? <Check /> : <Copy />}
+        </IconButton>
       </div>
       {isNullish ? (
-        <div className="font-mono text-xs text-[var(--type-null)]">NULL</div>
+        <div className="font-mono text-[12px] text-[var(--grid-null)]">NULL</div>
       ) : isEmpty ? (
-        <div className="font-display text-xs italic text-muted-foreground">(empty string)</div>
+        <div className="font-mono text-[12px] text-[var(--wb-text-3)]">(empty string)</div>
       ) : (
         <pre
           className={cn(
-            'mt-0.5 font-mono text-xs text-foreground',
+            'mt-0.5 font-mono text-[12px] text-[var(--wb-text)]',
             multiline
-              ? 'max-h-60 overflow-auto whitespace-pre rounded-sm border border-border bg-muted/50 p-2'
+              ? 'max-h-60 overflow-auto whitespace-pre rounded-[5px] bg-[var(--wb-field)] p-2'
               : 'whitespace-pre-wrap break-words',
           )}
         >
@@ -240,29 +238,29 @@ function TableOverview({ schema, table }: { schema: string; table: string }) {
   }, [schema, table, connectionState]);
 
   return (
-    <div className="mx-3 mb-4 rounded-sm border border-border">
-      <div className="border-b border-border px-3 py-2">
-        <div className="font-display text-sm italic text-foreground">Table</div>
-        <div className="truncate font-mono text-xs text-muted-foreground">
+    <div className="mx-2.5 mb-3 shrink-0 rounded-[7px] bg-[var(--wb-control)]/60 shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--wb-text)_8%,transparent)]">
+      <div className="border-b border-[color-mix(in_srgb,var(--wb-text)_8%,transparent)] px-3 py-2">
+        <div className="text-[13px] font-semibold text-[var(--wb-text)]">Table</div>
+        <div className="truncate font-mono text-[12px] text-[var(--wb-text-2)]">
           {schema}.{table}
         </div>
       </div>
       {failed ? (
-        <div className="px-3 py-2 font-display text-xs italic text-muted-foreground">
+        <div className="px-3 py-2 text-[12px] text-[var(--wb-text-2)]">
           size information unavailable for this role
         </div>
       ) : !info ? (
-        <div className="px-3 py-2 font-display text-xs italic text-muted-foreground">loading…</div>
+        <div className="px-3 py-2 text-[12px] text-[var(--wb-text-2)]">loading…</div>
       ) : (
-        <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 px-3 py-2 text-xs">
+        <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 px-3 py-2 text-[12px]">
           <Stat label="Total size" value={info.total} />
           <Stat label="Data" value={info.data} />
           <Stat label="Indexes" value={info.index} />
           <Stat label="Rows (est.)" value={Number(info.estimate).toLocaleString()} />
           {info.comment && (
             <>
-              <dt className="text-muted-foreground">Comment</dt>
-              <dd className="font-display italic text-foreground">{info.comment}</dd>
+              <dt className="text-[var(--wb-text-2)]">Comment</dt>
+              <dd className="text-[var(--wb-text)]">{info.comment}</dd>
             </>
           )}
         </dl>
@@ -274,8 +272,8 @@ function TableOverview({ schema, table }: { schema: string; table: string }) {
 function Stat({ label, value }: { label: string; value: string }) {
   return (
     <>
-      <dt className="text-muted-foreground">{label}</dt>
-      <dd className="text-right font-mono tabular-nums text-foreground">{value}</dd>
+      <dt className="text-[var(--wb-text-2)]">{label}</dt>
+      <dd className="text-right font-mono tabular-nums text-[var(--wb-text)]">{value}</dd>
     </>
   );
 }

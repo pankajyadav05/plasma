@@ -52,12 +52,11 @@ export function ExportPopover({
       <PopoverTrigger asChild>
         <Pill
           title={hasSelection ? `Export — ${selectedCount} selected rows` : 'Export results'}
-          className={hasSelection ? 'text-primary' : undefined}
+          className="px-3"
         >
-          <Download />
           Export…
           {hasSelection && (
-            <span className="rounded-[4px] bg-primary px-1 text-[10px] font-semibold leading-4 text-primary-foreground">
+            <span className="rounded-[4px] bg-[var(--wb-control-active)] px-1 font-mono text-[11px] leading-4 tabular-nums text-[var(--wb-text)]">
               {selectedCount}
             </span>
           )}
@@ -66,7 +65,7 @@ export function ExportPopover({
       <PopoverContent align="end" sideOffset={4} className="w-[280px] p-1">
         {hasSelection && (
           <div
-            className="mb-1 grid grid-cols-2 gap-0.5 rounded-md border border-border p-0.5"
+            className="mb-1 grid h-6 grid-cols-2 gap-px rounded-[7px] bg-[var(--wb-control)] p-px"
             role="tablist"
             aria-label="Export scope"
           >
@@ -84,13 +83,13 @@ export function ExportPopover({
             />
           </div>
         )}
-        <div className="grid grid-cols-[1fr_auto_auto] items-center gap-x-1 px-2 pb-1 pt-1 text-[10px] uppercase tracking-wider text-muted-foreground">
+        <div className="grid grid-cols-[1fr_auto_auto] items-center gap-x-1 px-2 pb-1 pt-1 text-[11px] text-[var(--wb-text-3)]">
           <span />
           <span className="px-1 text-center">copy</span>
           <span className="px-1 text-center">file</span>
         </div>
         <ExportRow
-          icon={<FileText className="h-3.5 w-3.5 text-muted-foreground" />}
+          icon={<FileText className="h-3.5 w-3.5 text-[var(--wb-text-2)]" />}
           label="CSV"
           hint=".csv"
           format="csv"
@@ -99,7 +98,7 @@ export function ExportPopover({
           onClose={() => onOpenChange(false)}
         />
         <ExportRow
-          icon={<FileJson className="h-3.5 w-3.5 text-muted-foreground" />}
+          icon={<FileJson className="h-3.5 w-3.5 text-[var(--wb-text-2)]" />}
           label="JSON"
           hint=".json"
           format="json"
@@ -108,7 +107,7 @@ export function ExportPopover({
           onClose={() => onOpenChange(false)}
         />
         <ExportRow
-          icon={<FileType2 className="h-3.5 w-3.5 text-muted-foreground" />}
+          icon={<FileType2 className="h-3.5 w-3.5 text-[var(--wb-text-2)]" />}
           label="SQL INSERT"
           hint=".sql"
           format="sql"
@@ -116,10 +115,8 @@ export function ExportPopover({
           filename={effectiveFilename}
           onClose={() => onOpenChange(false)}
         />
-        <div className="my-1 h-px bg-border" />
-        <div className="px-2 pb-0.5 pt-1 text-[10px] uppercase tracking-wider text-muted-foreground">
-          copy as
-        </div>
+        <div className="my-1 h-px bg-[var(--wb-separator)]" />
+        <div className="px-2 pb-0.5 pt-1 text-[11px] text-[var(--wb-text-3)]">Copy as</div>
         <div className="flex flex-wrap gap-1 px-2 pb-1.5">
           <CopyAsChip label="Markdown" format="markdown" result={effectiveResult} />
           <CopyAsChip label="HTML" format="html" result={effectiveResult} />
@@ -148,14 +145,14 @@ function ScopeTab({
       aria-selected={active}
       onClick={onClick}
       className={cn(
-        'flex cursor-pointer items-center justify-center gap-1.5 rounded-sm px-2 py-1 text-xs transition-colors duration-150',
+        'flex cursor-pointer items-center justify-center gap-1.5 rounded-[6px] px-2 text-[13px] transition-colors duration-150',
         active
-          ? 'bg-accent font-medium text-accent-foreground'
-          : 'text-muted-foreground hover:bg-accent/40 hover:text-foreground',
+          ? 'bg-[var(--wb-control-active)] text-[var(--wb-text)]'
+          : 'text-[var(--wb-text-2)] hover:text-[var(--wb-text)]',
       )}
     >
       <span>{label}</span>
-      <span className="tabular-nums text-muted-foreground">{count.toLocaleString()}</span>
+      <span className="tabular-nums text-[var(--wb-text-2)]">{count.toLocaleString()}</span>
     </button>
   );
 }
@@ -185,9 +182,9 @@ function CopyAsChip({
           });
       }}
       title={`Copy ${label} to clipboard`}
-      className="flex items-center gap-1 rounded-sm border border-border px-2 py-1 text-xs text-foreground transition-colors hover:bg-accent"
+      className="flex h-6 items-center gap-1 rounded-[6px] bg-[var(--wb-control)] px-2 text-[13px] text-[var(--wb-text)] transition-colors hover:bg-[var(--wb-control-hover)]"
     >
-      {copied ? <Check className="h-3 w-3 text-primary" /> : <Copy className="h-3 w-3" />}
+      {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
       {label}
     </button>
   );
@@ -232,11 +229,11 @@ function ExportRow({
   };
 
   return (
-    <div className="grid grid-cols-[1fr_auto_auto] items-center gap-x-1 rounded-sm px-2 py-1 transition-colors hover:bg-accent/40">
-      <div className="flex min-w-0 items-center gap-2 text-sm text-foreground">
+    <div className="grid grid-cols-[1fr_auto_auto] items-center gap-x-1 rounded-[5px] px-2 py-0.5 transition-colors hover:bg-[var(--wb-control)]">
+      <div className="flex min-w-0 items-center gap-2 text-[13px] text-[var(--wb-text)]">
         {icon}
         <span className="truncate">{label}</span>
-        <span className="ml-1 text-xs text-muted-foreground">{hint}</span>
+        <span className="ml-1 font-mono text-[12px] text-[var(--wb-text-3)]">{hint}</span>
       </div>
       <Button
         variant="ghost"
@@ -245,7 +242,7 @@ function ExportRow({
         title={`Copy ${label} to clipboard`}
         aria-label={`Copy ${label}`}
       >
-        {copied ? <Check className="text-primary" /> : <Copy />}
+        {copied ? <Check /> : <Copy />}
       </Button>
       <Button
         variant="ghost"

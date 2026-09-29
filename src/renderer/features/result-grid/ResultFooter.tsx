@@ -1,5 +1,5 @@
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { MenuItem, Pill, Segmented, ToolbarButton } from '@/components/ui/workbench';
+import { IconButton, MenuItem, Pill, Segmented } from '@/components/ui/workbench';
 import { MockDataDialog } from '@/features/mock-data/MockDataDialog';
 import { PgVectorDialog } from '@/features/pgvector/PgVectorDialog';
 import { PostGisDialog } from '@/features/postgis/PostGisDialog';
@@ -89,13 +89,13 @@ export function ResultFooter() {
 
   return (
     <div
-      className="chrome flex h-[40px] shrink-0 items-center gap-2 border-t hairline px-2.5"
+      className="flex h-9 shrink-0 items-center gap-1.5 border-t border-[var(--wb-separator)] bg-[var(--wb-content)] px-2"
       data-testid="result-footer"
     >
       {isTable ? (
         <Segmented<TableViewMode>
           ariaLabel="Table view"
-          variant="accent"
+          variant="track"
           value={tab.viewMode}
           onChange={setTabViewMode}
           options={[
@@ -107,7 +107,7 @@ export function ResultFooter() {
       ) : (
         <Segmented<ResultView>
           ariaLabel="Result view"
-          variant="accent"
+          variant="track"
           value={resultView}
           onChange={(v) => setResultView(tab.id, v)}
           options={[
@@ -141,7 +141,7 @@ export function ResultFooter() {
       )}
 
       {!isTable && result && !running && (
-        <span className="shrink-0 font-mono text-[11px] tabular-nums text-muted-foreground">
+        <span className="ml-1.5 shrink-0 text-[13px] tabular-nums text-[var(--wb-text-2)]">
           {formatDuration(
             tab.queryResults.length > 1
               ? tab.queryResults.reduce((sum: number, r: QueryResult) => sum + r.durationMs, 0)
@@ -150,7 +150,7 @@ export function ResultFooter() {
         </span>
       )}
       {running && (
-        <span className="shrink-0 text-[11px] text-muted-foreground">Running…</span>
+        <span className="ml-1.5 shrink-0 text-[13px] text-[var(--wb-text-2)]">Running…</span>
       )}
 
       <div className="flex min-w-0 flex-1 justify-center">
@@ -159,21 +159,20 @@ export function ResultFooter() {
 
       {showDataTools && (
         <>
-          <ToolbarButton
+          <IconButton
             label="Find in results (⌘F)"
-            className="h-[26px] w-[26px] rounded-[7px]"
             onClick={() => window.dispatchEvent(new CustomEvent('plasma:grid-find'))}
           >
             <Search />
-          </ToolbarButton>
+          </IconButton>
           <ColumnsPopover />
           <SortPopover />
           {moreItems && (
             <Popover open={moreOpen} onOpenChange={setMoreOpen}>
               <PopoverTrigger asChild>
-                <ToolbarButton label="More" className="h-[26px] w-[26px] rounded-[7px]">
+                <IconButton label="More">
                   <MoreHorizontal />
-                </ToolbarButton>
+                </IconButton>
               </PopoverTrigger>
               <PopoverContent align="end" side="top" sideOffset={6} className="w-[220px] p-1" role="menu">
                 {hasGeo && (
@@ -222,14 +221,9 @@ export function ResultFooter() {
       )}
 
       {isTable && (
-        <ToolbarButton
-          label="Refresh"
-          className="h-[26px] w-[26px] rounded-[7px]"
-          disabled={running}
-          onClick={() => void refreshTable()}
-        >
+        <IconButton label="Refresh" disabled={running} onClick={() => void refreshTable()}>
           <RefreshCw className={running ? 'animate-spin' : ''} />
-        </ToolbarButton>
+        </IconButton>
       )}
 
       <InsertRowDialog open={insertOpen} onOpenChange={setInsertOpen} />
@@ -265,24 +259,24 @@ function RowRange() {
   const limited = !isTable && tab.queryResult.truncated;
 
   return (
-    <div className="flex min-w-0 items-center gap-1 text-xs tabular-nums text-muted-foreground">
+    <div className="flex min-w-0 items-center gap-1 text-[13px] tabular-nums text-[var(--wb-text-2)]">
       {paged && (
-        <ToolbarButton
+        <IconButton
           label="Previous page"
-          className="h-6 w-6 rounded-[6px]"
+          variant="plain"
           disabled={page === 0}
           onClick={() => setPage(page - 1)}
         >
           <ChevronLeft />
-        </ToolbarButton>
+        </IconButton>
       )}
-      <span className="truncate px-1 text-foreground/80" data-testid="row-range">
+      <span className="truncate px-1" data-testid="row-range">
         {paged ? (
           <>
             {start.toLocaleString()}–{end.toLocaleString()} of{' '}
             {tab.countLoading ? '…' : totalRows.toLocaleString()}
             {isTable && tab.totalRowCountIsEstimate && (
-              <span className="text-muted-foreground" title="Estimate from pg_class.reltuples">
+              <span className="text-[var(--wb-text-3)]" title="Estimate from pg_class.reltuples">
                 {' '}
                 (est.)
               </span>
@@ -295,30 +289,33 @@ function RowRange() {
           </>
         )}
         {limited && (
-          <span className="text-primary" title="Stopped at the editor row limit / worker cap">
+          <span
+            className="text-[var(--wb-text)]"
+            title="Stopped at the editor row limit / worker cap"
+          >
             {' '}
             · limited
           </span>
         )}
       </span>
       {paged && (
-        <ToolbarButton
+        <IconButton
           label="Next page"
-          className="h-6 w-6 rounded-[6px]"
+          variant="plain"
           disabled={page >= totalPages - 1}
           onClick={() => setPage(page + 1)}
         >
           <ChevronRight />
-        </ToolbarButton>
+        </IconButton>
       )}
       <Popover>
         <PopoverTrigger asChild>
-          <ToolbarButton label="Page settings" className="h-6 w-6 rounded-[6px]">
+          <IconButton label="Page settings" variant="plain">
             <Settings2 />
-          </ToolbarButton>
+          </IconButton>
         </PopoverTrigger>
         <PopoverContent side="top" sideOffset={6} className="w-[220px] p-3">
-          <div className="mb-2 text-[11px] font-semibold text-muted-foreground">Rows per page</div>
+          <div className="mb-2 text-[12px] font-medium text-[var(--wb-text-2)]">Rows per page</div>
           <div className="mb-3 flex flex-wrap gap-1">
             {PAGE_SIZES.map((n) => (
               <button
@@ -326,17 +323,17 @@ function RowRange() {
                 type="button"
                 onClick={() => setPageSize(n)}
                 className={cn(
-                  'rounded-[6px] px-2 py-1 font-mono text-[11px] transition-colors',
+                  'rounded-[6px] px-2 py-1 font-mono text-[12px] transition-colors',
                   tab.pageSize === n
-                    ? 'bg-primary text-primary-foreground'
-                    : 'glass text-foreground hover:bg-[var(--glass-fill-hover)]',
+                    ? 'bg-[var(--wb-control-active)] text-[var(--wb-text)]'
+                    : 'bg-[var(--wb-control)] text-[var(--wb-text-2)] hover:bg-[var(--wb-control-hover)] hover:text-[var(--wb-text)]',
                 )}
               >
                 {n}
               </button>
             ))}
           </div>
-          <div className="mb-1.5 text-[11px] font-semibold text-muted-foreground">
+          <div className="mb-1.5 text-[12px] font-medium text-[var(--wb-text-2)]">
             Go to page (1–{totalPages.toLocaleString()})
           </div>
           <form
@@ -353,11 +350,9 @@ function RowRange() {
               inputMode="numeric"
               placeholder={String(page + 1)}
               aria-label="Page number"
-              className="glass h-7 min-w-0 flex-1 rounded-[6px] border-0 px-2 font-mono text-xs text-foreground outline-none focus:ring-2 focus:ring-primary/50"
+              className="h-6 min-w-0 flex-1 rounded-[6px] border-0 bg-[var(--wb-field)] px-2 font-mono text-[12px] text-[var(--wb-text)] outline-none ring-1 ring-[var(--wb-separator)] placeholder:text-[var(--wb-text-3)] focus:ring-2 focus:ring-[var(--wb-accent)]"
             />
-            <Pill type="submit" tone="accent">
-              Go
-            </Pill>
+            <Pill type="submit">Go</Pill>
           </form>
         </PopoverContent>
       </Popover>

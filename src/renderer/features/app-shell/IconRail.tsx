@@ -26,7 +26,7 @@ export function IconRail() {
   const top: RailItem[] = [
     {
       mode: 'database',
-      icon: <Database />,
+      icon: <Database className="text-[var(--icon-db)]" />,
       label: dbLabel,
       title: `${activeConfig?.name ?? 'Database'} — tables and queries`,
     },
@@ -45,7 +45,7 @@ export function IconRail() {
 
   return (
     <nav
-      className="chrome flex w-[76px] shrink-0 flex-col items-center gap-1 border-r hairline py-2"
+      className="flex w-[79px] shrink-0 flex-col items-center gap-1 bg-[var(--wb-window)] py-2"
       aria-label="Workspaces"
     >
       {top.map((it) => (
@@ -78,18 +78,18 @@ function Tile({
       aria-current={active || undefined}
       title={item.title}
       className={cn(
-        'flex w-[66px] flex-col items-center gap-1 rounded-[10px] px-1 pb-1.5 pt-2 transition-colors',
-        '[&_svg]:h-[19px] [&_svg]:w-[19px]',
+        'flex w-[71px] flex-col items-center gap-[5px] rounded-[8px] px-1 pb-2 pt-2.5 transition-colors',
+        '[&_svg]:h-[22px] [&_svg]:w-[22px] [&_svg]:stroke-[1.6]',
         active
-          ? 'raised text-primary'
-          : 'text-foreground/60 hover:bg-[var(--glass-fill-hover)] hover:text-foreground',
+          ? 'bg-[color-mix(in_oklch,var(--wb-window)_88%,var(--wb-text))] text-[var(--wb-text)]'
+          : 'text-[var(--wb-text-2)] hover:bg-[color-mix(in_oklch,var(--wb-window)_94%,var(--wb-text))] hover:text-[var(--wb-text)]',
       )}
     >
       {item.icon}
       <span
         className={cn(
-          'w-full truncate text-center text-[10px] leading-3',
-          active ? 'font-semibold text-foreground' : 'font-medium',
+          'w-full truncate text-center text-[11px] font-medium leading-[13px]',
+          active ? 'text-[var(--wb-text)]' : 'text-[var(--wb-text-2)]',
         )}
       >
         {item.label}

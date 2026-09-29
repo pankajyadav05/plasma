@@ -43,6 +43,14 @@ const ENGINE_LABEL: Record<ConnectionEngine, string> = {
   opensearch: 'OpenSearch',
 };
 
+/** Native-looking graphite popover surface for the toolbar switchers. */
+const POPOVER =
+  'rounded-[10px] border-[var(--wb-toolbar-group-edge)] bg-[var(--wb-toolbar-group)] text-[13px] text-[var(--wb-text)] shadow-[0_10px_30px_rgb(0_0_0/0.35)]';
+
+/** Hover row in a switcher popover (macOS menu highlight). */
+const MENU_ROW =
+  'flex w-full items-center gap-2 rounded-[5px] px-2 py-1 text-[13px] text-[var(--wb-text)] transition-none hover:bg-[var(--wb-accent)] hover:text-white';
+
 /** Environment tag → capsule fill (TablePlus colours the whole capsule). */
 const TAG_FILL: Record<string, string> = {
   local: 'var(--status-local)',
@@ -76,7 +84,7 @@ export function TopBar() {
   return (
     <header
       className={cn(
-        'chrome topbar-pad relative z-20 flex h-[52px] shrink-0 items-center gap-2 border-b hairline',
+        'topbar-pad relative z-20 flex h-[52px] shrink-0 items-center gap-2.5 border-b border-[var(--wb-separator)] bg-[var(--wb-window)]',
         overlayOpen ? 'pointer-events-none' : 'drag',
       )}
     >
@@ -138,7 +146,7 @@ function ChangesCluster() {
   };
 
   return (
-    <ToolbarGroup className={cn(has && 'ring-1 ring-primary/50')}>
+    <ToolbarGroup className={cn(has && 'ring-1 ring-[var(--wb-accent)]/50')}>
       <ToolbarButton
         label="Discard pending changes"
         disabled={!has || busy}
@@ -155,8 +163,12 @@ function ChangesCluster() {
             <Eye />
           </ToolbarButton>
         </PopoverTrigger>
-        <PopoverContent align="start" sideOffset={8} className="w-[560px] max-w-[90vw] p-0">
-          <div className="border-b border-[var(--hairline)] px-3 py-2 text-xs text-muted-foreground">
+        <PopoverContent
+          align="start"
+          sideOffset={8}
+          className={cn(POPOVER, 'w-[560px] max-w-[90vw] overflow-hidden p-0')}
+        >
+          <div className="border-b border-[var(--wb-separator)] px-3 py-2 text-[12px] text-[var(--wb-text-2)]">
             {edits.length} pending UPDATE{edits.length === 1 ? '' : 's'} — commits as one
             transaction
           </div>
@@ -173,7 +185,7 @@ function ChangesCluster() {
         {busy ? <Loader2 className="animate-spin" /> : <Check />}
       </ToolbarButton>
       {has && (
-        <span className="px-1.5 font-mono text-[11px] font-semibold tabular-nums text-primary">
+        <span className="px-1.5 font-mono text-[11px] font-semibold tabular-nums text-[var(--wb-accent)]">
           {edits.length}
         </span>
       )}
@@ -195,7 +207,7 @@ function TxnCluster() {
   const rollbackTxn = useSession((s) => s.rollbackTxn);
   return (
     <ToolbarGroup className="ring-1 ring-[var(--status-staging)]">
-      <span className="px-2 text-[11px] font-semibold text-foreground" data-testid="status-txn">
+      <span className="px-2 text-[12px] font-medium text-[var(--wb-text)]" data-testid="status-txn">
         Transaction open
       </span>
       <ToolbarDivider />
@@ -251,9 +263,8 @@ function SessionCluster({ postgres }: { postgres: boolean }) {
             if (canvasMode !== 'database') setCanvasMode('database');
             addTab();
           }}
-          className="px-1.5"
         >
-          <span className="text-[10px] font-bold tracking-wide">SQL</span>
+          <span className="text-[10px] font-semibold tracking-wide">SQL</span>
         </ToolbarButton>
       )}
     </ToolbarGroup>
@@ -339,6 +350,7 @@ function StatusCapsule() {
   const engine = activeConfig?.engine ?? 'postgres';
   const connected = connectionState === 'connected';
   const fill = connected && tag ? TAG_FILL[tag] : undefined;
+  const surface = fill ?? 'var(--status-none)';
   const stateLabel =
     connectionState === 'connected'
       ? 'connected'
@@ -372,10 +384,11 @@ function StatusCapsule() {
   return (
     <div
       className={cn(
-        'no-drag flex h-[30px] min-w-0 flex-1 items-center overflow-hidden rounded-[9px] px-3 font-mono text-[12px] leading-none',
-        fill ? 'text-white shadow-[inset_0_1px_0_rgb(255_255_255/0.22),0_1px_2px_rgb(0_0_0/0.25)]' : 'glass text-foreground',
+        'no-drag flex h-9 min-w-0 flex-1 items-center overflow-hidden rounded-[10px] px-3.5 font-mono text-[13px] font-semibold leading-none',
+        'shadow-[inset_0_1px_0_rgb(255_255_255/0.08)]',
+        fill ? 'text-white' : 'text-[var(--wb-text)]',
       )}
-      style={fill ? { backgroundColor: fill } : undefined}
+      style={{ backgroundColor: surface }}
       data-testid="status-capsule"
     >
       <span className="sr-only" data-testid="status-connection">
@@ -387,7 +400,7 @@ function StatusCapsule() {
           className={cn(
             'mr-2 inline-block h-2 w-2 shrink-0 rounded-full',
             connectionState === 'connecting'
-              ? 'animate-pulse bg-primary'
+              ? 'animate-pulse bg-[var(--wb-accent)]'
               : connectionState === 'error'
                 ? 'bg-destructive'
                 : 'bg-muted-foreground',
@@ -398,7 +411,7 @@ function StatusCapsule() {
 
       {activeConfig && connected ? (
         <span className="flex min-w-0 items-center">
-          <Seg strong>{shortVersion(serverVersion, engine)}</Seg>
+          <Seg>{shortVersion(serverVersion, engine)}</Seg>
           <Sep />
           <Seg
             title={
@@ -408,7 +421,6 @@ function StatusCapsule() {
                   ? 'Tunnelled over SSH'
                   : 'Unencrypted connection'
             }
-            className={cn(!activeConfig.ssl && !viaSsh && !fill && 'text-red-600 dark:text-red-400')}
           >
             {transport}
           </Seg>
@@ -429,15 +441,17 @@ function StatusCapsule() {
           {engine === 'postgres' && <SchemaSwitcher />}
           {object && (
             <>
-              <span className="shrink-0 px-1 opacity-60">/</span>
-              <Seg strong>{object}</Seg>
+              <span className="shrink-0 whitespace-pre opacity-60" aria-hidden>
+                {' / '}
+              </span>
+              <Seg>{object}</Seg>
               {tab?.queryRunState === 'running' && canvasMode === 'database' && (
                 <Loader2 className="ml-1.5 h-3 w-3 shrink-0 animate-spin opacity-80" />
               )}
             </>
           )}
           {tag && (
-            <span className="ml-2 shrink-0 rounded-[4px] bg-black/20 px-1.5 py-[3px] text-[9px] font-bold uppercase tracking-wider">
+            <span className="ml-2.5 shrink-0 rounded-[4px] bg-black/20 px-1.5 py-[3px] font-sans text-[10px] font-semibold uppercase tracking-wider">
               {tag}
             </span>
           )}
@@ -461,20 +475,15 @@ function StatusCapsule() {
 
 function Seg({
   children,
-  strong = false,
   title,
   className,
 }: {
   children: React.ReactNode;
-  strong?: boolean;
   title?: string;
   className?: string;
 }) {
   return (
-    <span
-      className={cn('min-w-0 shrink truncate whitespace-nowrap', strong && 'font-semibold', className)}
-      title={title}
-    >
+    <span className={cn('min-w-0 shrink truncate whitespace-nowrap', className)} title={title}>
       {children}
     </span>
   );
@@ -482,8 +491,8 @@ function Seg({
 
 function Sep() {
   return (
-    <span className="shrink-0 px-1.5 opacity-55" aria-hidden>
-      :
+    <span className="shrink-0 whitespace-pre opacity-60" aria-hidden>
+      {' : '}
     </span>
   );
 }
@@ -497,11 +506,11 @@ function CapsuleButton({
     <button
       type="button"
       title={title}
-      className="-mx-1 flex min-w-0 shrink items-center gap-1 rounded-[5px] px-1 py-1 font-semibold transition-colors hover:bg-black/10 dark:hover:bg-white/10"
+      className="group/cap -mx-1 flex min-w-0 shrink items-center gap-0.5 rounded-[5px] px-1 py-1 font-semibold transition-colors hover:bg-black/15"
       {...props}
     >
       {children}
-      <ChevronsUpDown className="h-3 w-3 shrink-0 opacity-70" />
+      <ChevronsUpDown className="hidden h-3 w-3 shrink-0 opacity-70 group-hover/cap:inline-block group-focus-visible/cap:inline-block" />
     </button>
   );
 }
@@ -523,18 +532,18 @@ function ConnectionSwitcher({ trigger }: { trigger: React.ReactElement }) {
   return (
     <Popover onOpenChange={(o) => !o && setFilter('')}>
       <PopoverTrigger asChild>{trigger}</PopoverTrigger>
-      <PopoverContent align="start" sideOffset={8} className="w-[360px] p-1.5">
+      <PopoverContent align="start" sideOffset={8} className={cn(POPOVER, 'w-[360px] p-1.5')}>
         <input
           type="text"
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
           placeholder="Search connections…"
           aria-label="Search connections"
-          className="glass mb-1 h-7 w-full rounded-[7px] border-0 px-2.5 text-xs text-foreground outline-none placeholder:text-muted-foreground"
+          className="mb-1 h-[26px] w-full rounded-[7px] border-0 bg-[var(--wb-field)] px-2.5 text-[13px] text-[var(--wb-text)] outline-none ring-1 ring-[var(--wb-toolbar-group-edge)] placeholder:text-[var(--wb-text-3)] focus:ring-[var(--wb-accent)]"
         />
         <div className="max-h-[340px] overflow-y-auto">
           {list.length === 0 && (
-            <div className="px-2 py-2 text-xs text-muted-foreground">
+            <div className="px-2 py-2 text-[13px] text-[var(--wb-text-2)]">
               {savedConnections.length === 0 ? 'No saved connections yet' : 'No matches'}
             </div>
           )}
@@ -547,12 +556,8 @@ function ConnectionSwitcher({ trigger }: { trigger: React.ReactElement }) {
             />
           ))}
         </div>
-        <div className="my-1 h-px bg-[var(--hairline)]" />
-        <button
-          type="button"
-          onClick={() => openDialog()}
-          className="flex w-full items-center gap-2 rounded-[5px] px-2 py-1.5 text-xs text-foreground transition-colors hover:bg-primary hover:text-primary-foreground"
-        >
+        <div className="my-1 h-px bg-[var(--wb-toolbar-group-edge)]" />
+        <button type="button" onClick={() => openDialog()} className={MENU_ROW}>
           <Plus className="h-3.5 w-3.5" />
           New connection…
         </button>
@@ -578,8 +583,8 @@ function ConnectionRow({
   return (
     <div
       className={cn(
-        'group/row flex items-center rounded-[5px] transition-colors hover:bg-[var(--glass-fill-hover)]',
-        active && 'bg-[var(--glass-fill-press)]',
+        'group/row flex items-center rounded-[5px] transition-colors hover:bg-[var(--wb-control-hover)]',
+        active && 'bg-[var(--wb-control)]',
         disabled && 'opacity-50',
       )}
     >
@@ -594,25 +599,27 @@ function ConnectionRow({
       >
         <span
           className="grid h-7 w-7 shrink-0 place-items-center rounded-[7px] text-white"
-          style={{ backgroundColor: (tag && TAG_FILL[tag]) || 'var(--muted-foreground)' }}
+          style={{ backgroundColor: (tag && TAG_FILL[tag]) || 'var(--status-none)' }}
         >
           <Icon className="h-3.5 w-3.5" />
         </span>
         <span className="min-w-0 flex-1">
-          <span className="block truncate text-xs font-medium text-foreground">{c.name}</span>
-          <span className="block truncate font-mono text-[10px] text-muted-foreground">
+          <span className="block truncate text-[13px] font-medium text-[var(--wb-text)]">
+            {c.name}
+          </span>
+          <span className="block truncate font-mono text-[11px] text-[var(--wb-text-2)]">
             {c.host}:{c.port}
             {c.database ? ` / ${c.database}` : ''}
           </span>
         </span>
-        {active && <Check className="h-3.5 w-3.5 shrink-0 text-primary" />}
+        {active && <Check className="h-3.5 w-3.5 shrink-0 text-[var(--wb-accent)]" />}
       </button>
       <button
         type="button"
         onClick={() => void editConnection(c.id)}
         aria-label={`Edit ${c.name}`}
         title="Edit connection"
-        className="mr-1 grid h-6 w-6 shrink-0 place-items-center rounded-[5px] text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:opacity-100 group-hover/row:opacity-100"
+        className="mr-1 grid h-6 w-6 shrink-0 place-items-center rounded-[5px] text-[var(--wb-text-2)] opacity-0 transition-opacity hover:text-[var(--wb-text)] focus-visible:opacity-100 group-hover/row:opacity-100"
       >
         <Pencil className="h-3 w-3" />
       </button>
@@ -636,15 +643,15 @@ function SchemaSwitcher() {
             <span className="truncate">{value}</span>
           </CapsuleButton>
         </PopoverTrigger>
-        <PopoverContent align="start" sideOffset={8} className="w-[240px] p-1.5">
-          <div className="px-2 pb-1 text-[11px] font-medium text-muted-foreground">Schemas</div>
+        <PopoverContent align="start" sideOffset={8} className={cn(POPOVER, 'w-[240px] p-1.5')}>
+          <div className="px-2 pb-1 text-[11px] font-medium text-[var(--wb-text-2)]">Schemas</div>
           <div className="max-h-[300px] overflow-y-auto">
             {list.map((s) => (
               <button
                 key={s.name}
                 type="button"
                 onClick={() => setCurrentSchema(s.name)}
-                className="flex w-full items-center gap-2 rounded-[5px] px-2 py-1.5 font-mono text-xs text-foreground transition-colors hover:bg-primary hover:text-primary-foreground"
+                className={cn(MENU_ROW, 'font-mono')}
               >
                 <span className="grid w-3 place-items-center">
                   {s.name === value && <Check className="h-3 w-3" />}

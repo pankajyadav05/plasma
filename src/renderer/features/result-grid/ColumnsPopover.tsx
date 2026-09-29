@@ -1,6 +1,6 @@
 import { Button } from '@/components/ui/button';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { Pill } from '@/components/ui/workbench';
+import { IconButton } from '@/components/ui/workbench';
 import { cn } from '@/lib/cn';
 import { useActiveTab, useSession } from '@/stores/session';
 import { Command } from 'cmdk';
@@ -44,16 +44,24 @@ export function ColumnsPopover() {
   return (
     <Popover>
       <PopoverTrigger asChild>
-        <Pill className={hasState ? 'text-primary' : undefined}>
+        <IconButton
+          label="Columns"
+          title={
+            hasState
+              ? `Columns — ${allColumns.length - hiddenCount}/${allColumns.length} visible, ${stickyCount} pinned`
+              : 'Columns'
+          }
+          active={hasState}
+          className={hasState ? 'flex w-auto gap-1 px-1.5' : undefined}
+        >
           <Columns3 />
-          Columns
           {hiddenCount > 0 && (
-            <span className="rounded-[4px] bg-primary px-1 text-[10px] font-semibold leading-4 text-primary-foreground">
+            <span className="font-mono text-[11px] leading-none tabular-nums">
               {allColumns.length - hiddenCount}/{allColumns.length}
             </span>
           )}
-          {stickyCount > 0 && <Pin className="h-3 w-3" />}
-        </Pill>
+          {stickyCount > 0 && <Pin className="!h-3 !w-3" />}
+        </IconButton>
       </PopoverTrigger>
       <PopoverContent align="start" side="top" className="w-[420px] p-0">
         <div className="flex items-center justify-between border-b border-border px-4 py-3">

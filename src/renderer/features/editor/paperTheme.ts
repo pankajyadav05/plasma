@@ -50,6 +50,14 @@ function resolveCssColor(varName: string, fallback: string): string {
   }
 }
 
+/** True when no named palette (`theme-*` class on <html>) is active. */
+function isDefaultPalette(): boolean {
+  for (const cls of document.documentElement.classList) {
+    if (cls.startsWith('theme-')) return false;
+  }
+  return true;
+}
+
 function buildTheme(mode: 'light' | 'dark'): MonacoType.editor.IStandaloneThemeData {
   const bg = resolveCssColor('--background', mode === 'dark' ? '#252525' : '#FFFFFF');
   const fg = resolveCssColor('--foreground', mode === 'dark' ? '#FBFBFB' : '#252525');
@@ -65,42 +73,108 @@ function buildTheme(mode: 'light' | 'dark'): MonacoType.editor.IStandaloneThemeD
   // Monaco token rules expect colors WITHOUT the leading `#`.
   const hex6 = (h: string) => (h.startsWith('#') ? h.slice(1, 7) : h);
 
-  // Syntax colors stay semantically intuitive (strings green, numbers
-  // blue, types amber, comments grey) for readability across palettes.
-  // Keyword picks up --primary so the theme flavor still lands.
-  const keywordHex = hex6(primary);
-  const syntax =
-    mode === 'dark'
+  // Default theme = TablePlus syntax palette (SPEC §2): muted blue
+  // keywords (not bold), rose strings, violet numbers, grey italic
+  // comments. Named palettes keep deriving from their own variables so
+  // the theme flavour still lands (keyword = --primary).
+  const isDefault = isDefaultPalette();
+  const syntax = isDefault
+    ? mode === 'dark'
       ? {
+          keyword: '659AD4',
+          keywordStyle: '',
+          string: 'BF7471',
+          number: 'AC7CF8',
+          numberStyle: '',
+          type: '6399D4',
+          comment: '7F7F7F',
+          identifier: 'C1C0C1',
+          delimiter: 'C1C0C1',
+        }
+      : {
+          keyword: '0B57D0',
+          keywordStyle: '',
+          string: 'C41A16',
+          number: '7C3AED',
+          numberStyle: '',
+          type: '0B57D0',
+          comment: '8E8E93',
+          identifier: '1D1D1F',
+          delimiter: '1D1D1F',
+        }
+    : mode === 'dark'
+      ? {
+          keyword: hex6(primary),
+          keywordStyle: 'bold',
           string: 'A3D977',
           number: '7FB8FF',
+          numberStyle: 'bold',
           type: 'E8B872',
           comment: '888888',
           identifier: hex6(fg),
           delimiter: 'C0C0C0',
         }
       : {
+          keyword: hex6(primary),
+          keywordStyle: 'bold',
           string: '3F6D1F',
           number: '1C4480',
+          numberStyle: 'bold',
           type: 'B47E11',
           comment: '888888',
           identifier: hex6(fg),
           delimiter: '555555',
         };
 
+  // Editor chrome colours. Default theme: TablePlus graphite (bg #242424,
+  // grey line numbers, white active number, near-invisible current line,
+  // system-blue cursor/selection). Named themes: derived as before.
+  const ed = isDefault
+    ? mode === 'dark'
+      ? {
+          bg: '#242424',
+          fg: '#C1C0C1',
+          lineNumber: '#7F7F7F',
+          lineNumberActive: '#FFFFFF',
+          lineHighlight: '#2A2A2A',
+          selection: '#0A84FF4D',
+          cursor: '#E0E0E0',
+          accent: '#0A84FF',
+        }
+      : {
+          bg: '#FFFFFF',
+          fg: '#1D1D1F',
+          lineNumber: '#8E8E93',
+          lineNumberActive: '#1D1D1F',
+          lineHighlight: '#F7F7F7',
+          selection: '#007AFF33',
+          cursor: '#1D1D1F',
+          accent: '#007AFF',
+        }
+    : {
+        bg,
+        fg,
+        lineNumber: mutedFg,
+        lineNumberActive: primary,
+        lineHighlight: `${muted}80`,
+        selection: accent,
+        cursor: primary,
+        accent: primary,
+      };
+
   return {
     base: mode === 'dark' ? 'vs-dark' : 'vs',
     inherit: false,
     rules: [
-      { token: '', foreground: syntax.identifier, background: hex6(bg) },
-      { token: 'keyword', foreground: keywordHex, fontStyle: 'bold' },
-      { token: 'keyword.sql', foreground: keywordHex, fontStyle: 'bold' },
+      { token: '', foreground: syntax.identifier, background: hex6(ed.bg) },
+      { token: 'keyword', foreground: syntax.keyword, fontStyle: syntax.keywordStyle },
+      { token: 'keyword.sql', foreground: syntax.keyword, fontStyle: syntax.keywordStyle },
       { token: 'operator', foreground: syntax.delimiter },
       { token: 'operator.sql', foreground: syntax.delimiter },
       { token: 'string', foreground: syntax.string },
       { token: 'string.sql', foreground: syntax.string },
-      { token: 'number', foreground: syntax.number, fontStyle: 'bold' },
-      { token: 'number.sql', foreground: syntax.number, fontStyle: 'bold' },
+      { token: 'number', foreground: syntax.number, fontStyle: syntax.numberStyle },
+      { token: 'number.sql', foreground: syntax.number, fontStyle: syntax.numberStyle },
       { token: 'comment', foreground: syntax.comment, fontStyle: 'italic' },
       { token: 'identifier', foreground: syntax.identifier },
       { token: 'type', foreground: syntax.type },
@@ -108,18 +182,20 @@ function buildTheme(mode: 'light' | 'dark'): MonacoType.editor.IStandaloneThemeD
       { token: 'predefined.sql', foreground: syntax.type },
     ],
     colors: {
-      'editor.background': bg,
-      'editor.foreground': fg,
-      'editorGutter.background': bg,
-      'editorLineNumber.foreground': mutedFg,
-      'editorLineNumber.activeForeground': primary,
-      'editor.selectionBackground': accent,
-      'editor.inactiveSelectionBackground': `${accent}80`,
-      'editor.lineHighlightBackground': `${muted}80`,
+      'editor.background': ed.bg,
+      'editor.foreground': ed.fg,
+      'editorGutter.background': ed.bg,
+      'editorLineNumber.foreground': ed.lineNumber,
+      'editorLineNumber.activeForeground': ed.lineNumberActive,
+      'editor.selectionBackground': ed.selection,
+      'editor.inactiveSelectionBackground': isDefault
+        ? `${ed.selection.slice(0, 7)}26`
+        : `${accent}80`,
+      'editor.lineHighlightBackground': ed.lineHighlight,
       'editor.lineHighlightBorder': '#00000000',
-      'editorCursor.foreground': primary,
-      'editorBracketMatch.background': accent,
-      'editorBracketMatch.border': primary,
+      'editorCursor.foreground': ed.cursor,
+      'editorBracketMatch.background': isDefault ? '#00000000' : accent,
+      'editorBracketMatch.border': isDefault ? `${ed.accent}99` : primary,
       'editorWidget.background': card,
       'editorWidget.foreground': cardFg,
       'editorWidget.border': border,
@@ -129,9 +205,9 @@ function buildTheme(mode: 'light' | 'dark'): MonacoType.editor.IStandaloneThemeD
       'editorSuggestWidget.border': border,
       'editorSuggestWidget.selectedBackground': accent,
       'editorSuggestWidget.selectedForeground': accentFg,
-      'editorSuggestWidget.selectedIconForeground': primary,
-      'editorSuggestWidget.highlightForeground': primary,
-      'editorSuggestWidget.focusHighlightForeground': primary,
+      'editorSuggestWidget.selectedIconForeground': ed.accent,
+      'editorSuggestWidget.highlightForeground': ed.accent,
+      'editorSuggestWidget.focusHighlightForeground': ed.accent,
       'list.focusBackground': accent,
       'list.focusForeground': accentFg,
       'list.hoverBackground': muted,

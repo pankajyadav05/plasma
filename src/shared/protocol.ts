@@ -852,7 +852,7 @@ export const SettingsShape = z.object({
   sidebarCollapsed: z.boolean().default(false),
   sidebarWidth: z.number().int().min(200).max(520).default(264),
   editorExpanded: z.boolean().default(false),
-  editorFontSize: z.number().int().min(10).max(24).default(14),
+  editorFontSize: z.number().int().min(10).max(24).default(13),
   /**
    * Pixel height of the inline SQL editor when the result grid is also
    * visible. Drives the draggable divider between editor and grid;

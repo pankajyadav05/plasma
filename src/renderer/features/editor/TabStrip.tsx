@@ -1,4 +1,3 @@
-import { ToolbarButton } from '@/components/ui/workbench';
 import { cn } from '@/lib/cn';
 import { kbd } from '@/lib/platform';
 import { useSession } from '@/stores/session';
@@ -34,7 +33,8 @@ const TAB_ICON: Record<TabKind, LucideIcon> = {
 
 /**
  * Object tabs, TablePlus-style: tabs share the strip's width equally
- * with centred titles; the active tab is a raised pill on a glass track.
+ * with centred titles; the active tab is an inset rounded pill on the
+ * flat tab bar (no track, no dividers).
  * Close sits on the leading edge and appears on hover (macOS tab
  * convention). Middle-click closes too.
  */
@@ -49,9 +49,9 @@ export function TabStrip() {
   const engine = useSession((s) => s.activeConfig?.engine ?? 'postgres');
 
   return (
-    <div className="chrome flex h-[38px] shrink-0 items-center gap-1.5 border-b hairline px-2">
+    <div className="flex h-[34px] shrink-0 items-stretch border-b border-[var(--wb-separator)] bg-[var(--wb-tabbar)]">
       <div
-        className="glass scrollbar-none flex h-[28px] min-w-0 flex-1 items-stretch gap-[2px] overflow-x-auto rounded-[8px] p-[2px]"
+        className="scrollbar-none flex min-w-0 flex-1 items-stretch gap-1 overflow-x-auto p-1"
         role="tablist"
         aria-label="Open tabs"
       >
@@ -73,16 +73,16 @@ export function TabStrip() {
               }}
               title={t.title}
               className={cn(
-                'group relative flex min-w-[120px] max-w-[320px] flex-1 cursor-default items-center justify-center gap-1.5 rounded-[6px] px-6 text-xs transition-colors',
+                'group relative flex min-w-[120px] flex-1 basis-0 cursor-default items-center justify-center gap-1.5 rounded-[7px] px-7 text-[13px] leading-5 transition-colors',
                 active
-                  ? 'raised font-medium text-foreground'
-                  : 'text-foreground/60 hover:bg-[var(--glass-fill-hover)] hover:text-foreground',
+                  ? 'bg-[var(--wb-control-active)] text-[var(--wb-text)] shadow-[0_0.5px_1px_rgb(0_0_0/0.2)]'
+                  : 'text-[var(--wb-text-2)] hover:bg-[var(--wb-control-hover)] hover:text-[var(--wb-text)]',
               )}
             >
               {tabs.length > 1 && (
                 <button
                   type="button"
-                  className="absolute left-1 top-1/2 grid h-[18px] w-[18px] -translate-y-1/2 place-items-center rounded-[4px] text-muted-foreground opacity-0 transition-opacity hover:bg-[var(--glass-fill-press)] hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100"
+                  className="absolute left-1 top-1/2 grid h-[18px] w-[18px] -translate-y-1/2 place-items-center rounded-[4px] text-[var(--wb-text-2)] opacity-0 transition-opacity hover:bg-[var(--wb-control-hover)] hover:text-[var(--wb-text)] focus-visible:opacity-100 group-hover:opacity-100"
                   onClick={(e) => {
                     e.stopPropagation();
                     closeTab(t.id);
@@ -93,12 +93,10 @@ export function TabStrip() {
                   <X className="h-3 w-3" />
                 </button>
               )}
-              <Icon
-                className={cn('h-3.5 w-3.5 shrink-0', active ? 'text-primary' : 'opacity-70')}
-              />
+              <Icon className="h-3.5 w-3.5 shrink-0 opacity-60" />
               <span className="truncate">{t.title}</span>
               {t.queryRunState === 'running' && (
-                <span className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-primary" />
+                <span className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-[var(--wb-accent)]" />
               )}
               {t.queryError && (
                 <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-destructive" title="Last run failed" />
@@ -108,13 +106,15 @@ export function TabStrip() {
         })}
       </div>
       {engine === 'postgres' && (
-        <ToolbarButton
-          label={`New SQL tab (${kbd('T')})`}
+        <button
+          type="button"
+          aria-label={`New SQL tab (${kbd('T')})`}
+          title={`New SQL tab (${kbd('T')})`}
           onClick={addTab}
-          className="h-7 w-7 rounded-[7px]"
+          className="my-1 mr-1 grid w-[30px] shrink-0 place-items-center rounded-[7px] text-[var(--wb-text-2)] transition-colors hover:bg-[var(--wb-control-hover)] hover:text-[var(--wb-text)]"
         >
-          <Plus />
-        </ToolbarButton>
+          <Plus className="h-4 w-4" />
+        </button>
       )}
     </div>
   );

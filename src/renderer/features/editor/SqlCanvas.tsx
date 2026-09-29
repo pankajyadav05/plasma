@@ -10,6 +10,7 @@ import {
   Gauge,
   ListOrdered,
   Play,
+  SlidersHorizontal,
   Sparkles,
   Square,
   TextSelect,
@@ -216,22 +217,27 @@ function EditorActionBar({
 
   return (
     <div
-      className="flex h-[38px] shrink-0 items-center gap-1.5 border-t hairline bg-background px-2.5"
+      className="flex h-9 shrink-0 items-center gap-1.5 border-t border-[var(--wb-separator)] bg-[var(--wb-content)] px-2.5"
       data-testid="editor-action-bar"
     >
+      <SlidersHorizontal
+        className="h-4 w-4 shrink-0 text-[var(--wb-text-2)]"
+        strokeWidth={1.5}
+        aria-hidden
+      />
       {hasSelection && cursor ? (
-        <span className="shrink-0 font-mono text-[11px] tabular-nums text-foreground">
+        <span className="shrink-0 font-mono text-[12px] tabular-nums text-[var(--wb-text)]">
           {cursor.selectionLength.toLocaleString()} selected
         </span>
       ) : position && position.total > 1 ? (
         <span
-          className="shrink-0 font-mono text-[11px] tabular-nums text-foreground"
+          className="shrink-0 font-mono text-[12px] tabular-nums text-[var(--wb-text)]"
           data-testid="current-statement"
         >
           statement {position.index} of {position.total}
         </span>
       ) : null}
-      <span className="min-w-0 truncate font-mono text-[11px] tabular-nums text-muted-foreground">
+      <span className="min-w-0 truncate font-mono text-[12px] tabular-nums text-[var(--wb-text-2)]">
         {(hasSelection || (position && position.total > 1)) && cursor ? '· ' : ''}
         {cursor
           ? `line ${cursor.line}, column ${cursor.column}, location ${cursor.offset}`
@@ -246,12 +252,9 @@ function EditorActionBar({
         <>
           <Popover open={limitMenu} onOpenChange={setLimitMenu}>
             <PopoverTrigger asChild>
-              <Pill
-                title="Row limit for results — enforced while reading, SQL is not rewritten"
-                className={rowLimit !== null ? 'text-primary' : undefined}
-              >
+              <Pill title="Row limit for results — enforced while reading, SQL is not rewritten">
                 {rowLimit === null ? 'No limit' : `Limit ${rowLimit.toLocaleString()}`}
-                <ChevronDown className="!h-3 !w-3 opacity-70" />
+                <ChevronDown className="!h-3.5 !w-3.5 opacity-70" />
               </Pill>
             </PopoverTrigger>
             <PopoverContent align="end" side="top" sideOffset={6} className="w-[180px] p-1" role="menu">
@@ -271,9 +274,8 @@ function EditorActionBar({
 
           <SplitPill>
             <Pill onClick={() => void formatActiveSql()} disabled={!hasSql} title="Beautify SQL">
-              <Wand2 />
               Beautify
-              <span className="font-mono text-[10px] opacity-60">{kbd('⇧F')}</span>
+              <span className="font-mono text-[12px] opacity-70">{kbd('⇧F')}</span>
             </Pill>
             <Popover open={beautifyMenu} onOpenChange={setBeautifyMenu}>
               <PopoverTrigger asChild>
@@ -306,15 +308,14 @@ function EditorActionBar({
       )}
 
       {running ? (
-        <Pill tone="accent" onClick={onRun} className="bg-destructive hover:bg-destructive/90">
+        <Pill onClick={onRun} className="bg-destructive text-white hover:bg-destructive/90">
           <Square className="fill-current" />
           Cancel
           <span className="font-mono text-[10px] opacity-75">{kbd('.')}</span>
         </Pill>
       ) : (
-        <SplitPill tone="accent">
+        <SplitPill>
           <Pill
-            tone="accent"
             onClick={onRun}
             disabled={!canRun}
             data-testid="run-primary"
@@ -326,15 +327,13 @@ function EditorActionBar({
                   : `Run the highlighted statement at the cursor (${kbd('⏎')})`
             }
           >
-            <Play className="fill-current" />
             {primaryLabel}
-            <span className="font-mono text-[10px] opacity-75">{kbd('⏎')}</span>
+            <span className="font-mono text-[12px] opacity-70">{kbd('⏎')}</span>
           </Pill>
           {!isTable && (
             <Popover open={runMenu} onOpenChange={setRunMenu}>
               <PopoverTrigger asChild>
                 <PillChevron
-                  tone="accent"
                   disabled={!canRun}
                   aria-label="More run options"
                   title="More run options"

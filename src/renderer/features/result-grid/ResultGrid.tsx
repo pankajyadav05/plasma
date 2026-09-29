@@ -32,12 +32,36 @@ import { type RowDetail, RowDetailSheet } from './RowDetailSheet';
 import { SqlHomePanel } from './SqlHomePanel';
 import { TableDefinitionView } from './TableDefinitionView';
 import { TableStructureView } from './TableStructureView';
-import { computeRowWindow } from './windowed-rows';
+import { ROW_HEIGHT_PX, computeRowWindow } from './windowed-rows';
 
 // Stable empty Set used as a fallback when the active tab is null. Using
 // a module-level singleton keeps the useEffect dependency reference-stable
 // across renders so we don't trip the sticky-column re-measure loop.
 const EMPTY_STICKY_SET: ReadonlySet<string> = new Set();
+
+/** Grid header height (TablePlus: 26px header over 24px rows). */
+const HEADER_HEIGHT_PX = 26;
+/** Row-number gutter width. */
+const GUTTER_WIDTH_PX = 44;
+/** Selected-row tint (TablePlus: system blue at 18%). */
+const SELECTED_ROW_BG = 'bg-[rgba(10,132,255,0.18)]';
+
+/**
+ * Scroll-container background: the zebra stripes continue below the last
+ * row (aligned to the 24px rows under the 26px header) and the gutter
+ * column stays the plain content colour, like TablePlus.
+ */
+const STRIPED_BACKGROUND: React.CSSProperties = {
+  backgroundColor: 'var(--wb-content)',
+  backgroundImage: [
+    'linear-gradient(var(--wb-content), var(--wb-content))',
+    `repeating-linear-gradient(to bottom, var(--grid-row-a) 0 ${ROW_HEIGHT_PX}px, var(--grid-row-b) ${ROW_HEIGHT_PX}px ${ROW_HEIGHT_PX * 2}px)`,
+  ].join(', '),
+  backgroundSize: `${GUTTER_WIDTH_PX}px 100%, 100% auto`,
+  backgroundRepeat: 'no-repeat, repeat',
+  backgroundPosition: `0 0, 0 ${HEADER_HEIGHT_PX}px`,
+  backgroundAttachment: 'scroll, local',
+};
 
 /**
  * Paginated + sortable result grid with keyboard navigation and cell copy.
@@ -354,7 +378,7 @@ export function ResultGrid() {
           position: 'sticky',
           left: stickyLefts[colIndex] ?? 0,
           zIndex: baseZ,
-          boxShadow: '1px 0 0 0 var(--border)',
+          boxShadow: '1px 0 0 0 var(--grid-line)',
         }
       : {};
 
@@ -530,7 +554,7 @@ export function ResultGrid() {
   // ── Error state ──
   if (tab?.queryError) {
     return (
-      <div className="min-h-0 flex-1 overflow-auto bg-background">
+      <div className="min-h-0 flex-1 overflow-auto bg-[var(--wb-content)]">
         <div className="max-w-4xl p-5">
           <div className="flex items-start gap-2.5 rounded-[8px] bg-destructive/10 px-3.5 py-3 ring-1 ring-inset ring-destructive/30">
             <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
@@ -564,7 +588,7 @@ export function ResultGrid() {
   // mark glyph itself breathes subtly to confirm the query is alive.
   if (tab?.queryRunState === 'running') {
     return (
-      <div className="flex min-h-0 flex-1 items-center justify-center bg-background">
+      <div className="flex min-h-0 flex-1 items-center justify-center bg-[var(--wb-content)]">
         <div className="flex flex-col items-center gap-5 text-center">
           <BrandMark className="plasma-loading-mark h-28 w-28 text-foreground" />
           <div className="plasma-loading-caption text-lg text-muted-foreground">
@@ -610,7 +634,7 @@ export function ResultGrid() {
       return <SqlHomePanel />;
     }
     return (
-      <div className="flex min-h-0 flex-1 items-center justify-center bg-background">
+      <div className="flex min-h-0 flex-1 items-center justify-center bg-[var(--wb-content)]">
         <div className="flex flex-col items-center gap-6 text-center">
           <BrandMark className="h-20 w-20 text-foreground/70" />
           <div className="text-2xl text-muted-foreground">
@@ -625,7 +649,7 @@ export function ResultGrid() {
   // ── Non-SELECT commands ──
   if (tab.queryResult.columns.length === 0) {
     return (
-      <div className="flex min-h-0 flex-1 items-center justify-center bg-background">
+      <div className="flex min-h-0 flex-1 items-center justify-center bg-[var(--wb-content)]">
         <div className="text-center">
           <div className="mb-2 text-3xl text-foreground">
             {tab.queryResult.command ?? 'OK'}
@@ -657,7 +681,7 @@ export function ResultGrid() {
   // Columns popover).
   if (visibleColumns.length === 0) {
     return (
-      <div className="flex min-h-0 flex-1 items-center justify-center bg-background">
+      <div className="flex min-h-0 flex-1 items-center justify-center bg-[var(--wb-content)]">
         <div className="flex flex-col items-center gap-4 text-center">
           <div className="text-2xl text-muted-foreground">
             All columns hidden
@@ -697,7 +721,11 @@ export function ResultGrid() {
   };
 
   return (
-    <div ref={containerRef} className="relative min-h-0 flex-1 overflow-auto bg-background">
+    <div
+      ref={containerRef}
+      className="relative min-h-0 flex-1 overflow-auto"
+      style={STRIPED_BACKGROUND}
+    >
       {editError && (
         <div className="sticky top-0 z-20 border-b border-primary bg-primary/10 px-4 py-2 text-xs text-primary">
           {editError}{' '}
@@ -707,76 +735,80 @@ export function ResultGrid() {
         </div>
       )}
       {searchOpen && (
-        <div className="sticky top-0 z-30 flex justify-end px-3 pt-2">
-          <div className="flex items-center gap-1.5 rounded-md border bg-popover px-2 py-1.5 text-xs shadow-md">
-            <Search className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-            <input
-              ref={searchInputRef}
-              type="text"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Find in results…"
-              className="h-5 w-48 border-0 bg-transparent text-xs text-foreground outline-none placeholder:text-muted-foreground"
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  e.preventDefault();
-                  if (e.shiftKey) jumpToMatch(activeMatchIdx - 1);
-                  else jumpToMatch(activeMatchIdx + 1);
-                } else if (e.key === 'Escape') {
-                  e.preventDefault();
+        // Zero-height sticky host so the floating find bar never shifts
+        // the table (keeps the striped background aligned to the rows).
+        <div className="sticky top-0 z-30 h-0 overflow-visible">
+          <div className="flex justify-end px-3 pt-8">
+            <div className="flex items-center gap-1.5 rounded-[7px] border border-[var(--wb-separator)] bg-[var(--wb-sidebar)] px-2 py-1 text-[13px] shadow-md">
+              <Search className="h-3.5 w-3.5 shrink-0 text-[var(--wb-text-2)]" />
+              <input
+                ref={searchInputRef}
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Find in results…"
+                className="h-5 w-48 border-0 bg-transparent text-[13px] text-[var(--wb-text)] outline-none placeholder:text-[var(--wb-text-3)]"
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    if (e.shiftKey) jumpToMatch(activeMatchIdx - 1);
+                    else jumpToMatch(activeMatchIdx + 1);
+                  } else if (e.key === 'Escape') {
+                    e.preventDefault();
+                    setSearchOpen(false);
+                    setSearchQuery('');
+                  }
+                }}
+              />
+              <span className="shrink-0 tabular-nums text-[var(--wb-text-2)]">
+                {searchQuery
+                  ? searchMatches.length > 0
+                    ? `${activeMatchIdx + 1}/${searchMatches.length}`
+                    : '0'
+                  : ''}
+              </span>
+              <button
+                type="button"
+                onClick={() => jumpToMatch(activeMatchIdx - 1)}
+                disabled={searchMatches.length === 0}
+                className="grid h-5 w-5 place-items-center rounded-[4px] text-[var(--wb-text-2)] hover:bg-[var(--wb-control-hover)] hover:text-[var(--wb-text)] disabled:opacity-40"
+                aria-label="Previous match"
+                title="Previous match (Shift+Enter)"
+              >
+                <ChevronUp className="h-3 w-3" />
+              </button>
+              <button
+                type="button"
+                onClick={() => jumpToMatch(activeMatchIdx + 1)}
+                disabled={searchMatches.length === 0}
+                className="grid h-5 w-5 place-items-center rounded-[4px] text-[var(--wb-text-2)] hover:bg-[var(--wb-control-hover)] hover:text-[var(--wb-text)] disabled:opacity-40"
+                aria-label="Next match"
+                title="Next match (Enter)"
+              >
+                <ChevronDown className="h-3 w-3" />
+              </button>
+              <button
+                type="button"
+                onClick={() => {
                   setSearchOpen(false);
                   setSearchQuery('');
-                }
-              }}
-            />
-            <span className="shrink-0 tabular-nums text-muted-foreground">
-              {searchQuery
-                ? searchMatches.length > 0
-                  ? `${activeMatchIdx + 1}/${searchMatches.length}`
-                  : '0'
-                : ''}
-            </span>
-            <button
-              type="button"
-              onClick={() => jumpToMatch(activeMatchIdx - 1)}
-              disabled={searchMatches.length === 0}
-              className="grid h-5 w-5 place-items-center rounded-sm text-muted-foreground hover:text-foreground disabled:opacity-40"
-              aria-label="Previous match"
-              title="Previous match (Shift+Enter)"
-            >
-              <ChevronUp className="h-3 w-3" />
-            </button>
-            <button
-              type="button"
-              onClick={() => jumpToMatch(activeMatchIdx + 1)}
-              disabled={searchMatches.length === 0}
-              className="grid h-5 w-5 place-items-center rounded-sm text-muted-foreground hover:text-foreground disabled:opacity-40"
-              aria-label="Next match"
-              title="Next match (Enter)"
-            >
-              <ChevronDown className="h-3 w-3" />
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setSearchOpen(false);
-                setSearchQuery('');
-              }}
-              className="grid h-5 w-5 place-items-center rounded-sm text-muted-foreground hover:text-foreground"
-              aria-label="Close search"
-              title="Close (Esc)"
-            >
-              <X className="h-3 w-3" />
-            </button>
+                }}
+                className="grid h-5 w-5 place-items-center rounded-[4px] text-[var(--wb-text-2)] hover:bg-[var(--wb-control-hover)] hover:text-[var(--wb-text)]"
+                aria-label="Close search"
+                title="Close (Esc)"
+              >
+                <X className="h-3 w-3" />
+              </button>
+            </div>
           </div>
         </div>
       )}
-      <table className="min-w-full border-collapse font-mono text-xs tabular-nums">
-        <thead className="sticky top-0 z-10 bg-[var(--grid-header)]">
+      <table className="min-w-full border-collapse font-mono text-[13px] tabular-nums text-[var(--grid-text)]">
+        <thead className="sticky top-0 z-10 bg-[var(--wb-content)]">
           <tr>
             <th
-              className="sticky left-0 z-30 h-[28px] w-11 border-b border-r border-[var(--grid-line)] bg-[var(--grid-header)] px-1 text-center align-middle"
-              style={{ minWidth: 44 }}
+              className="sticky left-0 z-30 h-[26px] border-r border-[var(--grid-line)] bg-[var(--wb-content)] px-1 shadow-[inset_0_-1px_0_var(--wb-separator)] text-center align-middle"
+              style={{ minWidth: GUTTER_WIDTH_PX, width: GUTTER_WIDTH_PX }}
             >
               <SelectAllCheckbox
                 total={displayRows.length}
@@ -805,11 +837,9 @@ export function ResultGrid() {
                   }}
                   onClick={() => setSort(origIdx)}
                   className={cn(
-                    'group/header relative h-[28px] cursor-pointer select-none whitespace-nowrap border-b border-r border-[var(--grid-line)] bg-[var(--grid-header)] px-2.5 py-0 text-left font-sans transition-colors hover:bg-[var(--glass-fill-hover)]',
-                    isSticky && 'bg-muted',
+                    'group/header relative h-[26px] cursor-pointer select-none whitespace-nowrap border-r border-[var(--grid-line)] bg-[var(--wb-content)] px-6 py-0 text-center font-sans shadow-[inset_0_-1px_0_var(--wb-separator)] text-[13px] font-semibold text-[var(--grid-text)] transition-colors hover:bg-[var(--wb-control)]',
                   )}
                   style={{
-                    fontWeight: 400,
                     minWidth: storedWidth ?? 120,
                     width: storedWidth,
                     ...stickyStyle(origIdx, col.name, 20),
@@ -817,17 +847,16 @@ export function ResultGrid() {
                   }}
                   title={`${col.name} — ${col.dataTypeName}${isSticky ? ' · pinned' : ''}`}
                 >
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs text-foreground" style={{ fontWeight: 600 }}>
-                      {col.name || <span className="text-muted-foreground">?column?</span>}
-                    </span>
-                    <span className="font-mono text-[10px] text-muted-foreground">
-                      {col.dataTypeName}
+                  <div className="flex items-center justify-center gap-1">
+                    <span className="truncate">
+                      {col.name || <span className="text-[var(--wb-text-3)]">?column?</span>}
                     </span>
                     {sortDir && (
-                      <span className="text-xs text-primary">{sortDir === 'asc' ? '↑' : '↓'}</span>
+                      <span className="text-[12px] font-normal text-[var(--wb-text-2)]">
+                        {sortDir === 'asc' ? '↑' : '↓'}
+                      </span>
                     )}
-                    <div className="ml-auto flex items-center">
+                    <div className="absolute right-1.5 top-1/2 flex -translate-y-1/2 items-center">
                       <ColumnHeaderMenu
                         column={col}
                         sortDir={sortDir}
@@ -867,14 +896,14 @@ export function ResultGrid() {
                     onClick={(e) => e.stopPropagation()}
                     className="group/resize absolute right-0 top-0 z-10 flex h-full w-2 cursor-col-resize items-stretch justify-center"
                   >
-                    <div className="h-full w-px bg-transparent transition-colors group-hover/resize:bg-primary group-active/resize:bg-primary" />
+                    <div className="h-full w-px bg-transparent transition-colors group-hover/resize:bg-[var(--wb-accent)] group-active/resize:bg-[var(--wb-accent)]" />
                   </div>
                 </th>
               );
             })}
             {writable && (
               <th
-                className="sticky right-0 w-10 border-b border-[var(--grid-line)] bg-[var(--grid-header)]"
+                className="sticky right-0 w-10 bg-[var(--wb-content)] shadow-[inset_0_-1px_0_var(--wb-separator)]"
                 aria-label="row actions"
               />
             )}
@@ -890,27 +919,27 @@ export function ResultGrid() {
             const visibleRow = rowWindow.start + windowIdx;
             const rowSelected = tab.selectedCell?.row === visibleRow;
             const rowChecked = tab.selectedRows.has(entry.originalIndex);
+            // Row #1 (index 0) takes stripe A, matching the scroll-container
+            // background that continues the stripes below the last row.
+            const zebra =
+              visibleRow % 2 === 0 ? 'bg-[var(--grid-row-a)]' : 'bg-[var(--grid-row-b)]';
             return (
               <tr
                 // biome-ignore lint/suspicious/noArrayIndexKey: stable per-query
                 key={`row-${visibleRow}-${entry.originalIndex}`}
                 className={cn(
-                  'group/row cv-row-26 transition-colors',
-                  rowChecked
-                    ? 'bg-primary/15 hover:bg-primary/20'
-                    : rowSelected
-                      ? 'bg-primary/10'
-                      : visibleRow % 2 === 1
-                        ? 'bg-[var(--grid-stripe)] hover:bg-[var(--glass-fill-hover)]'
-                        : 'hover:bg-[var(--glass-fill-hover)]',
+                  'group/row cv-row-24',
+                  rowSelected ? SELECTED_ROW_BG : rowChecked ? 'bg-[rgba(10,132,255,0.10)]' : zebra,
                 )}
               >
                 <td
                   className={cn(
-                    'sticky left-0 z-[2] w-11 border-b border-r border-[var(--grid-line)] p-0 text-right align-middle',
-                    rowChecked ? 'bg-primary' : 'bg-[var(--grid-header)]',
+                    'sticky left-0 z-[2] border-r border-[var(--grid-line)] p-0 text-center align-middle',
+                    rowChecked
+                      ? 'bg-[color-mix(in_srgb,var(--wb-accent)_30%,var(--wb-content))]'
+                      : 'bg-[var(--wb-content)]',
                   )}
-                  style={{ minWidth: 44 }}
+                  style={{ minWidth: GUTTER_WIDTH_PX, width: GUTTER_WIDTH_PX }}
                 >
                   <button
                     type="button"
@@ -919,10 +948,10 @@ export function ResultGrid() {
                     aria-label={`Select row ${tab.page * tab.pageSize + visibleRow + 1}`}
                     title={rowChecked ? 'Deselect row' : 'Select row'}
                     className={cn(
-                      'h-[25px] w-full px-2 font-mono text-[10px] tabular-nums transition-colors',
+                      'h-[24px] w-full px-1 text-center font-mono text-[12px] tabular-nums transition-colors',
                       rowChecked
-                        ? 'font-semibold text-primary-foreground'
-                        : 'text-muted-foreground hover:bg-[var(--glass-fill-hover)] hover:text-foreground',
+                        ? 'text-[var(--wb-text)]'
+                        : 'text-[var(--wb-text-3)] hover:bg-[var(--wb-control)] hover:text-[var(--wb-text)]',
                     )}
                   >
                     {(tab.page * tab.pageSize + visibleRow + 1).toLocaleString()}
@@ -965,24 +994,26 @@ export function ResultGrid() {
                         }
                       }}
                       className={cn(
-                        'group/cell relative h-[26px] max-w-[480px] whitespace-nowrap border-b border-r border-[var(--grid-line)] px-2.5 text-foreground',
+                        'group/cell relative h-[24px] max-w-[480px] whitespace-nowrap border-r border-[var(--grid-line)] px-1.5 text-[var(--grid-text)]',
                         !isEditing && 'cursor-cell truncate',
                         cellClass(col),
                         cellSelected &&
                           !isEditing &&
-                          'outline outline-2 -outline-offset-2 outline-primary',
+                          'outline outline-2 -outline-offset-2 outline-[var(--wb-accent)]',
                         isEditing &&
-                          'bg-background p-0 outline outline-2 -outline-offset-2 outline-primary',
+                          'bg-[var(--wb-content)] p-0 outline outline-2 -outline-offset-2 outline-[var(--wb-accent)]',
+                        // Sticky cells need an opaque fill so scrolled
+                        // columns don't show through.
                         isSticky &&
                           (rowSelected
-                            ? 'bg-primary/15'
-                            : 'bg-muted group-hover/row:bg-accent group-hover/row:text-accent-foreground'),
-                        // Search match highlights — passive matches get a
-                        // primary tint, the "current" match gets a stronger
+                            ? 'bg-[color-mix(in_srgb,#0a84ff_18%,var(--grid-row-b))]'
+                            : zebra),
+                        // Search match highlights — passive matches get an
+                        // accent tint, the "current" match gets a stronger
                         // tint so the user can see where the jump landed.
-                        isMatch && !isActiveMatch && 'bg-primary/10',
+                        isMatch && !isActiveMatch && 'bg-[rgba(10,132,255,0.12)]',
                         isActiveMatch &&
-                          'bg-primary/30 outline outline-1 -outline-offset-1 outline-primary',
+                          'bg-[rgba(10,132,255,0.3)] outline outline-1 -outline-offset-1 outline-[var(--wb-accent)]',
                         // Make room for the FK arrow so long values don't
                         // slide underneath the button.
                         hasFk && !isEditing && 'pr-7',
@@ -997,7 +1028,7 @@ export function ResultGrid() {
                             e.stopPropagation();
                             if (fk) openForeignRow(fk.refSchema, fk.refTable, fk.refColumn, cell);
                           }}
-                          className="absolute right-1 top-1/2 grid h-5 w-5 -translate-y-1/2 cursor-pointer place-items-center rounded-sm text-muted-foreground opacity-0 transition-all duration-150 hover:bg-primary hover:text-primary-foreground focus-visible:opacity-100 group-hover/cell:opacity-100"
+                          className="absolute right-1 top-1/2 grid h-[18px] w-[18px] -translate-y-1/2 cursor-pointer place-items-center rounded-[4px] bg-[var(--wb-control)] text-[var(--wb-text-2)] opacity-0 transition-all duration-150 hover:bg-[var(--wb-control-hover)] hover:text-[var(--wb-text)] focus-visible:opacity-100 group-hover/cell:opacity-100"
                           aria-label={`Open ${fk?.refSchema}.${fk?.refTable}`}
                           title={`Open ${fk?.refSchema}.${fk?.refTable} where ${fk?.refColumn} = ${formatFkTitle(cell)}`}
                         >
@@ -1048,7 +1079,7 @@ export function ResultGrid() {
                               })();
                             }
                           }}
-                          className="h-[24px] w-full border-0 bg-transparent px-2.5 font-mono text-xs text-foreground outline-none"
+                          className="h-[22px] w-full border-0 bg-transparent px-1.5 font-mono text-[13px] text-[var(--grid-text)] outline-none"
                         />
                       ) : (
                         formatCell(cell)
@@ -1057,7 +1088,7 @@ export function ResultGrid() {
                   );
                 })}
                 {writable && (
-                  <td className="sticky right-0 w-10 border-b border-[var(--grid-line)] bg-background px-1 text-right">
+                  <td className="sticky right-0 w-10 bg-[var(--wb-content)] px-1 text-right">
                     <Button
                       variant="ghost"
                       size="icon-xs"
@@ -1130,10 +1161,10 @@ function SelectAllCheckbox({
       aria-label={all ? 'Deselect all rows' : 'Select all rows'}
       title={all ? 'Deselect all visible' : 'Select all visible'}
       className={cn(
-        'h-[22px] w-full rounded-[4px] font-mono text-[10px] tabular-nums transition-colors',
+        'h-[20px] w-full rounded-[4px] font-mono text-[12px] tabular-nums transition-colors',
         selectedCount > 0
-          ? 'bg-primary font-semibold text-primary-foreground'
-          : 'text-muted-foreground hover:bg-[var(--glass-fill-hover)] hover:text-foreground',
+          ? 'bg-[color-mix(in_srgb,var(--wb-accent)_30%,var(--wb-content))] text-[var(--wb-text)]'
+          : 'text-[var(--wb-text-3)] hover:bg-[var(--wb-control)] hover:text-[var(--wb-text)]',
       )}
     >
       {selectedCount > 0 ? selectedCount.toLocaleString() : '#'}
@@ -1144,8 +1175,8 @@ function SelectAllCheckbox({
 // ─── Cell formatting (shared with export) ───────────────────────────
 
 function formatCell(value: unknown): React.ReactNode {
-  if (value === null) return <span className="text-muted-foreground">␀</span>;
-  if (value === undefined) return <span className="text-muted-foreground">undef</span>;
+  if (value === null) return <span className="text-[var(--grid-null)]">NULL</span>;
+  if (value === undefined) return <span className="text-[var(--grid-null)]">undef</span>;
   if (typeof value === 'boolean') return value ? 'true' : 'false';
   if (value instanceof Date) return value.toISOString();
   if (typeof value === 'object') {
@@ -1156,7 +1187,7 @@ function formatCell(value: unknown): React.ReactNode {
     }
   }
   const str = String(value);
-  if (str === '') return <span className="text-muted-foreground">''</span>;
+  if (str === '') return <span className="text-[var(--grid-null)]">''</span>;
   return str;
 }
 
@@ -1208,6 +1239,10 @@ function EmptySqlActions() {
   );
 }
 
+/**
+ * Numbers right-align (TablePlus); no per-type colours — every value uses
+ * the grid text colour.
+ */
 function cellClass(col: ColumnMeta | undefined): string {
   if (!col) return '';
   const t = col.dataTypeName;
@@ -1219,19 +1254,8 @@ function cellClass(col: ColumnMeta | undefined): string {
     t === 'float8' ||
     t === 'numeric'
   ) {
-    return 'font-medium text-type-num text-right';
+    return 'text-right';
   }
-  if (
-    t === 'date' ||
-    t === 'timestamp' ||
-    t === 'timestamptz' ||
-    t === 'time' ||
-    t === 'interval'
-  ) {
-    return 'text-muted-foreground';
-  }
-  if (t === 'bool') return 'text-type-bool';
-  if (t === 'json' || t === 'jsonb') return 'text-type-json';
   return '';
 }
 

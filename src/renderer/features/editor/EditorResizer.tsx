@@ -62,7 +62,7 @@ export function EditorResizer() {
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
       onPointerCancel={onPointerUp}
-      className="group relative h-1.5 shrink-0 cursor-row-resize border-y border-border bg-muted/60 transition-colors hover:bg-primary/40"
+      className="relative z-10 h-px shrink-0 cursor-row-resize bg-[var(--wb-separator)] transition-colors before:absolute before:inset-x-0 before:-top-[3px] before:-bottom-[3px] before:content-[''] hover:bg-[var(--wb-accent)] active:bg-[var(--wb-accent)]"
       style={{ touchAction: 'none' }}
     />
   );

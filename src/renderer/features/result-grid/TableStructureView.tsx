@@ -1,4 +1,4 @@
-import { Button } from '@/components/ui/button';
+import { IconButton } from '@/components/ui/workbench';
 import { cn } from '@/lib/cn';
 import { ipc } from '@/lib/ipc';
 import { buildDefinitionQuerySql } from '@/lib/table-query';
@@ -75,47 +75,44 @@ export function TableStructureView() {
   if (!schemaName || !tableName) return null;
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col bg-card">
-      <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border px-3">
+    <div className="flex min-h-0 flex-1 flex-col bg-[var(--wb-content)]">
+      <div className="flex h-9 shrink-0 items-center gap-2 border-b border-[var(--wb-separator)] px-2">
         <div className="relative w-64">
-          <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+          <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--wb-text-2)]" />
           <input
             type="text"
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
             placeholder="Search columns…"
             aria-label="Search columns"
-            className="h-7 w-full rounded-md border border-border bg-background pl-8 pr-2 text-xs text-foreground outline-none transition-colors placeholder:text-muted-foreground focus:border-primary"
+            className="h-[26px] w-full rounded-[7px] border-0 bg-[var(--wb-field)] pl-8 pr-2 text-[13px] text-[var(--wb-text)] outline-none transition-colors placeholder:text-[var(--wb-text-3)] focus:ring-2 focus:ring-[var(--wb-accent)]"
           />
         </div>
         {structure && (
-          <span className="font-mono text-[11px] text-muted-foreground">
+          <span className="font-mono text-[12px] text-[var(--wb-text-2)]">
             {structure.columns.length} columns · {structure.constraints.length} constraints ·{' '}
             {structure.indexes.length} indexes
           </span>
         )}
         <div className="flex-1" />
-        <Button
-          variant="ghost"
-          size="icon-xs"
+        <IconButton
+          label="Reload structure"
           onClick={() => setReloadKey((k) => k + 1)}
           disabled={loading}
-          aria-label="Reload structure"
-          title="Reload structure"
         >
           <RefreshCw className={loading ? 'animate-spin' : ''} />
-        </Button>
+        </IconButton>
       </div>
 
       <div className="min-h-0 flex-1 overflow-auto">
         {loading && !structure ? (
-          <div className="flex h-full items-center justify-center gap-2 text-muted-foreground">
+          <div className="flex h-full items-center justify-center gap-2 text-[var(--wb-text-2)]">
             <Loader2 className="h-4 w-4 animate-spin" />
-            <span className="text-sm ">reading the catalog…</span>
+            <span className="text-[13px]">reading the catalog…</span>
           </div>
         ) : error ? (
           <div className="max-w-3xl p-8">
-            <div className="text-lg text-foreground">
+            <div className="text-[15px] font-semibold text-[var(--wb-text)]">
               Couldn't read this table's structure
             </div>
             <pre className="mt-2 whitespace-pre-wrap font-mono text-xs text-destructive">
@@ -125,31 +122,36 @@ export function TableStructureView() {
         ) : structure ? (
           <>
             <Section title="Columns">
-              <table className="w-full border-collapse font-mono text-xs">
+              <table className="w-full border-collapse font-mono text-[13px] text-[var(--grid-text)]">
                 <thead>
                   <HeadRow cols={['#', 'column_name', 'data_type', 'nullable', 'default', 'key']} />
                 </thead>
                 <tbody>
                   {columns.map((c) => (
-                    <tr key={c.name} className="border-b border-border/60 hover:bg-accent/50">
-                      <Td className="w-10 text-right text-muted-foreground">{c.ordinal}</Td>
-                      <Td className="font-medium text-foreground">
+                    <tr
+                      key={c.name}
+                      className="even:bg-[var(--grid-row-b)] odd:bg-[var(--grid-row-a)]"
+                    >
+                      <Td className="w-10 text-right text-[var(--wb-text-2)]">{c.ordinal}</Td>
+                      <Td className="font-medium text-[var(--wb-text)]">
                         <span className="flex items-center gap-1.5">
                           {c.primaryKey && (
-                            <KeyRound className="h-3 w-3 text-primary" aria-label="primary key" />
+                            <KeyRound className="h-3 w-3 text-[#d9b44a]" aria-label="primary key" />
                           )}
                           {c.name}
                         </span>
                       </Td>
-                      <Td className="whitespace-nowrap text-[var(--type-num)]">{c.type}</Td>
-                      <Td className={c.nullable ? 'text-foreground' : 'text-muted-foreground'}>
+                      <Td className="whitespace-nowrap text-[var(--wb-text-2)]">{c.type}</Td>
+                      <Td
+                        className={c.nullable ? 'text-[var(--wb-text)]' : 'text-[var(--wb-text-2)]'}
+                      >
                         {c.nullable ? 'YES' : 'NO'}
                       </Td>
                       <Td
-                        className="max-w-[280px] truncate text-muted-foreground"
+                        className="max-w-[280px] truncate text-[var(--wb-text-2)]"
                         title={c.defaultExpr}
                       >
-                        {c.defaultExpr || <span className="text-[var(--type-null)]">NULL</span>}
+                        {c.defaultExpr || <span className="text-[var(--grid-null)]">NULL</span>}
                       </Td>
                       <Td className="whitespace-nowrap">
                         <span className="flex items-center gap-1">
@@ -162,7 +164,7 @@ export function TableStructureView() {
                   ))}
                   {columns.length === 0 && (
                     <tr>
-                      <Td className="text-muted-foreground" colSpan={6}>
+                      <Td className="text-[var(--wb-text-2)]" colSpan={6}>
                         no column matches "{filter}"
                       </Td>
                     </tr>
@@ -172,18 +174,21 @@ export function TableStructureView() {
             </Section>
 
             <Section title="Constraints" empty={structure.constraints.length === 0}>
-              <table className="w-full border-collapse font-mono text-xs">
+              <table className="w-full border-collapse font-mono text-[13px] text-[var(--grid-text)]">
                 <thead>
                   <HeadRow cols={['constraint_name', 'type', 'definition']} />
                 </thead>
                 <tbody>
                   {structure.constraints.map((c) => (
-                    <tr key={c.name} className="border-b border-border/60 hover:bg-accent/50">
-                      <Td className="font-medium text-foreground">{c.name}</Td>
+                    <tr
+                      key={c.name}
+                      className="even:bg-[var(--grid-row-b)] odd:bg-[var(--grid-row-a)]"
+                    >
+                      <Td className="font-medium text-[var(--wb-text)]">{c.name}</Td>
                       <Td>
                         <Tag>{CONSTRAINT_LABEL[c.type]}</Tag>
                       </Td>
-                      <Td className="whitespace-pre-wrap break-words text-muted-foreground">
+                      <Td className="whitespace-pre-wrap break-words text-[var(--wb-text-2)]">
                         {c.definition}
                       </Td>
                     </tr>
@@ -193,7 +198,7 @@ export function TableStructureView() {
             </Section>
 
             <Section title="Indexes" empty={structure.indexes.length === 0}>
-              <table className="w-full border-collapse font-mono text-xs">
+              <table className="w-full border-collapse font-mono text-[13px] text-[var(--grid-text)]">
                 <thead>
                   <HeadRow
                     cols={['index_name', 'algorithm', 'is_unique', 'columns', 'condition']}
@@ -203,19 +208,19 @@ export function TableStructureView() {
                   {structure.indexes.map((i) => (
                     <tr
                       key={i.name}
-                      className="border-b border-border/60 hover:bg-accent/50"
+                      className="even:bg-[var(--grid-row-b)] odd:bg-[var(--grid-row-a)]"
                       title={i.definition}
                     >
-                      <Td className="font-medium text-foreground">{i.name}</Td>
-                      <Td className="text-muted-foreground">{i.method}</Td>
+                      <Td className="font-medium text-[var(--wb-text)]">{i.name}</Td>
+                      <Td className="text-[var(--wb-text-2)]">{i.method}</Td>
                       <Td
-                        className={i.unique ? 'text-[var(--type-bool)]' : 'text-muted-foreground'}
+                        className={i.unique ? 'text-[var(--wb-text)]' : 'text-[var(--wb-text-2)]'}
                       >
                         {i.unique ? 'TRUE' : 'FALSE'}
                       </Td>
-                      <Td className="text-foreground">{i.columns}</Td>
-                      <Td className="text-muted-foreground">
-                        {i.condition || <span className="text-[var(--type-null)]">—</span>}
+                      <Td className="text-[var(--wb-text)]">{i.columns}</Td>
+                      <Td className="text-[var(--wb-text-2)]">
+                        {i.condition || <span className="text-[var(--grid-null)]">—</span>}
                       </Td>
                     </tr>
                   ))}
@@ -248,10 +253,10 @@ function Section({
   children: React.ReactNode;
 }) {
   return (
-    <section className="border-b hairline">
-      <h3 className="px-4 pb-1.5 pt-4 text-xs font-semibold text-foreground">{title}</h3>
+    <section className="border-b border-[var(--wb-separator)]">
+      <h3 className="px-3 pb-1.5 pt-4 text-[13px] font-semibold text-[var(--wb-text)]">{title}</h3>
       {empty ? (
-        <div className="px-4 pb-4 text-sm text-muted-foreground">none</div>
+        <div className="px-3 pb-4 text-[13px] text-[var(--wb-text-2)]">none</div>
       ) : (
         <div className="px-2 pb-3">{children}</div>
       )}
@@ -261,11 +266,11 @@ function Section({
 
 function HeadRow({ cols }: { cols: string[] }) {
   return (
-    <tr className="border-b border-[var(--grid-line)] bg-[var(--grid-header)] text-left">
+    <tr className="bg-[var(--wb-content)] text-left shadow-[inset_0_-1px_0_var(--wb-separator)]">
       {cols.map((c) => (
         <th
           key={c}
-          className="whitespace-nowrap px-2 py-1.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground"
+          className="h-[26px] whitespace-nowrap border-r border-[var(--grid-line)] px-2 font-sans text-[13px] font-semibold text-[var(--grid-text)]"
         >
           {c}
         </th>
@@ -286,7 +291,11 @@ function Td({
   colSpan?: number;
 }) {
   return (
-    <td className={cn('px-2 py-1.5 align-top', className)} title={title} colSpan={colSpan}>
+    <td
+      className={cn('border-r border-[var(--grid-line)] px-2 py-[3px] align-top', className)}
+      title={title}
+      colSpan={colSpan}
+    >
       {children}
     </td>
   );
@@ -294,7 +303,7 @@ function Td({
 
 function Tag({ children }: { children: React.ReactNode }) {
   return (
-    <span className="rounded-sm border border-border px-1 py-px text-[9px] uppercase tracking-wider text-muted-foreground">
+    <span className="rounded-[4px] bg-[var(--wb-control)] px-1 py-px font-sans text-[11px] text-[var(--wb-text-2)]">
       {children}
     </span>
   );
@@ -316,12 +325,12 @@ function FkLink({ target }: { target: string }) {
   }, [schema, target]);
 
   const ref = resolve();
-  if (!ref) return <span className="text-muted-foreground">→ {target}</span>;
+  if (!ref) return <span className="text-[var(--wb-text-2)]">→ {target}</span>;
   return (
     <button
       type="button"
       onClick={() => openTable(ref.schema, ref.name)}
-      className="inline-flex items-center gap-0.5 text-primary underline-offset-2 hover:underline"
+      className="inline-flex items-center gap-0.5 text-[var(--wb-accent)] underline-offset-2 hover:underline"
       title={`Open ${ref.schema}.${ref.name}`}
     >
       → {target}

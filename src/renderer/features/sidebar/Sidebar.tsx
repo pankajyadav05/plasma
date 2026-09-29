@@ -32,7 +32,7 @@ export function Sidebar() {
   const mode = useWorkbench((s) => s.sidebarMode);
 
   return (
-    <div className="flex h-full flex-col">
+    <div className="flex h-full flex-col bg-[var(--wb-sidebar)] text-[var(--wb-text)]">
       {activeConfig && engine === 'postgres' && <SidebarModeSwitch />}
       <div className="min-h-0 flex-1 overflow-hidden">
         {!activeConfig ? (
@@ -57,9 +57,10 @@ function SidebarModeSwitch() {
   const mode = useWorkbench((s) => s.sidebarMode);
   const setMode = useWorkbench((s) => s.setSidebarMode);
   return (
-    <div className="shrink-0 px-2.5 pb-2 pt-2.5">
+    <div className="shrink-0 px-2.5 pb-2 pt-2">
       <Segmented<SidebarMode>
         ariaLabel="Sidebar mode"
+        variant="plain"
         stretch
         value={mode}
         onChange={setMode}
@@ -86,16 +87,12 @@ function SavedConnectionsList() {
   return (
     <div className="flex h-full flex-col">
       <div className="px-3 py-2">
-        <h2 className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-          Saved connections
-        </h2>
+        <h2 className="text-[11px] font-semibold text-[var(--wb-text-2)]">Saved connections</h2>
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto">
         {savedConnections.length === 0 ? (
-          <div className="px-4 py-3 text-[13px] text-muted-foreground">
-            none yet
-          </div>
+          <div className="px-4 py-3 text-[13px] text-[var(--wb-text-2)]">none yet</div>
         ) : (
           savedConnections.map((c) => {
             const engine = c.engine ?? 'postgres';
@@ -104,7 +101,7 @@ function SavedConnectionsList() {
             return (
               <div
                 key={c.id}
-                className="group/row relative mx-2 mb-0.5 flex h-8 items-stretch rounded-md transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+                className="group/row relative mx-2 flex h-6 items-stretch rounded-[5px] transition-colors hover:bg-[color-mix(in_srgb,var(--wb-text)_6%,transparent)]"
               >
                 <button
                   type="button"
@@ -114,15 +111,15 @@ function SavedConnectionsList() {
                   disabled={connecting}
                   title={`Connect to ${c.host}:${c.port}${engine === 'postgres' ? `/${c.database}` : ''}`}
                   className={cn(
-                    'flex min-w-0 flex-1 items-center gap-2 px-3 text-left text-sm transition-colors',
+                    'flex min-w-0 flex-1 items-center gap-2 px-2 text-left text-[13px] transition-colors',
                     connecting
-                      ? 'cursor-not-allowed text-muted-foreground opacity-60'
-                      : 'cursor-pointer text-muted-foreground group-hover/row:text-sidebar-accent-foreground',
+                      ? 'cursor-not-allowed text-[var(--wb-text-2)] opacity-60'
+                      : 'cursor-pointer text-[var(--wb-text)]',
                   )}
                 >
-                  <Circle className="h-2 w-2 shrink-0 text-muted-foreground" />
+                  <Circle className="h-2 w-2 shrink-0 text-[var(--wb-text-2)]" />
                   <span className="truncate">{c.name}</span>
-                  <span className="ml-auto shrink-0 rounded-sm border border-border px-1 py-0 font-mono text-[9px] uppercase tracking-wider text-muted-foreground">
+                  <span className="ml-auto shrink-0 rounded-[4px] bg-[var(--wb-control)] px-1 py-0 font-mono text-[9px] uppercase tracking-wider text-[var(--wb-text-2)]">
                     {engineLabel}
                   </span>
                 </button>
@@ -135,7 +132,7 @@ function SavedConnectionsList() {
                   }}
                   aria-label={`Edit ${c.name}`}
                   title="Edit (delete inside)"
-                  className="mr-1 h-6 w-6 self-center opacity-0 transition-opacity duration-150 group-hover/row:opacity-100 focus-visible:opacity-100"
+                  className="mr-0.5 h-5 w-5 self-center text-[var(--wb-text-2)] opacity-0 transition-opacity duration-150 group-hover/row:opacity-100 focus-visible:opacity-100"
                 >
                   <Pencil />
                 </Button>
@@ -145,7 +142,7 @@ function SavedConnectionsList() {
         )}
       </div>
 
-      <div className="border-t border-sidebar-border p-3">
+      <div className="border-t border-[var(--wb-separator)] p-2.5">
         <Button variant="outline" size="sm" onClick={() => openDialog()} className="w-full">
           <Plus />
           Add connection

@@ -56,7 +56,7 @@ export function FilterRow() {
   const hasFilters = tab.filters.length > 0;
 
   return (
-    <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border bg-background px-3">
+    <div className="flex h-9 shrink-0 items-center gap-2 border-b border-[var(--wb-separator)] bg-[var(--wb-content)] px-2 text-[13px]">
       {/* Search-style trigger only shows when no filters are applied —
           once chips exist, "Add more filters" handles new additions. */}
       {!hasFilters && <FilterTrigger teaser={teaser} hasAi={hasAiKey} />}
@@ -79,15 +79,11 @@ function FilterTrigger({ teaser, hasAi }: { teaser: string; hasAi: boolean }) {
       <PopoverTrigger asChild>
         <button
           type="button"
-          className="group flex h-7 w-[280px] shrink-0 cursor-pointer items-center gap-2 rounded-md border border-transparent px-2 text-muted-foreground transition-colors duration-150 hover:border-border hover:bg-accent/40"
+          className="group flex h-[26px] w-[280px] shrink-0 cursor-pointer items-center gap-2 rounded-[7px] bg-[var(--wb-field)] px-2 text-[var(--wb-text-3)] transition-colors duration-150 hover:text-[var(--wb-text-2)]"
         >
-          {hasAi ? (
-            <Sparkles className="h-3.5 w-3.5 text-primary" />
-          ) : (
-            <Search className="h-3.5 w-3.5" />
-          )}
-          <span className="flex-1 truncate text-left text-xs ">{teaser}</span>
-          <kbd className="rounded-sm border border-border bg-muted px-1 font-mono text-[10px] text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100">
+          {hasAi ? <Sparkles className="h-3.5 w-3.5" /> : <Search className="h-3.5 w-3.5" />}
+          <span className="flex-1 truncate text-left text-[13px]">{teaser}</span>
+          <kbd className="rounded-[4px] bg-[var(--wb-control)] px-1 font-mono text-[11px] text-[var(--wb-text-2)] opacity-0 transition-opacity group-hover:opacity-100">
             F
           </kbd>
         </button>
@@ -105,17 +101,17 @@ function EditableFilterChip({ filter, onRemove }: { filter: Filter; onRemove: ()
   const showVal = filter.op !== 'IS NULL' && filter.op !== 'IS NOT NULL';
   return (
     <Popover open={open} onOpenChange={setOpen}>
-      <span className="inline-flex h-7 items-center gap-1 rounded-md border border-border bg-muted text-[11px]">
+      <span className="inline-flex h-6 items-center gap-1 rounded-[6px] bg-[var(--wb-control)] text-[13px]">
         <PopoverTrigger asChild>
           <button
             type="button"
-            className="flex h-full cursor-pointer items-center gap-1 rounded-l-md px-2 transition-colors duration-150 hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            className="flex h-full cursor-pointer items-center gap-1 rounded-l-[6px] px-2 transition-colors duration-150 hover:bg-[var(--wb-control-hover)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--wb-accent)]"
             title="Edit filter"
           >
-            <span className="font-mono font-medium text-foreground">{filter.column}</span>
-            <span className="text-muted-foreground">{filter.op}</span>
+            <span className="font-mono font-medium text-[var(--wb-text)]">{filter.column}</span>
+            <span className="text-[var(--wb-text-2)]">{filter.op}</span>
             {showVal && (
-              <span className="max-w-[160px] truncate font-mono text-type-str">
+              <span className="max-w-[160px] truncate font-mono text-[var(--wb-text)]">
                 {filter.value || "''"}
               </span>
             )}
@@ -125,7 +121,7 @@ function EditableFilterChip({ filter, onRemove }: { filter: Filter; onRemove: ()
           type="button"
           onClick={onRemove}
           aria-label={`Remove filter on ${filter.column}`}
-          className="grid h-4 w-4 shrink-0 cursor-pointer place-items-center rounded-sm text-muted-foreground transition-colors duration-150 hover:bg-accent hover:text-foreground focus-visible:opacity-100"
+          className="grid h-4 w-4 shrink-0 cursor-pointer place-items-center rounded-[4px] text-[var(--wb-text-2)] transition-colors duration-150 hover:bg-[var(--wb-control-hover)] hover:text-[var(--wb-text)] focus-visible:opacity-100"
         >
           <X className="h-3 w-3" />
         </button>
@@ -147,14 +143,14 @@ function AddMoreFilters({ hasAny }: { hasAny: boolean }) {
         <button
           type="button"
           className={cn(
-            'inline-flex h-7 cursor-pointer items-center gap-1 rounded-md px-2 text-[11px] transition-colors duration-150',
+            'inline-flex h-6 cursor-pointer items-center gap-1 rounded-[6px] px-2 text-[13px] transition-colors duration-150',
             hasAny
-              ? 'text-muted-foreground hover:bg-accent hover:text-foreground'
-              : 'border border-dashed border-border text-muted-foreground hover:border-foreground hover:text-foreground',
+              ? 'text-[var(--wb-text-2)] hover:bg-[var(--wb-control)] hover:text-[var(--wb-text)]'
+              : 'bg-[var(--wb-control)] text-[var(--wb-text)] hover:bg-[var(--wb-control-hover)]',
           )}
         >
           <Plus className="h-3 w-3" />
-          <span className="">{hasAny ? 'Add more filters' : 'Add filter'}</span>
+          <span>{hasAny ? 'Add more filters' : 'Add filter'}</span>
         </button>
       </PopoverTrigger>
       <PopoverContent align="start" sideOffset={4} className="w-[420px] p-0">
@@ -236,13 +232,13 @@ function FilterForm({ existing, onDone }: { existing?: Filter; onDone: () => voi
       <div className="flex items-center gap-2">
         <ColumnCombobox columns={columns} value={column} onChange={handleColumn} />
         <Select value={op} onValueChange={(v) => setOp(v as FilterOp)}>
-          <SelectTrigger className="h-8 w-[160px] shrink-0 text-xs">
+          <SelectTrigger className="h-8 w-[160px] shrink-0 text-[13px]">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
             {operatorGroups.map((group) => (
               <SelectGroup key={group.heading}>
-                <SelectLabel className="text-[10px] font-normal text-muted-foreground">
+                <SelectLabel className="text-[10px] font-normal text-[var(--wb-text-2)]">
                   {group.heading}
                 </SelectLabel>
                 {group.operators.map((o) => (
@@ -270,7 +266,7 @@ function FilterForm({ existing, onDone }: { existing?: Filter; onDone: () => voi
             value={value}
             onChange={(e) => setValue(e.target.value)}
             placeholder="value"
-            className="h-8 text-xs"
+            className="h-8 text-[13px]"
             onKeyDown={(e) => {
               if (e.key === 'Enter') handleSave();
             }}
@@ -323,32 +319,32 @@ function ColumnCombobox({
           aria-haspopup="listbox"
           aria-expanded={open}
           className={cn(
-            'flex h-8 flex-1 cursor-pointer items-center justify-between gap-2 rounded-md border border-input bg-background px-3 text-xs shadow-sm transition-colors duration-150',
-            'hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',
+            'flex h-8 flex-1 cursor-pointer items-center justify-between gap-2 rounded-md border border-input bg-[var(--wb-content)] px-3 text-[13px] shadow-sm transition-colors duration-150',
+            'hover:bg-[var(--wb-control)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',
           )}
         >
           {selected ? (
             <span className="flex min-w-0 items-baseline gap-2">
               <span className="truncate font-mono">{selected.name}</span>
-              <span className="shrink-0 text-muted-foreground">{selected.dataType}</span>
+              <span className="shrink-0 text-[var(--wb-text-2)]">{selected.dataType}</span>
             </span>
           ) : (
-            <span className="text-muted-foreground">column…</span>
+            <span className="text-[var(--wb-text-2)]">column…</span>
           )}
-          <ChevronsUpDown className="h-3 w-3 shrink-0 text-muted-foreground" />
+          <ChevronsUpDown className="h-3 w-3 shrink-0 text-[var(--wb-text-2)]" />
         </button>
       </PopoverTrigger>
       <PopoverContent align="start" sideOffset={4} className="w-[320px] p-0">
         <Command className="flex flex-col">
-          <div className="flex items-center gap-2 border-b border-border px-3 py-2">
-            <Search className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+          <div className="flex items-center gap-2 border-b border-[var(--wb-separator)] px-3 py-2">
+            <Search className="h-3.5 w-3.5 shrink-0 text-[var(--wb-text-2)]" />
             <Command.Input
               placeholder="Search columns…"
-              className="h-6 flex-1 border-0 bg-transparent text-xs text-foreground outline-none placeholder:text-muted-foreground"
+              className="h-6 flex-1 border-0 bg-transparent text-[13px] text-[var(--wb-text)] outline-none placeholder:text-[var(--wb-text-2)]"
             />
           </div>
           <Command.List className="max-h-[280px] overflow-y-auto p-1">
-            <Command.Empty className="px-3 py-3 text-xs text-muted-foreground">
+            <Command.Empty className="px-3 py-3 text-[13px] text-[var(--wb-text-2)]">
               no matching column
             </Command.Empty>
             {columns.map((c) => {
@@ -362,19 +358,19 @@ function ColumnCombobox({
                     setOpen(false);
                   }}
                   className={cn(
-                    'flex cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 text-xs transition-colors',
+                    'flex cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 text-[13px] transition-colors',
                     'data-[selected=true]:bg-accent data-[selected=true]:text-accent-foreground',
-                    active && 'text-primary',
+                    active && 'text-[var(--wb-text)]',
                   )}
                 >
                   {active ? (
-                    <Check className="h-3 w-3 text-primary" />
+                    <Check className="h-3 w-3 text-[var(--wb-accent)]" />
                   ) : (
                     <span className="h-3 w-3" aria-hidden />
                   )}
                   <span className="flex min-w-0 flex-1 items-baseline gap-2">
                     <span className="truncate font-mono">{c.name}</span>
-                    <span className="shrink-0 text-muted-foreground">{c.dataType}</span>
+                    <span className="shrink-0 text-[var(--wb-text-2)]">{c.dataType}</span>
                   </span>
                 </Command.Item>
               );
@@ -480,7 +476,7 @@ function ValueAutocomplete({
           if (!show) setShow(true);
         }}
         placeholder="value"
-        className="h-8 text-xs"
+        className="h-8 text-[13px]"
         onKeyDown={(e) => {
           if (e.key === 'Enter') {
             // Enter: if the suggestion panel is closed OR matches the
@@ -504,17 +500,15 @@ function ValueAutocomplete({
             e.preventDefault();
             cancelBlur();
           }}
-          className="absolute left-0 right-0 top-full z-50 mt-1 max-h-[200px] overflow-y-auto rounded-md border border-border bg-popover text-popover-foreground shadow-md"
+          className="absolute left-0 right-0 top-full z-50 mt-1 max-h-[200px] overflow-y-auto rounded-md border border-[var(--wb-separator)] bg-popover text-popover-foreground shadow-md"
         >
           {loading && suggestions.length === 0 ? (
-            <div className="flex items-center gap-2 px-3 py-2 text-xs text-muted-foreground">
+            <div className="flex items-center gap-2 px-3 py-2 text-[13px] text-[var(--wb-text-2)]">
               <Loader2 className="h-3 w-3 animate-spin" />
-              <span className="">looking up values…</span>
+              <span>looking up values…</span>
             </div>
           ) : suggestions.length === 0 ? (
-            <div className="px-3 py-2 text-xs text-muted-foreground">
-              no suggestions
-            </div>
+            <div className="px-3 py-2 text-[13px] text-[var(--wb-text-2)]">no suggestions</div>
           ) : (
             <div className="py-1">
               {suggestions.map((s) => (
@@ -526,7 +520,7 @@ function ValueAutocomplete({
                     setShow(false);
                     inputRef.current?.focus();
                   }}
-                  className="flex w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-left font-mono text-xs text-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+                  className="flex w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-left font-mono text-[13px] text-[var(--wb-text)] transition-colors hover:bg-[var(--wb-control-hover)] hover:text-[var(--wb-text)]"
                 >
                   <span className="truncate">{s}</span>
                 </button>

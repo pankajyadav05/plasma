@@ -56,9 +56,9 @@ type Theme = 'light' | 'dark';
  */
 export function themeColors(theme: Theme) {
   if (theme === 'dark') {
-    return { background: '#000000' };
+    return { background: '#1a1a1a' };
   }
-  return { background: '#FFFFFF' };
+  return { background: '#e9e9e9' };
 }
 
 /**

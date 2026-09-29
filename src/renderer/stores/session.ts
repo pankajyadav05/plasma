@@ -276,7 +276,7 @@ const DEFAULT_SETTINGS: Settings = {
   sidebarCollapsed: false,
   sidebarWidth: 264,
   editorExpanded: false,
-  editorFontSize: 14,
+  editorFontSize: 13,
   editorHeightPx: 280,
   defaultPageSize: 50,
   queryTimeoutMs: 0,

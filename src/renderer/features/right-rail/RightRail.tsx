@@ -3,7 +3,7 @@ import { Kbd } from '@/components/ui/kbd';
 import { AiPanel } from '@/features/ai/AiPanel';
 import { MonacoEditor } from '@/features/editor/MonacoEditor';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { MenuItem, Segmented, ToolbarButton } from '@/components/ui/workbench';
+import { IconButton, MenuItem, Pill, Segmented } from '@/components/ui/workbench';
 import { cn } from '@/lib/cn';
 import { ipc } from '@/lib/ipc';
 import { kbd } from '@/lib/platform';
@@ -28,9 +28,10 @@ import {
   X,
 } from 'lucide-react';
 import { useEffect, useState } from 'react';
+import { SidebarSearch } from '@/features/sidebar/sidebar-parts';
 import { DetailsPanel } from './DetailsPanel';
 
-const PANEL_WIDTH = 320;
+const PANEL_WIDTH = 260;
 
 const NOOP = () => {};
 
@@ -64,15 +65,16 @@ export function RightRail() {
 
   return (
     <aside
-      className="chrome flex shrink-0 flex-col self-stretch border-l hairline"
+      className="flex shrink-0 flex-col self-stretch border-l border-[var(--wb-separator)] bg-[var(--wb-sidebar)] text-[var(--wb-text)]"
       style={{ width: PANEL_WIDTH }}
       aria-label="Right sidebar"
     >
-      <div className="flex shrink-0 items-center gap-1.5 px-2.5 pb-2 pt-2.5">
+      <div className="grid shrink-0 grid-cols-[1fr_auto_1fr] items-center gap-1.5 px-2.5 pb-2 pt-2">
+        <span aria-hidden />
         {postgres ? (
           <Segmented<PrimaryPane>
             ariaLabel="Right sidebar pane"
-            stretch
+            variant="plain"
             value={primary}
             onChange={(v) => setMode(v === 'none' ? 'details' : v)}
             options={[
@@ -81,11 +83,17 @@ export function RightRail() {
             ]}
           />
         ) : (
-          <span className="flex-1 px-1 text-xs font-semibold text-foreground">Assistant</span>
+          <span className="flex h-[26px] items-center rounded-[6px] bg-[var(--wb-segment-active)] px-3 text-[13px] font-medium text-[var(--wb-text)]">
+            Assistant
+          </span>
         )}
-        {postgres && <SessionToolsMenu isTable={isTable} rlsCount={isTable ? tab.rlsPolicyCount : null} />}
+        <div className="flex justify-end">
+          {postgres && (
+            <SessionToolsMenu isTable={isTable} rlsCount={isTable ? tab.rlsPolicyCount : null} />
+          )}
+        </div>
       </div>
-      <div className="min-h-0 flex-1 border-t hairline bg-background">
+      <div className="min-h-0 flex-1">
         {effective === 'query' && <QueryPanel />}
         {effective === 'ai' && <AiPanel />}
         {effective === 'details' && <DetailsPanel />}
@@ -109,13 +117,14 @@ function SessionToolsMenu({ isTable, rlsCount }: { isTable: boolean; rlsCount: n
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <ToolbarButton
+        <IconButton
+          variant="plain"
           label="Session tools — compiled SQL, role, row-level security"
           active={secondary}
-          className="h-[28px] w-[28px] rounded-[8px]"
+          className="[&_svg]:h-4 [&_svg]:w-4"
         >
           <MoreHorizontal />
-        </ToolbarButton>
+        </IconButton>
       </PopoverTrigger>
       <PopoverContent align="end" sideOffset={6} className="w-[240px] p-1" role="menu">
         <MenuItem
@@ -159,7 +168,14 @@ function QueryPanel() {
   const formatActiveSql = useSession((s) => s.formatActiveSql);
   const theme = useSession((s) => s.settings.theme);
   const fontSize = useSession((s) => s.settings.editorFontSize);
-  const hasApiKey = useSession((s) => Boolean(s.settings.hasOpenrouterApiKey || s.settings.hasClaudeApiKey || s.settings.openrouterApiKey || s.settings.claudeApiKey));
+  const hasApiKey = useSession((s) =>
+    Boolean(
+      s.settings.hasOpenrouterApiKey ||
+        s.settings.hasClaudeApiKey ||
+        s.settings.openrouterApiKey ||
+        s.settings.claudeApiKey,
+    ),
+  );
 
   if (!tab) {
     return <PanelEmpty title="No active tab" hint="Open a table or write a query." />;
@@ -189,57 +205,55 @@ function QueryPanel() {
           <Button
             variant="ghost"
             size="sm"
-            className="font-display italic text-muted-foreground"
+            className="h-6 px-2 text-[13px] text-[var(--wb-text-2)]"
             title={`Open AI assistant (${kbd('L')})`}
             onClick={() => setMode('ai')}
           >
-            <Sparkles className="h-3.5 w-3.5 text-primary" />
+            <Sparkles className="h-3.5 w-3.5" />
             ask
           </Button>
         )}
         {!isTable && (
-          <Button
-            variant="ghost"
-            size="icon-xs"
-            onClick={() => void formatActiveSql()}
+          <IconButton
+            variant="plain"
+            label="Format SQL"
             title={`Format SQL (${kbd('⇧F')})`}
-            aria-label="Format SQL"
+            onClick={() => void formatActiveSql()}
           >
             <Wand2 />
-          </Button>
+          </IconButton>
         )}
-        <Button
-          variant="ghost"
-          size="icon-xs"
-          onClick={() => setSidebarMode('queries')}
+        <IconButton
+          variant="plain"
+          label="Show saved queries"
           title="Saved queries (left sidebar)"
-          aria-label="Show saved queries"
+          onClick={() => setSidebarMode('queries')}
         >
           <Bookmark />
-        </Button>
+        </IconButton>
         {running ? (
-          <Button variant="destructive" size="sm" onClick={handleAction}>
+          <Button variant="destructive" size="xs" className="h-6" onClick={handleAction}>
             <Square className="fill-current" />
             Cancel
             <Kbd className="border-0 bg-transparent text-destructive-foreground/80">{kbd('.')}</Kbd>
           </Button>
         ) : isTable ? (
-          <Button variant="secondary" size="sm" onClick={handleAction} disabled={!canRun}>
+          <Pill onClick={handleAction} disabled={!canRun}>
             <RefreshCw />
             Refresh
-          </Button>
+          </Pill>
         ) : (
-          <Button variant="primary" size="sm" onClick={handleAction} disabled={!canRun}>
+          <Pill onClick={handleAction} disabled={!canRun}>
             <Play className="fill-current" />
             Run
-            <Kbd className="border-0 bg-transparent text-primary-foreground/80">{kbd('⏎')}</Kbd>
-          </Button>
+            <Kbd className="border-0 bg-transparent text-[var(--wb-text-2)]">{kbd('⏎')}</Kbd>
+          </Pill>
         )}
       </PanelHeader>
 
       <div className="relative min-h-0 flex-1 overflow-hidden pt-3">
         {isTable && (
-          <div className="absolute left-4 top-1 z-10 font-display text-xs italic text-muted-foreground">
+          <div className="absolute left-4 top-1 z-10 text-[11px] text-[var(--wb-text-3)]">
             compiled from table browser — read-only
           </div>
         )}
@@ -294,14 +308,12 @@ function RolePanel() {
         onClose={() => setMode('details')}
       />
 
-      <div className="border-b border-border px-3 py-2">
-        <input
-          type="text"
+      <div className="flex px-2.5 py-2">
+        <SidebarSearch
           value={filter}
-          onChange={(e) => setFilter(e.target.value)}
+          onChange={setFilter}
           placeholder="Filter roles…"
-          className="h-8 w-full rounded-md border border-border bg-background px-2 text-sm text-foreground outline-none transition-colors placeholder:text-muted-foreground focus:border-primary"
-          aria-label="Filter roles"
+          ariaLabel="Filter roles"
         />
       </div>
 
@@ -313,9 +325,7 @@ function RolePanel() {
           onClick={() => void setActiveRole(null)}
         />
         {list.length === 0 && availableRoles.length > 0 && (
-          <div className="px-3 py-3 font-display text-xs italic text-muted-foreground">
-            no matches
-          </div>
+          <div className="px-3 py-3 text-[13px] text-[var(--wb-text-2)]">no matches</div>
         )}
         {list.map((r) => (
           <RoleRow
@@ -326,9 +336,7 @@ function RolePanel() {
           />
         ))}
         {availableRoles.length === 0 && (
-          <div className="px-3 py-3 font-display text-xs italic text-muted-foreground">
-            no roles loaded
-          </div>
+          <div className="px-3 py-3 text-[13px] text-[var(--wb-text-2)]">no roles loaded</div>
         )}
       </div>
 
@@ -353,19 +361,19 @@ function RoleRow({
       type="button"
       onClick={onClick}
       className={cn(
-        'flex w-full cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 text-left text-xs transition-colors duration-150',
+        'flex h-6 w-full cursor-pointer items-center gap-2 rounded-[5px] px-2 text-left text-[13px] text-[var(--wb-text)] transition-colors duration-150',
         active
-          ? 'bg-accent text-accent-foreground'
-          : 'text-foreground hover:bg-accent hover:text-accent-foreground',
+          ? 'bg-[var(--wb-selected)]'
+          : 'hover:bg-[color-mix(in_srgb,var(--wb-text)_6%,transparent)]',
       )}
     >
       {active ? (
-        <Check className="h-3 w-3 text-primary" />
+        <Check className="h-3 w-3 text-[var(--wb-text)]" />
       ) : (
         <span className="h-3 w-3" aria-hidden />
       )}
-      <span className="font-mono">{label}</span>
-      {note && <span className="ml-auto text-muted-foreground">{note}</span>}
+      <span className="font-mono text-[12px]">{label}</span>
+      {note && <span className="ml-auto text-[11px] text-[var(--wb-text-3)]">{note}</span>}
     </button>
   );
 }
@@ -449,9 +457,9 @@ function RlsPanel() {
 
       <div className="min-h-0 flex-1 overflow-y-auto">
         {loading && (
-          <div className="flex h-full items-center justify-center text-muted-foreground">
+          <div className="flex h-full items-center justify-center text-[var(--wb-text-2)]">
             <Loader2 className="h-4 w-4 animate-spin" />
-            <span className="ml-2 font-display text-sm italic">loading policies…</span>
+            <span className="ml-2 text-[13px]">loading policies…</span>
           </div>
         )}
         {!loading && policies && policies.length === 0 && (
@@ -468,31 +476,31 @@ function RlsPanel() {
 
 function PolicyItem({ p }: { p: PolicyRow }) {
   return (
-    <div className="border-b border-border px-3 py-2 last:border-b-0">
+    <div className="border-b border-[var(--wb-separator)] px-3 py-2 last:border-b-0">
       <div className="flex items-center gap-2">
-        <span className="font-mono text-xs font-medium text-foreground">{p.name}</span>
-        <span className="rounded-sm border border-border px-1 py-0.5 font-mono text-[9px] uppercase text-muted-foreground">
+        <span className="font-mono text-[12px] font-semibold text-[var(--wb-text)]">{p.name}</span>
+        <span className="rounded-[4px] bg-[var(--wb-control)] px-1 py-0.5 font-mono text-[9px] uppercase text-[var(--wb-text-2)]">
           {p.cmd || 'ALL'}
         </span>
         {p.permissive === 'PERMISSIVE' && (
-          <span className="rounded-sm border border-border px-1 py-0.5 font-mono text-[9px] uppercase text-muted-foreground">
+          <span className="rounded-[4px] bg-[var(--wb-control)] px-1 py-0.5 font-mono text-[9px] uppercase text-[var(--wb-text-2)]">
             permissive
           </span>
         )}
-        <span className="ml-auto font-mono text-[10px] text-muted-foreground">{p.roles}</span>
+        <span className="ml-auto font-mono text-[10px] text-[var(--wb-text-3)]">{p.roles}</span>
       </div>
       {p.qual && (
         <div className="mt-1">
-          <div className="font-display text-[10px] italic text-muted-foreground">USING</div>
-          <pre className="overflow-x-auto whitespace-pre-wrap font-mono text-[11px] text-foreground">
+          <div className="text-[11px] font-semibold text-[var(--wb-text-2)]">USING</div>
+          <pre className="overflow-x-auto whitespace-pre-wrap font-mono text-[12px] text-[var(--wb-text)]">
             {p.qual}
           </pre>
         </div>
       )}
       {p.withCheck && (
         <div className="mt-1">
-          <div className="font-display text-[10px] italic text-muted-foreground">WITH CHECK</div>
-          <pre className="overflow-x-auto whitespace-pre-wrap font-mono text-[11px] text-foreground">
+          <div className="text-[11px] font-semibold text-[var(--wb-text-2)]">WITH CHECK</div>
+          <pre className="overflow-x-auto whitespace-pre-wrap font-mono text-[12px] text-[var(--wb-text)]">
             {p.withCheck}
           </pre>
         </div>
@@ -515,25 +523,19 @@ function PanelHeader({
   children?: React.ReactNode;
 }) {
   return (
-    <div className="flex h-11 shrink-0 items-center gap-2 border-b border-border bg-background pl-3 pr-2">
-      <span className="truncate text-sm font-medium text-foreground">{title}</span>
+    <div className="flex h-9 shrink-0 items-center gap-1.5 border-b border-[var(--wb-separator)] pl-3 pr-2">
+      <span className="truncate text-[13px] font-semibold text-[var(--wb-text)]">{title}</span>
       {hint && (
-        <span className="rounded-md bg-muted px-1.5 py-0.5 font-mono text-[10px] uppercase text-muted-foreground">
+        <span className="truncate rounded-[4px] bg-[var(--wb-control)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--wb-text-2)]">
           {hint}
         </span>
       )}
       <div className="flex-1" />
       {children}
       {onClose && (
-        <Button
-          variant="ghost"
-          size="icon-xs"
-          onClick={onClose}
-          aria-label="Close panel"
-          title="Close"
-        >
+        <IconButton variant="plain" label="Close panel" title="Close" onClick={onClose}>
           <X />
-        </Button>
+        </IconButton>
       )}
     </div>
   );
@@ -541,7 +543,7 @@ function PanelHeader({
 
 function PanelFooter({ children }: { children: React.ReactNode }) {
   return (
-    <div className="shrink-0 border-t border-border px-3 py-2 font-display text-[11px] italic text-muted-foreground">
+    <div className="shrink-0 border-t border-[var(--wb-separator)] px-3 py-2 text-[11px] text-[var(--wb-text-3)]">
       {children}
     </div>
   );
@@ -550,8 +552,8 @@ function PanelFooter({ children }: { children: React.ReactNode }) {
 function PanelEmpty({ title, hint }: { title: string; hint?: string }) {
   return (
     <div className="flex h-full flex-col items-center justify-center gap-1 px-6 text-center">
-      <div className="font-display text-base italic text-foreground">{title}</div>
-      {hint && <div className="font-display text-xs italic text-muted-foreground">{hint}</div>}
+      <div className="text-[16px] text-[var(--wb-text-2)]">{title}</div>
+      {hint && <div className="text-[12px] text-[var(--wb-text-3)]">{hint}</div>}
     </div>
   );
 }
