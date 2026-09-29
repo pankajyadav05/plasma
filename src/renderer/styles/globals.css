@@ -1076,8 +1076,13 @@
   --status-none: color-mix(in oklch, var(--background) 85%, var(--foreground));
 
   --icon-folder: #9b6cc4;
-  --icon-db: #3f8f4d;
+  --icon-db: var(--wb-accent);
   --icon-pin: #d9785a;
+
+  /* Connected capsule fill: the theme's accent hue at a fixed lightness
+     and capped chroma, so every palette (black, yellow, pastel accents…)
+     gets a muted TablePlus-style fill that keeps white text readable. */
+  --wb-connected: oklch(from var(--wb-accent) 0.52 min(c, 0.1) h);
 }
 
 .dark {
@@ -1105,8 +1110,10 @@
   --status-none: color-mix(in oklch, var(--background) 86%, var(--foreground));
 
   --icon-folder: #ae86cd;
-  --icon-db: #469c55;
+  --icon-db: var(--wb-accent);
   --icon-pin: #e49375;
+
+  --wb-connected: oklch(from var(--wb-accent) 0.45 min(c, 0.08) h);
 }
 
 /* Default theme — exact TablePlus values. */
@@ -1142,7 +1149,7 @@
   --status-none: #d8d8d8;
 
   --icon-folder: #9b6cc4;
-  --icon-db: #3f8f4d;
+  --icon-db: var(--wb-accent);
   --icon-pin: #d9785a;
 }
 
@@ -1178,7 +1185,7 @@
   --status-none: #3a3a3a;
 
   --icon-folder: #ae86cd;
-  --icon-db: #469c55;
+  --icon-db: var(--wb-accent);
   --icon-pin: #e49375;
 }
 

@@ -55,7 +55,7 @@ const MENU_ROW =
 
 /** Environment tag → capsule fill (TablePlus colours the whole capsule). */
 const TAG_FILL: Record<string, string> = {
-  local: 'var(--status-local)',
+  local: 'var(--wb-connected)',
   dev: 'var(--status-dev)',
   staging: 'var(--status-staging)',
   prod: 'var(--status-prod)',
@@ -351,13 +351,13 @@ function StatusCapsule() {
 
   const engine = activeConfig?.engine ?? 'postgres';
   const connected = connectionState === 'connected';
-  // Connected = TablePlus green, whatever the env tag (the tag still
+  // Connected = the theme's accent (muted), whatever the env tag (the tag still
   // shows as a chip). Prod keeps its red fill so a production session is
   // never mistaken for a safe one. Disconnected/connecting stay neutral.
   const fill = connected
     ? tag === 'prod'
       ? 'var(--status-prod)'
-      : 'var(--status-local)'
+      : 'var(--wb-connected)'
     : undefined;
   const surface = fill ?? 'var(--status-none)';
   const stateLabel =
