@@ -875,6 +875,15 @@ export const SettingsShape = z.object({
   claudeApiKey: z.string().default(''),
   hasClaudeApiKey: z.boolean().optional(),
   transactionMode: z.boolean().default(false),
+  /** Connect to `lastConnectionId` when Plasma starts. */
+  autoConnectOnLaunch: z.boolean().default(true),
+  /** Retry with backoff when a live connection drops and can't be recovered. */
+  autoReconnect: z.boolean().default(true),
+  /**
+   * Saved connection used most recently. Cleared by an explicit
+   * Disconnect so a deliberate disconnect is never undone on relaunch.
+   */
+  lastConnectionId: z.string().nullable().default(null),
   /**
    * Per-connection environment tag. Drives the status-bar color (green
    * for local, amber for staging, red for prod) and gates destructive

@@ -284,6 +284,9 @@ const DEFAULT_SETTINGS: Settings = {
   openrouterModel: 'anthropic/claude-sonnet-4.5',
   claudeApiKey: '',
   transactionMode: false,
+  autoConnectOnLaunch: true,
+  autoReconnect: true,
+  lastConnectionId: null,
   connectionTags: {},
   connectionSsh: {},
   schemaSnapshots: [],
@@ -293,6 +296,11 @@ const DEFAULT_SETTINGS: Settings = {
   savedQueries: {},
   windowBounds: null,
 };
+
+/** Persist the saved connection just opened, for auto-connect on launch. */
+function rememberLastConnection(get: () => SessionState, id: string) {
+  if (get().settings.lastConnectionId !== id) void get().updateSettings({ lastConnectionId: id });
+}
 
 function freshId(): string {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
@@ -828,6 +836,9 @@ export const useSession = create<SessionState>((set, get) => ({
         activeOsIndex: null,
       });
       await get().loadSavedConnections();
+      if (config.id && get().savedConnections.some((c) => c.id === config.id)) {
+        rememberLastConnection(get, config.id);
+      }
       await loadEngineOverview(set, get, eff);
       if (eff === 'postgres') void get().loadAvailableRoles();
     } catch (err) {
@@ -860,6 +871,7 @@ export const useSession = create<SessionState>((set, get) => ({
         activeRedisKey: null,
         activeOsIndex: null,
       });
+      rememberLastConnection(get, id);
       await loadEngineOverview(set, get, eff);
       if (eff === 'postgres') void get().loadAvailableRoles();
     } catch (err) {
@@ -872,6 +884,8 @@ export const useSession = create<SessionState>((set, get) => ({
 
   async disconnect() {
     if (get().pendingEdits.length > 0) { set({ connectionActionGate: { kind: 'disconnect' } }); return; }
+    // A deliberate disconnect must not be undone by auto-connect on relaunch.
+    if (get().settings.lastConnectionId) void get().updateSettings({ lastConnectionId: null });
     try {
       await ipc.conn.disconnect();
     } finally {

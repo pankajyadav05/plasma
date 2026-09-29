@@ -3,6 +3,7 @@ import { ToolbarButton, ToolbarDivider, ToolbarGroup } from '@/components/ui/wor
 import { PendingEditsTable } from '@/features/result-grid/PendingEditsTable';
 import { cn } from '@/lib/cn';
 import { kbd } from '@/lib/platform';
+import { useReconnect } from '@/stores/reconnect';
 import { useActiveTab, useSession } from '@/stores/session';
 import type { ConnectionEngine, SavedConnection } from '@shared/protocol';
 import {
@@ -21,10 +22,11 @@ import {
   Pencil,
   Plus,
   RefreshCw,
+  RotateCw,
   Undo2,
   X,
 } from 'lucide-react';
-import { useState } from 'react';
+import { forwardRef, useEffect, useState } from 'react';
 import { BrandMark } from './BrandMark';
 import { UpdateBadge } from './UpdateBadge';
 import { WindowControls } from './WindowControls';
@@ -402,20 +404,6 @@ function StatusCapsule() {
         {stateLabel}
       </span>
 
-      {!connected && (
-        <span
-          className={cn(
-            'mr-2 inline-block h-2 w-2 shrink-0 rounded-full',
-            connectionState === 'connecting'
-              ? 'animate-pulse bg-[var(--wb-accent)]'
-              : connectionState === 'error'
-                ? 'bg-destructive'
-                : 'bg-muted-foreground',
-          )}
-          aria-hidden
-        />
-      )}
-
       {activeConfig && connected ? (
         <span className="flex min-w-0 items-center">
           <Seg>{shortVersion(serverVersion, engine)}</Seg>
@@ -464,20 +452,132 @@ function StatusCapsule() {
           )}
         </span>
       ) : (
-        <ConnectionSwitcher
-          trigger={
-            <CapsuleButton title="Connect to a database">
-              <span className="truncate">
-                {connectionState === 'connecting'
-                  ? `Connecting to ${activeConfig?.name ?? 'database'}…`
-                  : 'Not connected — open a connection'}
-              </span>
-            </CapsuleButton>
-          }
-        />
+        <OfflineCapsule />
       )}
     </div>
   );
+}
+
+/**
+ * Capsule body while not connected. Shows what the reconnect machine is
+ * doing and makes the whole capsule a reconnect button:
+ *
+ *   ● Connection to Resilinc Admin lost — retrying in 4s        Reconnect now  ⇅
+ *   ◌ Reconnecting to Resilinc Admin… (attempt 2)                               ⇅
+ *   ● Couldn't reach Resilinc Admin — click to reconnect                        ⇅
+ *   ● Not connected — click to connect to Resilinc Admin                        ⇅
+ *
+ * The trailing ⇅ always opens the connection switcher.
+ */
+function OfflineCapsule() {
+  const connectionState = useSession((s) => s.connectionState);
+  const activeConfig = useSession((s) => s.activeConfig);
+  const savedConnections = useSession((s) => s.savedConnections);
+  const lastId = useSession((s) => s.settings.lastConnectionId);
+  const target = useReconnect((s) => s.target);
+  const phase = useReconnect((s) => s.phase);
+  const reason = useReconnect((s) => s.reason);
+  const attempt = useReconnect((s) => s.attempt);
+  const nextAt = useReconnect((s) => s.nextAt);
+  const lastError = useReconnect((s) => s.lastError);
+  const reconnectNow = useReconnect((s) => s.reconnectNow);
+  const start = useReconnect((s) => s.start);
+  const now = useNow(phase === 'waiting' ? 1000 : null);
+
+  // With no retry in progress, still offer the last connection by name.
+  const last = !target ? savedConnections.find((c) => c.id === lastId) : undefined;
+  const busy = phase === 'connecting' || connectionState === 'connecting';
+  const name = target?.name ?? last?.name ?? activeConfig?.name;
+
+  let label: string;
+  let dot: string;
+  let onClick: (() => void) | null = null;
+  if (busy) {
+    label =
+      target && reason !== 'manual' && attempt > 0
+        ? `Reconnecting to ${name}… (attempt ${attempt + 1})`
+        : `Connecting to ${name ?? 'database'}…`;
+    dot = 'animate-pulse bg-[var(--wb-accent)]';
+  } else if (target && phase === 'waiting') {
+    const secs = nextAt ? Math.max(0, Math.ceil((nextAt - now) / 1000)) : 0;
+    label = `Connection to ${target.name} lost — retrying in ${secs}s`;
+    dot = 'bg-[var(--status-staging)]';
+    onClick = () => void reconnectNow();
+  } else if (target && phase === 'failed') {
+    label =
+      reason === 'launch'
+        ? `Couldn't connect to ${target.name} — click to retry`
+        : `Couldn't reach ${target.name} — click to reconnect`;
+    dot = 'bg-destructive';
+    onClick = () => void reconnectNow();
+  } else if (last) {
+    label = `Not connected — click to connect to ${last.name}`;
+    dot = 'bg-[var(--wb-text-3)]';
+    onClick = () => start({ id: last.id, name: last.name }, 'manual');
+  } else {
+    label = 'Not connected — open a connection';
+    dot = 'bg-[var(--wb-text-3)]';
+  }
+
+  const body = (
+    <>
+      {busy ? (
+        <Loader2 className="mr-2 h-3.5 w-3.5 shrink-0 animate-spin opacity-80" aria-hidden />
+      ) : (
+        <span className={cn('mr-2 inline-block h-2 w-2 shrink-0 rounded-full', dot)} aria-hidden />
+      )}
+      <span className="truncate">{label}</span>
+    </>
+  );
+
+  return (
+    <span className="flex min-w-0 flex-1 items-center">
+      {onClick ? (
+        <button
+          type="button"
+          onClick={onClick}
+          title={lastError ? `${label}\n\nLast error: ${lastError}` : label}
+          className="-ml-1 flex min-w-0 flex-1 items-center rounded-full px-1 py-1 text-left hover:bg-black/10 dark:hover:bg-white/10"
+          data-testid="reconnect-button"
+        >
+          {body}
+          {phase === 'waiting' && (
+            <span className="ml-auto shrink-0 pl-3 font-sans text-[12px] font-medium opacity-80">
+              Reconnect now
+            </span>
+          )}
+        </button>
+      ) : (
+        <span className="flex min-w-0 flex-1 items-center" title={label}>
+          {body}
+        </span>
+      )}
+      <ConnectionSwitcher
+        trigger={
+          <button
+            type="button"
+            aria-label="Switch connection"
+            title="Switch connection"
+            className="ml-1 grid h-6 w-6 shrink-0 place-items-center rounded-full opacity-70 hover:bg-black/10 hover:opacity-100 dark:hover:bg-white/10"
+          >
+            <ChevronsUpDown className="h-3.5 w-3.5" />
+          </button>
+        }
+      />
+    </span>
+  );
+}
+
+/** Re-render every `intervalMs` (null = paused); returns Date.now(). */
+function useNow(intervalMs: number | null): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (intervalMs === null) return;
+    setNow(Date.now());
+    const id = window.setInterval(() => setNow(Date.now()), intervalMs);
+    return () => window.clearInterval(id);
+  }, [intervalMs]);
+  return now;
 }
 
 function Seg({
@@ -504,13 +604,15 @@ function Sep() {
   );
 }
 
-function CapsuleButton({
-  children,
-  title,
-  ...props
-}: React.ButtonHTMLAttributes<HTMLButtonElement>) {
-  return (
+/**
+ * Clickable capsule segment. Forwards its ref: it is used as a Radix
+ * `PopoverTrigger asChild`, which needs the DOM node to open and anchor
+ * the popover (without it, clicking the connection name did nothing).
+ */
+const CapsuleButton = forwardRef<HTMLButtonElement, React.ButtonHTMLAttributes<HTMLButtonElement>>(
+  ({ children, title, ...props }, ref) => (
     <button
+      ref={ref}
       type="button"
       title={title}
       className="group/cap -mx-1 flex min-w-0 shrink items-center gap-0.5 rounded-[5px] px-1 py-1 font-semibold transition-colors hover:bg-black/15"
@@ -519,14 +621,16 @@ function CapsuleButton({
       {children}
       <ChevronsUpDown className="hidden h-3 w-3 shrink-0 opacity-70 group-hover/cap:inline-block group-focus-visible/cap:inline-block" />
     </button>
-  );
-}
+  ),
+);
+CapsuleButton.displayName = 'CapsuleButton';
 
 function ConnectionSwitcher({ trigger }: { trigger: React.ReactElement }) {
   const activeConfig = useSession((s) => s.activeConfig);
   const savedConnections = useSession((s) => s.savedConnections);
   const connectionState = useSession((s) => s.connectionState);
   const openDialog = useSession((s) => s.openDialog);
+  const connectSaved = useSession((s) => s.connectSaved);
   const [filter, setFilter] = useState('');
 
   const q = filter.trim().toLowerCase();
@@ -564,6 +668,17 @@ function ConnectionSwitcher({ trigger }: { trigger: React.ReactElement }) {
           ))}
         </div>
         <div className="my-1 h-px bg-[var(--wb-toolbar-group-edge)]" />
+        {activeConfig && connectionState === 'connected' && (
+          <button
+            type="button"
+            onClick={() => void connectSaved(activeConfig.id)}
+            className={MENU_ROW}
+            title="Open a fresh session to the current connection"
+          >
+            <RotateCw className="h-3.5 w-3.5" />
+            Reconnect to {activeConfig.name}
+          </button>
+        )}
         <button type="button" onClick={() => openDialog()} className={MENU_ROW}>
           <Plus className="h-3.5 w-3.5" />
           New connection…

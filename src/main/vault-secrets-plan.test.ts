@@ -77,6 +77,9 @@ describe('redactSettingsWithPresence (U07)', () => {
     openrouterModel: 'anthropic/claude-sonnet-4.5',
     claudeApiKey: 'SHOULD_NOT_LEAK',
     transactionMode: false,
+    autoConnectOnLaunch: true,
+    autoReconnect: true,
+    lastConnectionId: null,
     connectionTags: {},
     connectionSsh: {
       'conn-1': {

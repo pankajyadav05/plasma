@@ -1,5 +1,6 @@
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { AppShell } from '@/features/app-shell/AppShell';
+import { useReconnect } from '@/stores/reconnect';
 import { useSession } from '@/stores/session';
 import { ConnectionRecovered } from '@shared/protocol';
 import { useEffect } from 'react';
@@ -11,9 +12,16 @@ export function App() {
       await session.loadSettings();
       await session.loadSavedConnections();
 
-      const { savedConnections, connectionState } = useSession.getState();
+      const { savedConnections, connectionState, settings } = useSession.getState();
       if (savedConnections.length === 0 && connectionState === 'idle') {
         session.openDialog();
+        return;
+      }
+      // Auto-connect to the connection used last time (skipped after an
+      // explicit disconnect, which clears lastConnectionId).
+      const last = savedConnections.find((c) => c.id === settings.lastConnectionId);
+      if (settings.autoConnectOnLaunch && last && connectionState === 'idle') {
+        useReconnect.getState().start({ id: last.id, name: last.name }, 'launch');
       }
     })();
   }, []);
@@ -58,7 +66,15 @@ export function App() {
       }),
       // U20: the worker died and came back with no DB session — stop
       // claiming to be connected so the user gets the connect screen.
-      window.plasmaEvents.on('plasma:worker:reset', () => session().handleWorkerReset()),
+      window.plasmaEvents.on('plasma:worker:reset', () => {
+        // Remember what we were connected to before the reset forgets it,
+        // then retry with backoff (or wait for a click if auto is off).
+        const prev = session().activeConfig;
+        session().handleWorkerReset();
+        if (prev?.id && session().savedConnections.some((c) => c.id === prev.id)) {
+          useReconnect.getState().start({ id: prev.id, name: prev.name }, 'lost');
+        }
+      }),
       // U27: main rebuilt the session after a network/VPN drop. Adopt the
       // new connection generation so edit + result guards stay honest.
       window.plasmaEvents.on('plasma:conn:recovered', (...args: unknown[]) => {
@@ -66,8 +82,16 @@ export function App() {
         if (parsed.success) session().handleConnectionRecovered(parsed.data);
       }),
     ];
+    // Network back (Wi-Fi, VPN, wake from sleep) → retry right away
+    // instead of waiting out the backoff.
+    const onOnline = () => {
+      const r = useReconnect.getState();
+      if (r.target && (r.phase === 'waiting' || r.phase === 'failed')) void r.reconnectNow();
+    };
+    window.addEventListener('online', onOnline);
     return () => {
       for (const fn of unsub) fn();
+      window.removeEventListener('online', onOnline);
     };
   }, []);
 

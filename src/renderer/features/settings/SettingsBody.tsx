@@ -316,6 +316,40 @@ export function SettingsBody() {
         </p>
       </Field>
 
+      <SectionTitle>Connection</SectionTitle>
+      <Field label="Auto-connect">
+        <div className="flex items-center gap-3">
+          <Checkbox
+            id="auto-connect"
+            checked={settings.autoConnectOnLaunch}
+            onCheckedChange={(v) => void updateSettings({ autoConnectOnLaunch: Boolean(v) })}
+          />
+          <label htmlFor="auto-connect" className="cursor-pointer text-sm text-foreground">
+            Reconnect to the last connection when Plasma starts
+          </label>
+        </div>
+        <p className="mt-1 text-xs text-muted-foreground">
+          Skipped after you disconnect on purpose.
+        </p>
+      </Field>
+
+      <Field label="Auto-reconnect">
+        <div className="flex items-center gap-3">
+          <Checkbox
+            id="auto-reconnect"
+            checked={settings.autoReconnect}
+            onCheckedChange={(v) => void updateSettings({ autoReconnect: Boolean(v) })}
+          />
+          <label htmlFor="auto-reconnect" className="cursor-pointer text-sm text-foreground">
+            Retry automatically when the connection drops
+          </label>
+        </div>
+        <p className="mt-1 text-xs text-muted-foreground">
+          Retries after 2s, 5s, 10s, 30s and 60s, and immediately when the network comes
+          back. You can always click the status bar to reconnect.
+        </p>
+      </Field>
+
       <SectionTitle>AI (OpenRouter)</SectionTitle>
       <Field label="OpenRouter API key" htmlFor="openrouter-key">
         <DebouncedSettingsInput
