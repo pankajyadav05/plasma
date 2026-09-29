@@ -50,7 +50,14 @@ export function SidebarResizer({ side = 'left' }: { side?: Side }) {
       if (collapsed) return;
       e.preventDefault();
       const startX = e.clientX;
-      const startWidth = width;
+      // Start from the sidebar's rendered width — the handle sits right
+      // after the left sidebar and right before the right one. Falls back
+      // to the stored width only if the element can't be measured.
+      const pane = isLeft
+        ? e.currentTarget.previousElementSibling
+        : e.currentTarget.nextElementSibling;
+      const measured = pane?.getBoundingClientRect().width;
+      const startWidth = measured && measured > 0 ? measured : width;
       e.currentTarget.setPointerCapture(e.pointerId);
 
       const onMove = (ev: PointerEvent) => {
@@ -70,7 +77,7 @@ export function SidebarResizer({ side = 'left' }: { side?: Side }) {
       document.body.style.cursor = 'col-resize';
       document.body.style.userSelect = 'none';
     },
-    [collapsed, width, setWidth, direction, persist],
+    [collapsed, width, setWidth, direction, persist, isLeft],
   );
 
   if (collapsed) return null;

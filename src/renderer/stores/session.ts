@@ -298,6 +298,13 @@ const DEFAULT_SETTINGS: Settings = {
   windowBounds: null,
 };
 
+/** Fill any keys missing from a settings payload with renderer defaults. */
+export function withDefaults(settings: Partial<Settings>): Settings {
+  const merged = { ...DEFAULT_SETTINGS } as Record<string, unknown>;
+  for (const [k, v] of Object.entries(settings)) if (v !== undefined) merged[k] = v;
+  return merged as Settings;
+}
+
 /** Persist the saved connection just opened, for auto-connect on launch. */
 function rememberLastConnection(get: () => SessionState, id: string) {
   if (get().settings.lastConnectionId !== id) void get().updateSettings({ lastConnectionId: id });
@@ -1549,12 +1556,14 @@ export const useSession = create<SessionState>((set, get) => ({
 
   setSidebarWidth(width) {
     // Optimistic, no IPC. The caller (resizer pointerup) persists once.
+    if (!Number.isFinite(width)) return;
     const clamped = Math.max(200, Math.min(520, Math.round(width)));
     set({ settings: { ...get().settings, sidebarWidth: clamped } });
   },
 
   setRightSidebarWidth(width) {
     // Same contract as setSidebarWidth: optimistic here, persisted on drop.
+    if (!Number.isFinite(width)) return;
     const clamped = Math.max(240, Math.min(720, Math.round(width)));
     set({ settings: { ...get().settings, rightSidebarWidth: clamped } });
   },
@@ -2135,7 +2144,11 @@ export const useSession = create<SessionState>((set, get) => ({
 
   async loadSettings() {
     try {
-      const settings = await ipc.settings.get();
+      // Merge over renderer defaults: a main process built before a
+      // setting existed (e.g. `pnpm dev` hot-reloads the renderer but not
+      // main) returns objects without the new keys, and undefined widths /
+      // flags would silently break the features that read them.
+      const settings = withDefaults(await ipc.settings.get());
       set({ settings });
       // Apply theme + font overrides immediately on boot
       applyTheme(settings.theme, settings.themeName);
@@ -2147,7 +2160,7 @@ export const useSession = create<SessionState>((set, get) => ({
 
   async updateSettings(patch) {
     try {
-      const next = await ipc.settings.set(patch);
+      const next = withDefaults(await ipc.settings.set(patch));
       set({ settings: next });
       applyTheme(next.theme, next.themeName);
       applyFonts(next.fontSans, next.fontMono);
