@@ -109,7 +109,6 @@
   --sidebar-accent-foreground: #e0e0e0;
   --sidebar-border: #000000;
   --sidebar-ring: oklch(0.7122 0.1809 21.663);
-  --radius: 0.5rem;
   --shadow-color: oklch(0 0 0);
   --shadow-2xs: 0 1px 1px 0 hsl(0 0% 0% / 0.3);
   --shadow-xs: 0 1px 2px 0 hsl(0 0% 0% / 0.35);
@@ -148,9 +147,10 @@
    restored to a shared tinted set for every named theme (above);
    `--bg-hover` and `--color-win-close` are not overridden.
 
-   Each theme varies on every axis — radius, font stack, tracking,
-   shadow profile — so picking a palette feels like switching IDE,
-   not just swapping a hue. */
+   Themes are colour-only: they set colour variables and nothing else.
+   Radius, fonts, letter-spacing and shadows come from :root (shadows
+   get stronger opacity in .dark so they stay visible), so switching
+   palette never changes the shape or size of a control. */
 
 /* ── catppuccin ── beloved dev pastel-on-dark; latte (light) +
    mocha (dark). Soft cool lavender + peach accents, balanced for
@@ -188,19 +188,6 @@
   --sidebar-accent-foreground: oklch(0.3 0.04 285);
   --sidebar-border: oklch(0.88 0.02 65);
   --sidebar-ring: oklch(0.55 0.18 260);
-  --radius: 0.5rem;
-  --font-sans: "Geist", ui-sans-serif, system-ui, sans-serif;
-  --font-serif: "Newsreader", ui-serif, Georgia, serif;
-  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
-  --shadow-2xs: 0px 1px 2px 0px hsl(280 30% 30% / 0.04);
-  --shadow-xs: 0px 1px 2px 0px hsl(280 30% 30% / 0.04);
-  --shadow-sm: 0px 1px 3px 0px hsl(280 30% 30% / 0.08), 0px 1px 2px 0px hsl(280 30% 30% / 0.04);
-  --shadow: 0px 2px 4px 0px hsl(280 30% 30% / 0.08), 0px 1px 2px 0px hsl(280 30% 30% / 0.04);
-  --shadow-md: 0px 4px 8px 0px hsl(280 30% 30% / 0.1), 0px 2px 4px 0px hsl(280 30% 30% / 0.06);
-  --shadow-lg: 0px 8px 16px 0px hsl(280 30% 30% / 0.12), 0px 4px 6px 0px hsl(280 30% 30% / 0.08);
-  --shadow-xl: 0px 16px 24px 0px hsl(280 30% 30% / 0.14), 0px 8px 10px 0px hsl(280 30% 30% / 0.1);
-  --shadow-2xl: 0px 24px 48px 0px hsl(280 30% 30% / 0.2);
-  --tracking-normal: 0em;
 }
 .dark.theme-catppuccin {
   --background: oklch(0.19 0.025 285);
@@ -272,19 +259,6 @@
   --sidebar-accent-foreground: oklch(0.22 0.04 30);
   --sidebar-border: oklch(0.86 0.025 50);
   --sidebar-ring: oklch(0.55 0.13 35);
-  --radius: 0.625rem;
-  --font-sans: "Outfit", ui-sans-serif, system-ui, sans-serif;
-  --font-serif: "Lora", Georgia, serif;
-  --font-mono: "IBM Plex Mono", ui-monospace, monospace;
-  --shadow-2xs: 0px 2px 4px 0px hsl(30 35% 30% / 0.04);
-  --shadow-xs: 0px 2px 4px 0px hsl(30 35% 30% / 0.04);
-  --shadow-sm: 0px 2px 6px 0px hsl(30 35% 30% / 0.08), 0px 1px 2px 0px hsl(30 35% 30% / 0.04);
-  --shadow: 0px 4px 8px 0px hsl(30 35% 30% / 0.08), 0px 2px 4px 0px hsl(30 35% 30% / 0.06);
-  --shadow-md: 0px 6px 12px 0px hsl(30 35% 30% / 0.1), 0px 3px 6px 0px hsl(30 35% 30% / 0.08);
-  --shadow-lg: 0px 12px 20px 0px hsl(30 35% 30% / 0.12), 0px 6px 8px 0px hsl(30 35% 30% / 0.08);
-  --shadow-xl: 0px 20px 32px 0px hsl(30 35% 30% / 0.15), 0px 10px 16px 0px hsl(30 35% 30% / 0.1);
-  --shadow-2xl: 0px 32px 56px 0px hsl(30 35% 30% / 0.25);
-  --tracking-normal: 0em;
 }
 .dark.theme-claude {
   --background: oklch(0.17 0.018 35);
@@ -321,9 +295,7 @@
   --sidebar-ring: oklch(0.73 0.13 35);
 }
 
-/* ── claymorphism ── chunky pastel cards; 1.25rem radius;
-   multi-layer soft shadows + inset highlight (clay signature);
-   friendly playful AI-toy vibe. */
+/* ── claymorphism ── soft pastel palette; friendly, playful. */
 .theme-claymorphism {
   --background: oklch(0.96 0.022 285);
   --foreground: oklch(0.3 0.05 280);
@@ -357,24 +329,6 @@
   --sidebar-accent-foreground: oklch(0.3 0.05 280);
   --sidebar-border: oklch(0.88 0.035 285);
   --sidebar-ring: oklch(0.65 0.15 285);
-  --radius: 1.25rem;
-  --font-sans: "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
-  --font-serif: "Lora", Georgia, serif;
-  --font-mono: "Geist Mono", ui-monospace, monospace;
-  --shadow-2xs: 0 4px 12px 0 hsl(285 30% 50% / 0.06);
-  --shadow-xs: 0 4px 12px 0 hsl(285 30% 50% / 0.06);
-  --shadow-sm: 0 6px 16px 0 hsl(285 30% 50% / 0.1), 0 2px 4px 0 hsl(285 30% 50% / 0.06), inset 0 1px
-    0 0 hsl(0 0% 100% / 0.4);
-  --shadow: 0 8px 20px 0 hsl(285 30% 50% / 0.12), 0 3px 6px 0 hsl(285 30% 50% / 0.08), inset 0 1px 0
-    0 hsl(0 0% 100% / 0.4);
-  --shadow-md: 0 12px 28px 0 hsl(285 30% 50% / 0.14), 0 4px 8px 0 hsl(285 30% 50% / 0.08), inset 0
-    1px 0 0 hsl(0 0% 100% / 0.5);
-  --shadow-lg: 0 20px 40px 0 hsl(285 30% 50% / 0.16), 0 8px 16px 0 hsl(285 30% 50% / 0.1), inset 0
-    1px 0 0 hsl(0 0% 100% / 0.5);
-  --shadow-xl: 0 32px 56px 0 hsl(285 30% 50% / 0.18), 0 16px 24px 0 hsl(285 30% 50% / 0.12), inset 0
-    2px 0 0 hsl(0 0% 100% / 0.5);
-  --shadow-2xl: 0 48px 80px 0 hsl(285 30% 50% / 0.3);
-  --tracking-normal: 0em;
 }
 .dark.theme-claymorphism {
   --background: oklch(0.18 0.04 285);
@@ -411,9 +365,7 @@
   --sidebar-ring: oklch(0.75 0.13 285);
 }
 
-/* ── neo-brutalism ── pure B&W + safety-yellow accent;
-   ZERO radius; chunky offset shadows (4px–12px solid black); IBM
-   Plex Sans for spec-sheet typography. */
+/* ── neo-brutalism ── pure black & white + safety-yellow accent. */
 .theme-neo-brutalism {
   --background: oklch(1.0 0 0);
   --foreground: oklch(0 0 0);
@@ -447,19 +399,6 @@
   --sidebar-accent-foreground: oklch(0 0 0);
   --sidebar-border: oklch(0 0 0);
   --sidebar-ring: oklch(0.9 0.2 95);
-  --radius: 0rem;
-  --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
-  --font-serif: "Newsreader", ui-serif, Georgia, serif;
-  --font-mono: "JetBrains Mono", ui-monospace, monospace;
-  --shadow-2xs: 2px 2px 0px 0px hsl(0 0% 0% / 1.0);
-  --shadow-xs: 2px 2px 0px 0px hsl(0 0% 0% / 1.0);
-  --shadow-sm: 3px 3px 0px 0px hsl(0 0% 0% / 1.0);
-  --shadow: 4px 4px 0px 0px hsl(0 0% 0% / 1.0);
-  --shadow-md: 5px 5px 0px 0px hsl(0 0% 0% / 1.0);
-  --shadow-lg: 6px 6px 0px 0px hsl(0 0% 0% / 1.0);
-  --shadow-xl: 8px 8px 0px 0px hsl(0 0% 0% / 1.0);
-  --shadow-2xl: 12px 12px 0px 0px hsl(0 0% 0% / 1.0);
-  --tracking-normal: -0.01em;
 }
 .dark.theme-neo-brutalism {
   --background: oklch(0 0 0);
@@ -497,7 +436,7 @@
 }
 
 /* ── quantum-rose ── glamour noir; deep wine bg + luminous rose
-   primary; tight 4px radius; rose-tinted dramatic shadows. */
+   primary. */
 .theme-quantum-rose {
   --background: oklch(0.97 0.015 0);
   --foreground: oklch(0.22 0.09 350);
@@ -531,19 +470,6 @@
   --sidebar-accent-foreground: oklch(0.22 0.09 350);
   --sidebar-border: oklch(0.88 0.025 0);
   --sidebar-ring: oklch(0.55 0.2 0);
-  --radius: 0.25rem;
-  --font-sans: "Outfit", ui-sans-serif, system-ui, sans-serif;
-  --font-serif: "Newsreader", ui-serif, Georgia, serif;
-  --font-mono: "JetBrains Mono", ui-monospace, monospace;
-  --shadow-2xs: 0px 1px 3px 0px hsl(0 50% 30% / 0.06);
-  --shadow-xs: 0px 1px 3px 0px hsl(0 50% 30% / 0.06);
-  --shadow-sm: 0px 2px 6px 0px hsl(0 50% 30% / 0.1), 0px 1px 2px 0px hsl(0 50% 30% / 0.06);
-  --shadow: 0px 4px 10px 0px hsl(0 50% 30% / 0.12), 0px 2px 4px 0px hsl(0 50% 30% / 0.08);
-  --shadow-md: 0px 6px 14px 0px hsl(0 50% 30% / 0.14), 0px 3px 6px 0px hsl(0 50% 30% / 0.08);
-  --shadow-lg: 0px 12px 24px 0px hsl(0 50% 30% / 0.16), 0px 6px 10px 0px hsl(0 50% 30% / 0.1);
-  --shadow-xl: 0px 24px 40px 0px hsl(0 50% 30% / 0.2), 0px 12px 20px 0px hsl(0 50% 30% / 0.12);
-  --shadow-2xl: 0px 36px 64px 0px hsl(0 50% 30% / 0.3);
-  --tracking-normal: 0.025em;
 }
 .dark.theme-quantum-rose {
   --background: oklch(0.14 0.035 350);
@@ -580,8 +506,7 @@
   --sidebar-ring: oklch(0.72 0.2 0);
 }
 
-/* ── forest-canopy ── deep moss + amber + bone (theme-factory anchor);
-   warm earthy organic; med radius; long warm shadows. */
+/* ── forest-canopy ── deep moss + amber + bone; warm and earthy. */
 .theme-forest-canopy {
   --background: oklch(0.96 0.018 95);
   --foreground: oklch(0.25 0.04 130);
@@ -615,19 +540,6 @@
   --sidebar-accent-foreground: oklch(0.25 0.04 130);
   --sidebar-border: oklch(0.86 0.025 100);
   --sidebar-ring: oklch(0.45 0.1 145);
-  --radius: 0.5rem;
-  --font-sans: "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
-  --font-serif: "Lora", Georgia, serif;
-  --font-mono: "JetBrains Mono", ui-monospace, monospace;
-  --shadow-2xs: 0px 2px 4px 0px hsl(120 25% 20% / 0.04);
-  --shadow-xs: 0px 2px 4px 0px hsl(120 25% 20% / 0.04);
-  --shadow-sm: 0px 2px 6px 0px hsl(120 25% 20% / 0.08), 0px 1px 2px 0px hsl(120 25% 20% / 0.04);
-  --shadow: 0px 4px 8px 0px hsl(120 25% 20% / 0.1), 0px 2px 4px 0px hsl(120 25% 20% / 0.06);
-  --shadow-md: 0px 6px 12px 0px hsl(120 25% 20% / 0.12), 0px 3px 6px 0px hsl(120 25% 20% / 0.08);
-  --shadow-lg: 0px 12px 20px 0px hsl(120 25% 20% / 0.14), 0px 6px 10px 0px hsl(120 25% 20% / 0.08);
-  --shadow-xl: 0px 20px 32px 0px hsl(120 25% 20% / 0.16), 0px 10px 16px 0px hsl(120 25% 20% / 0.1);
-  --shadow-2xl: 0px 32px 56px 0px hsl(120 25% 20% / 0.25);
-  --tracking-normal: 0em;
 }
 .dark.theme-forest-canopy {
   --background: oklch(0.16 0.025 130);
@@ -664,9 +576,8 @@
   --sidebar-ring: oklch(0.68 0.13 145);
 }
 
-/* ── cyberpunk ── neon-on-black hi-tech terminal; sharp 0.125rem corners;
-   JetBrains Mono everywhere; wider tracking; cyan glow shadows. Light
-   mode is a "blueprint" inversion — pale cyan paper + magenta ink. */
+/* ── cyberpunk ── neon-on-black hi-tech terminal. Light mode is a
+   "blueprint" inversion — pale cyan paper + magenta ink. */
 .theme-cyberpunk {
   --background: oklch(0.97 0.02 200);
   --foreground: oklch(0.2 0.07 320);
@@ -700,19 +611,6 @@
   --sidebar-accent-foreground: oklch(0.2 0.07 320);
   --sidebar-border: oklch(0.75 0.18 200);
   --sidebar-ring: oklch(0.55 0.24 320);
-  --radius: 0.125rem;
-  --font-sans: "Orbitron", "JetBrains Mono", ui-sans-serif, sans-serif;
-  --font-serif: "Space Grotesk", ui-serif, Georgia, serif;
-  --font-mono: "JetBrains Mono", ui-monospace, monospace;
-  --shadow-2xs: 0 0 4px 0 hsl(320 100% 50% / 0.2);
-  --shadow-xs: 0 0 4px 0 hsl(320 100% 50% / 0.2);
-  --shadow-sm: 0 0 6px 0 hsl(320 100% 50% / 0.3), 0 1px 0 0 hsl(200 100% 50% / 0.4);
-  --shadow: 0 0 8px 0 hsl(320 100% 50% / 0.35), 0 0 2px 0 hsl(200 100% 50% / 0.5);
-  --shadow-md: 0 0 12px 0 hsl(320 100% 50% / 0.4), 0 0 3px 0 hsl(200 100% 50% / 0.55);
-  --shadow-lg: 0 0 18px 0 hsl(320 100% 50% / 0.45), 0 0 4px 0 hsl(200 100% 50% / 0.6);
-  --shadow-xl: 0 0 28px 0 hsl(320 100% 50% / 0.5), 0 0 6px 0 hsl(200 100% 50% / 0.7);
-  --shadow-2xl: 0 0 48px 0 hsl(320 100% 50% / 0.65);
-  --tracking-normal: 0.05em;
 }
 .dark.theme-cyberpunk {
   --background: oklch(0.09 0.025 280);
@@ -747,19 +645,10 @@
   --sidebar-accent-foreground: oklch(0.78 0.22 200);
   --sidebar-border: oklch(0.45 0.18 320);
   --sidebar-ring: oklch(0.75 0.24 320);
-  --shadow-2xs: 0 0 6px 0 hsl(320 100% 60% / 0.4);
-  --shadow-xs: 0 0 6px 0 hsl(320 100% 60% / 0.4);
-  --shadow-sm: 0 0 10px 0 hsl(320 100% 60% / 0.5), 0 0 2px 0 hsl(200 100% 60% / 0.6);
-  --shadow: 0 0 14px 0 hsl(320 100% 60% / 0.55), 0 0 3px 0 hsl(200 100% 60% / 0.7);
-  --shadow-md: 0 0 20px 0 hsl(320 100% 60% / 0.6), 0 0 4px 0 hsl(200 100% 60% / 0.75);
-  --shadow-lg: 0 0 32px 0 hsl(320 100% 60% / 0.65), 0 0 6px 0 hsl(200 100% 60% / 0.8);
-  --shadow-xl: 0 0 48px 0 hsl(320 100% 60% / 0.7), 0 0 10px 0 hsl(200 100% 60% / 0.85);
-  --shadow-2xl: 0 0 80px 0 hsl(320 100% 60% / 0.85);
 }
 
-/* ── arctic ── icy frost-glass; deep navy on bone in light, pale ice
-   on midnight in dark; smooth 0.875rem radius; cool diffuse shadows
-   with a faint blue tint; Space Grotesk display + Inter body. */
+/* ── arctic ── icy; deep navy on bone in light, pale ice on
+   midnight in dark. */
 .theme-arctic {
   --background: oklch(0.975 0.008 220);
   --foreground: oklch(0.22 0.05 240);
@@ -793,19 +682,6 @@
   --sidebar-accent-foreground: oklch(0.22 0.05 240);
   --sidebar-border: oklch(0.88 0.015 220);
   --sidebar-ring: oklch(0.55 0.15 240);
-  --radius: 0.875rem;
-  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
-  --font-serif: "Space Grotesk", ui-serif, Georgia, serif;
-  --font-mono: "Geist Mono", ui-monospace, monospace;
-  --shadow-2xs: 0px 1px 3px 0px hsl(220 60% 30% / 0.04);
-  --shadow-xs: 0px 1px 3px 0px hsl(220 60% 30% / 0.04);
-  --shadow-sm: 0px 2px 6px 0px hsl(220 60% 30% / 0.08), 0px 1px 2px 0px hsl(220 60% 30% / 0.04);
-  --shadow: 0px 4px 12px 0px hsl(220 60% 30% / 0.1), 0px 2px 4px 0px hsl(220 60% 30% / 0.06);
-  --shadow-md: 0px 8px 18px 0px hsl(220 60% 30% / 0.12), 0px 4px 6px 0px hsl(220 60% 30% / 0.08);
-  --shadow-lg: 0px 14px 28px 0px hsl(220 60% 30% / 0.14), 0px 8px 12px 0px hsl(220 60% 30% / 0.08);
-  --shadow-xl: 0px 24px 40px 0px hsl(220 60% 30% / 0.16), 0px 12px 20px 0px hsl(220 60% 30% / 0.1);
-  --shadow-2xl: 0px 40px 64px 0px hsl(220 60% 30% / 0.22);
-  --tracking-normal: -0.005em;
 }
 .dark.theme-arctic {
   --background: oklch(0.13 0.03 240);

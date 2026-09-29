@@ -168,7 +168,7 @@ const PALETTES: Array<{
 ];
 
 const FONT_SANS_OPTIONS: Array<{ id: Settings['fontSans']; label: string; sample: string }> = [
-  { id: 'theme', label: 'Theme default', sample: '' },
+  { id: 'theme', label: 'Default (system UI)', sample: '' },
   { id: 'geist', label: 'Geist', sample: "'Geist', sans-serif" },
   { id: 'inter', label: 'Inter', sample: "'Inter', sans-serif" },
   { id: 'outfit', label: 'Outfit', sample: "'Outfit', sans-serif" },
@@ -178,7 +178,7 @@ const FONT_SANS_OPTIONS: Array<{ id: Settings['fontSans']; label: string; sample
 ];
 
 const FONT_MONO_OPTIONS: Array<{ id: Settings['fontMono']; label: string; sample: string }> = [
-  { id: 'theme', label: 'Theme default', sample: '' },
+  { id: 'theme', label: 'Default (JetBrains Mono)', sample: '' },
   { id: 'jetbrains-mono', label: 'JetBrains Mono', sample: "'JetBrains Mono', monospace" },
   { id: 'geist-mono', label: 'Geist Mono', sample: "'Geist Mono', monospace" },
   { id: 'ibm-plex-mono', label: 'IBM Plex Mono', sample: "'IBM Plex Mono', monospace" },
@@ -227,8 +227,8 @@ export function SettingsBody() {
           </SelectContent>
         </Select>
         <p className="mt-1 font-display text-xs italic text-muted-foreground">
-          Body + UI text. "Theme default" follows the active palette. SQL editor keeps its own mono
-          font.
+          Body + UI text. Palettes only change colours, so the font stays the same across
+          themes. The SQL editor keeps its own mono font.
         </p>
       </Field>
 
