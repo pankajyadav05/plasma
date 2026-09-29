@@ -349,7 +349,14 @@ function StatusCapsule() {
 
   const engine = activeConfig?.engine ?? 'postgres';
   const connected = connectionState === 'connected';
-  const fill = connected && tag ? TAG_FILL[tag] : undefined;
+  // Connected = TablePlus green, whatever the env tag (the tag still
+  // shows as a chip). Prod keeps its red fill so a production session is
+  // never mistaken for a safe one. Disconnected/connecting stay neutral.
+  const fill = connected
+    ? tag === 'prod'
+      ? 'var(--status-prod)'
+      : 'var(--status-local)'
+    : undefined;
   const surface = fill ?? 'var(--status-none)';
   const stateLabel =
     connectionState === 'connected'
@@ -384,7 +391,7 @@ function StatusCapsule() {
   return (
     <div
       className={cn(
-        'no-drag flex h-9 min-w-0 flex-1 items-center overflow-hidden rounded-[10px] px-3.5 font-mono text-[13px] font-semibold leading-none',
+        'no-drag flex h-9 min-w-0 flex-1 items-center overflow-hidden rounded-full px-4 font-mono text-[13px] font-semibold leading-none',
         'shadow-[inset_0_1px_0_rgb(255_255_255/0.08)]',
         fill ? 'text-white' : 'text-[var(--wb-text)]',
       )}
