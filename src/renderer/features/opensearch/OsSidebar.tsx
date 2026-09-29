@@ -1,30 +1,78 @@
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { Badge } from '@/components/ui/view-parts';
+import { IconButton, MenuItem } from '@/components/ui/workbench';
+import {
+  SidebarEmpty,
+  SidebarSearch,
+  SidebarSearchRow,
+  sidebarRowClass,
+} from '@/features/sidebar/sidebar-parts';
+import { cn } from '@/lib/cn';
 import { useSession } from '@/stores/session';
-import { Boxes, Loader2, Plus, RefreshCw, Search, SquareTerminal, Trash2, X } from 'lucide-react';
+import {
+  Loader2,
+  Plus,
+  RefreshCw,
+  Search,
+  SlidersHorizontal,
+  SquareTerminal,
+  Trash2,
+} from 'lucide-react';
 import { useMemo, useState } from 'react';
-
-/**
- * Health pills are deliberately neutral. Cluster status (green/yellow/red)
- * is exposed via the textual label inside the pill — no semantic color
- * branding to keep the theme palette intact.
- */
-const HEALTH_CLASS = 'bg-muted text-muted-foreground';
 
 function fmtBytes(n: number): string {
   if (!Number.isFinite(n)) return '—';
-  if (n < 1024) return `${n}B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)}KB`;
-  if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)}MB`;
-  return `${(n / 1024 / 1024 / 1024).toFixed(2)}GB`;
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`;
+  return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`;
+}
+
+/** Compact docs count for the 11px right-aligned column (1.2k, 3.4M). */
+function fmtCount(n: number): string {
+  if (n < 1000) return String(n);
+  if (n < 1_000_000) return `${(n / 1000).toFixed(n < 10_000 ? 1 : 0)}k`;
+  if (n < 1_000_000_000) return `${(n / 1_000_000).toFixed(n < 10_000_000 ? 1 : 0)}M`;
+  return `${(n / 1_000_000_000).toFixed(1)}B`;
+}
+
+/** Cluster / index health → Badge tone. Green stays neutral (graphite). */
+function healthTone(health: string): 'neutral' | 'warn' | 'danger' {
+  const h = health.toLowerCase();
+  if (h === 'red') return 'danger';
+  if (h === 'yellow') return 'warn';
+  return 'neutral';
+}
+
+/** Small health dot for 24px rows. */
+function HealthDot({ health }: { health: string }) {
+  const h = health.toLowerCase();
+  return (
+    <span
+      aria-hidden
+      title={`health: ${health}`}
+      className={cn(
+        'h-[7px] w-[7px] shrink-0 rounded-full',
+        h === 'green' && 'bg-[var(--status-local)]',
+        h === 'yellow' && 'bg-[var(--status-staging)]',
+        h === 'red' && 'bg-destructive',
+        h !== 'green' && h !== 'yellow' && h !== 'red' && 'bg-[var(--wb-text-3)]',
+      )}
+    />
+  );
+}
+
+/** System indices are dot-prefixed (`.plugins-ml-config`, `.kibana`, …). */
+function isSystemIndex(name: string): boolean {
+  return name.startsWith('.');
 }
 
 /**
- * OpenSearch sidebar — flat indices list.
+ * OpenSearch sidebar — Postgres-sidebar look: compact cluster meta,
+ * search field + sliders menu, then a flat list of 24px index rows.
  *
- * Search filter narrows the visible set without re-fetching from the
- * cluster. Click an index to open its mapping/stats; double-click (or
- * the `+` button) to spawn a fresh search tab against it.
+ * Click an index to open its mapping/stats; double-click (or the row's
+ * search action) opens a search tab against it.
  */
 export function OsSidebar() {
   const overview = useSession((s) => s.osOverview);
@@ -38,154 +86,175 @@ export function OsSidebar() {
   const activeIndex = useSession((s) => s.activeOsIndex);
 
   const [filter, setFilter] = useState('');
+  const [showSystem, setShowSystem] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const runAndClose = (fn: () => void) => () => {
+    setMenuOpen(false);
+    fn();
+  };
+
+  const systemCount = useMemo(
+    () => (overview ? overview.indices.filter((i) => isSystemIndex(i.index)).length : 0),
+    [overview],
+  );
 
   const indices = useMemo(() => {
     if (!overview) return [];
-    if (!filter.trim()) return overview.indices;
-    const f = filter.toLowerCase();
-    return overview.indices.filter((i) => i.index.toLowerCase().includes(f));
-  }, [overview, filter]);
+    const f = filter.trim().toLowerCase();
+    // Typing a leading "." is an explicit ask for system indices.
+    const includeSystem = showSystem || f.startsWith('.');
+    return overview.indices
+      .filter((i) => includeSystem || !isSystemIndex(i.index))
+      .filter((i) => !f || i.index.toLowerCase().includes(f))
+      .sort((a, b) => a.index.localeCompare(b.index));
+  }, [overview, filter, showSystem]);
 
   return (
-    <div className="flex h-full flex-col">
-      {/* Header */}
-      <div className="border-b border-sidebar-border px-3 py-2">
-        <div className="flex items-center gap-2">
-          <Boxes className="h-3.5 w-3.5 text-muted-foreground" />
-          <span className="text-sm font-semibold">OpenSearch</span>
-          <span className="font-display text-[11px] italic text-muted-foreground">
-            {overview ? `${overview.distribution} ${overview.version}` : '—'}
+    <div className="flex h-full flex-col bg-[var(--wb-sidebar)]">
+      {/* Header — cluster meta */}
+      <div className="shrink-0 px-2.5 pb-2 pt-2">
+        <div className="flex h-6 items-center gap-1.5">
+          <span className="truncate text-[13px] font-semibold text-[var(--wb-text)]">
+            {overview?.distribution ?? 'OpenSearch'}
+          </span>
+          <span className="truncate font-mono text-[11px] text-[var(--wb-text-2)]">
+            {overview ? overview.version : '—'}
           </span>
           <div className="flex-1" />
-          <Button variant="ghost" size="icon-xs" title="New index" onClick={openNewIndex}>
+          <IconButton variant="plain" label="New index" onClick={openNewIndex}>
             <Plus />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon-xs"
-            title="Refresh"
+          </IconButton>
+          <IconButton
+            variant="plain"
+            label="Refresh"
             onClick={() => void refreshOverview()}
+            disabled={loading}
           >
             {loading ? <Loader2 className="animate-spin" /> : <RefreshCw />}
-          </Button>
+          </IconButton>
         </div>
         {overview && (
-          <div className="mt-1 flex flex-wrap items-center gap-2 font-display text-[11px] italic text-muted-foreground">
-            <span className={`rounded-sm px-1 py-0.5 not-italic ${HEALTH_CLASS}`}>
-              {overview.health}
+          <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[11px] text-[var(--wb-text-3)]">
+            <Badge tone={healthTone(overview.health)}>{overview.health}</Badge>
+            <span className="truncate">
+              {overview.nodes} {overview.nodes === 1 ? 'node' : 'nodes'} · {overview.indices.length}{' '}
+              {overview.indices.length === 1 ? 'index' : 'indices'}
             </span>
-            <span>· {overview.nodes} node(s)</span>
-            <span>· {overview.indices.length} indices</span>
           </div>
         )}
       </div>
 
-      {/* Filter */}
-      <div className="border-b border-sidebar-border px-3 py-2">
-        <div className="relative">
-          <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            value={filter}
-            onChange={(e) => setFilter(e.target.value)}
-            placeholder="filter indices…"
-            className="h-7 pl-7 pr-7 font-mono text-xs"
-          />
-          {filter && (
-            <button
-              type="button"
-              onClick={() => setFilter('')}
-              className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded-sm p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
-              aria-label="Clear filter"
+      {/* Search + options */}
+      <SidebarSearchRow>
+        <SidebarSearch
+          value={filter}
+          onChange={setFilter}
+          placeholder="Search for index…"
+          ariaLabel="Filter indices"
+        />
+        <Popover open={menuOpen} onOpenChange={setMenuOpen}>
+          <PopoverTrigger asChild>
+            <IconButton
+              variant="plain"
+              label="Index options"
+              active={showSystem}
+              className="[&_svg]:h-4 [&_svg]:w-4"
             >
-              <X className="h-3 w-3" />
-            </button>
-          )}
-        </div>
-        <button
-          type="button"
-          onClick={openOsSql}
-          className="mt-2 flex w-full cursor-pointer items-center gap-2 rounded-md border border-dashed border-border px-2 py-1.5 text-xs text-muted-foreground transition-colors hover:border-foreground hover:text-foreground"
-        >
-          <SquareTerminal className="h-3.5 w-3.5" />
-          <span className="flex-1 text-left">Open SQL canvas</span>
-          <span className="font-mono text-[10px] opacity-70">_sql</span>
-        </button>
-      </div>
+              <SlidersHorizontal />
+            </IconButton>
+          </PopoverTrigger>
+          <PopoverContent align="end" sideOffset={4} className="w-[230px] p-1">
+            <div role="menu" aria-label="Index options" className="flex flex-col">
+              <MenuItem
+                icon={<SquareTerminal />}
+                label="Open SQL canvas"
+                hint="_sql"
+                onClick={runAndClose(openOsSql)}
+              />
+              <MenuItem icon={<Plus />} label="New index…" onClick={runAndClose(openNewIndex)} />
+              <MenuItem
+                icon={<RefreshCw />}
+                label="Refresh"
+                onClick={runAndClose(() => void refreshOverview())}
+              />
+              <div className="my-1 h-px bg-[var(--wb-separator)]" />
+              <MenuItem
+                label="Show system indices"
+                hint={systemCount > 0 ? String(systemCount) : undefined}
+                checked={showSystem}
+                onClick={() => setShowSystem((v) => !v)}
+              />
+            </div>
+          </PopoverContent>
+        </Popover>
+      </SidebarSearchRow>
 
-      {/* Indices list */}
-      <div className="min-h-0 flex-1 overflow-y-auto">
-        {!overview && (
-          <div className="px-4 py-3 font-display text-sm italic text-muted-foreground">
-            loading cluster…
-          </div>
-        )}
+      {/* Indices */}
+      <div className="min-h-0 flex-1 overflow-y-auto py-1" role="tree" aria-label="Indices">
+        {!overview && <SidebarEmpty title="Loading cluster…" />}
         {overview && indices.length === 0 && (
-          <div className="px-4 py-3 font-display text-sm italic text-muted-foreground">
-            no indices match
-          </div>
+          <SidebarEmpty
+            title={filter ? `No indices match "${filter}"` : 'No indices'}
+            hint={
+              !showSystem && systemCount > 0
+                ? `${systemCount} system ${systemCount === 1 ? 'index' : 'indices'} hidden`
+                : undefined
+            }
+          />
         )}
-        {indices.length > 0 && (
-          <ul className="py-1">
-            {indices.map((idx) => {
-              const isActive = activeIndex === idx.index;
-              return (
-                <li key={idx.index}>
-                  <div
-                    className={
-                      isActive
-                        ? 'mx-1 my-0.5 flex items-stretch rounded-md bg-sidebar-accent text-sidebar-accent-foreground'
-                        : 'group/idx mx-1 my-0.5 flex items-stretch rounded-md transition-colors hover:bg-sidebar-accent/50'
-                    }
-                  >
-                    <button
-                      type="button"
-                      onClick={() => openIndex(idx.index)}
-                      onDoubleClick={() => openSearch(idx.index)}
-                      className="flex min-w-0 flex-1 cursor-pointer flex-col items-start gap-0.5 px-2 py-1.5 text-left"
-                      title={`${idx.index} · ${idx.docsCount.toLocaleString()} docs`}
-                    >
-                      <div className="flex w-full items-center gap-1.5">
-                        <span
-                          className={`shrink-0 rounded-sm px-1 py-0 font-mono text-[9px] uppercase ${HEALTH_CLASS}`}
-                        >
-                          {idx.health}
-                        </span>
-                        <span className="truncate font-mono text-xs">{idx.index}</span>
-                      </div>
-                      <div className="font-display text-[10px] italic text-muted-foreground">
-                        {idx.docsCount.toLocaleString()} docs · {fmtBytes(idx.storeBytes)}
-                      </div>
-                    </button>
-                    <Button
-                      variant="ghost"
-                      size="icon-xs"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        openSearch(idx.index);
-                      }}
-                      className="self-center opacity-0 transition-opacity group-hover/idx:opacity-100"
-                      title="Open search"
-                    >
-                      <Search />
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="icon-xs"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        requestDelete(idx.index);
-                      }}
-                      className="mr-1 self-center opacity-0 transition-opacity hover:text-destructive group-hover/idx:opacity-100"
-                      title="Delete index"
-                    >
-                      <Trash2 />
-                    </Button>
-                  </div>
-                </li>
-              );
-            })}
-          </ul>
-        )}
+        {indices.map((idx) => {
+          const isActive = activeIndex === idx.index;
+          return (
+            <div
+              key={idx.index}
+              role="treeitem"
+              aria-level={1}
+              aria-selected={isActive}
+              aria-label={idx.index}
+              className={cn('group/idx relative items-stretch', sidebarRowClass(isActive))}
+            >
+              <button
+                type="button"
+                onClick={() => openIndex(idx.index)}
+                onDoubleClick={() => openSearch(idx.index)}
+                className="flex min-w-0 flex-1 cursor-default items-center gap-2 pl-2 pr-2 text-left"
+                title={`${idx.index} · ${idx.health} · ${idx.docsCount.toLocaleString()} docs · ${fmtBytes(idx.storeBytes)}`}
+              >
+                <HealthDot health={idx.health} />
+                <span className="min-w-0 flex-1 truncate">{idx.index}</span>
+                <span className="shrink-0 font-mono text-[11px] tabular-nums text-[var(--wb-text-3)] group-focus-within/idx:invisible group-hover/idx:invisible">
+                  {fmtCount(idx.docsCount)}
+                </span>
+              </button>
+              <div className="absolute inset-y-0 right-1 hidden items-center gap-0.5 group-focus-within/idx:flex group-hover/idx:flex">
+                <IconButton
+                  variant="plain"
+                  label={`Open search on ${idx.index}`}
+                  title="Open search"
+                  className="h-5 w-5"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    openSearch(idx.index);
+                  }}
+                >
+                  <Search />
+                </IconButton>
+                <IconButton
+                  variant="plain"
+                  label={`Delete index ${idx.index}`}
+                  title="Delete index"
+                  className="h-5 w-5 hover:text-destructive"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    requestDelete(idx.index);
+                  }}
+                >
+                  <Trash2 />
+                </IconButton>
+              </div>
+            </div>
+          );
+        })}
       </div>
     </div>
   );

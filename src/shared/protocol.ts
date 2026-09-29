@@ -175,6 +175,11 @@ export const RedisOverview = z.object({
       expires: z.number().int(),
     }),
   ),
+  /** From `INFO memory` / `clients` / `server`; absent on servers that hide them. */
+  usedMemoryHuman: z.string().optional(),
+  maxMemoryHuman: z.string().optional(),
+  connectedClients: z.number().int().optional(),
+  uptimeSeconds: z.number().int().optional(),
 });
 export type RedisOverview = z.infer<typeof RedisOverview>;
 

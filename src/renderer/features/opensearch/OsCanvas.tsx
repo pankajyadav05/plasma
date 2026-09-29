@@ -19,7 +19,7 @@ export function OsCanvas() {
   const tab = useActiveTab();
   const hasTabs = tab ? OS_TAB_KINDS.has(tab.kind) : false;
   return (
-    <main className="flex min-h-0 min-w-0 flex-1 flex-col bg-background">
+    <main className="flex min-h-0 min-w-0 flex-1 flex-col bg-[var(--wb-content)] text-[var(--wb-text)]">
       {hasTabs && <TabStrip />}
       <OsBody />
     </main>
@@ -30,7 +30,7 @@ function OsBody() {
   const tab = useActiveTab();
   if (!tab) return <OsHomeView />;
   if (tab.kind === 'os-index' && tab.osIndex) {
-    return <OsIndexView indexName={tab.osIndex} />;
+    return <OsIndexView key={tab.id} tabId={tab.id} indexName={tab.osIndex} />;
   }
   if (tab.kind === 'os-search' && tab.osIndex) {
     return <OsSearchView tabId={tab.id} indexName={tab.osIndex} />;

@@ -2,6 +2,7 @@ import { Button } from '@/components/ui/button';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { BrandMark } from '@/features/app-shell/BrandMark';
 import { cn } from '@/lib/cn';
+import { cleanIpcError } from '@/lib/errors';
 import { copyCellToClipboard } from '@/lib/export';
 import { formatDuration } from '@/lib/format';
 import { useActiveTab, useSession } from '@/stores/session';
@@ -1257,12 +1258,4 @@ function cellClass(col: ColumnMeta | undefined): string {
     return 'text-right';
   }
   return '';
-}
-
-/**
- * Electron wraps IPC rejections as "Error invoking remote method
- * 'plasma:…': Error: <message>" — show only the database's message.
- */
-function cleanIpcError(message: string): string {
-  return message.replace(/^Error invoking remote method '[^']+':\s*(?:\w*Error:\s*)?/, '');
 }

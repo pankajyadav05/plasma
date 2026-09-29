@@ -1,259 +1,335 @@
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
+import { type DataColumn, DataTable } from '@/components/ui/data-table';
+import {
+  Badge,
+  EmptyState,
+  SectionHeading,
+  StatTile,
+  ViewFooter,
+  ViewTitle,
+  ViewToolbar,
+} from '@/components/ui/view-parts';
+import { Pill } from '@/components/ui/workbench';
+import { cleanIpcError } from '@/lib/errors';
 import { ipc } from '@/lib/ipc';
-import { useSession } from '@/stores/session';
-import type { RedisAnalyzeResult } from '@shared/protocol';
-import { Loader2, Play, Search } from 'lucide-react';
-import { useState } from 'react';
+import { useActiveTab, useSession } from '@/stores/session';
+import { useWorkbench } from '@/stores/workbench';
+import type { RedisAnalyzeResult, RedisAnalyzeSample } from '@shared/protocol';
+import { ExternalLink, Loader2, Play, Search } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+
+const FIELD =
+  'h-6 rounded-[6px] bg-[var(--wb-field)] font-mono text-[12px] text-[var(--wb-text)] outline-none ring-1 ring-inset ring-[var(--wb-separator)] placeholder:text-[var(--wb-text-3)] focus:ring-[var(--wb-accent)]';
 
 /**
  * Memory analyzer — runs a SCAN sample, pulls MEMORY USAGE per key,
- * aggregates by type + namespace prefix, and renders three coordinated
- * panels:
+ * aggregates by type + namespace prefix, and renders:
  *
- *   1. Top KPI strip — keys scanned, total bytes, biggest single key.
- *   2. Two horizontal bar charts — one per type, one per top prefix.
- *   3. Drill-down table — top 1000 keys by size, with type + TTL.
+ *   1. Stat tiles — keys scanned, total bytes, biggest single key.
+ *   2. Two compact bar lists — bytes per type, bytes per top prefix.
+ *   3. Drill-down grid — sampled keys by size, with type + TTL.
+ *      Selecting a key shows it in Details; double-click / Enter opens it.
  *
  * Sample size is capped (default 5000) so this is safe to run in prod.
- * The "Run analyze" button sets this off; results stay until the user
- * runs again or closes the tab.
+ * Results stay until the user runs again or closes the tab.
  */
 export function RedisAnalyzeView() {
   const openRedisKey = useSession((s) => s.openRedisKey);
+  const tabId = useActiveTab()?.id ?? null;
   const [match, setMatch] = useState('');
   const [sampleCap, setSampleCap] = useState('5000');
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<RedisAnalyzeResult | null>(null);
+  const [tookMs, setTookMs] = useState<number | null>(null);
+  const [selected, setSelected] = useState<number | null>(null);
+
+  // Clear the Details pane when leaving the view.
+  useEffect(() => () => useWorkbench.getState().setInspectedRow(null), []);
 
   const onRun = async () => {
     const cap = Number.parseInt(sampleCap, 10);
     setRunning(true);
     setError(null);
+    setSelected(null);
+    useWorkbench.getState().setInspectedRow(null);
+    const started = performance.now();
     try {
       const r = await ipc.redis.analyze({
         sampleCap: Number.isFinite(cap) && cap > 0 ? cap : 5000,
         match: match.trim() || undefined,
       });
       setResult(r);
+      setTookMs(Math.round(performance.now() - started));
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(cleanIpcError(err instanceof Error ? err.message : String(err)));
       setResult(null);
+      setTookMs(null);
     } finally {
       setRunning(false);
     }
   };
 
+  const onSelect = (s: RedisAnalyzeSample, index: number) => {
+    setSelected(index);
+    if (!tabId) return;
+    useWorkbench.getState().setInspectedRow({
+      tabId,
+      rowNumber: index + 1,
+      columnIndex: 0,
+      columns: [
+        { name: 'key', dataTypeID: 0, dataTypeName: 'redis key' },
+        { name: 'type', dataTypeID: 0, dataTypeName: 'redis type' },
+        { name: 'bytes', dataTypeID: 0, dataTypeName: 'MEMORY USAGE' },
+        { name: 'size', dataTypeID: 0, dataTypeName: 'formatted' },
+        { name: 'ttl_ms', dataTypeID: 0, dataTypeName: 'PTTL' },
+      ],
+      row: [s.key, s.type, s.bytes, fmtBytes(s.bytes), s.ttlMs],
+    });
+  };
+
+  const selectedSample = result && selected !== null ? result.samples[selected] : undefined;
+
   return (
-    <main className="flex min-h-0 min-w-0 flex-1 flex-col bg-background">
-      {/* Header */}
-      <div className="flex shrink-0 items-center gap-3 border-b border-border px-4 py-3">
-        <div className="min-w-0 flex-1">
-          <h1 className="text-sm font-semibold">Memory analyzer</h1>
-          <p className="font-display text-[11px] italic text-muted-foreground">
-            SCAN sample with MEMORY USAGE per key. Safe to run on production —
-            capped at the chosen sample size.
-          </p>
-        </div>
-      </div>
-
-      {/* Run controls */}
-      <div className="flex shrink-0 items-center gap-2 border-b border-border bg-muted/30 px-4 py-2.5">
-        <div className="relative w-64">
-          <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            value={match}
-            onChange={(e) => setMatch(e.target.value)}
-            placeholder="MATCH pattern (e.g. user:*)"
-            className="h-7 pl-7 font-mono text-xs"
-          />
-        </div>
-        <span className="font-display text-[11px] italic text-muted-foreground">sample cap</span>
-        <Input
-          value={sampleCap}
-          onChange={(e) => setSampleCap(e.target.value)}
-          inputMode="numeric"
-          className="h-7 w-24 font-mono text-xs"
-        />
+    <main className="flex min-h-0 min-w-0 flex-1 flex-col bg-[var(--wb-content)]">
+      <ViewToolbar>
+        <ViewTitle title="Memory analyzer" meta="SCAN sample · MEMORY USAGE per key" />
         <div className="flex-1" />
-        <Button variant="primary" size="sm" onClick={() => void onRun()} disabled={running}>
-          {running ? <Loader2 className="animate-spin" /> : <Play className="fill-current" />}
-          Run analyze
-        </Button>
-      </div>
-
-      {/* Body */}
-      <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
-        {error && (
-          <div className="mb-3 rounded-md border-l-4 border-destructive bg-muted px-4 py-2 text-sm text-foreground">
-            {error}
+        <form
+          className="flex items-center gap-2"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (!running) void onRun();
+          }}
+        >
+          <div className="relative w-56">
+            <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--wb-text-3)]" />
+            <input
+              value={match}
+              onChange={(e) => setMatch(e.target.value)}
+              placeholder="MATCH pattern (e.g. user:*)"
+              aria-label="MATCH pattern"
+              spellCheck={false}
+              className={`${FIELD} w-full pl-7 pr-2`}
+            />
           </div>
-        )}
+          <label className="flex items-center gap-1.5 text-[12px] text-[var(--wb-text-2)]">
+            Sample
+            <input
+              value={sampleCap}
+              onChange={(e) => setSampleCap(e.target.value)}
+              inputMode="numeric"
+              aria-label="Sample cap"
+              className={`${FIELD} w-20 px-2 text-right tabular-nums`}
+            />
+          </label>
+          <Pill type="submit" disabled={running} aria-label="Run analyze">
+            {running ? <Loader2 className="animate-spin" /> : <Play />}
+            Run
+          </Pill>
+        </form>
+      </ViewToolbar>
 
-        {!result && !running && (
-          <div className="font-display text-sm italic text-muted-foreground">
-            press Run to scan the keyspace and aggregate memory usage.
-          </div>
-        )}
+      {error && (
+        <div
+          role="alert"
+          className="shrink-0 border-b border-[var(--wb-separator)] px-3 py-1.5 text-[13px] text-destructive"
+        >
+          {error}
+        </div>
+      )}
 
-        {running && !result && (
-          <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Loader2 className="h-4 w-4 animate-spin" /> scanning…
-          </div>
-        )}
+      {result ? (
+        <Body result={result} selected={selected} onSelect={onSelect} onOpenKey={openRedisKey} />
+      ) : running ? (
+        <EmptyState
+          title={
+            <span className="inline-flex items-center gap-2">
+              <Loader2 className="h-4 w-4 animate-spin" /> Scanning keyspace…
+            </span>
+          }
+        />
+      ) : (
+        !error && (
+          <EmptyState
+            title="No analysis yet"
+            hint="Samples keys with SCAN and sizes each with MEMORY USAGE, then aggregates by type and prefix. Capped at the sample size, so it is safe to run on production."
+            action={
+              <Pill onClick={() => void onRun()}>
+                <Play />
+                Run analyze
+              </Pill>
+            }
+          />
+        )
+      )}
 
-        {result && <Body result={result} onOpenKey={openRedisKey} />}
-      </div>
+      {result && (
+        <ViewFooter>
+          <span className="tabular-nums">
+            {result.samples.length.toLocaleString()} keys sampled
+          </span>
+          {tookMs !== null && <span className="tabular-nums">· {fmtMs(tookMs)}</span>}
+          <div className="flex-1" />
+          {selectedSample ? (
+            <Pill
+              onClick={() => openRedisKey(selectedSample.key)}
+              title={`Open ${selectedSample.key}`}
+            >
+              <ExternalLink />
+              Open key
+            </Pill>
+          ) : (
+            <span className="text-[12px] text-[var(--wb-text-3)]">
+              Double-click a key to open it
+            </span>
+          )}
+        </ViewFooter>
+      )}
     </main>
   );
 }
 
 function Body({
   result,
+  selected,
+  onSelect,
   onOpenKey,
 }: {
   result: RedisAnalyzeResult;
+  selected: number | null;
+  onSelect: (s: RedisAnalyzeSample, index: number) => void;
   onOpenKey: (k: string) => void;
 }) {
   const biggest = result.samples[0];
+
+  const columns = useMemo<DataColumn<RedisAnalyzeSample>[]>(
+    () => [
+      {
+        key: 'key',
+        label: 'key',
+        render: (s) => s.key,
+        titleOf: (s) => s.key,
+      },
+      {
+        key: 'type',
+        label: 'type',
+        width: 90,
+        sans: true,
+        render: (s) => <Badge>{s.type}</Badge>,
+      },
+      {
+        key: 'size',
+        label: 'size',
+        title: 'MEMORY USAGE',
+        align: 'right',
+        width: 100,
+        render: (s) => fmtBytes(s.bytes),
+        titleOf: (s) => `${s.bytes.toLocaleString()} bytes`,
+      },
+      {
+        key: 'ttl',
+        label: 'ttl',
+        title: 'Time to live (— = no expiry)',
+        align: 'right',
+        width: 100,
+        render: (s) =>
+          s.ttlMs === null ? <span className="text-[var(--grid-null)]">—</span> : fmtTtl(s.ttlMs),
+      },
+    ],
+    [],
+  );
+
   return (
-    <div className="space-y-6">
-      {/* KPI strip */}
-      <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-        <Kpi label="Keys scanned" value={result.scanned.toLocaleString()} />
-        <Kpi label="Total bytes" value={fmtBytes(result.totalBytes)} />
-        <Kpi
-          label="Biggest key"
-          value={biggest && biggest.bytes != null ? fmtBytes(biggest.bytes) : '—'}
-          sub={biggest?.key}
-        />
-      </div>
-
-      {/* Type + prefix breakdown side by side */}
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <Section title="By type">
-          <BarList
-            rows={result.byType.map((t) => ({
-              label: t.type,
-              count: t.count,
-              bytes: t.bytes,
-            }))}
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="max-h-[50%] shrink-0 overflow-y-auto border-b border-[var(--wb-separator)] pb-3">
+        <div className="grid grid-cols-3 gap-2 px-4 pt-3">
+          <StatTile label="Keys scanned" value={result.scanned.toLocaleString()} />
+          <StatTile label="Total bytes" value={fmtBytes(result.totalBytes)} />
+          <StatTile
+            label="Biggest key"
+            value={biggest ? fmtBytes(biggest.bytes) : '—'}
+            hint={biggest ? <span title={biggest.key}>{biggest.key}</span> : undefined}
           />
-        </Section>
-        <Section title="By namespace prefix">
-          <BarList
-            rows={result.byPrefix.map((p) => ({
-              label: p.prefix || '(no prefix)',
-              count: p.count,
-              bytes: p.bytes,
-            }))}
-          />
-        </Section>
-      </div>
-
-      {/* Detail table */}
-      <Section title={`Top ${result.samples.length.toLocaleString()} keys by size`}>
-        <div className="overflow-auto rounded-md border border-border">
-          <table className="w-full font-mono text-xs">
-            <thead className="bg-muted/60 text-[10px] uppercase tracking-wider text-muted-foreground">
-              <tr>
-                <th className="border-b border-border px-3 py-1.5 text-left">key</th>
-                <th className="border-b border-border px-3 py-1.5 text-left">type</th>
-                <th className="border-b border-border px-3 py-1.5 text-right">bytes</th>
-                <th className="border-b border-border px-3 py-1.5 text-right">ttl</th>
-              </tr>
-            </thead>
-            <tbody>
-              {result.samples.map((s) => (
-                <tr
-                  key={s.key}
-                  className="border-b border-border/50 last:border-b-0 hover:bg-muted/30"
-                >
-                  <td className="break-all px-3 py-1 align-top">
-                    <button
-                      type="button"
-                      onClick={() => onOpenKey(s.key)}
-                      className="cursor-pointer text-left text-foreground underline-offset-2 hover:underline"
-                    >
-                      {s.key}
-                    </button>
-                  </td>
-                  <td className="px-3 py-1 align-top text-muted-foreground">{s.type}</td>
-                  <td className="px-3 py-1 text-right align-top">{s.bytes === null ? '—' : fmtBytes(s.bytes)}</td>
-                  <td className="px-3 py-1 text-right align-top text-muted-foreground">
-                    {s.ttlMs === null ? '—' : `${(s.ttlMs / 1000).toFixed(1)}s`}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
         </div>
-      </Section>
+        <div className="grid grid-cols-1 lg:grid-cols-2">
+          <div className="min-w-0">
+            <SectionHeading>By type</SectionHeading>
+            <BarList
+              ariaLabel="Memory by type"
+              rows={result.byType.map((t) => ({
+                label: t.type,
+                count: t.count,
+                bytes: t.bytes,
+              }))}
+            />
+          </div>
+          <div className="min-w-0">
+            <SectionHeading>By prefix</SectionHeading>
+            <BarList
+              ariaLabel="Memory by prefix"
+              rows={result.byPrefix.map((p) => ({
+                label: p.prefix || '(no prefix)',
+                count: p.count,
+                bytes: p.bytes,
+              }))}
+            />
+          </div>
+        </div>
+      </div>
+
+      <div className="flex h-[30px] shrink-0 items-center gap-2 px-3 text-[13px]">
+        <span className="font-semibold text-[var(--wb-text)]">Largest keys</span>
+        <span className="text-[12px] text-[var(--wb-text-2)]">
+          top {result.samples.length.toLocaleString()} by size
+        </span>
+      </div>
+      <DataTable
+        ariaLabel="Largest keys"
+        className="border-t border-[var(--wb-separator)]"
+        columns={columns}
+        rows={result.samples}
+        rowKey={(s) => s.key}
+        selectedIndex={selected}
+        onSelect={onSelect}
+        onActivate={(s) => onOpenKey(s.key)}
+        empty={<span>No keys matched</span>}
+      />
     </div>
   );
 }
 
-function Kpi({ label, value, sub }: { label: string; value: string; sub?: string }) {
-  return (
-    <div className="rounded-md border border-border bg-muted/30 p-3">
-      <div className="font-display text-[11px] uppercase tracking-wider text-muted-foreground">
-        {label}
-      </div>
-      <div className="mt-1 font-display text-2xl">{value}</div>
-      {sub && (
-        <div className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground" title={sub}>
-          {sub}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <section>
-      <h2 className="mb-2 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
-        {title}
-      </h2>
-      {children}
-    </section>
-  );
-}
-
+/** Compact horizontal bars (TablePlus-dense), filled with --wb-accent. */
 function BarList({
   rows,
+  ariaLabel,
 }: {
   rows: { label: string; count: number; bytes: number }[];
+  ariaLabel: string;
 }) {
   if (rows.length === 0) {
-    return (
-      <div className="px-3 py-2 font-display text-sm italic text-muted-foreground">
-        empty
-      </div>
-    );
+    return <div className="px-4 text-[13px] text-[var(--wb-text-2)]">No keys</div>;
   }
   const max = rows.reduce((acc, r) => Math.max(acc, r.bytes), 0);
   return (
-    <ul className="space-y-1">
+    <ul aria-label={ariaLabel} className="px-4">
       {rows.map((r) => {
         const pct = max > 0 ? (r.bytes / max) * 100 : 0;
         return (
           <li
             key={r.label}
-            className="grid grid-cols-[120px_1fr_auto] items-center gap-2 font-mono text-xs"
+            className="grid h-6 grid-cols-[minmax(0,120px)_1fr_auto] items-center gap-2.5 text-[13px]"
+            title={`${r.label}: ${r.bytes.toLocaleString()} bytes in ${r.count.toLocaleString()} keys`}
           >
-            <span className="truncate text-foreground" title={r.label}>
-              {r.label}
-            </span>
-            <div className="relative h-3 overflow-hidden rounded-sm bg-muted">
+            <span className="truncate font-mono text-[var(--wb-text)]">{r.label}</span>
+            <div className="h-2 overflow-hidden rounded-[3px] bg-[var(--wb-control)]">
               <div
-                className="absolute inset-y-0 left-0 bg-foreground/60"
-                style={{ width: `${pct}%` }}
+                className="h-full rounded-[3px] bg-[var(--wb-accent)]"
+                style={{ width: `${Math.max(pct, r.bytes > 0 ? 1 : 0)}%` }}
               />
             </div>
-            <span className="text-right text-muted-foreground">
-              {fmtBytes(r.bytes)} · {r.count.toLocaleString()}
+            <span className="whitespace-nowrap text-right font-mono text-[12px] tabular-nums text-[var(--wb-text-2)]">
+              {fmtBytes(r.bytes)}
+              <span className="text-[var(--wb-text-3)]"> · {r.count.toLocaleString()}</span>
             </span>
           </li>
         );
@@ -268,4 +344,16 @@ function fmtBytes(n: number): string {
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)}KB`;
   if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)}MB`;
   return `${(n / 1024 / 1024 / 1024).toFixed(2)}GB`;
+}
+
+function fmtTtl(ms: number): string {
+  const s = ms / 1000;
+  if (s < 60) return `${s.toFixed(1)}s`;
+  if (s < 3600) return `${Math.floor(s / 60)}m ${Math.floor(s % 60)}s`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
+  return `${Math.floor(s / 86400)}d ${Math.floor((s % 86400) / 3600)}h`;
+}
+
+function fmtMs(ms: number): string {
+  return ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(2)}s`;
 }

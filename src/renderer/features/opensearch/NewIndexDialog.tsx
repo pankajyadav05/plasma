@@ -1,4 +1,3 @@
-import { Button } from '@/components/ui/button';
 import {
   Dialog,
   DialogContent,
@@ -14,6 +13,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { IconButton, Pill, Segmented } from '@/components/ui/workbench';
 import { PLASMA_THEME_ID, applyMonacoTheme } from '@/features/editor/paperTheme';
 import { ipc } from '@/lib/ipc';
 import {
@@ -44,6 +44,12 @@ type Mode = 'form' | 'json';
  * doesn't care about either layer — strip them so the actual cluster
  * message is what they see first.
  */
+/** Graphite field look for dialog inputs (--wb-field, 26px, radius 6). */
+const FIELD_CLASS =
+  'h-[26px] rounded-[6px] border-0 bg-[var(--wb-field)] px-2 font-mono text-[13px] text-[var(--wb-text)] shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--wb-text)_12%,transparent)] placeholder:text-[var(--wb-text-3)] focus-visible:ring-0 focus-visible:shadow-[0_0_0_2px_color-mix(in_srgb,var(--wb-accent)_55%,transparent)] focus:ring-0 focus:shadow-[0_0_0_2px_color-mix(in_srgb,var(--wb-accent)_55%,transparent)]';
+
+const LABEL_CLASS = 'text-[12px] text-[var(--wb-text-2)]';
+
 function stripIpcPrefix(msg: string): string {
   return msg.replace(/^Error invoking remote method '[^']+':\s*/i, '').replace(/^Error:\s*/i, '');
 }
@@ -231,39 +237,37 @@ export function NewIndexDialog() {
 
   return (
     <Dialog open={open} onOpenChange={(o) => !o && !submitting && close()}>
-      <DialogContent className="flex h-[88vh] w-[92vw] max-w-none flex-col p-0">
-        <DialogHeader className="shrink-0 border-b border-border px-5 py-4">
+      <DialogContent className="flex h-[88vh] w-[92vw] max-w-none flex-col gap-0 rounded-[10px] border-[var(--wb-separator)] bg-[var(--wb-content)] p-0 text-[13px] text-[var(--wb-text)]">
+        <DialogHeader className="shrink-0 space-y-1 border-b border-[var(--wb-separator)] px-5 py-3.5">
           <div className="flex items-center gap-2">
-            <Boxes className="h-4 w-4 text-primary" />
-            <DialogTitle>New OpenSearch index</DialogTitle>
+            <Boxes className="h-4 w-4 text-[var(--wb-text-2)]" />
+            <DialogTitle className="font-sans text-[15px] font-semibold not-italic leading-tight tracking-normal">
+              New OpenSearch index
+            </DialogTitle>
           </div>
-          <DialogDescription>
+          <DialogDescription className="font-sans text-[13px] not-italic leading-snug text-[var(--wb-text-2)]">
             Define settings + mappings via the form, paste raw JSON to round-trip, or mix both —
             anything the form can&apos;t edit is preserved verbatim.
           </DialogDescription>
         </DialogHeader>
 
         {/* Top row: name + tabs */}
-        <div className="flex shrink-0 items-end gap-4 border-b border-border px-5 py-3">
+        <div className="flex shrink-0 items-end gap-4 border-b border-[var(--wb-separator)] px-5 py-3">
           <div className="flex flex-col gap-1">
-            <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
-              Index name
-            </span>
+            <span className={LABEL_CLASS}>Index name</span>
             <Input
               value={spec.name}
               onChange={(e) => commitSpec({ ...spec, name: e.target.value })}
               placeholder="orders-2026-05"
-              className="h-8 w-72 font-mono text-xs"
+              className={`${FIELD_CLASS} w-72`}
+              aria-label="Index name"
+              spellCheck={false}
               autoFocus
             />
-            {nameError && (
-              <span className="font-display text-[11px] italic text-destructive">{nameError}</span>
-            )}
+            {nameError && <span className="text-[12px] text-destructive">{nameError}</span>}
           </div>
           <div className="flex flex-col gap-1">
-            <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
-              Shards
-            </span>
+            <span className={LABEL_CLASS}>Shards</span>
             <Input
               type="number"
               min={1}
@@ -271,13 +275,11 @@ export function NewIndexDialog() {
               onChange={(e) =>
                 commitSpec({ ...spec, shards: Math.max(1, Number(e.target.value) || 1) })
               }
-              className="h-8 w-20 font-mono text-xs"
+              className={`${FIELD_CLASS} w-20`}
             />
           </div>
           <div className="flex flex-col gap-1">
-            <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
-              Replicas
-            </span>
+            <span className={LABEL_CLASS}>Replicas</span>
             <Input
               type="number"
               min={0}
@@ -285,30 +287,30 @@ export function NewIndexDialog() {
               onChange={(e) =>
                 commitSpec({ ...spec, replicas: Math.max(0, Number(e.target.value) || 0) })
               }
-              className="h-8 w-20 font-mono text-xs"
+              className={`${FIELD_CLASS} w-20`}
             />
           </div>
 
           <div className="flex-1" />
 
-          <div className="flex items-center gap-1 rounded-md border border-border bg-muted/40 p-0.5">
-            <ModeButton active={mode === 'form'} onClick={() => switchMode('form')}>
-              <Boxes className="h-3.5 w-3.5" />
-              Form
-            </ModeButton>
-            <ModeButton active={mode === 'json'} onClick={() => switchMode('json')}>
-              <Code className="h-3.5 w-3.5" />
-              JSON
-            </ModeButton>
-          </div>
+          <Segmented<Mode>
+            variant="track"
+            ariaLabel="Editor mode"
+            value={mode}
+            onChange={switchMode}
+            options={[
+              { value: 'form', label: 'Form', icon: <Boxes /> },
+              { value: 'json', label: 'JSON', icon: <Code /> },
+            ]}
+          />
         </div>
 
         {/* Notes banner */}
         {parseNotes.length > 0 && (
-          <div className="shrink-0 border-b border-border bg-muted/30 px-5 py-2">
+          <div className="shrink-0 border-b border-[var(--wb-separator)] bg-[var(--wb-sidebar)] px-5 py-2">
             <div className="flex items-start gap-2">
-              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-              <div className="flex flex-col gap-0.5 font-display text-[11px] italic text-muted-foreground">
+              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--wb-text-2)]" />
+              <div className="flex flex-col gap-0.5 text-[12px] text-[var(--wb-text-2)]">
                 {parseNotes.map((n) => (
                   <span key={n}>{n}</span>
                 ))}
@@ -331,15 +333,15 @@ export function NewIndexDialog() {
           ) : (
             <div className="flex h-full flex-col">
               {jsonError && (
-                <div className="shrink-0 border-b border-destructive/40 bg-destructive/10 px-5 py-2 font-mono text-[11px] text-destructive">
+                <div className="shrink-0 border-b border-[var(--wb-separator)] bg-[color-mix(in_srgb,var(--destructive)_14%,transparent)] px-5 py-2 font-mono text-[12px] text-[var(--wb-text)]">
                   {jsonError}
                 </div>
               )}
               <div className="min-h-0 flex-1">
                 <Suspense
                   fallback={
-                    <div className="flex h-full items-center justify-center font-display text-sm italic text-muted-foreground">
-                      loading editor…
+                    <div className="flex h-full items-center justify-center text-[13px] text-[var(--wb-text-2)]">
+                      Loading editor…
                     </div>
                   }
                 >
@@ -368,14 +370,12 @@ export function NewIndexDialog() {
 
         {/* Error banner (above footer for readability) */}
         {submitError && (
-          <div className="shrink-0 border-t border-destructive/40 bg-destructive/10 px-5 py-2.5">
+          <div className="shrink-0 border-t border-[var(--wb-separator)] bg-[color-mix(in_srgb,var(--destructive)_14%,transparent)] px-5 py-2.5">
             <div className="flex items-start gap-2">
               <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-destructive" />
               <div className="min-w-0 flex-1">
-                <div className="font-mono text-[10px] uppercase tracking-wider text-destructive">
-                  Create failed
-                </div>
-                <div className="mt-0.5 break-words font-mono text-[12px] leading-snug text-foreground">
+                <div className="text-[12px] font-semibold text-destructive">Create failed</div>
+                <div className="mt-0.5 break-words font-mono text-[12px] leading-snug text-[var(--wb-text)]">
                   {stripIpcPrefix(submitError)}
                 </div>
               </div>
@@ -384,11 +384,12 @@ export function NewIndexDialog() {
         )}
 
         {/* Footer */}
-        <div className="flex shrink-0 items-center justify-end gap-2 border-t border-border px-5 py-3">
-          <Button variant="secondary" onClick={() => close()} disabled={submitting}>
+        <div className="flex h-12 shrink-0 items-center justify-end gap-2 border-t border-[var(--wb-separator)] px-5">
+          <Pill className="h-7 px-3" onClick={() => close()} disabled={submitting}>
             Cancel
-          </Button>
-          <Button
+          </Pill>
+          <Pill
+            className="h-7 bg-[var(--wb-control-active)] px-3 font-medium hover:bg-[var(--wb-control-hover)]"
             onClick={() => void onSubmit()}
             disabled={
               submitting ||
@@ -397,34 +398,10 @@ export function NewIndexDialog() {
             }
           >
             {submitting ? 'Creating…' : 'Create index'}
-          </Button>
+          </Pill>
         </div>
       </DialogContent>
     </Dialog>
-  );
-}
-
-function ModeButton({
-  active,
-  onClick,
-  children,
-}: {
-  active: boolean;
-  onClick: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={
-        active
-          ? 'flex cursor-pointer items-center gap-1.5 rounded-sm bg-background px-2.5 py-1 font-mono text-[11px] uppercase tracking-wider text-foreground shadow-sm'
-          : 'flex cursor-pointer items-center gap-1.5 rounded-sm px-2.5 py-1 font-mono text-[11px] uppercase tracking-wider text-muted-foreground hover:text-foreground'
-      }
-    >
-      {children}
-    </button>
   );
 }
 
@@ -445,20 +422,18 @@ function FormView({
 }) {
   return (
     <div className="flex h-full flex-col">
-      <div className="flex shrink-0 items-center justify-between border-b border-border px-5 py-2">
-        <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
-          Mapping fields
-        </span>
-        <Button variant="secondary" size="sm" onClick={addField}>
-          <Plus className="h-3.5 w-3.5" />
+      <div className="flex h-9 shrink-0 items-center justify-between border-b border-[var(--wb-separator)] px-5">
+        <span className="text-[13px] font-semibold text-[var(--wb-text)]">Mapping fields</span>
+        <Pill onClick={addField}>
+          <Plus />
           Add field
-        </Button>
+        </Pill>
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto px-5 py-3">
         {spec.fields.length === 0 ? (
-          <div className="flex h-full items-center justify-center font-display text-sm italic text-muted-foreground">
-            no fields yet — OpenSearch will pick types from your first document, or click &ldquo;Add
+          <div className="flex h-full items-center justify-center px-6 text-center text-[13px] text-[var(--wb-text-2)]">
+            No fields yet — OpenSearch will pick types from your first document, or click &ldquo;Add
             field&rdquo; to declare the mapping up front.
           </div>
         ) : (
@@ -496,17 +471,19 @@ function FieldRow({
     <div
       className={
         field.advanced
-          ? 'flex items-center gap-2 rounded-md border border-border bg-muted/40 px-2 py-1.5'
-          : 'group flex items-center gap-2 rounded-md border border-border bg-background px-2 py-1.5'
+          ? 'flex items-center gap-2 rounded-[6px] bg-[var(--wb-sidebar)] px-2 py-1'
+          : 'group flex items-center gap-2 rounded-[6px] px-2 py-1 hover:bg-[color-mix(in_srgb,var(--wb-text)_4%,transparent)]'
       }
     >
-      {field.advanced && <Lock className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />}
+      {field.advanced && <Lock className="h-3.5 w-3.5 shrink-0 text-[var(--wb-text-2)]" />}
       <Input
         value={field.name}
         onChange={(e) => onChange({ name: e.target.value })}
         placeholder="field_name"
         disabled={field.advanced}
-        className="h-7 flex-1 font-mono text-xs"
+        className={`${FIELD_CLASS} flex-1`}
+        aria-label="Field name"
+        spellCheck={false}
       />
       <div className="w-44 shrink-0">
         <Select
@@ -514,17 +491,17 @@ function FieldRow({
           onValueChange={(v) => onChange({ type: v as SupportedFieldType })}
           disabled={field.advanced}
         >
-          <SelectTrigger className="h-7 font-mono text-xs">
+          <SelectTrigger className={FIELD_CLASS} aria-label="Field type">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
             {SUPPORTED_FIELD_TYPES.map((t) => (
-              <SelectItem key={t} value={t} className="font-mono text-xs">
+              <SelectItem key={t} value={t} className="font-mono text-[13px]">
                 {t}
               </SelectItem>
             ))}
             {field.type === 'unknown' && (
-              <SelectItem value="unknown" className="font-mono text-xs italic">
+              <SelectItem value="unknown" className="font-mono text-[13px] text-[var(--wb-text-2)]">
                 unknown
               </SelectItem>
             )}
@@ -533,7 +510,7 @@ function FieldRow({
       </div>
 
       <label
-        className={`flex shrink-0 items-center gap-1 font-mono text-[10px] uppercase tracking-wider${supportsKeywordSub ? ' text-muted-foreground' : ' opacity-40 pointer-events-none'}`}
+        className={`flex shrink-0 items-center gap-1.5 font-mono text-[12px] text-[var(--wb-text-2)]${supportsKeywordSub ? '' : ' pointer-events-none opacity-40'}`}
         title={
           supportsKeywordSub
             ? 'Add a `.keyword` sub-field for exact-match aggregations'
@@ -552,28 +529,23 @@ function FieldRow({
 
       {field.advanced && (
         <span
-          className="shrink-0 rounded-sm border border-border px-1 py-0 font-mono text-[9px] uppercase text-muted-foreground"
+          className="shrink-0 rounded-[4px] bg-[var(--wb-control)] px-1.5 py-px text-[11px] text-[var(--wb-text-2)]"
           title="This field uses options the form can't edit. Switch to JSON to modify."
         >
           advanced
         </span>
       )}
 
-      <Button
-        variant="ghost"
-        size="icon-xs"
+      <IconButton
+        variant="plain"
+        label="Remove field"
         onClick={onRemove}
-        title="Remove field"
-        className="shrink-0"
+        className="hover:text-destructive"
       >
         <Trash2 />
-      </Button>
+      </IconButton>
 
-      {error && (
-        <span className="ml-2 shrink-0 font-display text-[11px] italic text-destructive">
-          {error}
-        </span>
-      )}
+      {error && <span className="ml-2 shrink-0 text-[12px] text-destructive">{error}</span>}
     </div>
   );
 }

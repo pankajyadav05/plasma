@@ -114,6 +114,14 @@ export class RedisDriver {
       role: parsed.replicationFields.role ?? 'unknown',
       dbCount: 16, // ioredis default; CLUSTER INFO would be more accurate
       keyspace,
+      usedMemoryHuman: parsed.memoryFields.used_memory_human,
+      // maxmemory 0 = no limit; report nothing rather than "0B".
+      maxMemoryHuman:
+        parsed.memoryFields.maxmemory && parsed.memoryFields.maxmemory !== '0'
+          ? parsed.memoryFields.maxmemory_human
+          : undefined,
+      connectedClients: toInt(parsed.clientFields.connected_clients),
+      uptimeSeconds: toInt(parsed.serverFields.uptime_in_seconds),
     };
   }
 
@@ -564,31 +572,44 @@ function normalizeType(raw: string): RedisValueType {
   return 'unknown';
 }
 
-function parseInfo(info: string): {
+/** Split `INFO` output into the sections Plasma reads. Exported for tests. */
+export function parseInfo(info: string): {
   serverFields: Record<string, string>;
   replicationFields: Record<string, string>;
+  memoryFields: Record<string, string>;
+  clientFields: Record<string, string>;
   keyspaceLines: string[];
 } {
   const sections = info.split(/\r?\n#\s*/g);
   const out = {
     serverFields: {} as Record<string, string>,
     replicationFields: {} as Record<string, string>,
+    memoryFields: {} as Record<string, string>,
+    clientFields: {} as Record<string, string>,
     keyspaceLines: [] as string[],
+  };
+  const readFields = (lines: string[], into: Record<string, string>) => {
+    for (const ln of lines) {
+      // Split on the first ':' only — values can contain colons.
+      const i = ln.indexOf(':');
+      if (i > 0) into[ln.slice(0, i).trim()] = ln.slice(i + 1).trim();
+    }
   };
   for (const sec of sections) {
     const [headerLine, ...rest] = sec.split(/\r?\n/);
-    const header = headerLine.trim().toLowerCase();
+    // INFO starts with "# Server" — the first section keeps its "#"
+    // because the split only consumes "#" after a newline. Without this
+    // the Server section (version, mode) was silently skipped.
+    const header = headerLine.replace(/^#\s*/, '').trim().toLowerCase();
     const lines = rest.filter((l) => l && !l.startsWith('#'));
     if (header.startsWith('server')) {
-      for (const ln of lines) {
-        const [k, v] = ln.split(':');
-        if (k && v !== undefined) out.serverFields[k.trim()] = v.trim();
-      }
+      readFields(lines, out.serverFields);
     } else if (header.startsWith('replication')) {
-      for (const ln of lines) {
-        const [k, v] = ln.split(':');
-        if (k && v !== undefined) out.replicationFields[k.trim()] = v.trim();
-      }
+      readFields(lines, out.replicationFields);
+    } else if (header.startsWith('memory')) {
+      readFields(lines, out.memoryFields);
+    } else if (header.startsWith('clients')) {
+      readFields(lines, out.clientFields);
     } else if (header.startsWith('keyspace')) {
       out.keyspaceLines.push(...lines);
     }
@@ -652,4 +673,10 @@ function serializeReply(reply: unknown): unknown {
     return out;
   }
   return reply;
+}
+
+function toInt(v: string | undefined): number | undefined {
+  if (v === undefined) return undefined;
+  const n = Number.parseInt(v, 10);
+  return Number.isFinite(n) ? n : undefined;
 }

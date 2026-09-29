@@ -8,6 +8,7 @@ import {
   Clock,
   FileCode,
   KeyRound,
+  LayoutDashboard,
   Plus,
   Radio,
   Search,
@@ -47,6 +48,14 @@ export function TabStrip() {
   // New SQL tabs only make sense for Postgres; redis / opensearch tabs
   // spawn from the sidebar.
   const engine = useSession((s) => s.activeConfig?.engine ?? 'postgres');
+  // Redis / OpenSearch have no SQL editor: the session's placeholder SQL
+  // tab renders the engine overview, so show it as a fixed "Overview" tab
+  // (never "query-1.sql", never closable) and hide any extra SQL tabs.
+  const keyValueEngine = engine !== 'postgres';
+  const overviewId = keyValueEngine ? tabs.find((t) => t.kind === 'sql')?.id : undefined;
+  const visible = keyValueEngine
+    ? tabs.filter((t) => t.kind !== 'sql' || t.id === overviewId)
+    : tabs;
 
   return (
     <div className="flex h-[34px] shrink-0 items-stretch border-b border-[var(--wb-separator)] bg-[var(--wb-tabbar)]">
@@ -55,9 +64,12 @@ export function TabStrip() {
         role="tablist"
         aria-label="Open tabs"
       >
-        {tabs.map((t) => {
+        {visible.map((t) => {
           const active = t.id === activeTabId;
-          const Icon = TAB_ICON[t.kind] ?? FileCode;
+          const isOverview = t.id === overviewId;
+          const Icon = isOverview ? LayoutDashboard : (TAB_ICON[t.kind] ?? FileCode);
+          const title = isOverview ? 'Overview' : t.title;
+          const closable = visible.length > 1 && !isOverview;
           return (
             <div
               key={t.id}
@@ -66,12 +78,12 @@ export function TabStrip() {
               tabIndex={0}
               onClick={() => setActiveTab(t.id)}
               onAuxClick={(e) => {
-                if (e.button === 1 && tabs.length > 1) closeTab(t.id);
+                if (e.button === 1 && closable) closeTab(t.id);
               }}
               onKeyDown={(e) => {
                 if (e.key === 'Enter') setActiveTab(t.id);
               }}
-              title={t.title}
+              title={title}
               className={cn(
                 'group relative flex min-w-[120px] flex-1 basis-0 cursor-default items-center justify-center gap-1.5 rounded-[7px] px-7 text-[13px] leading-5 transition-colors',
                 active
@@ -79,7 +91,7 @@ export function TabStrip() {
                   : 'text-[var(--wb-text-2)] hover:bg-[var(--wb-control-hover)] hover:text-[var(--wb-text)]',
               )}
             >
-              {tabs.length > 1 && (
+              {closable && (
                 <button
                   type="button"
                   className="absolute left-1 top-1/2 grid h-[18px] w-[18px] -translate-y-1/2 place-items-center rounded-[4px] text-[var(--wb-text-2)] opacity-0 transition-opacity hover:bg-[var(--wb-control-hover)] hover:text-[var(--wb-text)] focus-visible:opacity-100 group-hover:opacity-100"
@@ -87,14 +99,14 @@ export function TabStrip() {
                     e.stopPropagation();
                     closeTab(t.id);
                   }}
-                  aria-label={`Close ${t.title}`}
+                  aria-label={`Close ${title}`}
                   title={`Close (${kbd('W')})`}
                 >
                   <X className="h-3 w-3" />
                 </button>
               )}
               <Icon className="h-3.5 w-3.5 shrink-0 opacity-60" />
-              <span className="truncate">{t.title}</span>
+              <span className="truncate">{title}</span>
               {t.queryRunState === 'running' && (
                 <span className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-[var(--wb-accent)]" />
               )}

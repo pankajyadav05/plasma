@@ -131,9 +131,7 @@ export function AppShell() {
           e.preventDefault();
           const st = useSession.getState();
           if (st.canvasMode !== 'database') break;
-          const fallback =
-            (st.activeConfig?.engine ?? 'postgres') === 'postgres' ? 'details' : 'ai';
-          st.setRightPanelMode(st.rightPanelMode ? null : fallback);
+          st.setRightPanelMode(st.rightPanelMode ? null : 'details');
           break;
         }
         case 'toggleEditor':

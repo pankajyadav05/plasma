@@ -10,6 +10,7 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { describeConnectError } from '@/lib/errors';
 import { useSession } from '@/stores/session';
 import { suggestReadOnlyForTag } from '@shared/connection-readonly';
 import type { ConnectionConfig, ConnectionEngine } from '@shared/protocol';
@@ -135,7 +136,9 @@ export function ConnectionDialog() {
       engine: next,
       port: d.port,
       database: d.database,
-      user: form.user || d.user,
+      // Replace the previous engine's default user (e.g. Postgres's
+      // "postgres") — Redis/OpenSearch reject it — but keep one the user typed.
+      user: !form.user || form.user === ENGINE_DEFAULTS[engine].user ? d.user : form.user,
       ssl: d.ssl,
     });
     setTest({ kind: 'idle' });
@@ -443,12 +446,12 @@ export function ConnectionDialog() {
             )}
             {test.kind === 'fail' && (
               <div className="rounded-md border-l-4 border-destructive bg-muted px-4 py-2 text-sm text-foreground">
-                ✗ {test.message}
+                ✗ {describeConnectError(test.message, engine)}
               </div>
             )}
             {connectionError && connectionState === 'error' && (
               <div className="rounded-md border-l-4 border-destructive bg-muted px-4 py-2 text-sm text-foreground">
-                ✗ {connectionError}
+                ✗ {describeConnectError(connectionError, engine)}
               </div>
             )}
           </div>

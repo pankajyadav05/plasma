@@ -1,11 +1,16 @@
-import { Button } from '@/components/ui/button';
+import { EmptyState, ViewFooter, ViewTitle, ViewToolbar } from '@/components/ui/view-parts';
+import { IconButton, Pill } from '@/components/ui/workbench';
+import { cleanIpcError } from '@/lib/errors';
 import { ipc } from '@/lib/ipc';
+import { useSession } from '@/stores/session';
 import type { RedisCommandResult } from '@shared/protocol';
-import { Loader2, Send, Trash2 } from 'lucide-react';
+import { CornerDownLeft, Loader2, Trash2 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 
 interface CliEntry {
   id: string;
+  /** Prompt as it read when the command was sent (`host:port[db]>`). */
+  prompt: string;
   command: string;
   result: RedisCommandResult | null;
   error: string | null;
@@ -16,18 +21,25 @@ interface CliEntry {
  * Minimal redis-cli — split user input on whitespace (with rudimentary
  * quoting), forward to ipc.redis.command, render replies bottom-up.
  *
- * Design intent: feel like a real terminal, not a form. Commands echo
- * inline above their output, the input stays at the bottom, and Up/Down
- * walks the local history stack.
+ * Design intent: feel like a real terminal inside the workbench. Each
+ * command echoes after a `127.0.0.1:6379[0]>` prompt with its reply
+ * underneath, the input stays pinned at the bottom, and Up/Down walks
+ * the local history stack.
  */
 export function RedisCliView() {
+  const activeConfig = useSession((s) => s.activeConfig);
   const [input, setInput] = useState('');
   const [entries, setEntries] = useState<CliEntry[]>([]);
   const [busy, setBusy] = useState(false);
   const [history, setHistory] = useState<string[]>([]);
   const [cursor, setCursor] = useState(-1);
+  // Tracks `SELECT n` so the prompt shows the db the worker is on.
+  const [db, setDb] = useState<string>(() => activeConfig?.database || '0');
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
+
+  const host = activeConfig ? `${activeConfig.host}:${activeConfig.port}` : 'redis';
+  const prompt = `${host}[${db}]>`;
 
   const scrollToBottom = () => {
     if (scrollRef.current) {
@@ -41,13 +53,13 @@ export function RedisCliView() {
 
   const submit = async () => {
     const cmd = input.trim();
-    if (!cmd) return;
+    if (!cmd || busy) return;
     const parts = tokenize(cmd);
     if (parts.length === 0) return;
     const id = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
     setEntries((prev) => [
       ...prev,
-      { id, command: cmd, result: null, error: null, durationMs: null },
+      { id, prompt, command: cmd, result: null, error: null, durationMs: null },
     ]);
     setHistory((prev) => [...prev, cmd]);
     setCursor(-1);
@@ -61,15 +73,24 @@ export function RedisCliView() {
       setEntries((prev) =>
         prev.map((e) => (e.id === id ? { ...e, result, durationMs: result.durationMs } : e)),
       );
+      const [verb, arg] = parts;
+      if (verb?.toUpperCase() === 'SELECT' && arg !== undefined && /^\d+$/.test(arg)) {
+        setDb(arg);
+      }
     } catch (err) {
       setEntries((prev) =>
         prev.map((e) =>
-          e.id === id ? { ...e, error: err instanceof Error ? err.message : String(err) } : e,
+          e.id === id
+            ? { ...e, error: cleanIpcError(err instanceof Error ? err.message : String(err)) }
+            : e,
         ),
       );
     } finally {
       setBusy(false);
-      requestAnimationFrame(scrollToBottom);
+      requestAnimationFrame(() => {
+        scrollToBottom();
+        inputRef.current?.focus();
+      });
     }
   };
 
@@ -94,55 +115,77 @@ export function RedisCliView() {
     }
   };
 
+  // Clicking empty transcript space puts the caret back in the prompt,
+  // unless the user is selecting text to copy.
+  const focusInput = () => {
+    if (window.getSelection()?.toString()) return;
+    inputRef.current?.focus();
+  };
+
   return (
-    <main className="flex min-h-0 min-w-0 flex-1 flex-col bg-background">
-      {/* Header */}
-      <div className="flex shrink-0 items-center gap-2 border-b border-border px-4 py-2.5">
-        <span className="font-mono text-sm font-semibold">redis-cli</span>
-        <span className="font-display text-[11px] italic text-muted-foreground">
-          press ↑/↓ to recall, ⏎ to send
-        </span>
+    <main className="flex min-h-0 min-w-0 flex-1 flex-col bg-[var(--wb-content)]">
+      <ViewToolbar>
+        <ViewTitle
+          title={<span className="font-mono">redis-cli</span>}
+          meta="↑/↓ history · ⏎ run"
+        />
         <div className="flex-1" />
-        <Button
-          variant="ghost"
-          size="sm"
+        {entries.length > 0 && (
+          <span className="text-[12px] tabular-nums text-[var(--wb-text-2)]">
+            {entries.length.toLocaleString()} {entries.length === 1 ? 'command' : 'commands'}
+          </span>
+        )}
+        <IconButton
+          label="Clear output"
           onClick={() => setEntries([])}
           disabled={entries.length === 0}
         >
           <Trash2 />
-          Clear
-        </Button>
-      </div>
+        </IconButton>
+      </ViewToolbar>
 
       {/* Transcript */}
-      <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-4 py-3 font-mono text-xs">
+      {/* biome-ignore lint/a11y/useKeyWithClickEvents: convenience only — the input is keyboard reachable */}
+      <div
+        ref={scrollRef}
+        onClick={focusInput}
+        className="min-h-0 flex-1 overflow-y-auto px-3 py-2 font-mono text-[13px] leading-5 text-[var(--grid-text)]"
+      >
         {entries.length === 0 ? (
-          <div className="flex h-full flex-col items-start gap-2 font-display italic text-muted-foreground">
-            <span className="text-sm">try: INFO server</span>
-            <span className="text-[11px]">PING · DBSIZE · CLIENT LIST · CONFIG GET maxmemory</span>
-          </div>
+          <EmptyState
+            title="Type a Redis command below"
+            hint="PING · INFO server · DBSIZE · CLIENT LIST · CONFIG GET maxmemory"
+          />
         ) : (
-          <ul className="space-y-3">
+          <ul className="space-y-2.5">
             {entries.map((e) => (
-              <li key={e.id} className="rounded-md border border-border bg-muted/20">
-                <div className="border-b border-border/60 px-3 py-1.5">
-                  <span className="text-muted-foreground">›</span>{' '}
-                  <span className="text-foreground">{e.command}</span>
+              <li key={e.id}>
+                <div className="flex items-baseline gap-2">
+                  <span className="shrink-0 text-[var(--wb-text-2)]">{e.prompt}</span>
+                  <span className="min-w-0 flex-1 break-all text-[var(--wb-text)]">
+                    {e.command}
+                  </span>
                   {e.durationMs !== null && (
-                    <span className="ml-2 font-display text-[11px] italic text-muted-foreground">
+                    <span className="shrink-0 text-[11px] tabular-nums text-[var(--wb-text-3)]">
                       {e.durationMs}ms
                     </span>
                   )}
                 </div>
-                <div className="px-3 py-2">
+                <div className="select-text">
                   {e.error ? (
-                    <span className="text-destructive">{e.error}</span>
+                    <span className="whitespace-pre-wrap break-all text-destructive">
+                      (error) {e.error}
+                    </span>
                   ) : e.result ? (
-                    <pre className="whitespace-pre-wrap break-all leading-5">
-                      {formatReply(e.result.reply)}
-                    </pre>
+                    e.result.reply === null || e.result.reply === undefined ? (
+                      <span className="text-[var(--grid-null)]">(nil)</span>
+                    ) : (
+                      <pre className="whitespace-pre-wrap break-all font-mono">
+                        {formatReply(e.result.reply)}
+                      </pre>
+                    )
                   ) : (
-                    <span className="flex items-center gap-1 text-muted-foreground">
+                    <span className="flex items-center gap-1.5 text-[var(--wb-text-3)]">
                       <Loader2 className="h-3 w-3 animate-spin" /> waiting…
                     </span>
                   )}
@@ -154,30 +197,35 @@ export function RedisCliView() {
       </div>
 
       {/* Input */}
-      <div className="shrink-0 border-t border-border bg-muted/20 px-4 py-2">
+      <ViewFooter className="px-3">
         <form
-          className="flex items-center gap-2"
+          className="flex min-w-0 flex-1 items-center gap-2"
           onSubmit={(e) => {
             e.preventDefault();
             void submit();
           }}
         >
-          <span className="font-mono text-sm text-muted-foreground">›</span>
+          <span className="shrink-0 font-mono text-[13px] text-[var(--wb-text-2)]">{prompt}</span>
           <input
             ref={inputRef}
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={onKeyDown}
-            disabled={busy}
+            // Never disable while a command runs: a disabled input drops
+            // keystrokes typed right after Enter (and loses focus).
+            // submit() refuses to send while busy instead.
             placeholder="GET myKey"
-            className="flex-1 bg-transparent font-mono text-sm outline-none placeholder:text-muted-foreground/60"
+            aria-label="Redis command"
+            spellCheck={false}
+            autoComplete="off"
+            className="min-w-0 flex-1 bg-transparent font-mono text-[13px] text-[var(--wb-text)] outline-none placeholder:text-[var(--wb-text-3)]"
           />
-          <Button type="submit" size="sm" variant="primary" disabled={busy}>
-            {busy ? <Loader2 className="animate-spin" /> : <Send />}
-            Send
-          </Button>
+          <Pill type="submit" disabled={busy || input.trim() === ''} aria-label="Send">
+            {busy ? <Loader2 className="animate-spin" /> : <CornerDownLeft />}
+            Run
+          </Pill>
         </form>
-      </div>
+      </ViewFooter>
     </main>
   );
 }

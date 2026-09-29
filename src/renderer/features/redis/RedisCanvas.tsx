@@ -29,7 +29,7 @@ export function RedisCanvas() {
   const tab = useActiveTab();
   const hasTabs = tab ? REDIS_TAB_KINDS.has(tab.kind) : false;
   return (
-    <main className="flex min-h-0 min-w-0 flex-1 flex-col bg-background">
+    <main className="flex min-h-0 min-w-0 flex-1 flex-col bg-[var(--wb-content)] text-[var(--wb-text)]">
       {hasTabs && <TabStrip />}
       <RedisBody />
     </main>
@@ -40,12 +40,18 @@ function RedisBody() {
   const tab = useActiveTab();
   if (!tab) return <RedisHomeView />;
   if (tab.kind === 'redis-key' && tab.redisKey) {
-    return <RedisKeyView keyName={tab.redisKey} />;
+    // Keyed by tab + key so switching keys starts from a clean view
+    // (selection, string mode, inspected row) instead of flashing stale state.
+    return <RedisKeyView key={`${tab.id}:${tab.redisKey}`} keyName={tab.redisKey} />;
   }
   if (tab.kind === 'redis-cli') return <RedisCliView />;
   if (tab.kind === 'redis-pubsub' && tab.redisChannel) {
     return (
-      <RedisPubsubView channel={tab.redisChannel} pattern={tab.redisPattern === true} />
+      <RedisPubsubView
+        key={tab.id}
+        channel={tab.redisChannel}
+        pattern={tab.redisPattern === true}
+      />
     );
   }
   if (tab.kind === 'redis-analyze') return <RedisAnalyzeView />;

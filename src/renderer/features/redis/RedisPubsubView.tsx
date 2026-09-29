@@ -1,14 +1,27 @@
-import { Button } from '@/components/ui/button';
+import { type DataColumn, DataTable } from '@/components/ui/data-table';
+import { Badge, EmptyState, ViewFooter, ViewToolbar } from '@/components/ui/view-parts';
+import { IconButton, Pill } from '@/components/ui/workbench';
+import { cn } from '@/lib/cn';
+import { cleanIpcError } from '@/lib/errors';
 import { ipc } from '@/lib/ipc';
+import { useActiveTab } from '@/stores/session';
+import { useWorkbench } from '@/stores/workbench';
 import type { RedisPubsubMessage } from '@shared/protocol';
 import { Loader2, Pause, Play, Trash2 } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 const MAX_MESSAGES = 2000;
+
+type Status = 'subscribing' | 'live' | 'error' | 'stopped';
 
 interface PubsubViewProps {
   channel: string;
   pattern: boolean;
+}
+
+/** A received message plus a local sequence number for stable identity. */
+interface Row extends RedisPubsubMessage {
+  seq: number;
 }
 
 /**
@@ -18,20 +31,29 @@ interface PubsubViewProps {
  * `plasma:redis:pubsub`, and renders messages newest-on-top capped at
  * MAX_MESSAGES so memory stays bounded on chatty channels. Pause stops
  * accepting new messages without unsubscribing — useful for inspecting
- * a fast feed without dropping the subscription.
+ * a fast feed without dropping the subscription. Unsubscribe drops the
+ * subscription (keeping the captured messages); Subscribe re-attaches.
  */
 export function RedisPubsubView({ channel, pattern }: PubsubViewProps) {
-  const [messages, setMessages] = useState<RedisPubsubMessage[]>([]);
+  const tabId = useActiveTab()?.id ?? null;
+  const [messages, setMessages] = useState<Row[]>([]);
   const [paused, setPaused] = useState(false);
-  const [status, setStatus] = useState<'subscribing' | 'live' | 'error' | 'stopped'>(
-    'subscribing',
-  );
+  const [active, setActive] = useState(true);
+  const [status, setStatus] = useState<Status>('subscribing');
   const [error, setError] = useState<string | null>(null);
+  const [selectedSeq, setSelectedSeq] = useState<number | null>(null);
   const pausedRef = useRef(paused);
   pausedRef.current = paused;
+  const seqRef = useRef(0);
 
   useEffect(() => {
+    if (!active) {
+      setStatus('stopped');
+      return;
+    }
     let cancelled = false;
+    setStatus('subscribing');
+    setError(null);
     void ipc.redis
       .subscribe(channel, pattern)
       .then(() => {
@@ -40,7 +62,7 @@ export function RedisPubsubView({ channel, pattern }: PubsubViewProps) {
       .catch((err) => {
         if (cancelled) return;
         setStatus('error');
-        setError(err instanceof Error ? err.message : String(err));
+        setError(cleanIpcError(err instanceof Error ? err.message : String(err)));
       });
 
     const off = window.plasmaEvents.on('plasma:redis:pubsub', (payload: unknown) => {
@@ -49,13 +71,11 @@ export function RedisPubsubView({ channel, pattern }: PubsubViewProps) {
       // Direct subscription uses exact channel match; pattern subs match
       // when the message's channel matches our glob.
       if (!matchesSubscription(channel, pattern, msg.channel)) return;
-      if (msg.pattern !== pattern) {
-        // Direct messages still arrive when one tab is psub and another sub
-        // with overlap — keep what's relevant.
-      }
       if (pausedRef.current) return;
+      seqRef.current += 1;
+      const row: Row = { ...msg, seq: seqRef.current };
       setMessages((prev) => {
-        const next = [msg, ...prev];
+        const next = [row, ...prev];
         if (next.length > MAX_MESSAGES) next.length = MAX_MESSAGES;
         return next;
       });
@@ -66,86 +86,192 @@ export function RedisPubsubView({ channel, pattern }: PubsubViewProps) {
       off();
       void ipc.redis.unsubscribe(channel, pattern).catch(() => {});
     };
-  }, [channel, pattern]);
+  }, [channel, pattern, active]);
+
+  // Clear the Details pane when leaving the view.
+  useEffect(() => () => useWorkbench.getState().setInspectedRow(null), []);
+
+  // Selection follows the message (by seq) as new ones push it down.
+  const selectedIndex = useMemo(() => {
+    if (selectedSeq === null) return null;
+    const i = messages.findIndex((m) => m.seq === selectedSeq);
+    return i < 0 ? null : i;
+  }, [messages, selectedSeq]);
+
+  // The selected message fell off the cap (or was cleared) → clear Details.
+  useEffect(() => {
+    if (selectedSeq !== null && selectedIndex === null) {
+      setSelectedSeq(null);
+      useWorkbench.getState().setInspectedRow(null);
+    }
+  }, [selectedSeq, selectedIndex]);
+
+  const onSelect = (m: Row, index: number) => {
+    setSelectedSeq(m.seq);
+    if (!tabId) return;
+    useWorkbench.getState().setInspectedRow({
+      tabId,
+      rowNumber: index + 1,
+      columnIndex: 2,
+      columns: [
+        { name: 'time', dataTypeID: 0, dataTypeName: 'received' },
+        { name: 'channel', dataTypeID: 0, dataTypeName: m.pattern ? 'psub match' : 'channel' },
+        { name: 'payload', dataTypeID: 0, dataTypeName: `${m.message.length} chars` },
+      ],
+      row: [new Date(m.timestamp).toISOString(), m.channel, prettyPayload(m.message)],
+    });
+  };
+
+  const columns = useMemo<DataColumn<Row>[]>(
+    () => [
+      { key: 'time', label: 'time', width: 110, render: (m) => fmtTime(m.timestamp) },
+      {
+        key: 'channel',
+        label: 'channel',
+        width: 180,
+        render: (m) => m.channel,
+        titleOf: (m) => m.channel,
+      },
+      {
+        key: 'payload',
+        label: 'payload',
+        render: (m) => m.message,
+        titleOf: (m) => (m.message.length > 400 ? `${m.message.slice(0, 400)}…` : m.message),
+      },
+    ],
+    [],
+  );
+
+  const toggleSubscription = () => {
+    setPaused(false);
+    setActive((v) => !v);
+  };
 
   return (
-    <main className="flex min-h-0 min-w-0 flex-1 flex-col bg-background">
-      {/* Header */}
-      <div className="flex shrink-0 items-center gap-3 border-b border-border px-4 py-3">
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
-            <span className="rounded-md bg-muted px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
-              {pattern ? 'psub' : 'sub'}
-            </span>
-            <h1 className="truncate font-mono text-sm">{channel}</h1>
-          </div>
-          <p className="mt-0.5 font-display text-[11px] italic text-muted-foreground">
-            {messages.length.toLocaleString()} messages · {statusLabel(status)}
-          </p>
-        </div>
-        <Button
-          variant="outline"
-          size="sm"
+    <main className="flex min-h-0 min-w-0 flex-1 flex-col bg-[var(--wb-content)]">
+      <ViewToolbar>
+        <Badge tone={pattern ? 'accent' : 'neutral'}>{pattern ? 'psub' : 'sub'}</Badge>
+        <span className="min-w-0 truncate font-mono font-semibold" title={channel}>
+          {channel}
+        </span>
+        <StatusChip status={status} paused={paused} />
+        <div className="flex-1" />
+        <IconButton
+          label={paused ? 'Resume' : 'Pause'}
           onClick={() => setPaused((v) => !v)}
           disabled={status !== 'live'}
+          active={paused}
         >
-          {paused ? <Play className="fill-current" /> : <Pause />}
-          {paused ? 'Resume' : 'Pause'}
-        </Button>
-        <Button
-          variant="ghost"
-          size="sm"
+          {paused ? <Play /> : <Pause />}
+        </IconButton>
+        <IconButton
+          label="Clear messages"
           onClick={() => setMessages([])}
           disabled={messages.length === 0}
         >
           <Trash2 />
-          Clear
-        </Button>
-      </div>
+        </IconButton>
+        <Pill onClick={toggleSubscription} disabled={status === 'subscribing'}>
+          {active ? 'Unsubscribe' : 'Subscribe'}
+        </Pill>
+      </ViewToolbar>
 
-      {/* Body */}
-      <div className="min-h-0 flex-1 overflow-y-auto font-mono text-xs">
-        {error && (
-          <div className="m-3 rounded-md border-l-4 border-destructive bg-muted px-4 py-2 text-foreground">
-            {error}
-          </div>
+      {error && (
+        <div
+          role="alert"
+          className="shrink-0 border-b border-[var(--wb-separator)] px-3 py-1.5 text-[13px] text-destructive"
+        >
+          {error}
+        </div>
+      )}
+
+      {messages.length === 0 ? (
+        status === 'subscribing' ? (
+          <EmptyState
+            title={
+              <span className="inline-flex items-center gap-2">
+                <Loader2 className="h-4 w-4 animate-spin" /> Subscribing…
+              </span>
+            }
+          />
+        ) : status === 'live' ? (
+          <EmptyState
+            title="Waiting for messages…"
+            hint={
+              <>
+                Publish with <span className="font-mono">PUBLISH {channel} hello</span> to see it
+                here.
+              </>
+            }
+          />
+        ) : status === 'stopped' ? (
+          <EmptyState title="Not subscribed" hint="Subscribe again to resume the tail." />
+        ) : null
+      ) : (
+        <DataTable
+          ariaLabel={`Messages on ${channel}`}
+          columns={columns}
+          rows={messages}
+          rowKey={(m) => String(m.seq)}
+          selectedIndex={selectedIndex}
+          onSelect={onSelect}
+        />
+      )}
+
+      <ViewFooter>
+        <span className="tabular-nums">
+          {messages.length.toLocaleString()} {messages.length === 1 ? 'message' : 'messages'}
+        </span>
+        <span className="text-[12px] text-[var(--wb-text-3)]">
+          · newest first, capped at {MAX_MESSAGES.toLocaleString()}
+        </span>
+        <div className="flex-1" />
+        {paused && (
+          <span className="text-[12px] text-[var(--wb-text-2)]">
+            Paused — incoming messages are dropped
+          </span>
         )}
-        {status === 'subscribing' && (
-          <div className="flex items-center gap-2 px-4 py-3 text-muted-foreground">
-            <Loader2 className="h-3.5 w-3.5 animate-spin" /> subscribing…
-          </div>
-        )}
-        {status === 'live' && messages.length === 0 && (
-          <div className="px-4 py-3 font-display text-sm italic text-muted-foreground">
-            waiting for messages…
-          </div>
-        )}
-        {messages.length > 0 && (
-          <ul className="divide-y divide-border/50">
-            {messages.map((m) => (
-              <li
-                key={`${m.timestamp}-${m.channel}-${m.message.slice(0, 8)}`}
-                className="grid grid-cols-[120px_140px_1fr] gap-3 px-4 py-1.5 hover:bg-muted/30"
-              >
-                <span className="text-muted-foreground">{fmtTime(m.timestamp)}</span>
-                <span className="truncate text-foreground" title={m.channel}>
-                  {m.channel}
-                </span>
-                <span className="break-all text-foreground">{m.message}</span>
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
+      </ViewFooter>
     </main>
   );
 }
 
-function statusLabel(s: 'subscribing' | 'live' | 'error' | 'stopped'): string {
+function StatusChip({ status, paused }: { status: Status; paused: boolean }) {
+  const label = paused && status === 'live' ? 'paused' : statusLabel(status);
+  return (
+    <span className="inline-flex shrink-0 items-center gap-1.5 text-[12px] text-[var(--wb-text-2)]">
+      <span
+        aria-hidden
+        className={cn(
+          'h-1.5 w-1.5 rounded-full',
+          status === 'live' && !paused && 'bg-[var(--status-local)]',
+          status === 'live' && paused && 'bg-[var(--status-staging)]',
+          status === 'subscribing' && 'bg-[var(--wb-text-3)]',
+          status === 'stopped' && 'bg-[var(--wb-text-3)]',
+          status === 'error' && 'bg-destructive',
+        )}
+      />
+      {label}
+    </span>
+  );
+}
+
+function statusLabel(s: Status): string {
   if (s === 'subscribing') return 'subscribing…';
   if (s === 'live') return 'live';
   if (s === 'error') return 'error';
   return 'stopped';
+}
+
+/** Pretty-print JSON payloads for the Details pane; others pass through. */
+function prettyPayload(message: string): string {
+  const t = message.trim();
+  if (!(t.startsWith('{') || t.startsWith('['))) return message;
+  try {
+    return JSON.stringify(JSON.parse(t), null, 2);
+  } catch {
+    return message;
+  }
 }
 
 function fmtTime(ts: number): string {

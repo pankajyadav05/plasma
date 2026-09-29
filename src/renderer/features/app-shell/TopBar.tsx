@@ -324,7 +324,7 @@ function RightClusters({ connected }: { connected: boolean }) {
           <ToolbarButton
             label={`${rightPanelMode ? 'Hide' : 'Show'} right sidebar (${kbd('⇧B')})`}
             active={Boolean(rightPanelMode)}
-            onClick={() => setRightPanelMode(rightPanelMode ? null : postgres ? 'details' : 'ai')}
+            onClick={() => setRightPanelMode(rightPanelMode ? null : 'details')}
           >
             <PanelRight />
           </ToolbarButton>
@@ -387,7 +387,9 @@ function StatusCapsule() {
       : tab
         ? tab.kind === 'table' && tab.tableName
           ? tab.tableName
-          : tab.title
+          : tab.kind === 'sql' && engine !== 'postgres'
+            ? 'Overview' // Redis / OpenSearch placeholder tab (see TabStrip)
+            : tab.title
         : null;
 
   return (

@@ -51,7 +51,15 @@ export function RightRail() {
   const tab = useActiveTab();
   const isTable = tab?.kind === 'table';
   const postgres = engine === 'postgres';
-  const effective = mode === null ? null : postgres ? mode : 'ai';
+  // Details + Assistant exist for every engine (Redis elements and
+  // OpenSearch documents publish into Details too); the Postgres session
+  // tools (compiled SQL, role, RLS) fall back to Details elsewhere.
+  const effective =
+    mode === null
+      ? null
+      : postgres || mode === 'details' || mode === 'ai'
+        ? mode
+        : 'details';
 
   // RLS / compiled SQL are table-scoped — fall back to Details elsewhere.
   useEffect(() => {
@@ -74,22 +82,16 @@ export function RightRail() {
       >
         <div className="grid shrink-0 grid-cols-[1fr_auto_1fr] items-center gap-1.5 px-2.5 pb-2 pt-2">
           <span aria-hidden />
-          {postgres ? (
-            <Segmented<PrimaryPane>
-              ariaLabel="Right sidebar pane"
-              variant="plain"
-              value={primary}
-              onChange={(v) => setMode(v === 'none' ? 'details' : v)}
-              options={[
-                { value: 'details', label: 'Details' },
-                { value: 'ai', label: 'Assistant', title: `Assistant (${kbd('L')})` },
-              ]}
-            />
-          ) : (
-            <span className="flex h-[26px] items-center rounded-[6px] bg-[var(--wb-segment-active)] px-3 text-[13px] font-medium text-[var(--wb-text)]">
-              Assistant
-            </span>
-          )}
+          <Segmented<PrimaryPane>
+            ariaLabel="Right sidebar pane"
+            variant="plain"
+            value={primary}
+            onChange={(v) => setMode(v === 'none' ? 'details' : v)}
+            options={[
+              { value: 'details', label: 'Details' },
+              { value: 'ai', label: 'Assistant', title: `Assistant (${kbd('L')})` },
+            ]}
+          />
           <div className="flex justify-end">
             {postgres && (
               <SessionToolsMenu isTable={isTable} rlsCount={isTable ? tab.rlsPolicyCount : null} />

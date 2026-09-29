@@ -1,52 +1,67 @@
-import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
-import { Input } from '@/components/ui/input';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { Badge } from '@/components/ui/view-parts';
+import { IconButton, MenuItem, Pill } from '@/components/ui/workbench';
+import {
+  SidebarEmpty,
+  SidebarSearch,
+  SidebarSearchRow,
+  sidebarRowClass,
+} from '@/features/sidebar/sidebar-parts';
+import { cn } from '@/lib/cn';
 import { useSession } from '@/stores/session';
 import type { RedisKeyMeta, RedisValueType } from '@shared/protocol';
 import {
   Activity,
   CheckSquare,
-  ChevronDown,
   ChevronRight,
   Clock,
   KeyRound,
-  Layers,
   Loader2,
   Plus,
   Radio,
   RefreshCw,
-  Search,
+  SlidersHorizontal,
   Square,
   Terminal,
   Trash2,
-  X,
 } from 'lucide-react';
 import { useMemo, useState } from 'react';
 
 /**
- * Redis sidebar — keyspace browser.
+ * Redis sidebar — keyspace browser, laid out like the Postgres items list.
  *
- * Layout:
- *   1. Compact header: redis version + role badge + key count
- *   2. SCAN MATCH input (debounced via Enter)
- *   3. "redis-cli" launcher
- *   4. Tree of keys grouped by `:` prefix tokens
- *   5. "Load more" button when SCAN cursor !== '0'
+ *   1. Compact header: "Redis <version>" + role / key-count meta + refresh
+ *   2. SCAN MATCH search (Enter to scan) + a sliders menu holding the
+ *      tool launchers (redis-cli, analyzer, slowlog, pub/sub) and the
+ *      bulk-select toggle
+ *   3. Prefix tree of keys (24px rows, type badges, TTL hints)
+ *   4. Bottom bar: loaded count + "Load more keys" while SCAN isn't done
  *
  * Why a prefix tree: production Redis instances commonly hold tens of
- * thousands of keys. Naively rendering them flat is slow + unreadable.
- * Grouping by the conventional `:` separator turns `user:42:profile`
- * into `user → 42 → profile`, mirroring how engineers actually think
- * about a Redis namespace.
+ * thousands of keys. Grouping by the conventional `:` separator turns
+ * `user:42:profile` into `user → 42 → profile`, mirroring how engineers
+ * think about a Redis namespace.
  */
 
 interface KeyTreeNode {
   /** The token at this depth (e.g. "user", "42", "profile"). */
   token: string;
-  /** Full key path if this node is a leaf, else null. */
+  /** Full key path if this node is itself a key, else null. */
   fullKey: string | null;
   meta: RedisKeyMeta | null;
   children: Map<string, KeyTreeNode>;
+  /** Number of keys at or below this node. */
+  keyCount: number;
 }
 
 const SEPARATOR = ':';
@@ -57,17 +72,19 @@ function buildTree(keys: RedisKeyMeta[]): KeyTreeNode {
     fullKey: null,
     meta: null,
     children: new Map(),
+    keyCount: 0,
   };
   for (const k of keys) {
     const parts = k.key.split(SEPARATOR);
     let cur = root;
-    for (let i = 0; i < parts.length; i++) {
-      const tok = parts[i];
+    cur.keyCount++;
+    for (const tok of parts) {
       let next = cur.children.get(tok);
       if (!next) {
-        next = { token: tok, fullKey: null, meta: null, children: new Map() };
+        next = { token: tok, fullKey: null, meta: null, children: new Map(), keyCount: 0 };
         cur.children.set(tok, next);
       }
+      next.keyCount++;
       cur = next;
     }
     cur.fullKey = k.key;
@@ -76,29 +93,29 @@ function buildTree(keys: RedisKeyMeta[]): KeyTreeNode {
   return root;
 }
 
-const TYPE_TONE: Record<RedisValueType, string> = {
-  string: 'text-type-str',
-  list: 'text-type-int',
-  set: 'text-type-bool',
-  zset: 'text-type-num',
-  hash: 'text-type-uuid',
-  stream: 'text-type-date',
-  json: 'text-type-jsonb',
-  none: 'text-muted-foreground',
-  unknown: 'text-muted-foreground',
-};
-
-const TYPE_GLYPH: Record<RedisValueType, string> = {
-  string: 'str',
-  list: 'lst',
-  set: 'set',
-  zset: 'zst',
-  hash: 'hsh',
-  stream: 'stm',
-  json: 'jsn',
-  none: '—',
+const REDIS_TYPE_LABEL: Record<RedisValueType, string> = {
+  string: 'STR',
+  list: 'LIST',
+  set: 'SET',
+  zset: 'ZSET',
+  hash: 'HASH',
+  stream: 'STREAM',
+  json: 'JSON',
+  none: 'NONE',
   unknown: '?',
 };
+
+/** Compact TTL hint: 42s / 12m / 5h / 3d. */
+function formatTtlShort(ms: number): string {
+  const s = Math.max(0, Math.round(ms / 1000));
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.round(s / 60)}m`;
+  if (s < 86_400) return `${Math.round(s / 3600)}h`;
+  return `${Math.round(s / 86_400)}d`;
+}
+
+const FIELD_CLASS =
+  'h-[26px] w-full rounded-[7px] border-0 bg-[var(--wb-field)] px-2.5 font-mono text-[13px] text-[var(--wb-text)] shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--wb-text)_10%,transparent)] outline-none placeholder:text-[var(--wb-text-3)] focus:shadow-[0_0_0_2px_color-mix(in_srgb,var(--wb-accent)_55%,transparent)]';
 
 export function RedisSidebar() {
   const overview = useSession((s) => s.redisOverview);
@@ -121,9 +138,8 @@ export function RedisSidebar() {
   const bulkDelete = useSession((s) => s.bulkDeleteSelectedRedisKeys);
 
   const [match, setMatch] = useState(matchInput ?? '');
+  const [menuOpen, setMenuOpen] = useState(false);
   const [pubsubOpen, setPubsubOpen] = useState(false);
-  const [pubsubChannel, setPubsubChannel] = useState('');
-  const [pubsubPattern, setPubsubPattern] = useState(false);
   const [confirmBulk, setConfirmBulk] = useState(false);
 
   const tree = useMemo(() => buildTree(keys?.keys ?? []), [keys]);
@@ -142,177 +158,137 @@ export function RedisSidebar() {
     void scanRedisKeys({ cursor: keys.cursor, match: match || undefined });
   };
 
+  const onRefresh = () => {
+    void refreshRedisOverview();
+    void scanRedisKeys({ cursor: '0' });
+  };
+
+  const runMenu = (fn: () => void) => {
+    setMenuOpen(false);
+    fn();
+  };
+
+  const loaded = keys?.keys.length ?? 0;
+  const scanDone = !keys || keys.cursor === '0';
+
   return (
     <div className="flex h-full flex-col">
       {/* Header */}
-      <div className="border-b border-sidebar-border px-3 py-2">
-        <div className="flex items-center gap-2">
-          <Layers className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-          <span className="font-semibold text-sm">Redis</span>
-          <span className="font-display text-[11px] italic text-muted-foreground">
-            {overview ? overview.redisVersion : '—'}
+      <div className="flex h-9 shrink-0 items-center gap-2 pl-4 pr-2.5">
+        <div className="flex min-w-0 flex-1 items-baseline gap-1.5">
+          <span className="shrink-0 text-[13px] font-semibold text-[var(--wb-text)]">Redis</span>
+          <span className="truncate text-[11px] text-[var(--wb-text-2)]">
+            {overview
+              ? [
+                  overview.redisVersion,
+                  overview.role,
+                  overview.mode,
+                  `${totalKeys.toLocaleString()} keys`,
+                ].join(' · ')
+              : 'connecting…'}
           </span>
-          <div className="flex-1" />
-          <Button
-            variant="ghost"
-            size="icon-xs"
-            title="Refresh"
-            onClick={() => {
-              void refreshRedisOverview();
-              void scanRedisKeys({ cursor: '0' });
-            }}
-          >
-            {loading ? <Loader2 className="animate-spin" /> : <RefreshCw />}
-          </Button>
         </div>
-        {overview && (
-          <div className="mt-1 flex flex-wrap items-center gap-2 font-display text-[11px] italic text-muted-foreground">
-            <span className="rounded-sm border border-border px-1 py-0.5 not-italic">
-              {overview.role}
-            </span>
-            <span className="rounded-sm border border-border px-1 py-0.5 not-italic">
-              {overview.mode}
-            </span>
-            <span>· {totalKeys.toLocaleString()} keys total</span>
-          </div>
-        )}
+        <IconButton
+          variant="plain"
+          label="Refresh keys"
+          title="Refresh"
+          onClick={onRefresh}
+          disabled={loading}
+        >
+          {loading ? <Loader2 className="animate-spin" /> : <RefreshCw />}
+        </IconButton>
       </div>
 
-      {/* MATCH input */}
-      <div className="border-b border-sidebar-border px-3 py-2">
+      {/* SCAN MATCH + tools menu */}
+      <SidebarSearchRow>
         <form
+          className="flex min-w-0 flex-1"
           onSubmit={(e) => {
             e.preventDefault();
             submitMatch(match);
           }}
-          className="relative"
         >
-          <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-          <Input
+          <SidebarSearch
             value={match}
-            onChange={(e) => setMatch(e.target.value)}
-            placeholder="user:* (Enter to scan)"
-            className="h-7 pl-7 pr-7 font-mono text-xs"
-          />
-          {match && (
-            <button
-              type="button"
-              onClick={() => {
-                setMatch('');
-                submitMatch('');
-              }}
-              className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded-sm p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
-              aria-label="Clear filter"
-            >
-              <X className="h-3 w-3" />
-            </button>
-          )}
-        </form>
-        <div className="mt-2 grid grid-cols-4 gap-1">
-          <ToolButton title="redis-cli" icon={<Terminal />} onClick={openRedisCli} />
-          <ToolButton title="Memory analyzer" icon={<Activity />} onClick={openRedisAnalyze} />
-          <ToolButton title="Slowlog" icon={<Clock />} onClick={openRedisSlowlog} />
-          <ToolButton
-            title="Pub/sub subscribe"
-            icon={<Radio />}
-            onClick={() => setPubsubOpen((v) => !v)}
-            active={pubsubOpen}
-          />
-        </div>
-        {pubsubOpen && (
-          <form
-            className="mt-2 flex flex-col gap-1.5 rounded-md border border-border bg-muted/20 p-2"
-            onSubmit={(e) => {
-              e.preventDefault();
-              const ch = pubsubChannel.trim();
-              if (!ch) return;
-              openRedisPubsub(ch, pubsubPattern);
-              setPubsubOpen(false);
-              setPubsubChannel('');
+            onChange={(v) => {
+              setMatch(v);
+              // The field's clear button (or erasing everything) resets the scan.
+              if (v === '' && matchInput) submitMatch('');
             }}
-          >
-            <Input
-              value={pubsubChannel}
-              onChange={(e) => setPubsubChannel(e.target.value)}
-              placeholder={pubsubPattern ? 'news:* (PSUBSCRIBE)' : 'news.alerts (SUBSCRIBE)'}
-              className="h-7 font-mono text-xs"
-              autoFocus
-            />
-            <label className="flex cursor-pointer items-center gap-1.5 font-display text-[11px] italic text-muted-foreground">
-              <input
-                type="checkbox"
-                checked={pubsubPattern}
-                onChange={(e) => setPubsubPattern(e.target.checked)}
-                className="h-3 w-3 cursor-pointer"
-              />
-              pattern (PSUBSCRIBE)
-            </label>
-            <div className="flex justify-end gap-1">
-              <Button
-                type="button"
-                size="sm"
-                variant="ghost"
-                onClick={() => setPubsubOpen(false)}
-              >
-                Cancel
-              </Button>
-              <Button type="submit" size="sm" variant="primary">
-                Subscribe
-              </Button>
-            </div>
-          </form>
-        )}
-      </div>
-
-      {/* Bulk-mode toolbar */}
-      <div className="flex shrink-0 items-center gap-1 border-b border-sidebar-border px-3 py-1.5">
-        <button
-          type="button"
-          onClick={toggleBulkMode}
-          className={
-            bulkMode
-              ? 'flex cursor-pointer items-center gap-1 rounded-sm border border-foreground bg-muted px-1.5 py-0.5 font-mono text-[10px] uppercase text-foreground'
-              : 'flex cursor-pointer items-center gap-1 rounded-sm border border-border px-1.5 py-0.5 font-mono text-[10px] uppercase text-muted-foreground hover:border-foreground hover:text-foreground'
-          }
-          title="Toggle bulk select"
-        >
-          <CheckSquare className="h-3 w-3" />
-          select
-        </button>
-        {bulkMode && (
-          <>
-            <span className="font-display text-[11px] italic text-muted-foreground">
-              {selectedKeys.size.toLocaleString()} chosen
-            </span>
-            <div className="flex-1" />
-            <Button
-              variant="ghost"
-              size="icon-xs"
-              onClick={() => setConfirmBulk(true)}
-              disabled={selectedKeys.size === 0}
-              title="Delete selected"
-              className="text-destructive hover:bg-destructive/10 hover:text-destructive disabled:text-muted-foreground"
+            placeholder="MATCH pattern, e.g. user:*…"
+            ariaLabel="Scan keys matching pattern (Enter to scan)"
+          />
+        </form>
+        <Popover open={menuOpen} onOpenChange={setMenuOpen}>
+          <PopoverTrigger asChild>
+            <IconButton
+              variant="plain"
+              label="Redis tools"
+              active={bulkMode}
+              className="[&_svg]:h-4 [&_svg]:w-4"
             >
-              <Trash2 />
-            </Button>
-          </>
-        )}
-      </div>
+              <SlidersHorizontal />
+            </IconButton>
+          </PopoverTrigger>
+          <PopoverContent align="end" sideOffset={4} className="w-[230px] p-1" role="menu">
+            <MenuItem icon={<Terminal />} label="redis-cli" onClick={() => runMenu(openRedisCli)} />
+            <MenuItem
+              icon={<Activity />}
+              label="Memory analyzer"
+              onClick={() => runMenu(openRedisAnalyze)}
+            />
+            <MenuItem icon={<Clock />} label="Slowlog" onClick={() => runMenu(openRedisSlowlog)} />
+            <MenuItem
+              icon={<Radio />}
+              label="Pub/sub subscribe…"
+              onClick={() => runMenu(() => setPubsubOpen(true))}
+            />
+            <div className="my-1 h-px bg-[var(--wb-separator)]" />
+            <MenuItem
+              icon={<CheckSquare />}
+              label="Bulk select"
+              checked={bulkMode}
+              onClick={() => runMenu(toggleBulkMode)}
+            />
+            <MenuItem
+              icon={<RefreshCw />}
+              label="Rescan keyspace"
+              onClick={() => runMenu(onRefresh)}
+            />
+          </PopoverContent>
+        </Popover>
+      </SidebarSearchRow>
+
+      {/* Bulk-mode strip */}
+      {bulkMode && (
+        <div className="flex h-7 shrink-0 items-center gap-1.5 px-4 pb-1 text-[12px] text-[var(--wb-text-2)]">
+          <span className="flex-1 truncate">{selectedKeys.size.toLocaleString()} selected</span>
+          <IconButton
+            variant="plain"
+            label="Delete selected"
+            onClick={() => setConfirmBulk(true)}
+            disabled={selectedKeys.size === 0}
+            className="text-destructive hover:text-destructive"
+          >
+            <Trash2 />
+          </IconButton>
+          <Pill onClick={toggleBulkMode} aria-label="Toggle bulk select" title="Toggle bulk select">
+            Done
+          </Pill>
+        </div>
+      )}
 
       {/* Key tree */}
-      <div className="min-h-0 flex-1 overflow-y-auto">
-        {!keys && (
-          <div className="px-4 py-3 font-display text-sm italic text-muted-foreground">
-            scanning…
-          </div>
-        )}
+      <div className="min-h-0 flex-1 overflow-y-auto pb-1">
+        {!keys && <SidebarEmpty title="Scanning…" />}
         {keys && keys.keys.length === 0 && (
-          <div className="px-4 py-3 font-display text-sm italic text-muted-foreground">
-            no keys match
-          </div>
+          <SidebarEmpty
+            title="No keys match"
+            hint={matchInput ? `MATCH ${matchInput}` : 'The selected database is empty.'}
+          />
         )}
         {keys && keys.keys.length > 0 && (
-          <ul className="py-1" role="tree" aria-label="Redis keys">
+          <ul role="tree" aria-label="Redis keys" aria-multiselectable={bulkMode || undefined}>
             {[...tree.children.values()].map((node) => (
               <TreeNode
                 key={node.token}
@@ -330,21 +306,31 @@ export function RedisSidebar() {
         )}
       </div>
 
-      {/* Pagination */}
-      {keys && keys.cursor !== '0' && (
-        <div className="shrink-0 border-t border-sidebar-border p-2">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={onLoadMore}
-            disabled={loading}
-            className="w-full"
-          >
-            {loading ? <Loader2 className="animate-spin" /> : <Plus />}
-            {loading ? 'Scanning…' : 'Load more keys'}
-          </Button>
+      {/* Bottom bar: loaded count + pagination */}
+      {keys && (
+        <div className="flex h-9 shrink-0 items-center gap-2 border-t border-[var(--wb-separator)] pl-4 pr-2.5">
+          <span className="min-w-0 flex-1 truncate text-[11px] tabular-nums text-[var(--wb-text-2)]">
+            {scanDone
+              ? `${loaded.toLocaleString()} keys`
+              : `${loaded.toLocaleString()}${totalKeys ? ` of ${totalKeys.toLocaleString()}` : ''} keys`}
+          </span>
+          {!scanDone && (
+            <Pill onClick={onLoadMore} disabled={loading}>
+              {loading ? <Loader2 className="animate-spin" /> : <Plus />}
+              {loading ? 'Scanning…' : 'Load more keys'}
+            </Pill>
+          )}
         </div>
       )}
+
+      <PubsubDialog
+        open={pubsubOpen}
+        onOpenChange={setPubsubOpen}
+        onSubscribe={(channel, pattern) => {
+          openRedisPubsub(channel, pattern);
+          setPubsubOpen(false);
+        }}
+      />
 
       <ConfirmDialog
         open={confirmBulk}
@@ -362,31 +348,72 @@ export function RedisSidebar() {
   );
 }
 
-function ToolButton({
-  title,
-  icon,
-  onClick,
-  active,
+function PubsubDialog({
+  open,
+  onOpenChange,
+  onSubscribe,
 }: {
-  title: string;
-  icon: React.ReactNode;
-  onClick: () => void;
-  active?: boolean;
+  open: boolean;
+  onOpenChange: (o: boolean) => void;
+  onSubscribe: (channel: string, pattern: boolean) => void;
 }) {
+  const [channel, setChannel] = useState('');
+  const [pattern, setPattern] = useState(false);
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      title={title}
-      aria-label={title}
-      className={
-        active
-          ? 'flex cursor-pointer items-center justify-center rounded-md border border-foreground bg-muted px-2 py-1.5 text-foreground'
-          : 'flex cursor-pointer items-center justify-center rounded-md border border-border bg-background px-2 py-1.5 text-muted-foreground transition-colors hover:border-foreground hover:text-foreground'
-      }
+    <Dialog
+      open={open}
+      onOpenChange={(o) => {
+        onOpenChange(o);
+        if (!o) setChannel('');
+      }}
     >
-      <span className="[&>svg]:h-3.5 [&>svg]:w-3.5">{icon}</span>
-    </button>
+      <DialogContent className="max-w-[420px] gap-3 bg-[var(--wb-sidebar)] p-5">
+        <DialogHeader>
+          <DialogTitle className="text-[15px]">Subscribe to a channel</DialogTitle>
+          <DialogDescription className="text-[12px] text-[var(--wb-text-2)]">
+            Opens a live tail tab. Use a pattern to PSUBSCRIBE to many channels.
+          </DialogDescription>
+        </DialogHeader>
+        <form
+          id="redis-pubsub-form"
+          className="flex flex-col gap-2"
+          onSubmit={(e) => {
+            e.preventDefault();
+            const ch = channel.trim();
+            if (!ch) return;
+            onSubscribe(ch, pattern);
+            setChannel('');
+          }}
+        >
+          <input
+            // biome-ignore lint/a11y/noAutofocus: dialog opened on explicit user action
+            autoFocus
+            value={channel}
+            onChange={(e) => setChannel(e.target.value)}
+            placeholder={pattern ? 'news:* (PSUBSCRIBE)' : 'news.alerts (SUBSCRIBE)'}
+            aria-label="Channel"
+            className={FIELD_CLASS}
+          />
+          <label
+            htmlFor="redis-pubsub-pattern"
+            className="flex cursor-pointer items-center gap-2 text-[13px] text-[var(--wb-text)]"
+          >
+            <Checkbox
+              id="redis-pubsub-pattern"
+              checked={pattern}
+              onCheckedChange={(v) => setPattern(v === true)}
+            />
+            Pattern (PSUBSCRIBE)
+          </label>
+        </form>
+        <DialogFooter className="gap-2">
+          <Pill onClick={() => onOpenChange(false)}>Cancel</Pill>
+          <Pill type="submit" form="redis-pubsub-form" disabled={!channel.trim()}>
+            Subscribe
+          </Pill>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -409,87 +436,100 @@ function TreeNode({
   checked: Set<string>;
   onToggleChecked: (key: string) => void;
 }) {
-  // Auto-expand the first two levels — anything past that gets the
-  // collapse treatment so a `feed:user:42:posts:99:cache` namespace
-  // doesn't blow out the sidebar height by default.
+  // Only the top level starts expanded so deep namespaces like
+  // `feed:user:42:posts:99:cache` don't blow out the sidebar height.
   const [open, setOpen] = useState(depth < 1);
   const hasChildren = node.children.size > 0;
-  const isLeaf = node.fullKey !== null;
+  const isKey = node.fullKey !== null;
   const fullPath = pathPrefix ? `${pathPrefix}${SEPARATOR}${node.token}` : node.token;
-  const isActive = activeKey === node.fullKey;
+  const isActive = isKey && activeKey === node.fullKey;
   const isChecked = node.fullKey !== null && checked.has(node.fullKey);
+  const meta = node.meta;
+  // Chevron column (12px) + 12px indent per level, inside the row's px-1.
+  const indent = { paddingLeft: 4 + depth * 12 };
+
+  const activate = () => {
+    if (isKey && node.fullKey) {
+      if (bulkMode) onToggleChecked(node.fullKey);
+      else onOpen(node.fullKey);
+    } else {
+      setOpen((v) => !v);
+    }
+  };
+
+  const label = isKey
+    ? (node.fullKey ?? fullPath)
+    : `${fullPath}${SEPARATOR}* (${node.keyCount.toLocaleString()} keys)`;
 
   return (
     <li
-      className="leading-tight"
       role="treeitem"
+      aria-label={label}
       aria-level={depth + 1}
-      aria-selected={isActive}
+      aria-selected={bulkMode ? isChecked : isActive}
       aria-expanded={hasChildren ? open : undefined}
     >
-      {isLeaf && !hasChildren ? (
+      <div
+        className={cn(sidebarRowClass(isActive || (bulkMode && isChecked)), 'pr-2')}
+        style={indent}
+      >
+        {/* Chevron column — toggles groups (also for keys that are a prefix of others). */}
+        {hasChildren ? (
+          <button
+            type="button"
+            tabIndex={-1}
+            aria-hidden
+            onClick={() => setOpen((v) => !v)}
+            className="grid h-full w-3.5 shrink-0 place-items-center text-[var(--wb-text-2)]"
+          >
+            <ChevronRight className={cn('h-3 w-3 transition-transform', open && 'rotate-90')} />
+          </button>
+        ) : (
+          <span className="w-3.5 shrink-0" />
+        )}
         <button
           type="button"
-          onClick={() => {
-            if (bulkMode && node.fullKey) {
-              onToggleChecked(node.fullKey);
-            } else {
-              onOpen(node.fullKey ?? fullPath);
-            }
-          }}
-          className={
-            isActive
-              ? 'flex w-full cursor-pointer items-center gap-1.5 bg-sidebar-accent px-2 py-1 text-left text-xs text-sidebar-accent-foreground'
-              : 'flex w-full cursor-pointer items-center gap-1.5 px-2 py-1 text-left text-xs text-sidebar-foreground transition-colors hover:bg-sidebar-accent/50 hover:text-sidebar-accent-foreground'
-          }
-          style={{ paddingLeft: 8 + depth * 12 }}
-          title={node.fullKey ?? ''}
+          onClick={activate}
+          title={isKey ? (node.fullKey ?? undefined) : `${fullPath}${SEPARATOR}*`}
+          className="flex h-full min-w-0 flex-1 cursor-default items-center gap-1.5 pl-0.5 text-left outline-none focus-visible:underline"
         >
-          {bulkMode ? (
-            isChecked ? (
-              <CheckSquare className="h-3 w-3 shrink-0 text-foreground" />
+          {isKey ? (
+            bulkMode ? (
+              isChecked ? (
+                <CheckSquare className="h-3.5 w-3.5 shrink-0 text-[var(--wb-text)]" />
+              ) : (
+                <Square className="h-3.5 w-3.5 shrink-0 text-[var(--wb-text-2)]" />
+              )
             ) : (
-              <Square className="h-3 w-3 shrink-0 text-muted-foreground" />
+              <KeyRound className="h-3.5 w-3.5 shrink-0 text-[var(--wb-text-2)]" />
             )
-          ) : (
-            <KeyRound className="h-3 w-3 shrink-0 text-muted-foreground" />
-          )}
-          <span className="truncate font-mono">{node.token}</span>
-          <div className="flex-1" />
-          {node.meta && (
+          ) : null}
+          <span className={cn('min-w-0 flex-1 truncate', !isKey && 'font-medium')}>
+            {node.token === '' ? (
+              <span className="text-[var(--wb-text-3)]">(empty)</span>
+            ) : (
+              node.token
+            )}
+          </span>
+          {meta && meta.ttlMs !== null && meta.ttlMs >= 0 && (
             <span
-              className={`shrink-0 font-mono text-[9px] uppercase tracking-wider ${TYPE_TONE[node.meta.type]}`}
+              className="flex shrink-0 items-center gap-0.5 font-mono text-[10px] tabular-nums text-[var(--wb-text-3)]"
+              title={`Expires in ${formatTtlShort(meta.ttlMs)}`}
             >
-              {TYPE_GLYPH[node.meta.type]}
+              <Clock className="h-2.5 w-2.5" />
+              {formatTtlShort(meta.ttlMs)}
+            </span>
+          )}
+          {meta && <Badge className="px-1 text-[9px]">{REDIS_TYPE_LABEL[meta.type]}</Badge>}
+          {hasChildren && (
+            <span className="shrink-0 font-mono text-[11px] tabular-nums text-[var(--wb-text-3)]">
+              {node.keyCount.toLocaleString()}
             </span>
           )}
         </button>
-      ) : (
-        <button
-          type="button"
-          onClick={() => {
-            if (isLeaf) {
-              onOpen(node.fullKey ?? fullPath);
-            } else {
-              setOpen((v) => !v);
-            }
-          }}
-          className="flex w-full cursor-pointer items-center gap-1.5 px-2 py-1 text-left text-xs text-foreground transition-colors hover:bg-sidebar-accent/30"
-          style={{ paddingLeft: 8 + depth * 12 }}
-        >
-          {open ? (
-            <ChevronDown className="h-3 w-3 shrink-0 text-muted-foreground" />
-          ) : (
-            <ChevronRight className="h-3 w-3 shrink-0 text-muted-foreground" />
-          )}
-          <span className="truncate font-mono font-medium">{node.token}</span>
-          <div className="flex-1" />
-          <span className="shrink-0 font-display text-[10px] italic text-muted-foreground">
-            {node.children.size}
-          </span>
-        </button>
-      )}
+      </div>
       {open && hasChildren && (
+        // biome-ignore lint/a11y/useSemanticElements: WAI-ARIA tree pattern — nested groups are lists
         <ul role="group">
           {[...node.children.values()].map((child) => (
             <TreeNode
@@ -509,4 +549,3 @@ function TreeNode({
     </li>
   );
 }
-
