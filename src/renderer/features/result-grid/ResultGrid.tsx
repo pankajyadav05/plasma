@@ -43,8 +43,8 @@ const EMPTY_STICKY_SET: ReadonlySet<string> = new Set();
 const HEADER_HEIGHT_PX = 26;
 /** Row-number gutter width. */
 const GUTTER_WIDTH_PX = 44;
-/** Selected-row tint (TablePlus: system blue at 18%). */
-const SELECTED_ROW_BG = 'bg-[rgba(10,132,255,0.18)]';
+/** Selected-row tint: the theme accent at 18% (Plasma coral by default). */
+const SELECTED_ROW_BG = 'bg-[color-mix(in_srgb,var(--wb-accent)_18%,transparent)]';
 
 /**
  * Scroll-container background: the zebra stripes continue below the last
@@ -929,7 +929,7 @@ export function ResultGrid() {
                 key={`row-${visibleRow}-${entry.originalIndex}`}
                 className={cn(
                   'group/row cv-row-24',
-                  rowSelected ? SELECTED_ROW_BG : rowChecked ? 'bg-[rgba(10,132,255,0.10)]' : zebra,
+                  rowSelected ? SELECTED_ROW_BG : rowChecked ? 'bg-[color-mix(in_srgb,var(--wb-accent)_10%,transparent)]' : zebra,
                 )}
               >
                 <td
@@ -1006,14 +1006,14 @@ export function ResultGrid() {
                         // columns don't show through.
                         isSticky &&
                           (rowSelected
-                            ? 'bg-[color-mix(in_srgb,#0a84ff_18%,var(--grid-row-b))]'
+                            ? 'bg-[color-mix(in_srgb,var(--wb-accent)_18%,var(--grid-row-b))]'
                             : zebra),
                         // Search match highlights — passive matches get an
                         // accent tint, the "current" match gets a stronger
                         // tint so the user can see where the jump landed.
-                        isMatch && !isActiveMatch && 'bg-[rgba(10,132,255,0.12)]',
+                        isMatch && !isActiveMatch && 'bg-[color-mix(in_srgb,var(--wb-accent)_12%,transparent)]',
                         isActiveMatch &&
-                          'bg-[rgba(10,132,255,0.3)] outline outline-1 -outline-offset-1 outline-[var(--wb-accent)]',
+                          'bg-[color-mix(in_srgb,var(--wb-accent)_30%,transparent)] outline outline-1 -outline-offset-1 outline-[var(--wb-accent)]',
                         // Make room for the FK arrow so long values don't
                         // slide underneath the button.
                         hasFk && !isEditing && 'pr-7',

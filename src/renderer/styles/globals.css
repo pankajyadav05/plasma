@@ -13,7 +13,7 @@
   --card-foreground: #1d1d1f;
   --popover: #ffffff;
   --popover-foreground: #1d1d1f;
-  --primary: #007aff;
+  --primary: oklch(0.7122 0.1809 21.663);
   --primary-foreground: #ffffff;
   --secondary: #e3e3e3;
   --secondary-foreground: #1d1d1f;
@@ -25,7 +25,7 @@
   --destructive-foreground: #ffffff;
   --border: #dcdcdc;
   --input: #d0d0d0;
-  --ring: #007aff;
+  --ring: oklch(0.7122 0.1809 21.663);
   --chart-1: oklch(0.8093 0.0985 252.2024);
   --chart-2: oklch(0.6182 0.2066 260.2572);
   --chart-3: oklch(0.5492 0.2491 262.9726);
@@ -33,12 +33,12 @@
   --chart-5: oklch(0.4184 0.2365 264.0643);
   --sidebar: #f2f2f2;
   --sidebar-foreground: #1d1d1f;
-  --sidebar-primary: #007aff;
+  --sidebar-primary: oklch(0.7122 0.1809 21.663);
   --sidebar-primary-foreground: #ffffff;
   --sidebar-accent: #d5d5d5;
   --sidebar-accent-foreground: #1d1d1f;
   --sidebar-border: #c9c9c9;
-  --sidebar-ring: #007aff;
+  --sidebar-ring: oklch(0.7122 0.1809 21.663);
   --font-sans:
     ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
   --font-serif: "Newsreader", ui-serif, Georgia, Cambria, "Times New Roman", Times, serif;
@@ -83,7 +83,7 @@
   --card-foreground: #e0e0e0;
   --popover: #2c2c2c;
   --popover-foreground: #e0e0e0;
-  --primary: #0a84ff;
+  --primary: oklch(0.7122 0.1809 21.663);
   --primary-foreground: #ffffff;
   --secondary: #343434;
   --secondary-foreground: #e0e0e0;
@@ -95,7 +95,7 @@
   --destructive-foreground: #ffffff;
   --border: #3a3a3a;
   --input: #3a3a3a;
-  --ring: #0a84ff;
+  --ring: oklch(0.7122 0.1809 21.663);
   --chart-1: oklch(0.8093 0.0985 252.2024);
   --chart-2: oklch(0.6182 0.2066 260.2572);
   --chart-3: oklch(0.5492 0.2491 262.9726);
@@ -103,12 +103,12 @@
   --chart-5: oklch(0.4184 0.2365 264.0643);
   --sidebar: #1f1f1f;
   --sidebar-foreground: #e0e0e0;
-  --sidebar-primary: #0a84ff;
+  --sidebar-primary: oklch(0.7122 0.1809 21.663);
   --sidebar-primary-foreground: #ffffff;
   --sidebar-accent: #464646;
   --sidebar-accent-foreground: #e0e0e0;
   --sidebar-border: #000000;
-  --sidebar-ring: #0a84ff;
+  --sidebar-ring: oklch(0.7122 0.1809 21.663);
   --radius: 0.5rem;
   --shadow-color: oklch(0 0 0);
   --shadow-2xs: 0 1px 1px 0 hsl(0 0% 0% / 0.3);
@@ -1134,7 +1134,7 @@
   --wb-text: #1d1d1f;
   --wb-text-2: #6e6e73;
   --wb-text-3: #8e8e93;
-  --wb-accent: #007aff;
+  --wb-accent: var(--primary); /* Plasma coral — the palette the user picked */
 
   --grid-text: #1d1d1f;
   --grid-row-a: #f5f5f5;
@@ -1170,7 +1170,7 @@
   --wb-text: #e0e0e0;
   --wb-text-2: #9a9a9a;
   --wb-text-3: #7f7f7f;
-  --wb-accent: #0a84ff;
+  --wb-accent: var(--primary); /* Plasma coral — the palette the user picked */
 
   --grid-text: #d6d6d6;
   --grid-row-a: #2e2e2e;
