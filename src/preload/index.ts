@@ -34,6 +34,7 @@ const api: PlasmaAPI = {
             sql,
             params,
             internal: opts?.internal === true,
+            maxRows: opts?.maxRows,
           })
         : ipcRenderer.invoke(IpcChannel.QueryRun, sql),
     commitEditBatch: (req) => ipcRenderer.invoke(IpcChannel.QueryCommitEditBatch, req),

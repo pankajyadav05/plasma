@@ -61,7 +61,7 @@ export function HistoryList() {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex items-center gap-1 border-b border-sidebar-border px-3 py-2">
+      <div className="flex items-center gap-1 px-2.5 pb-2">
         <SidebarSearch value={search} onChange={setSearch} placeholder="Search history…" />
         <Button
           variant="ghost"
@@ -94,7 +94,7 @@ export function HistoryList() {
         ) : (
           groups.map((g) => (
             <div key={g.label} className="mb-1">
-              <div className="px-4 pb-0.5 pt-2 font-display text-xs italic text-muted-foreground">
+              <div className="px-3.5 pb-0.5 pt-2 text-[11px] font-semibold text-muted-foreground">
                 {g.label}
               </div>
               {g.entries.map((e) => (
@@ -118,7 +118,7 @@ function HistoryRow({ entry, onReuse }: { entry: HistoryEntry; onReuse: () => vo
       type="button"
       onClick={onReuse}
       title={`${entry.sql}\n\nClick to open in a new tab`}
-      className="mx-2 flex w-[calc(100%-1rem)] flex-col gap-0.5 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-sidebar-accent"
+      className="mx-1.5 flex w-[calc(100%-0.75rem)] flex-col gap-0.5 rounded-[6px] px-2 py-1.5 text-left transition-colors hover:bg-[var(--glass-fill-hover)]"
     >
       <span className="line-clamp-2 break-all font-mono text-[11px] leading-4 text-foreground">
         {entry.sql.replace(/\s+/g, ' ').trim()}

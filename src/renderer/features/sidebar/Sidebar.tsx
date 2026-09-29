@@ -4,15 +4,16 @@ import { RedisSidebar } from '@/features/redis/RedisSidebar';
 import { cn } from '@/lib/cn';
 import { useSession } from '@/stores/session';
 import { type SidebarMode, useWorkbench } from '@/stores/workbench';
-import { Bookmark, Circle, Clock, Pencil, Plus, Table2 } from 'lucide-react';
+import { Segmented } from '@/components/ui/workbench';
+import { Circle, Pencil, Plus } from 'lucide-react';
 import { EntityList } from './EntityList';
 import { HistoryList } from './HistoryList';
 import { SavedQueriesList } from './SavedQueriesList';
 
-const MODES: Array<{ mode: SidebarMode; label: string; icon: typeof Table2 }> = [
-  { mode: 'items', label: 'Items', icon: Table2 },
-  { mode: 'queries', label: 'Queries', icon: Bookmark },
-  { mode: 'history', label: 'History', icon: Clock },
+const MODES: Array<{ mode: SidebarMode; label: string }> = [
+  { mode: 'items', label: 'Items' },
+  { mode: 'queries', label: 'Queries' },
+  { mode: 'history', label: 'History' },
 ];
 
 /**
@@ -55,42 +56,15 @@ export function Sidebar() {
 function SidebarModeSwitch() {
   const mode = useWorkbench((s) => s.sidebarMode);
   const setMode = useWorkbench((s) => s.setSidebarMode);
-  const savedCount = useSession((s) => {
-    const id = s.activeConfig?.id;
-    return id ? (s.settings.savedQueries?.[id]?.length ?? 0) : 0;
-  });
-
   return (
-    <div
-      className="grid shrink-0 grid-cols-3 border-b border-sidebar-border"
-      role="tablist"
-      aria-label="Sidebar mode"
-    >
-      {MODES.map(({ mode: m, label, icon: Icon }) => {
-        const active = mode === m;
-        return (
-          <button
-            key={m}
-            type="button"
-            role="tab"
-            aria-selected={active}
-            onClick={() => setMode(m)}
-            className={cn(
-              'relative flex h-9 items-center justify-center gap-1.5 text-xs transition-colors',
-              active
-                ? 'font-medium text-foreground'
-                : 'text-muted-foreground hover:bg-sidebar-accent hover:text-foreground',
-            )}
-          >
-            <Icon className={cn('h-3.5 w-3.5', active && 'text-primary')} />
-            {label}
-            {m === 'queries' && savedCount > 0 && (
-              <span className="font-mono text-[10px] text-muted-foreground">{savedCount}</span>
-            )}
-            {active && <span className="absolute inset-x-3 bottom-[-1px] h-0.5 bg-primary" />}
-          </button>
-        );
-      })}
+    <div className="shrink-0 px-2.5 pb-2 pt-2.5">
+      <Segmented<SidebarMode>
+        ariaLabel="Sidebar mode"
+        stretch
+        value={mode}
+        onChange={setMode}
+        options={MODES.map((m) => ({ value: m.mode, label: m.label }))}
+      />
     </div>
   );
 }
@@ -119,7 +93,7 @@ function SavedConnectionsList() {
 
       <div className="min-h-0 flex-1 overflow-y-auto">
         {savedConnections.length === 0 ? (
-          <div className="px-4 py-3 font-display text-sm italic text-muted-foreground">
+          <div className="px-4 py-3 text-[13px] text-muted-foreground">
             none yet
           </div>
         ) : (

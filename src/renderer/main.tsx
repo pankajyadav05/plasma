@@ -21,6 +21,12 @@ if (window.plasma?.platform) {
     : 'win32';
 }
 
+// macOS windows are created with native vibrancy (main/window.ts); CSS
+// switches chrome surfaces to translucent materials when this is set.
+if (document.documentElement.dataset.platform === 'darwin') {
+  document.documentElement.dataset.vibrancy = '';
+}
+
 const root = document.getElementById('root');
 if (!root) throw new Error('root element not found');
 

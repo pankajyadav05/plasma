@@ -864,7 +864,9 @@
   --font-sans: var(--font-sans);
   --font-mono: var(--font-mono);
   --font-serif: var(--font-serif);
-  --font-display: var(--font-serif);
+  /* Workbench chrome is native-sans throughout (TablePlus look); the
+     serif stays available as font-serif for anything that opts in. */
+  --font-display: var(--font-sans);
 
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
@@ -1004,6 +1006,111 @@
 :root[data-platform="win32"] .topbar-pad,
 :root[data-platform="linux"] .topbar-pad {
   padding-right: 0;
+}
+
+/* ─── Workbench materials ──────────────────────────────────────────
+   TablePlus-style chrome: translucent "glass" control groups with an
+   inner top highlight, raised segments, hairline dividers, and a dense
+   grid. Every value derives from the active theme's variables via
+   color-mix, so all palettes (and light/dark) get the same materials.
+
+   macOS windows carry native vibrancy (data-vibrancy on <html>): chrome
+   surfaces turn translucent so the desktop reads through the toolbar,
+   rails and sidebars, while the editor and grid stay opaque. */
+
+:root {
+  --chrome: var(--sidebar);
+  --hairline: color-mix(in oklch, var(--foreground) 11%, transparent);
+  --glass-fill: color-mix(in oklch, var(--foreground) 4.5%, transparent);
+  --glass-fill-hover: color-mix(in oklch, var(--foreground) 8%, transparent);
+  --glass-fill-press: color-mix(in oklch, var(--foreground) 13%, transparent);
+  --glass-stroke: color-mix(in oklch, var(--foreground) 10%, transparent);
+  --glass-highlight: color-mix(in oklch, white 75%, transparent);
+  --glass-shadow:
+    0 0.5px 1px color-mix(in oklch, black 10%, transparent),
+    0 3px 10px -4px color-mix(in oklch, black 16%, transparent);
+  --raised: var(--background);
+  --raised-shadow:
+    0 0 0 0.5px color-mix(in oklch, var(--foreground) 14%, transparent),
+    0 1px 2px color-mix(in oklch, black 14%, transparent);
+  --grid-line: color-mix(in oklch, var(--foreground) 8%, transparent);
+  --grid-stripe: color-mix(in oklch, var(--foreground) 2.5%, transparent);
+  --grid-header: color-mix(in oklch, var(--foreground) 3%, var(--background));
+
+  /* Connection status colours — fill the toolbar capsule per env tag. */
+  --status-local: oklch(0.55 0.14 152);
+  --status-dev: oklch(0.52 0.14 255);
+  --status-staging: oklch(0.64 0.15 68);
+  --status-prod: oklch(0.54 0.2 27);
+}
+
+.dark {
+  --hairline: color-mix(in oklch, var(--foreground) 10%, transparent);
+  --glass-fill: color-mix(in oklch, var(--foreground) 7%, transparent);
+  --glass-fill-hover: color-mix(in oklch, var(--foreground) 11%, transparent);
+  --glass-fill-press: color-mix(in oklch, var(--foreground) 16%, transparent);
+  --glass-stroke: color-mix(in oklch, var(--foreground) 11%, transparent);
+  --glass-highlight: color-mix(in oklch, white 13%, transparent);
+  --glass-shadow:
+    0 0.5px 1px color-mix(in oklch, black 45%, transparent),
+    0 4px 14px -6px color-mix(in oklch, black 60%, transparent);
+  --raised: color-mix(in oklch, var(--foreground) 15%, var(--background));
+  --raised-shadow:
+    0 0 0 0.5px color-mix(in oklch, var(--foreground) 12%, transparent),
+    0 1px 3px color-mix(in oklch, black 50%, transparent);
+  --grid-line: color-mix(in oklch, var(--foreground) 9%, transparent);
+  --grid-stripe: color-mix(in oklch, var(--foreground) 3%, transparent);
+  --grid-header: color-mix(in oklch, var(--foreground) 5%, var(--background));
+}
+
+:root[data-vibrancy] body {
+  background: transparent;
+}
+:root[data-vibrancy] {
+  --chrome: color-mix(in oklch, var(--sidebar) 62%, transparent);
+}
+
+/* Window chrome surface (toolbar, rails, sidebars). */
+@utility chrome {
+  background-color: var(--chrome);
+  -webkit-backdrop-filter: blur(40px) saturate(1.7);
+  backdrop-filter: blur(40px) saturate(1.7);
+}
+
+/* Liquid-glass control group: translucent fill, hairline stroke, a lit
+   top edge and a soft drop — the TablePlus toolbar capsule. */
+@utility glass {
+  background-color: var(--glass-fill);
+  box-shadow:
+    inset 0 0 0 0.5px var(--glass-stroke),
+    inset 0 1px 0 0 var(--glass-highlight),
+    var(--glass-shadow);
+  -webkit-backdrop-filter: blur(24px) saturate(1.8);
+  backdrop-filter: blur(24px) saturate(1.8);
+}
+
+/* A segment / tab lifted above its glass track. */
+@utility raised {
+  background-color: var(--raised);
+  box-shadow:
+    inset 0 1px 0 0 var(--glass-highlight),
+    var(--raised-shadow);
+}
+
+@utility hairline {
+  border-color: var(--hairline);
+}
+
+@utility cv-row-26 {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 26px;
+}
+
+/* Display text used to be italic serif. With a sans display face the
+   italic reads as emphasis noise, so it is neutralised app-wide.
+   Unlayered, so it wins over the `italic` utility. */
+.font-display.italic {
+  font-style: normal;
 }
 
 /* ─── Monaco editor overrides ─── */

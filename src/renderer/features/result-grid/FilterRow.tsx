@@ -86,7 +86,7 @@ function FilterTrigger({ teaser, hasAi }: { teaser: string; hasAi: boolean }) {
           ) : (
             <Search className="h-3.5 w-3.5" />
           )}
-          <span className="flex-1 truncate text-left font-display text-xs italic">{teaser}</span>
+          <span className="flex-1 truncate text-left text-xs ">{teaser}</span>
           <kbd className="rounded-sm border border-border bg-muted px-1 font-mono text-[10px] text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100">
             F
           </kbd>
@@ -154,7 +154,7 @@ function AddMoreFilters({ hasAny }: { hasAny: boolean }) {
           )}
         >
           <Plus className="h-3 w-3" />
-          <span className="font-display italic">{hasAny ? 'Add more filters' : 'Add filter'}</span>
+          <span className="">{hasAny ? 'Add more filters' : 'Add filter'}</span>
         </button>
       </PopoverTrigger>
       <PopoverContent align="start" sideOffset={4} className="w-[420px] p-0">
@@ -242,7 +242,7 @@ function FilterForm({ existing, onDone }: { existing?: Filter; onDone: () => voi
           <SelectContent>
             {operatorGroups.map((group) => (
               <SelectGroup key={group.heading}>
-                <SelectLabel className="font-display text-[10px] font-normal italic text-muted-foreground">
+                <SelectLabel className="text-[10px] font-normal text-muted-foreground">
                   {group.heading}
                 </SelectLabel>
                 {group.operators.map((o) => (
@@ -348,7 +348,7 @@ function ColumnCombobox({
             />
           </div>
           <Command.List className="max-h-[280px] overflow-y-auto p-1">
-            <Command.Empty className="px-3 py-3 font-display text-xs italic text-muted-foreground">
+            <Command.Empty className="px-3 py-3 text-xs text-muted-foreground">
               no matching column
             </Command.Empty>
             {columns.map((c) => {
@@ -509,10 +509,10 @@ function ValueAutocomplete({
           {loading && suggestions.length === 0 ? (
             <div className="flex items-center gap-2 px-3 py-2 text-xs text-muted-foreground">
               <Loader2 className="h-3 w-3 animate-spin" />
-              <span className="font-display italic">looking up values…</span>
+              <span className="">looking up values…</span>
             </div>
           ) : suggestions.length === 0 ? (
-            <div className="px-3 py-2 font-display text-xs italic text-muted-foreground">
+            <div className="px-3 py-2 text-xs text-muted-foreground">
               no suggestions
             </div>
           ) : (

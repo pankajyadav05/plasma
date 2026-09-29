@@ -1,33 +1,32 @@
-import { Button } from '@/components/ui/button';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { ToolbarButton, ToolbarDivider, ToolbarGroup } from '@/components/ui/workbench';
+import { PendingEditsTable } from '@/features/result-grid/PendingEditsTable';
 import { cn } from '@/lib/cn';
 import { kbd } from '@/lib/platform';
-import { type TabKind, useActiveTab, useSession } from '@/stores/session';
+import { useActiveTab, useSession } from '@/stores/session';
 import type { ConnectionEngine, SavedConnection } from '@shared/protocol';
 import {
-  AlertCircle,
+  Activity,
   Boxes,
   Check,
   ChevronsUpDown,
+  Command,
   Database,
-  FileCode,
-  KeyRound,
+  Eye,
   Layers,
   Loader2,
   Lock,
-  LockOpen,
   PanelLeft,
-  PanelLeftClose,
   PanelRight,
   Pencil,
   Plus,
-  RotateCcw,
-  Search,
-  ShieldCheck,
-  Table2,
+  RefreshCw,
+  Undo2,
+  X,
 } from 'lucide-react';
 import { useState } from 'react';
 import { BrandMark } from './BrandMark';
+import { UpdateBadge } from './UpdateBadge';
 import { WindowControls } from './WindowControls';
 
 const isMac = window.plasma?.platform === 'darwin';
@@ -44,42 +43,27 @@ const ENGINE_LABEL: Record<ConnectionEngine, string> = {
   opensearch: 'OpenSearch',
 };
 
-/**
- * Environment tag → capsule tint. Mirrors the picker in
- * ConnectionDialog; a prod connection should be unmistakable from
- * across the room (TablePlus colour-codes the whole status capsule).
- */
-const TAG_CAPSULE: Record<string, string> = {
-  local: 'border-border',
-  dev: 'border-border',
-  staging: 'border-primary/60 bg-primary/5',
-  prod: 'border-destructive bg-destructive/10',
-};
-
-const TAG_CHIP: Record<string, string> = {
-  local: 'bg-foreground text-background',
-  dev: 'bg-secondary text-secondary-foreground',
-  staging: 'bg-primary text-primary-foreground',
-  prod: 'bg-destructive text-destructive-foreground',
+/** Environment tag → capsule fill (TablePlus colours the whole capsule). */
+const TAG_FILL: Record<string, string> = {
+  local: 'var(--status-local)',
+  dev: 'var(--status-dev)',
+  staging: 'var(--status-staging)',
+  prod: 'var(--status-prod)',
 };
 
 /**
- * Main toolbar, TablePlus anatomy:
+ * Main toolbar — TablePlus anatomy on glass:
  *
- *   [◆][⊟]   ┌ ■ PostgreSQL 16.2 · TLS │ conn ▾ / db / schema ▾ / object ┐   [changes][safe][⊡]
+ *   ●●●  [⊟]  [✕ 👁 ✓]  [🔒 ⛁ SQL]  ▐ PostgreSQL 16 : TLS : conn : db : schema / object ▌  [↻ ∿ ⌘]  [⊡]
  *
- * Left: brand + sidebar toggle. Centre: the status capsule — engine and
- * version, transport security, connection switcher, database, schema
- * switcher and the active object — tinted by the environment tag.
- * Right: pending-change review (only while edits are buffered), the
- * write-safety toggle, and the right-sidebar toggle.
+ * Left clusters: sidebar, pending-change review (discard / preview /
+ * commit), and safety · database · new SQL. The capsule in the middle is
+ * filled with the connection's environment colour. Right clusters:
+ * reload, activity monitor, command palette, and the right sidebar.
  */
 export function TopBar() {
-  const activeConfig = useSession((s) => s.activeConfig);
-  const sidebarCollapsed = useSession((s) => s.settings.sidebarCollapsed);
-  const toggleSidebar = useSession((s) => s.toggleSidebar);
   const connected = useSession((s) => s.connectionState === 'connected');
-
+  const engine = useSession((s) => s.activeConfig?.engine ?? 'postgres');
   const overlayOpen = useSession(
     (s) =>
       s.dialogOpen ||
@@ -92,37 +76,248 @@ export function TopBar() {
   return (
     <header
       className={cn(
-        'topbar-pad relative z-20 flex h-11 items-center gap-1 border-b bg-background',
+        'chrome topbar-pad relative z-20 flex h-[52px] shrink-0 items-center gap-2 border-b hairline',
         overlayOpen ? 'pointer-events-none' : 'drag',
       )}
     >
-      <div className="no-drag flex shrink-0 items-center gap-0.5 pl-1">
-        <BrandMark className="mx-1 h-5 w-5 text-foreground" />
-        {connected && (
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            onClick={() => void toggleSidebar()}
-            aria-label={sidebarCollapsed ? 'Show left sidebar' : 'Hide left sidebar'}
-            title={`${sidebarCollapsed ? 'Show' : 'Hide'} left sidebar (${kbd('B')})`}
-          >
-            {sidebarCollapsed ? <PanelLeft /> : <PanelLeftClose />}
-          </Button>
-        )}
-      </div>
+      {!isMac && <BrandMark className="no-drag mx-1 h-5 w-5 shrink-0 text-foreground" />}
 
-      <div className="flex min-w-0 flex-1 justify-center px-2">
-        <StatusCapsule />
-      </div>
+      {connected && <LeftClusters postgres={engine === 'postgres'} />}
 
-      <div className="no-drag flex shrink-0 items-center gap-1 pr-1">
-        {activeConfig && <PendingChangesGroup />}
-        {activeConfig && <SafetyToggle />}
-        {connected && <ToolbarActions />}
-      </div>
+      <StatusCapsule />
+
+      <RightClusters connected={connected} />
 
       {!isMac && <WindowControls />}
     </header>
+  );
+}
+
+// ───────────────────────── Left clusters ─────────────────────────
+
+function LeftClusters({ postgres }: { postgres: boolean }) {
+  const sidebarCollapsed = useSession((s) => s.settings.sidebarCollapsed);
+  const toggleSidebar = useSession((s) => s.toggleSidebar);
+  const txnState = useSession((s) => s.txnState);
+
+  return (
+    <>
+      <ToolbarGroup>
+        <ToolbarButton
+          label={`${sidebarCollapsed ? 'Show' : 'Hide'} left sidebar (${kbd('B')})`}
+          active={!sidebarCollapsed}
+          onClick={() => void toggleSidebar()}
+        >
+          <PanelLeft />
+        </ToolbarButton>
+      </ToolbarGroup>
+
+      {postgres && <ChangesCluster />}
+      {postgres && txnState === 'active' && <TxnCluster />}
+      <SessionCluster postgres={postgres} />
+    </>
+  );
+}
+
+/** Discard · Preview · Commit for buffered grid edits. */
+function ChangesCluster() {
+  const edits = useSession((s) => s.pendingEdits);
+  const busy = useSession((s) => s.pendingEditsBusy);
+  const commit = useSession((s) => s.commitPendingEdits);
+  const revert = useSession((s) => s.revertPendingEdits);
+  const [error, setError] = useState<string | null>(null);
+  const has = edits.length > 0;
+
+  const onCommit = async () => {
+    setError(null);
+    try {
+      await commit();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  return (
+    <ToolbarGroup className={cn(has && 'ring-1 ring-primary/50')}>
+      <ToolbarButton
+        label="Discard pending changes"
+        disabled={!has || busy}
+        onClick={() => {
+          setError(null);
+          void revert();
+        }}
+      >
+        <X />
+      </ToolbarButton>
+      <Popover>
+        <PopoverTrigger asChild>
+          <ToolbarButton label="Preview pending changes" disabled={!has}>
+            <Eye />
+          </ToolbarButton>
+        </PopoverTrigger>
+        <PopoverContent align="start" sideOffset={8} className="w-[560px] max-w-[90vw] p-0">
+          <div className="border-b border-[var(--hairline)] px-3 py-2 text-xs text-muted-foreground">
+            {edits.length} pending UPDATE{edits.length === 1 ? '' : 's'} — commits as one
+            transaction
+          </div>
+          <PendingEditsTable edits={edits} />
+        </PopoverContent>
+      </Popover>
+      <ToolbarButton
+        label={has ? `Commit ${edits.length} change${edits.length === 1 ? '' : 's'}` : 'Commit'}
+        disabled={!has || busy}
+        tone={has ? 'accent' : 'default'}
+        onClick={() => void onCommit()}
+        data-testid="toolbar-commit"
+      >
+        {busy ? <Loader2 className="animate-spin" /> : <Check />}
+      </ToolbarButton>
+      {has && (
+        <span className="px-1.5 font-mono text-[11px] font-semibold tabular-nums text-primary">
+          {edits.length}
+        </span>
+      )}
+      {error && (
+        <span
+          className="px-1 text-[11px] font-medium text-destructive"
+          title={`Commit failed: ${error}`}
+          role="alert"
+        >
+          failed
+        </span>
+      )}
+    </ToolbarGroup>
+  );
+}
+
+function TxnCluster() {
+  const commitTxn = useSession((s) => s.commitTxn);
+  const rollbackTxn = useSession((s) => s.rollbackTxn);
+  return (
+    <ToolbarGroup className="ring-1 ring-[var(--status-staging)]">
+      <span className="px-2 text-[11px] font-semibold text-foreground" data-testid="status-txn">
+        Transaction open
+      </span>
+      <ToolbarDivider />
+      <ToolbarButton label="Commit transaction" tone="accent" onClick={() => void commitTxn()}>
+        <Check />
+      </ToolbarButton>
+      <ToolbarButton label="Roll back transaction" onClick={() => void rollbackTxn()}>
+        <Undo2 />
+      </ToolbarButton>
+    </ToolbarGroup>
+  );
+}
+
+/** Safety (read-only / edit) · database switcher · new SQL tab. */
+function SessionCluster({ postgres }: { postgres: boolean }) {
+  const activeConfig = useSession((s) => s.activeConfig);
+  const editMode = useSession((s) => s.editMode);
+  const toggleEditMode = useSession((s) => s.toggleEditMode);
+  const addTab = useSession((s) => s.addTab);
+  const canvasMode = useSession((s) => s.canvasMode);
+  const setCanvasMode = useSession((s) => s.setCanvasMode);
+  const readOnlyConn = Boolean(activeConfig?.readOnly);
+
+  return (
+    <ToolbarGroup>
+      <ToolbarButton
+        label={
+          readOnlyConn
+            ? 'Read-only connection — writes are disabled'
+            : editMode
+              ? 'Edit mode — writes enabled. Click to lock.'
+              : 'Safe mode — read only. Click to allow edits.'
+        }
+        disabled={readOnlyConn}
+        active={editMode && !readOnlyConn}
+        tone={editMode && !readOnlyConn ? 'accent' : 'default'}
+        onClick={toggleEditMode}
+        data-testid="toolbar-safety"
+      >
+        {editMode && !readOnlyConn ? <Pencil /> : <Lock />}
+      </ToolbarButton>
+      <ConnectionSwitcher
+        trigger={
+          <ToolbarButton label="Switch connection or database">
+            <Database />
+          </ToolbarButton>
+        }
+      />
+      {postgres && (
+        <ToolbarButton
+          label={`New SQL query (${kbd('T')})`}
+          onClick={() => {
+            if (canvasMode !== 'database') setCanvasMode('database');
+            addTab();
+          }}
+          className="px-1.5"
+        >
+          <span className="text-[10px] font-bold tracking-wide">SQL</span>
+        </ToolbarButton>
+      )}
+    </ToolbarGroup>
+  );
+}
+
+// ───────────────────────── Right clusters ─────────────────────────
+
+function RightClusters({ connected }: { connected: boolean }) {
+  const togglePalette = useSession((s) => s.togglePalette);
+  const refreshSchema = useSession((s) => s.refreshSchema);
+  const refreshTable = useSession((s) => s.refreshTable);
+  const schemaLoading = useSession((s) => s.schemaLoading);
+  const canvasMode = useSession((s) => s.canvasMode);
+  const setCanvasMode = useSession((s) => s.setCanvasMode);
+  const rightPanelMode = useSession((s) => s.rightPanelMode);
+  const setRightPanelMode = useSession((s) => s.setRightPanelMode);
+  const engine = useSession((s) => s.activeConfig?.engine ?? 'postgres');
+  const tab = useActiveTab();
+  const postgres = engine === 'postgres';
+
+  return (
+    <>
+      <ToolbarGroup>
+        {connected && (
+          <ToolbarButton
+            label="Reload schema and current table"
+            disabled={schemaLoading}
+            onClick={() => {
+              void refreshSchema();
+              if (tab?.kind === 'table') void refreshTable();
+            }}
+          >
+            <RefreshCw className={schemaLoading ? 'animate-spin' : ''} />
+          </ToolbarButton>
+        )}
+        {connected && postgres && (
+          <ToolbarButton
+            label="Live activity (pg_stat_activity)"
+            active={canvasMode === 'monitor'}
+            onClick={() => setCanvasMode(canvasMode === 'monitor' ? 'database' : 'monitor')}
+          >
+            <Activity />
+          </ToolbarButton>
+        )}
+        <ToolbarButton label={`Open anything (${kbd('K')})`} onClick={togglePalette}>
+          <Command />
+        </ToolbarButton>
+      </ToolbarGroup>
+
+      <UpdateBadge />
+
+      {connected && canvasMode === 'database' && (
+        <ToolbarGroup>
+          <ToolbarButton
+            label={`${rightPanelMode ? 'Hide' : 'Show'} right sidebar (${kbd('⇧B')})`}
+            active={Boolean(rightPanelMode)}
+            onClick={() => setRightPanelMode(rightPanelMode ? null : postgres ? 'details' : 'ai')}
+          >
+            <PanelRight />
+          </ToolbarButton>
+        </ToolbarGroup>
+      )}
+    </>
   );
 }
 
@@ -132,135 +327,186 @@ function StatusCapsule() {
   const activeConfig = useSession((s) => s.activeConfig);
   const connectionState = useSession((s) => s.connectionState);
   const serverVersion = useSession((s) => s.serverVersion);
-  const togglePalette = useSession((s) => s.togglePalette);
   const tag = useSession((s) =>
     activeConfig?.id ? s.settings.connectionTags?.[activeConfig.id] : undefined,
   );
   const viaSsh = useSession((s) =>
     Boolean(activeConfig?.id && s.settings.connectionSsh?.[activeConfig.id]),
   );
+  const tab = useActiveTab();
+  const canvasMode = useSession((s) => s.canvasMode);
 
   const engine = activeConfig?.engine ?? 'postgres';
-  const EngineIcon = ENGINE_ICON[engine];
-
-  const dotClass =
+  const connected = connectionState === 'connected';
+  const fill = connected && tag ? TAG_FILL[tag] : undefined;
+  const stateLabel =
     connectionState === 'connected'
-      ? 'bg-[var(--type-str)]'
+      ? 'connected'
       : connectionState === 'connecting'
-        ? 'bg-primary animate-pulse'
+        ? 'connecting'
         : connectionState === 'error'
-          ? 'bg-destructive'
-          : 'bg-muted-foreground';
+          ? 'error'
+          : 'disconnected';
+
+  const transport = activeConfig?.ssl
+    ? `TLS${activeConfig.tls?.mode === 'insecure' ? ' (unverified)' : ''}`
+    : viaSsh
+      ? 'SSH'
+      : 'No TLS';
+
+  const object =
+    canvasMode !== 'database'
+      ? canvasMode === 'monitor'
+        ? 'Activity'
+        : canvasMode === 'history'
+          ? 'History'
+          : canvasMode === 'settings'
+            ? 'Settings'
+            : null
+      : tab
+        ? tab.kind === 'table' && tab.tableName
+          ? tab.tableName
+          : tab.title
+        : null;
 
   return (
     <div
       className={cn(
-        'no-drag flex h-8 min-w-0 max-w-[880px] flex-1 items-center rounded-md border bg-card/70 text-xs',
-        (tag && TAG_CAPSULE[tag]) || 'border-border',
+        'no-drag flex h-[30px] min-w-0 flex-1 items-center overflow-hidden rounded-[9px] px-3 font-mono text-[12px] leading-none',
+        fill ? 'text-white shadow-[inset_0_1px_0_rgb(255_255_255/0.22),0_1px_2px_rgb(0_0_0/0.25)]' : 'glass text-foreground',
       )}
+      style={fill ? { backgroundColor: fill } : undefined}
       data-testid="status-capsule"
     >
-      {/* Engine · version · transport */}
-      <div className="flex shrink-0 items-center gap-2 border-r border-border/70 px-2.5">
+      <span className="sr-only" data-testid="status-connection">
+        {stateLabel}
+      </span>
+
+      {!connected && (
         <span
-          className={cn('inline-block h-2 w-2 shrink-0 rounded-[1px]', dotClass)}
-          title={connectionState}
+          className={cn(
+            'mr-2 inline-block h-2 w-2 shrink-0 rounded-full',
+            connectionState === 'connecting'
+              ? 'animate-pulse bg-primary'
+              : connectionState === 'error'
+                ? 'bg-destructive'
+                : 'bg-muted-foreground',
+          )}
+          aria-hidden
         />
-        <EngineIcon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-        <span className="whitespace-nowrap font-mono text-[11px] text-foreground">
-          {activeConfig
-            ? shortVersion(serverVersion, engine)
-            : connectionState === 'connecting'
-              ? 'connecting…'
-              : 'not connected'}
-        </span>
-        {activeConfig && connectionState === 'connected' && (
-          <TransportBadge ssl={activeConfig.ssl} tlsMode={activeConfig.tls?.mode} ssh={viaSsh} />
-        )}
-        {tag && (
-          <span
-            className={cn(
-              'rounded-sm px-1.5 py-px text-[9px] font-semibold uppercase tracking-wider',
-              TAG_CHIP[tag] ?? 'bg-muted text-muted-foreground',
-            )}
+      )}
+
+      {activeConfig && connected ? (
+        <span className="flex min-w-0 items-center">
+          <Seg strong>{shortVersion(serverVersion, engine)}</Seg>
+          <Sep />
+          <Seg
+            title={
+              activeConfig.ssl
+                ? 'Encrypted with TLS'
+                : viaSsh
+                  ? 'Tunnelled over SSH'
+                  : 'Unencrypted connection'
+            }
+            className={cn(!activeConfig.ssl && !viaSsh && !fill && 'text-red-600 dark:text-red-400')}
           >
-            {tag}
-          </span>
-        )}
-      </div>
-
-      {/* Connection / database / schema / object */}
-      <div className="flex min-w-0 flex-1 items-center">
-        <ConnectionSwitcher />
-        {activeConfig && (
-          <>
-            <Crumb />
-            <DatabaseCrumb />
-            {engine === 'postgres' && (
-              <>
-                <Crumb />
-                <SchemaSwitcher />
-              </>
-            )}
-            <ActiveObjectCrumb />
-          </>
-        )}
-      </div>
-
-      <button
-        type="button"
-        onClick={togglePalette}
-        className="flex h-full shrink-0 items-center gap-1.5 border-l border-border/70 px-2.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-        title={`Open anything (${kbd('K')})`}
-        aria-label="Open command palette"
-      >
-        <Search className="h-3.5 w-3.5" />
-        <span className="font-mono text-[10px]">{kbd('K')}</span>
-      </button>
+            {transport}
+          </Seg>
+          <Sep />
+          <ConnectionSwitcher
+            trigger={
+              <CapsuleButton title="Switch connection">
+                <span className="truncate">{activeConfig.name}</span>
+              </CapsuleButton>
+            }
+          />
+          {activeConfig.database && (
+            <>
+              <Sep />
+              <Seg>{activeConfig.database}</Seg>
+            </>
+          )}
+          {engine === 'postgres' && <SchemaSwitcher />}
+          {object && (
+            <>
+              <span className="shrink-0 px-1 opacity-60">/</span>
+              <Seg strong>{object}</Seg>
+              {tab?.queryRunState === 'running' && canvasMode === 'database' && (
+                <Loader2 className="ml-1.5 h-3 w-3 shrink-0 animate-spin opacity-80" />
+              )}
+            </>
+          )}
+          {tag && (
+            <span className="ml-2 shrink-0 rounded-[4px] bg-black/20 px-1.5 py-[3px] text-[9px] font-bold uppercase tracking-wider">
+              {tag}
+            </span>
+          )}
+        </span>
+      ) : (
+        <ConnectionSwitcher
+          trigger={
+            <CapsuleButton title="Connect to a database">
+              <span className="truncate">
+                {connectionState === 'connecting'
+                  ? `Connecting to ${activeConfig?.name ?? 'database'}…`
+                  : 'Not connected — open a connection'}
+              </span>
+            </CapsuleButton>
+          }
+        />
+      )}
     </div>
   );
 }
 
-function TransportBadge({
-  ssl,
-  tlsMode,
-  ssh,
+function Seg({
+  children,
+  strong = false,
+  title,
+  className,
 }: {
-  ssl: boolean;
-  tlsMode?: string;
-  ssh: boolean;
+  children: React.ReactNode;
+  strong?: boolean;
+  title?: string;
+  className?: string;
 }) {
-  const label = ssl ? 'TLS' : ssh ? 'SSH' : 'plain';
-  const title = ssl
-    ? `Encrypted with TLS${tlsMode ? ` (${tlsMode})` : ''}${ssh ? ', over an SSH tunnel' : ''}`
-    : ssh
-      ? 'Tunnelled over SSH (no TLS to the server)'
-      : 'Unencrypted connection';
-  const Icon = ssl ? ShieldCheck : ssh ? KeyRound : LockOpen;
   return (
     <span
-      className={cn(
-        'flex items-center gap-1 font-mono text-[10px] uppercase',
-        ssl || ssh ? 'text-muted-foreground' : 'text-destructive',
-      )}
+      className={cn('min-w-0 shrink truncate whitespace-nowrap', strong && 'font-semibold', className)}
       title={title}
-      data-testid="status-transport"
     >
-      <Icon className="h-3 w-3" />
-      {label}
+      {children}
     </span>
   );
 }
 
-function Crumb() {
+function Sep() {
   return (
-    <span className="shrink-0 px-0.5 text-muted-foreground/50" aria-hidden>
-      /
+    <span className="shrink-0 px-1.5 opacity-55" aria-hidden>
+      :
     </span>
   );
 }
 
-function ConnectionSwitcher() {
+function CapsuleButton({
+  children,
+  title,
+  ...props
+}: React.ButtonHTMLAttributes<HTMLButtonElement>) {
+  return (
+    <button
+      type="button"
+      title={title}
+      className="-mx-1 flex min-w-0 shrink items-center gap-1 rounded-[5px] px-1 py-1 font-semibold transition-colors hover:bg-black/10 dark:hover:bg-white/10"
+      {...props}
+    >
+      {children}
+      <ChevronsUpDown className="h-3 w-3 shrink-0 opacity-70" />
+    </button>
+  );
+}
+
+function ConnectionSwitcher({ trigger }: { trigger: React.ReactElement }) {
   const activeConfig = useSession((s) => s.activeConfig);
   const savedConnections = useSession((s) => s.savedConnections);
   const connectionState = useSession((s) => s.connectionState);
@@ -276,42 +522,24 @@ function ConnectionSwitcher() {
 
   return (
     <Popover onOpenChange={(o) => !o && setFilter('')}>
-      <PopoverTrigger asChild>
-        <button
-          type="button"
-          className={cn(
-            'flex h-7 min-w-0 shrink items-center gap-1.5 rounded-sm px-2 transition-colors hover:bg-accent',
-            !activeConfig && 'text-muted-foreground',
-          )}
-          title="Switch connection"
-        >
-          {activeConfig ? (
-            <span className="truncate font-medium text-foreground">{activeConfig.name}</span>
-          ) : (
-            <span className="font-display italic">Connect to a database</span>
-          )}
-          <ChevronsUpDown className="h-3 w-3 shrink-0 text-muted-foreground" />
-        </button>
-      </PopoverTrigger>
-      <PopoverContent align="start" sideOffset={6} className="w-[340px] p-1">
-        <div className="p-1">
-          <input
-            type="text"
-            value={filter}
-            onChange={(e) => setFilter(e.target.value)}
-            placeholder="Search connections…"
-            aria-label="Search connections"
-            className="h-8 w-full rounded-md border border-border bg-background px-2 text-sm text-foreground outline-none transition-colors placeholder:text-muted-foreground focus:border-primary"
-          />
-        </div>
-        <div className="max-h-[320px] overflow-y-auto">
+      <PopoverTrigger asChild>{trigger}</PopoverTrigger>
+      <PopoverContent align="start" sideOffset={8} className="w-[360px] p-1.5">
+        <input
+          type="text"
+          value={filter}
+          onChange={(e) => setFilter(e.target.value)}
+          placeholder="Search connections…"
+          aria-label="Search connections"
+          className="glass mb-1 h-7 w-full rounded-[7px] border-0 px-2.5 text-xs text-foreground outline-none placeholder:text-muted-foreground"
+        />
+        <div className="max-h-[340px] overflow-y-auto">
           {list.length === 0 && (
-            <div className="px-2 py-2 font-display text-xs italic text-muted-foreground">
-              {savedConnections.length === 0 ? 'no saved connections yet' : 'no matches'}
+            <div className="px-2 py-2 text-xs text-muted-foreground">
+              {savedConnections.length === 0 ? 'No saved connections yet' : 'No matches'}
             </div>
           )}
           {list.map((c) => (
-            <ConnectionPickerRow
+            <ConnectionRow
               key={c.id}
               c={c}
               active={activeConfig?.id === c.id}
@@ -319,13 +547,13 @@ function ConnectionSwitcher() {
             />
           ))}
         </div>
-        <div className="my-1 h-px bg-border" />
+        <div className="my-1 h-px bg-[var(--hairline)]" />
         <button
           type="button"
           onClick={() => openDialog()}
-          className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-xs text-foreground transition-colors hover:bg-accent"
+          className="flex w-full items-center gap-2 rounded-[5px] px-2 py-1.5 text-xs text-foreground transition-colors hover:bg-primary hover:text-primary-foreground"
         >
-          <Plus className="h-3.5 w-3.5 text-muted-foreground" />
+          <Plus className="h-3.5 w-3.5" />
           New connection…
         </button>
       </PopoverContent>
@@ -333,103 +561,7 @@ function ConnectionSwitcher() {
   );
 }
 
-function DatabaseCrumb() {
-  const activeConfig = useSession((s) => s.activeConfig);
-  const editConnection = useSession((s) => s.editConnection);
-  if (!activeConfig?.database) return null;
-  return (
-    <button
-      type="button"
-      onClick={() => void editConnection(activeConfig.id)}
-      title="Database (bound to the connection — click to edit)"
-      className="flex h-7 min-w-0 shrink items-center gap-1.5 rounded-sm px-2 transition-colors hover:bg-accent"
-    >
-      <Database className="h-3 w-3 shrink-0 text-muted-foreground" />
-      <span className="truncate font-mono text-foreground">{activeConfig.database}</span>
-    </button>
-  );
-}
-
-function SchemaSwitcher() {
-  const schema = useSession((s) => s.schema);
-  const currentSchema = useSession((s) => s.currentSchema);
-  const setCurrentSchema = useSession((s) => s.setCurrentSchema);
-  const list = schema?.schemas ?? [];
-  const value = currentSchema ?? list[0]?.name ?? null;
-  if (!value) return null;
-  return (
-    <Popover>
-      <PopoverTrigger asChild>
-        <button
-          type="button"
-          className="flex h-7 min-w-0 shrink items-center gap-1.5 rounded-sm px-2 transition-colors hover:bg-accent"
-          title="Switch schema"
-        >
-          <span className="truncate font-mono text-foreground">{value}</span>
-          <ChevronsUpDown className="h-3 w-3 shrink-0 text-muted-foreground" />
-        </button>
-      </PopoverTrigger>
-      <PopoverContent align="start" sideOffset={6} className="w-[240px] p-1">
-        <div className="px-2 py-1 font-display text-[11px] italic text-muted-foreground">
-          Schemas
-        </div>
-        <div className="max-h-[280px] overflow-y-auto">
-          {list.map((s) => (
-            <button
-              key={s.name}
-              type="button"
-              onClick={() => setCurrentSchema(s.name)}
-              className={cn(
-                'flex w-full items-center gap-2 rounded-sm px-2 py-1.5 font-mono text-xs',
-                s.name === value
-                  ? 'bg-accent text-accent-foreground'
-                  : 'text-foreground hover:bg-accent hover:text-accent-foreground',
-              )}
-            >
-              {s.name === value ? (
-                <Check className="h-3 w-3 text-primary" />
-              ) : (
-                <span className="h-3 w-3" aria-hidden />
-              )}
-              <span className="truncate">{s.name}</span>
-            </button>
-          ))}
-        </div>
-      </PopoverContent>
-    </Popover>
-  );
-}
-
-const OBJECT_ICON: Partial<Record<TabKind, typeof Table2>> = {
-  sql: FileCode,
-  table: Table2,
-};
-
-/** The object the active tab is looking at — table name or SQL file. */
-function ActiveObjectCrumb() {
-  const tab = useActiveTab();
-  const canvasMode = useSession((s) => s.canvasMode);
-  if (!tab || canvasMode !== 'database') return null;
-  const Icon = OBJECT_ICON[tab.kind] ?? FileCode;
-  const label = tab.kind === 'table' && tab.tableName ? tab.tableName : tab.title;
-  return (
-    <>
-      <Crumb />
-      <span
-        className="flex min-w-0 shrink items-center gap-1.5 px-2 text-foreground"
-        title={tab.kind === 'table' ? `${tab.tableSchema}.${tab.tableName}` : tab.title}
-      >
-        <Icon className="h-3 w-3 shrink-0 text-primary" />
-        <span className="truncate font-mono">{label}</span>
-        {tab.queryRunState === 'running' && (
-          <Loader2 className="h-3 w-3 shrink-0 animate-spin text-muted-foreground" />
-        )}
-      </span>
-    </>
-  );
-}
-
-function ConnectionPickerRow({
+function ConnectionRow({
   c,
   active,
   disabled,
@@ -446,10 +578,8 @@ function ConnectionPickerRow({
   return (
     <div
       className={cn(
-        'group/row relative flex w-full items-stretch rounded-sm transition-colors',
-        active
-          ? 'bg-accent text-accent-foreground'
-          : 'hover:bg-accent hover:text-accent-foreground',
+        'group/row flex items-center rounded-[5px] transition-colors hover:bg-[var(--glass-fill-hover)]',
+        active && 'bg-[var(--glass-fill-press)]',
         disabled && 'opacity-50',
       )}
     >
@@ -459,166 +589,72 @@ function ConnectionPickerRow({
         onClick={() => {
           if (!active && !disabled) void connectSaved(c.id);
         }}
-        title={active ? 'Active' : `Connect to ${c.name}`}
-        className="flex min-w-0 flex-1 items-center gap-2 px-2 py-1.5 text-left text-xs"
+        title={active ? 'Connected' : `Connect to ${c.name}`}
+        className="flex min-w-0 flex-1 items-center gap-2.5 px-2 py-1.5 text-left"
       >
-        {active ? (
-          <Check className="h-3 w-3 shrink-0 text-primary" />
-        ) : (
-          <span className="h-3 w-3 shrink-0" aria-hidden />
-        )}
-        <Icon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+        <span
+          className="grid h-7 w-7 shrink-0 place-items-center rounded-[7px] text-white"
+          style={{ backgroundColor: (tag && TAG_FILL[tag]) || 'var(--muted-foreground)' }}
+        >
+          <Icon className="h-3.5 w-3.5" />
+        </span>
         <span className="min-w-0 flex-1">
-          <span className="block truncate font-medium">{c.name}</span>
+          <span className="block truncate text-xs font-medium text-foreground">{c.name}</span>
           <span className="block truncate font-mono text-[10px] text-muted-foreground">
             {c.host}:{c.port}
-            {c.database ? `/${c.database}` : ''}
+            {c.database ? ` / ${c.database}` : ''}
           </span>
         </span>
-        {tag && (
-          <span
-            className={cn(
-              'shrink-0 rounded-sm px-1 py-px text-[9px] font-semibold uppercase tracking-wider',
-              TAG_CHIP[tag] ?? 'bg-muted text-muted-foreground',
-            )}
-          >
-            {tag}
-          </span>
-        )}
+        {active && <Check className="h-3.5 w-3.5 shrink-0 text-primary" />}
       </button>
-      <Button
-        variant="ghost"
-        size="icon-xs"
-        onClick={(e) => {
-          e.stopPropagation();
-          void editConnection(c.id);
-        }}
+      <button
+        type="button"
+        onClick={() => void editConnection(c.id)}
         aria-label={`Edit ${c.name}`}
-        title="Edit (delete inside)"
-        className="mr-1 h-5 w-5 self-center opacity-0 transition-opacity duration-150 group-hover/row:opacity-100 focus-visible:opacity-100"
+        title="Edit connection"
+        className="mr-1 grid h-6 w-6 shrink-0 place-items-center rounded-[5px] text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:opacity-100 group-hover/row:opacity-100"
       >
-        <Pencil />
-      </Button>
+        <Pencil className="h-3 w-3" />
+      </button>
     </div>
   );
 }
 
-// ───────────────────────── Right-hand groups ─────────────────────────
-
-/**
- * Discard / review / commit for buffered grid edits — TablePlus keeps
- * this in the toolbar so pending work is visible from any tab. Only
- * rendered while something is pending; the tray above the status bar
- * still carries the per-edit diff.
- */
-function PendingChangesGroup() {
-  const edits = useSession((s) => s.pendingEdits);
-  const busy = useSession((s) => s.pendingEditsBusy);
-  const commit = useSession((s) => s.commitPendingEdits);
-  const revert = useSession((s) => s.revertPendingEdits);
-  const [error, setError] = useState<string | null>(null);
-  if (edits.length === 0) return null;
-  const onCommit = async () => {
-    setError(null);
-    try {
-      await commit();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    }
-  };
-  return (
-    <div
-      className="flex h-8 items-center gap-0.5 rounded-md border border-primary/50 bg-primary/5 pl-2 pr-0.5"
-      data-testid="toolbar-pending-changes"
-    >
-      <span className="mr-1 font-display text-xs italic text-foreground">
-        <span className="font-mono font-semibold not-italic text-primary">{edits.length}</span>{' '}
-        change{edits.length === 1 ? '' : 's'}
-      </span>
-      {error && (
-        <span className="mx-1 text-destructive" title={`Commit failed: ${error}`} role="alert">
-          <AlertCircle className="h-3.5 w-3.5" aria-label={`Commit failed: ${error}`} />
-        </span>
-      )}
-      <Button
-        variant="ghost"
-        size="icon-xs"
-        onClick={() => void revert()}
-        disabled={busy}
-        aria-label="Discard pending changes"
-        title="Discard pending changes"
-      >
-        <RotateCcw />
-      </Button>
-      <Button
-        variant="primary"
-        size="xs"
-        onClick={() => void onCommit()}
-        disabled={busy}
-        title="Commit pending changes (one transaction)"
-        className="h-6"
-      >
-        {busy ? <Loader2 className="animate-spin" /> : <Check />}
-        Commit
-      </Button>
-    </div>
-  );
-}
-
-/** Read-only ⇄ edit toggle — Plasma's equivalent of TablePlus Safe Mode. */
-function SafetyToggle() {
-  const activeConfig = useSession((s) => s.activeConfig);
-  const editMode = useSession((s) => s.editMode);
-  const toggleEditMode = useSession((s) => s.toggleEditMode);
-  if (!activeConfig) return null;
-  if (activeConfig.readOnly) {
-    return (
-      <Button
-        variant="outline"
-        size="xs"
-        disabled
-        title="This connection is read-only — writes are disabled"
-      >
-        <Lock />
-        Read only
-      </Button>
-    );
-  }
-  return (
-    <Button
-      variant={editMode ? 'primary' : 'outline'}
-      size="xs"
-      onClick={toggleEditMode}
-      title={editMode ? 'Writes enabled — click to lock' : 'Read-only — click to enable writes'}
-      data-testid="toolbar-safety"
-    >
-      {editMode ? <Pencil /> : <Lock />}
-      {editMode ? 'Edit mode' : 'Read only'}
-    </Button>
-  );
-}
-
-function ToolbarActions() {
-  const rightPanelMode = useSession((s) => s.rightPanelMode);
-  const setRightPanelMode = useSession((s) => s.setRightPanelMode);
-  const canvasMode = useSession((s) => s.canvasMode);
-  const engine = useSession((s) => s.activeConfig?.engine ?? 'postgres');
-  const isPostgres = engine === 'postgres';
-
+function SchemaSwitcher() {
+  const schema = useSession((s) => s.schema);
+  const currentSchema = useSession((s) => s.currentSchema);
+  const setCurrentSchema = useSession((s) => s.setCurrentSchema);
+  const list = schema?.schemas ?? [];
+  const value = currentSchema ?? list[0]?.name ?? null;
+  if (!value) return null;
   return (
     <>
-      {canvasMode === 'database' && (
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          onClick={() => setRightPanelMode(rightPanelMode ? null : isPostgres ? 'details' : 'ai')}
-          aria-label={rightPanelMode ? 'Hide right sidebar' : 'Show right sidebar'}
-          title={rightPanelMode ? 'Hide right sidebar' : 'Show right sidebar (Details)'}
-          className={rightPanelMode ? 'text-primary' : undefined}
-        >
-          <PanelRight />
-        </Button>
-      )}
+      <Sep />
+      <Popover>
+        <PopoverTrigger asChild>
+          <CapsuleButton title="Switch schema">
+            <span className="truncate">{value}</span>
+          </CapsuleButton>
+        </PopoverTrigger>
+        <PopoverContent align="start" sideOffset={8} className="w-[240px] p-1.5">
+          <div className="px-2 pb-1 text-[11px] font-medium text-muted-foreground">Schemas</div>
+          <div className="max-h-[300px] overflow-y-auto">
+            {list.map((s) => (
+              <button
+                key={s.name}
+                type="button"
+                onClick={() => setCurrentSchema(s.name)}
+                className="flex w-full items-center gap-2 rounded-[5px] px-2 py-1.5 font-mono text-xs text-foreground transition-colors hover:bg-primary hover:text-primary-foreground"
+              >
+                <span className="grid w-3 place-items-center">
+                  {s.name === value && <Check className="h-3 w-3" />}
+                </span>
+                <span className="truncate">{s.name}</span>
+              </button>
+            ))}
+          </div>
+        </PopoverContent>
+      </Popover>
     </>
   );
 }

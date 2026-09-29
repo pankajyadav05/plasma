@@ -5,7 +5,7 @@ import { quoteIdent } from '@/lib/table-query';
 import { useActiveTab, useSession } from '@/stores/session';
 import { useWorkbench } from '@/stores/workbench';
 import type { ColumnMeta } from '@shared/protocol';
-import { Braces, Check, Copy, Search, X } from 'lucide-react';
+import { Braces, Check, Copy, Search } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 
 /**
@@ -21,7 +21,7 @@ import { useEffect, useMemo, useState } from 'react';
  * The grid publishes the row via `useWorkbench.inspectedRow` because
  * only it knows how display rows map to result rows (sort / paging).
  */
-export function DetailsPanel({ onClose }: { onClose: () => void }) {
+export function DetailsPanel() {
   const tab = useActiveTab();
   const inspected = useWorkbench((s) => s.inspectedRow);
   const [query, setQuery] = useState('');
@@ -51,49 +51,35 @@ export function DetailsPanel({ onClose }: { onClose: () => void }) {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex h-11 shrink-0 items-center gap-2 border-b border-border pl-3 pr-2">
-        <span className="text-sm font-medium text-foreground">Details</span>
-        {current && (
-          <span className="rounded-md bg-muted px-1.5 py-0.5 font-mono text-[10px] uppercase text-muted-foreground">
-            row {current.rowNumber.toLocaleString()}
-          </span>
-        )}
-        <div className="flex-1" />
-        {current && (
-          <Button
-            variant="ghost"
-            size="icon-xs"
-            onClick={copyRowJson}
-            aria-label="Copy row as JSON"
-            title="Copy row as JSON"
-          >
-            {copiedRow ? <Check className="text-primary" /> : <Braces />}
-          </Button>
-        )}
-        <Button
-          variant="ghost"
-          size="icon-xs"
-          onClick={onClose}
-          aria-label="Close panel"
-          title="Close"
-        >
-          <X />
-        </Button>
-      </div>
-
-      <div className="border-b border-border px-3 py-2">
-        <div className="relative">
+      <div className="flex shrink-0 items-center gap-1.5 px-2.5 py-2">
+        <div className="relative min-w-0 flex-1">
           <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
           <input
             type="text"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search fields…"
+            placeholder="Search for field…"
             aria-label="Search fields"
             disabled={!current}
-            className="h-8 w-full rounded-md border border-border bg-background pl-8 pr-2 text-sm text-foreground outline-none transition-colors placeholder:text-muted-foreground focus:border-primary disabled:opacity-50"
+            className="glass h-7 w-full rounded-[7px] border-0 pl-8 pr-2 text-[13px] text-foreground outline-none placeholder:text-muted-foreground focus:ring-2 focus:ring-primary/50 disabled:opacity-60"
           />
         </div>
+        {current && (
+          <>
+            <span className="shrink-0 font-mono text-[10px] text-muted-foreground">
+              row {current.rowNumber.toLocaleString()}
+            </span>
+            <button
+              type="button"
+              onClick={copyRowJson}
+              aria-label="Copy row as JSON"
+              title="Copy row as JSON"
+              className="grid h-7 w-7 shrink-0 place-items-center rounded-[7px] text-muted-foreground transition-colors hover:bg-[var(--glass-fill-hover)] hover:text-foreground"
+            >
+              {copiedRow ? <Check className="h-3.5 w-3.5 text-primary" /> : <Braces className="h-3.5 w-3.5" />}
+            </button>
+          </>
+        )}
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto">
@@ -114,9 +100,9 @@ export function DetailsPanel({ onClose }: { onClose: () => void }) {
           )
         ) : (
           <>
-            <div className="flex flex-col items-center gap-1 px-6 py-8 text-center">
-              <div className="font-display text-base italic text-foreground">No row selected</div>
-              <div className="font-display text-xs italic text-muted-foreground">
+            <div className="flex flex-col items-center gap-1 px-6 pb-6 pt-16 text-center">
+              <div className="text-[15px] text-muted-foreground">No row selected</div>
+              <div className="text-xs text-muted-foreground/80">
                 Select a cell in the grid — or press Enter on one — to inspect its row here.
               </div>
             </div>

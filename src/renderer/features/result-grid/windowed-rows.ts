@@ -5,7 +5,8 @@
  * large pageSize values do not mount thousands of <tr> nodes.
  */
 
-export const ROW_HEIGHT_PX = 34;
+/** Matches the grid's dense 26px rows (TablePlus density). */
+export const ROW_HEIGHT_PX = 26;
 /** Extra rows above/below the viewport to reduce scroll flicker. */
 export const ROW_OVERSCAN = 20;
 

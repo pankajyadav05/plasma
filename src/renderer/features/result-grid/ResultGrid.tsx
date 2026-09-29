@@ -1,5 +1,4 @@
 import { Button } from '@/components/ui/button';
-import { Checkbox } from '@/components/ui/checkbox';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { BrandMark } from '@/features/app-shell/BrandMark';
 import { cn } from '@/lib/cn';
@@ -9,6 +8,7 @@ import { useActiveTab, useSession } from '@/stores/session';
 import { useWorkbench } from '@/stores/workbench';
 import type { ColumnMeta } from '@shared/protocol';
 import {
+  AlertCircle,
   ArrowUpRight,
   ChevronDown,
   ChevronUp,
@@ -120,6 +120,16 @@ export function ResultGrid() {
   const [searchQuery, setSearchQuery] = useState('');
   const [activeMatchIdx, setActiveMatchIdx] = useState(0);
   const searchInputRef = useRef<HTMLInputElement>(null);
+
+  // Footer's find button (TablePlus result footer) opens the in-grid search.
+  useEffect(() => {
+    const open = () => {
+      setSearchOpen(true);
+      requestAnimationFrame(() => searchInputRef.current?.focus());
+    };
+    window.addEventListener('plasma:grid-find', open);
+    return () => window.removeEventListener('plasma:grid-find', open);
+  }, []);
 
   const isTableTab = tab?.kind === 'table';
   const writable = Boolean(
@@ -520,16 +530,23 @@ export function ResultGrid() {
   // ── Error state ──
   if (tab?.queryError) {
     return (
-      <div className="min-h-0 flex-1 overflow-auto bg-card">
-        <div className="max-w-4xl p-8">
-          <div className="mb-3 font-display text-3xl italic text-destructive">Query error</div>
-          <pre className="whitespace-pre-wrap break-words text-base text-foreground">
-            {tab.queryError}
-          </pre>
+      <div className="min-h-0 flex-1 overflow-auto bg-background">
+        <div className="max-w-4xl p-5">
+          <div className="flex items-start gap-2.5 rounded-[8px] bg-destructive/10 px-3.5 py-3 ring-1 ring-inset ring-destructive/30">
+            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
+            <div className="min-w-0">
+              <div className="mb-1 text-xs font-semibold text-destructive">Query failed</div>
+              <pre className="whitespace-pre-wrap break-words font-mono text-[13px] text-foreground">
+                {cleanIpcError(tab.queryError)}
+              </pre>
+            </div>
+          </div>
           {tab.queryErrorSql && (
             <>
-              <div className="mt-6 mb-2 text-xs text-muted-foreground">sql sent to server</div>
-              <pre className="whitespace-pre-wrap break-words rounded-md border border-border bg-muted p-3 text-sm text-foreground">
+              <div className="mb-1.5 mt-4 text-[11px] font-semibold text-muted-foreground">
+                SQL sent to server
+              </div>
+              <pre className="glass whitespace-pre-wrap break-words rounded-[8px] p-3 font-mono text-xs text-foreground">
                 {tab.queryErrorSql}
               </pre>
             </>
@@ -547,10 +564,10 @@ export function ResultGrid() {
   // mark glyph itself breathes subtly to confirm the query is alive.
   if (tab?.queryRunState === 'running') {
     return (
-      <div className="flex min-h-0 flex-1 items-center justify-center bg-card">
+      <div className="flex min-h-0 flex-1 items-center justify-center bg-background">
         <div className="flex flex-col items-center gap-5 text-center">
           <BrandMark className="plasma-loading-mark h-28 w-28 text-foreground" />
-          <div className="plasma-loading-caption font-display text-lg italic text-muted-foreground">
+          <div className="plasma-loading-caption text-lg text-muted-foreground">
             running query…
           </div>
         </div>
@@ -593,10 +610,10 @@ export function ResultGrid() {
       return <SqlHomePanel />;
     }
     return (
-      <div className="flex min-h-0 flex-1 items-center justify-center bg-card">
+      <div className="flex min-h-0 flex-1 items-center justify-center bg-background">
         <div className="flex flex-col items-center gap-6 text-center">
           <BrandMark className="h-20 w-20 text-foreground/70" />
-          <div className="font-display text-2xl italic text-muted-foreground">
+          <div className="text-2xl text-muted-foreground">
             {isSqlTab ? 'Select a table, or write a query.' : 'Click a table in the sidebar.'}
           </div>
           {isSqlTab && <EmptySqlActions />}
@@ -608,9 +625,9 @@ export function ResultGrid() {
   // ── Non-SELECT commands ──
   if (tab.queryResult.columns.length === 0) {
     return (
-      <div className="flex min-h-0 flex-1 items-center justify-center bg-card">
+      <div className="flex min-h-0 flex-1 items-center justify-center bg-background">
         <div className="text-center">
-          <div className="mb-2 font-display text-3xl italic text-foreground">
+          <div className="mb-2 text-3xl text-foreground">
             {tab.queryResult.command ?? 'OK'}
           </div>
           <div className="text-sm text-muted-foreground">
@@ -640,9 +657,9 @@ export function ResultGrid() {
   // Columns popover).
   if (visibleColumns.length === 0) {
     return (
-      <div className="flex min-h-0 flex-1 items-center justify-center bg-card">
+      <div className="flex min-h-0 flex-1 items-center justify-center bg-background">
         <div className="flex flex-col items-center gap-4 text-center">
-          <div className="font-display text-2xl italic text-muted-foreground">
+          <div className="text-2xl text-muted-foreground">
             All columns hidden
           </div>
           <Button
@@ -680,7 +697,7 @@ export function ResultGrid() {
   };
 
   return (
-    <div ref={containerRef} className="relative min-h-0 flex-1 overflow-auto bg-card">
+    <div ref={containerRef} className="relative min-h-0 flex-1 overflow-auto bg-background">
       {editError && (
         <div className="sticky top-0 z-20 border-b border-primary bg-primary/10 px-4 py-2 text-xs text-primary">
           {editError}{' '}
@@ -755,11 +772,11 @@ export function ResultGrid() {
         </div>
       )}
       <table className="min-w-full border-collapse font-mono text-xs tabular-nums">
-        <thead className="sticky top-0 z-10 bg-card">
+        <thead className="sticky top-0 z-10 bg-[var(--grid-header)]">
           <tr>
             <th
-              className="sticky left-0 z-30 w-9 border-b bg-card px-2 py-2 text-center align-middle"
-              style={{ minWidth: 36 }}
+              className="sticky left-0 z-30 h-[28px] w-11 border-b border-r border-[var(--grid-line)] bg-[var(--grid-header)] px-1 text-center align-middle"
+              style={{ minWidth: 44 }}
             >
               <SelectAllCheckbox
                 total={displayRows.length}
@@ -788,7 +805,7 @@ export function ResultGrid() {
                   }}
                   onClick={() => setSort(origIdx)}
                   className={cn(
-                    'group/header relative cursor-pointer select-none whitespace-nowrap border-b px-[14px] py-2 text-left transition-colors hover:bg-accent hover:text-accent-foreground',
+                    'group/header relative h-[28px] cursor-pointer select-none whitespace-nowrap border-b border-r border-[var(--grid-line)] bg-[var(--grid-header)] px-2.5 py-0 text-left font-sans transition-colors hover:bg-[var(--glass-fill-hover)]',
                     isSticky && 'bg-muted',
                   )}
                   style={{
@@ -801,10 +818,12 @@ export function ResultGrid() {
                   title={`${col.name} — ${col.dataTypeName}${isSticky ? ' · pinned' : ''}`}
                 >
                   <div className="flex items-center gap-2">
-                    <span className="text-sm text-foreground" style={{ fontWeight: 500 }}>
+                    <span className="text-xs text-foreground" style={{ fontWeight: 600 }}>
                       {col.name || <span className="text-muted-foreground">?column?</span>}
                     </span>
-                    <span className="text-xs text-muted-foreground">{col.dataTypeName}</span>
+                    <span className="font-mono text-[10px] text-muted-foreground">
+                      {col.dataTypeName}
+                    </span>
                     {sortDir && (
                       <span className="text-xs text-primary">{sortDir === 'asc' ? '↑' : '↓'}</span>
                     )}
@@ -854,7 +873,10 @@ export function ResultGrid() {
               );
             })}
             {writable && (
-              <th className="sticky right-0 w-10 border-b bg-card" aria-label="row actions" />
+              <th
+                className="sticky right-0 w-10 border-b border-[var(--grid-line)] bg-[var(--grid-header)]"
+                aria-label="row actions"
+              />
             )}
           </tr>
         </thead>
@@ -873,28 +895,38 @@ export function ResultGrid() {
                 // biome-ignore lint/suspicious/noArrayIndexKey: stable per-query
                 key={`row-${visibleRow}-${entry.originalIndex}`}
                 className={cn(
-                  'group/row cv-row-34 transition-colors',
+                  'group/row cv-row-26 transition-colors',
                   rowChecked
-                    ? 'bg-primary/10 hover:bg-primary/15'
+                    ? 'bg-primary/15 hover:bg-primary/20'
                     : rowSelected
-                      ? 'bg-primary/15'
-                      : 'hover:bg-accent hover:text-accent-foreground',
+                      ? 'bg-primary/10'
+                      : visibleRow % 2 === 1
+                        ? 'bg-[var(--grid-stripe)] hover:bg-[var(--glass-fill-hover)]'
+                        : 'hover:bg-[var(--glass-fill-hover)]',
                 )}
               >
                 <td
                   className={cn(
-                    'sticky left-0 z-[2] w-9 border-b border-border px-2 text-center align-middle',
-                    rowChecked
-                      ? 'bg-primary/10 group-hover/row:bg-primary/15'
-                      : 'bg-card group-hover/row:bg-accent',
+                    'sticky left-0 z-[2] w-11 border-b border-r border-[var(--grid-line)] p-0 text-right align-middle',
+                    rowChecked ? 'bg-primary' : 'bg-[var(--grid-header)]',
                   )}
-                  style={{ minWidth: 36 }}
+                  style={{ minWidth: 44 }}
                 >
-                  <Checkbox
-                    checked={rowChecked}
-                    onCheckedChange={() => toggleRowSelected(entry.originalIndex)}
-                    aria-label={`Select row ${visibleRow + 1}`}
-                  />
+                  <button
+                    type="button"
+                    onClick={() => toggleRowSelected(entry.originalIndex)}
+                    aria-pressed={rowChecked}
+                    aria-label={`Select row ${tab.page * tab.pageSize + visibleRow + 1}`}
+                    title={rowChecked ? 'Deselect row' : 'Select row'}
+                    className={cn(
+                      'h-[25px] w-full px-2 font-mono text-[10px] tabular-nums transition-colors',
+                      rowChecked
+                        ? 'font-semibold text-primary-foreground'
+                        : 'text-muted-foreground hover:bg-[var(--glass-fill-hover)] hover:text-foreground',
+                    )}
+                  >
+                    {(tab.page * tab.pageSize + visibleRow + 1).toLocaleString()}
+                  </button>
                 </td>
                 {visibleColumns.map(({ col, originalIndex: origIdx }) => {
                   const cell = entry.row[origIdx];
@@ -933,14 +965,14 @@ export function ResultGrid() {
                         }
                       }}
                       className={cn(
-                        'group/cell relative h-[34px] max-w-[480px] whitespace-nowrap border-b border-border px-[18px] text-foreground',
+                        'group/cell relative h-[26px] max-w-[480px] whitespace-nowrap border-b border-r border-[var(--grid-line)] px-2.5 text-foreground',
                         !isEditing && 'cursor-cell truncate',
                         cellClass(col),
                         cellSelected &&
                           !isEditing &&
-                          'outline outline-2 -outline-offset-2 outline-accent',
+                          'outline outline-2 -outline-offset-2 outline-primary',
                         isEditing &&
-                          'bg-card p-0 outline outline-2 -outline-offset-2 outline-accent',
+                          'bg-background p-0 outline outline-2 -outline-offset-2 outline-primary',
                         isSticky &&
                           (rowSelected
                             ? 'bg-primary/15'
@@ -1016,7 +1048,7 @@ export function ResultGrid() {
                               })();
                             }
                           }}
-                          className="h-[32px] w-full border-0 bg-transparent px-[18px] font-mono text-xs text-foreground outline-none"
+                          className="h-[24px] w-full border-0 bg-transparent px-2.5 font-mono text-xs text-foreground outline-none"
                         />
                       ) : (
                         formatCell(cell)
@@ -1025,7 +1057,7 @@ export function ResultGrid() {
                   );
                 })}
                 {writable && (
-                  <td className="sticky right-0 w-10 border-b border-border bg-card px-1 text-right">
+                  <td className="sticky right-0 w-10 border-b border-[var(--grid-line)] bg-background px-1 text-right">
                     <Button
                       variant="ghost"
                       size="icon-xs"
@@ -1050,7 +1082,7 @@ export function ResultGrid() {
             <tr>
               <td
                 colSpan={visibleColumns.length + (writable ? 2 : 1)}
-                className="border-t border-amber-500/40 bg-amber-500/10 px-3 py-2 font-display text-xs italic text-foreground"
+                className="border-t border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-foreground"
               >
                 Result truncated at {tab.queryResult.rows.length.toLocaleString()} rows (worker
                 row/byte cap). Add a LIMIT — or export via a future incremental path — for the full
@@ -1090,15 +1122,22 @@ function SelectAllCheckbox({
   selectedCount: number;
   onToggle: () => void;
 }) {
-  const state =
-    selectedCount === 0 ? false : selectedCount === total ? true : ('indeterminate' as const);
+  const all = total > 0 && selectedCount === total;
   return (
-    <Checkbox
-      checked={state}
-      onCheckedChange={onToggle}
-      aria-label={selectedCount === total ? 'Deselect all rows' : 'Select all rows'}
-      title={selectedCount === total ? 'Deselect all visible' : 'Select all visible'}
-    />
+    <button
+      type="button"
+      onClick={onToggle}
+      aria-label={all ? 'Deselect all rows' : 'Select all rows'}
+      title={all ? 'Deselect all visible' : 'Select all visible'}
+      className={cn(
+        'h-[22px] w-full rounded-[4px] font-mono text-[10px] tabular-nums transition-colors',
+        selectedCount > 0
+          ? 'bg-primary font-semibold text-primary-foreground'
+          : 'text-muted-foreground hover:bg-[var(--glass-fill-hover)] hover:text-foreground',
+      )}
+    >
+      {selectedCount > 0 ? selectedCount.toLocaleString() : '#'}
+    </button>
   );
 }
 
@@ -1160,7 +1199,7 @@ function EmptySqlActions() {
         <Table2 />
         Browse tables
       </Button>
-      <span className="font-display text-sm italic text-muted-foreground">or</span>
+      <span className="text-sm text-muted-foreground">or</span>
       <Button variant="primary" size="default" onClick={() => setEditorExpanded(true)}>
         <Code2 />
         Write SQL
@@ -1194,4 +1233,12 @@ function cellClass(col: ColumnMeta | undefined): string {
   if (t === 'bool') return 'text-type-bool';
   if (t === 'json' || t === 'jsonb') return 'text-type-json';
   return '';
+}
+
+/**
+ * Electron wraps IPC rejections as "Error invoking remote method
+ * 'plasma:…': Error: <message>" — show only the database's message.
+ */
+function cleanIpcError(message: string): string {
+  return message.replace(/^Error invoking remote method '[^']+':\s*(?:\w*Error:\s*)?/, '');
 }

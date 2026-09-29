@@ -1,5 +1,6 @@
 import { Button } from '@/components/ui/button';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { Pill } from '@/components/ui/workbench';
 import { cn } from '@/lib/cn';
 import { useActiveTab, useSession } from '@/stores/session';
 import { Command } from 'cmdk';
@@ -43,22 +44,18 @@ export function ColumnsPopover() {
   return (
     <Popover>
       <PopoverTrigger asChild>
-        <Button
-          variant={hasState ? 'outline' : 'ghost'}
-          size="xs"
-          className={hasState ? 'border-primary text-primary' : ''}
-        >
+        <Pill className={hasState ? 'text-primary' : undefined}>
           <Columns3 />
           Columns
           {hiddenCount > 0 && (
-            <span className="rounded-sm bg-primary px-1 py-0.5 text-xs font-semibold leading-none text-primary-foreground">
+            <span className="rounded-[4px] bg-primary px-1 text-[10px] font-semibold leading-4 text-primary-foreground">
               {allColumns.length - hiddenCount}/{allColumns.length}
             </span>
           )}
           {stickyCount > 0 && <Pin className="h-3 w-3" />}
-        </Button>
+        </Pill>
       </PopoverTrigger>
-      <PopoverContent align="start" side="bottom" className="w-[420px] p-0">
+      <PopoverContent align="start" side="top" className="w-[420px] p-0">
         <div className="flex items-center justify-between border-b border-border px-4 py-3">
           <h3 className="text-xs text-muted-foreground">
             Columns ({allColumns.length - hiddenCount} visible · {stickyCount} pinned)

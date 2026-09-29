@@ -1,115 +1,99 @@
 import { cn } from '@/lib/cn';
-import { kbd } from '@/lib/platform';
 import { type CanvasMode, useSession } from '@/stores/session';
-import { Activity, Clock, Cog, Database, Search } from 'lucide-react';
+import { Activity, Clock, Cog, Database } from 'lucide-react';
 
 interface RailItem {
   mode: CanvasMode;
   icon: React.ReactNode;
   label: string;
+  title: string;
 }
 
-const TOP_ITEMS: RailItem[] = [
-  { mode: 'database', icon: <Database className="h-[18px] w-[18px]" />, label: 'Database' },
-  { mode: 'history', icon: <Clock className="h-[18px] w-[18px]" />, label: 'History' },
-  { mode: 'monitor', icon: <Activity className="h-[18px] w-[18px]" />, label: 'Live activity' },
-];
-
-const BOTTOM_ITEMS: RailItem[] = [
-  { mode: 'settings', icon: <Cog className="h-[18px] w-[18px]" />, label: 'Settings' },
-];
-
 /**
- * Left-most navigation rail (48px). Switches what the main canvas
- * renders — Database (entity browser), SQL Editor, History, Settings.
- * The sidebar stays visible across modes.
- *
- * Engine awareness: History + Live activity are Postgres-only canvases
- * (history records SQL strings; the monitor polls pg_stat_activity).
- * For redis / opensearch we hide them so the rail doesn't surface
- * dead-end buttons.
+ * Workspace rail (TablePlus's far-left column): a labelled tile per
+ * workspace. The database tile is captioned with the database name;
+ * History and Activity are Postgres-only workspaces (history records SQL,
+ * the monitor polls pg_stat_activity), so Redis / OpenSearch show only
+ * the database tile. Settings sits at the bottom.
  */
 export function IconRail() {
   const canvasMode = useSession((s) => s.canvasMode);
   const setCanvasMode = useSession((s) => s.setCanvasMode);
-  const togglePalette = useSession((s) => s.togglePalette);
-  const engine = useSession((s) => s.activeConfig?.engine ?? 'postgres');
+  const activeConfig = useSession((s) => s.activeConfig);
+  const engine = activeConfig?.engine ?? 'postgres';
+  const dbLabel = activeConfig?.database || activeConfig?.name || 'Database';
 
-  const topItems =
-    engine === 'postgres' ? TOP_ITEMS : TOP_ITEMS.filter((i) => i.mode === 'database');
+  const top: RailItem[] = [
+    {
+      mode: 'database',
+      icon: <Database />,
+      label: dbLabel,
+      title: `${activeConfig?.name ?? 'Database'} — tables and queries`,
+    },
+    ...(engine === 'postgres'
+      ? [
+          { mode: 'history' as const, icon: <Clock />, label: 'History', title: 'Query history' },
+          {
+            mode: 'monitor' as const,
+            icon: <Activity />,
+            label: 'Activity',
+            title: 'Live activity (pg_stat_activity)',
+          },
+        ]
+      : []),
+  ];
 
   return (
     <nav
-      className="flex w-12 shrink-0 flex-col items-center border-r border-border bg-sidebar py-2"
-      aria-label="Navigation"
+      className="chrome flex w-[76px] shrink-0 flex-col items-center gap-1 border-r hairline py-2"
+      aria-label="Workspaces"
     >
-      <Group items={topItems} active={canvasMode} onPick={setCanvasMode} />
+      {top.map((it) => (
+        <Tile key={it.mode} item={it} active={canvasMode === it.mode} onPick={setCanvasMode} />
+      ))}
       <div className="flex-1" />
-      <ActionButton
-        label={`Command palette (${kbd('K')})`}
-        icon={<Search className="h-[18px] w-[18px]" />}
-        onClick={togglePalette}
+      <Tile
+        item={{ mode: 'settings', icon: <Cog />, label: 'Settings', title: 'Settings' }}
+        active={canvasMode === 'settings'}
+        onPick={setCanvasMode}
       />
-      <Group items={BOTTOM_ITEMS} active={canvasMode} onPick={setCanvasMode} />
     </nav>
   );
 }
 
-function ActionButton({
-  label,
-  icon,
-  onClick,
+function Tile({
+  item,
+  active,
+  onPick,
 }: {
-  label: string;
-  icon: React.ReactNode;
-  onClick: () => void;
+  item: RailItem;
+  active: boolean;
+  onPick: (m: CanvasMode) => void;
 }) {
   return (
     <button
       type="button"
-      onClick={onClick}
-      aria-label={label}
-      title={label}
-      className="relative grid h-9 w-9 cursor-pointer place-items-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+      onClick={() => onPick(item.mode)}
+      aria-label={item.title}
+      aria-current={active || undefined}
+      title={item.title}
+      className={cn(
+        'flex w-[66px] flex-col items-center gap-1 rounded-[10px] px-1 pb-1.5 pt-2 transition-colors',
+        '[&_svg]:h-[19px] [&_svg]:w-[19px]',
+        active
+          ? 'raised text-primary'
+          : 'text-foreground/60 hover:bg-[var(--glass-fill-hover)] hover:text-foreground',
+      )}
     >
-      {icon}
+      {item.icon}
+      <span
+        className={cn(
+          'w-full truncate text-center text-[10px] leading-3',
+          active ? 'font-semibold text-foreground' : 'font-medium',
+        )}
+      >
+        {item.label}
+      </span>
     </button>
-  );
-}
-
-function Group({
-  items,
-  active,
-  onPick,
-}: {
-  items: RailItem[];
-  active: CanvasMode;
-  onPick: (m: CanvasMode) => void;
-}) {
-  return (
-    <ul className="flex flex-col gap-0.5">
-      {items.map((it) => {
-        const isActive = active === it.mode;
-        return (
-          <li key={it.mode}>
-            <button
-              type="button"
-              onClick={() => onPick(it.mode)}
-              aria-label={it.label}
-              title={it.label}
-              aria-current={isActive}
-              className={cn(
-                'relative grid h-9 w-9 cursor-pointer place-items-center rounded-md transition-colors',
-                isActive
-                  ? 'bg-accent text-primary'
-                  : 'text-muted-foreground hover:bg-accent hover:text-foreground',
-              )}
-            >
-              {it.icon}
-            </button>
-          </li>
-        );
-      })}
-    </ul>
   );
 }

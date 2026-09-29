@@ -62,7 +62,7 @@ export function EntityList() {
 
   if (!activeConfig) {
     return (
-      <div className="px-4 py-3 font-display text-sm italic text-muted-foreground">
+      <div className="px-4 py-3 text-[13px] text-muted-foreground">
         connect to browse the schema
       </div>
     );
@@ -70,12 +70,12 @@ export function EntityList() {
 
   if (!schema && schemaLoading) {
     return (
-      <div className="px-4 py-3 font-display text-sm italic text-muted-foreground">loading…</div>
+      <div className="px-4 py-3 text-[13px] text-muted-foreground">loading…</div>
     );
   }
   if (!schema) {
     return (
-      <div className="px-4 py-3 font-display text-sm italic text-muted-foreground">no schema</div>
+      <div className="px-4 py-3 text-[13px] text-muted-foreground">no schema</div>
     );
   }
 
@@ -84,7 +84,7 @@ export function EntityList() {
       {/* Schema picker lives in the topbar — don't duplicate it here. */}
 
       {/* ── Search + entity filter ── */}
-      <div className="border-b border-sidebar-border px-3 py-2">
+      <div className="px-2.5 pb-2">
         <div className="flex items-center gap-1">
           <div className="relative flex-1">
             <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
@@ -93,7 +93,7 @@ export function EntityList() {
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="Search tables…"
-              className="h-8 w-full rounded-md border border-sidebar-border bg-background pl-8 pr-7 text-sm text-foreground outline-none transition-colors placeholder:text-muted-foreground focus:border-primary"
+              className="glass h-7 w-full rounded-[7px] border-0 pl-8 pr-7 text-[13px] text-foreground outline-none transition-shadow placeholder:text-muted-foreground focus:ring-2 focus:ring-primary/50"
               aria-label="Search tables"
             />
             {search && (
@@ -118,7 +118,7 @@ export function EntityList() {
         aria-label={effectiveSchema ? `Tables in ${effectiveSchema}` : 'Tables'}
       >
         {entities.length === 0 && (
-          <div className="px-4 py-3 font-display text-sm italic text-muted-foreground">
+          <div className="px-4 py-3 text-[13px] text-muted-foreground">
             {search ? `no entities match "${search}"` : 'empty'}
           </div>
         )}
@@ -237,16 +237,10 @@ function EntityRow({
       aria-level={1}
       aria-selected={active}
       className={cn(
-        'group/row cv-row-28 relative mx-2 flex h-7 items-stretch rounded-md transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground',
-        active && 'bg-sidebar-accent text-sidebar-accent-foreground',
+        'group/row cv-row-26 relative mx-1.5 flex h-[26px] items-stretch rounded-[6px] transition-colors hover:bg-[var(--glass-fill-hover)]',
+        active && 'raised',
       )}
     >
-      {active && (
-        <div
-          className="absolute left-0 top-1/2 h-4 w-[2px] -translate-y-1/2 rounded-full bg-primary"
-          aria-hidden
-        />
-      )}
       <button
         type="button"
         onClick={(e) => {
@@ -281,10 +275,8 @@ function EntityRow({
         onClick={onClick}
         title={`Open ${name}`}
         className={cn(
-          'flex min-w-0 flex-1 items-center gap-2 pl-1 pr-3 text-left font-mono text-xs',
-          active
-            ? 'text-foreground'
-            : 'text-muted-foreground group-hover/row:text-sidebar-accent-foreground',
+          'flex min-w-0 flex-1 items-center gap-2 pl-0.5 pr-3 text-left text-[13px]',
+          active ? 'font-medium text-foreground' : 'text-foreground/85 group-hover/row:text-foreground',
         )}
       >
         <span className="truncate">{name}</span>

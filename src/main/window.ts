@@ -61,7 +61,20 @@ export function themeColors(theme: Theme) {
   return { background: '#FFFFFF' };
 }
 
+/**
+ * macOS gets a native vibrancy material behind the window chrome
+ * (toolbar, rails, sidebars read through it; the editor and grid stay
+ * opaque). The window background must then be fully transparent or the
+ * material is painted over. Other platforms keep a solid background.
+ */
+export const USES_VIBRANCY = process.platform === 'darwin';
+const TRANSPARENT = '#00000000';
+
 export function applyThemeToWindow(win: BrowserWindow, theme: Theme): void {
+  if (USES_VIBRANCY) {
+    win.setBackgroundColor(TRANSPARENT);
+    return;
+  }
   const colors = themeColors(theme);
   win.setBackgroundColor(colors.background);
 }
@@ -83,12 +96,16 @@ export function createMainWindow(): BrowserWindow {
     minHeight: 600,
     show: false,
     autoHideMenuBar: false,
-    backgroundColor: colors.background,
+    backgroundColor: USES_VIBRANCY ? TRANSPARENT : colors.background,
+    ...(USES_VIBRANCY
+      ? { vibrancy: 'under-window' as const, visualEffectState: 'followWindow' as const }
+      : {}),
     // Taskbar / Alt-Tab / window chrome icon. On macOS the dock icon
     // comes from app.dock.setIcon() — see main/index.ts.
     icon: iconPath,
     titleBarStyle: isMac ? 'hiddenInset' : 'hidden',
-    ...(isMac ? { trafficLightPosition: { x: 16, y: 16 } } : {}),
+    // Centred on the 52px toolbar.
+    ...(isMac ? { trafficLightPosition: { x: 18, y: 19 } } : {}),
     webPreferences: {
       preload: join(__dirname, '../preload/index.cjs'),
       sandbox: false,

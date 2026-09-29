@@ -1,6 +1,7 @@
 import { ConnectionLostError } from '@shared/connection-loss';
 import type { ConnectionConfig, PgNotice, QueryResult, SchemaInfo, TxnState } from '@shared/protocol';
 import {
+  MAX_RESULT_ROWS,
   RESULT_CURSOR_CHUNK,
   appendBoundedRows,
   emptyBoundState,
@@ -45,6 +46,8 @@ export type QueryChunkHandler = (chunk: {
 type QueryOpts = {
   revision?: number;
   onChunk?: QueryChunkHandler;
+  /** Editor row limit; defaults to the MAX_RESULT_ROWS safety cap. */
+  maxRows?: number;
 };
 
 function readCursorBatch(
@@ -369,7 +372,11 @@ export class PostgresDriver {
         if (batch.command) command = batch.command;
 
         const before = state.rows.length;
-        const stop = appendBoundedRows(state, batch.rows);
+        const stop = appendBoundedRows(
+          state,
+          batch.rows,
+          Math.min(opts?.maxRows ?? MAX_RESULT_ROWS, MAX_RESULT_ROWS),
+        );
         const accepted = state.rows.length - before;
         const chunkRows = accepted > 0 ? batch.rows.slice(0, accepted) : [];
 

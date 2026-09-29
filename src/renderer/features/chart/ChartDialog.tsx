@@ -36,83 +36,14 @@ export function ChartDialog({
   onOpenChange: (v: boolean) => void;
   defaultTitle?: string;
 }) {
-  const numericCols = useMemo(() => (result ? findNumericColumns(result) : []), [result]);
-
-  const [kind, setKind] = useState<ChartKind>('bar');
-  const [xCol, setXCol] = useState<string>('');
-  const [yCols, setYCols] = useState<string[]>([]);
-
-  // Auto-pick reasonable defaults on first open.
-  useEffect(() => {
-    if (!open || !result) return;
-    if (yCols.length === 0 && numericCols.length > 0) {
-      setYCols([numericCols[0]]);
-    }
-    if (!xCol && result.columns.length > 0) {
-      // Prefer first non-numeric column for the X axis (categorical reads
-      // better as bars). Fall back to the first column otherwise.
-      const firstNonNumeric =
-        result.columns.find((c) => !numericCols.includes(c.name))?.name ?? result.columns[0].name;
-      setXCol(firstNonNumeric);
-    }
-  }, [open, result, numericCols, xCol, yCols.length]);
-
   if (!result) return null;
-
-  const series = buildSeries(result, xCol, yCols);
-  const empty = series.length === 0 || yCols.length === 0;
-
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-3xl">
         <DialogHeader>
           <DialogTitle>{defaultTitle ?? 'Chart'}</DialogTitle>
         </DialogHeader>
-
-        <div className="grid grid-cols-3 gap-3">
-          <Field label="Type">
-            <Select value={kind} onValueChange={(v) => setKind(v as ChartKind)}>
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="bar">Bar</SelectItem>
-                <SelectItem value="line">Line</SelectItem>
-                <SelectItem value="area">Area</SelectItem>
-              </SelectContent>
-            </Select>
-          </Field>
-          <Field label="X axis">
-            <Select value={xCol} onValueChange={setXCol}>
-              <SelectTrigger>
-                <SelectValue placeholder="—" />
-              </SelectTrigger>
-              <SelectContent>
-                {result.columns.map((c) => (
-                  <SelectItem key={c.name} value={c.name}>
-                    {c.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </Field>
-          <Field label="Y axis">
-            <YPicker numericCols={numericCols} selected={yCols} onChange={setYCols} />
-          </Field>
-        </div>
-
-        <div className="mt-3 rounded-md border border-border bg-background p-3">
-          {empty ? (
-            <div className="flex h-[280px] items-center justify-center font-display text-sm italic text-muted-foreground">
-              {numericCols.length === 0
-                ? 'No numeric columns to plot.'
-                : 'Pick at least one numeric Y column.'}
-            </div>
-          ) : (
-            <ChartSvg kind={kind} series={series} yLabels={yCols} />
-          )}
-        </div>
-
+        {open && <ChartBody result={result} />}
         <div className="flex justify-end pt-3">
           <Button variant="outline" size="sm" onClick={() => onOpenChange(false)}>
             Close
@@ -120,6 +51,93 @@ export function ChartDialog({
         </div>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/**
+ * Chart controls + SVG for a result. Used inline by the result footer's
+ * Chart view and inside ChartDialog. State resets when the result
+ * changes (the component is keyed by its caller).
+ */
+export function ChartBody({ result, tall = false }: { result: QueryResult; tall?: boolean }) {
+  const numericCols = useMemo(() => findNumericColumns(result), [result]);
+
+  const [kind, setKind] = useState<ChartKind>('bar');
+  const [xCol, setXCol] = useState<string>('');
+  const [yCols, setYCols] = useState<string[]>([]);
+
+  // Auto-pick reasonable defaults.
+  useEffect(() => {
+    if (yCols.length === 0 && numericCols.length > 0) {
+      setYCols([numericCols[0]]);
+    }
+    if (!xCol && result.columns.length > 0) {
+      // Prefer first non-numeric column for the X axis (categorical reads
+      // better as bars). Fall back to the first column otherwise.
+      // JSON columns make unreadable category labels — skip them.
+      const firstNonNumeric =
+        result.columns.find(
+          (c) => !numericCols.includes(c.name) && !/^jsonb?$/.test(c.dataTypeName),
+        )?.name ?? result.columns[0].name;
+      setXCol(firstNonNumeric);
+    }
+  }, [result, numericCols, xCol, yCols.length]);
+
+  const series = buildSeries(result, xCol, yCols);
+  const empty = series.length === 0 || yCols.length === 0;
+
+  return (
+    <div className={tall ? 'flex h-full min-h-0 flex-col' : undefined}>
+      <div className="grid grid-cols-3 gap-3">
+        <Field label="Type">
+          <Select value={kind} onValueChange={(v) => setKind(v as ChartKind)}>
+            <SelectTrigger>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="bar">Bar</SelectItem>
+              <SelectItem value="line">Line</SelectItem>
+              <SelectItem value="area">Area</SelectItem>
+            </SelectContent>
+          </Select>
+        </Field>
+        <Field label="X axis">
+          <Select value={xCol} onValueChange={setXCol}>
+            <SelectTrigger>
+              <SelectValue placeholder="—" />
+            </SelectTrigger>
+            <SelectContent>
+              {result.columns.map((c) => (
+                <SelectItem key={c.name} value={c.name}>
+                  {c.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </Field>
+        <Field label="Y axis">
+          <YPicker numericCols={numericCols} selected={yCols} onChange={setYCols} />
+        </Field>
+      </div>
+
+      <div
+        className={
+          tall
+            ? 'mt-3 flex min-h-0 flex-1 items-center rounded-md border border-border bg-background p-3'
+            : 'mt-3 rounded-md border border-border bg-background p-3'
+        }
+      >
+        {empty ? (
+          <div className="flex h-[280px] w-full items-center justify-center text-sm text-muted-foreground">
+            {numericCols.length === 0
+              ? 'No numeric columns to plot.'
+              : 'Pick at least one numeric Y column.'}
+          </div>
+        ) : (
+          <ChartSvg kind={kind} series={series} yLabels={yCols} />
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -195,6 +213,7 @@ function formatLabel(v: unknown): string {
   if (typeof v === 'string') return v;
   if (typeof v === 'number') return v.toString();
   if (v instanceof Date) return v.toISOString().slice(0, 10);
+  if (typeof v === 'object') return JSON.stringify(v);
   return String(v);
 }
 

@@ -577,6 +577,8 @@ export const WorkerRequest = z.discriminatedUnion('kind', [
     params: z.array(z.unknown()).optional(),
     /** Request revision for chunk events (U15); stale chunks are ignored. */
     revision: z.number().int().nonnegative().optional(),
+    /** Editor row limit — stop reading the cursor after this many rows. */
+    maxRows: z.number().int().positive().optional(),
   }),
   z.object({ kind: z.literal('cancel'), id: z.string() }),
   z.object({ kind: z.literal('introspect'), id: z.string() }),
@@ -1291,7 +1293,7 @@ export interface PlasmaAPI {
      *   lookup, count queries, table-tab data, role list, SET ROLE,
      *   table definition). User-written queries should leave this off.
      */
-    run(sql: string, params?: unknown[], opts?: { internal?: boolean }): Promise<QueryResult>;
+    run(sql: string, params?: unknown[], opts?: { internal?: boolean; maxRows?: number }): Promise<QueryResult>;
     commitEditBatch(req: { connectionGen: number; updates: Array<{ sql: string; params?: unknown[] }> }): Promise<{ state: TxnState; applied: number }>;
     cancel(): Promise<void>;
     /**

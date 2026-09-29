@@ -17,7 +17,6 @@ import { type KeyboardEvent, useEffect, useRef, useState } from 'react';
  * "Run" buttons on hover so the user never has to copy-paste.
  */
 export function AiPanel() {
-  const setMode = useSession((s) => s.setRightPanelMode);
   const aiChat = useSession((s) => s.aiChat);
   const aiPending = useSession((s) => s.aiPending);
   const aiAsk = useSession((s) => s.aiAsk);
@@ -84,12 +83,11 @@ export function AiPanel() {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex h-11 shrink-0 items-center gap-2 border-b border-border bg-background pl-3 pr-2">
+      <div className="flex h-9 shrink-0 items-center gap-2 border-b border-[var(--hairline)] pl-3 pr-2">
         <Sparkles className="h-3.5 w-3.5 text-primary" />
-        <span className="truncate text-sm font-medium text-foreground">AI assistant</span>
         <span
-          className="rounded-md bg-muted px-1.5 py-0.5 font-mono text-[10px] uppercase text-muted-foreground"
-          title="Active OpenRouter model"
+          className="truncate font-mono text-[10px] uppercase text-muted-foreground"
+          title="Active model"
         >
           {modelLabel(model)}
         </span>
@@ -105,15 +103,6 @@ export function AiPanel() {
             <Trash2 />
           </Button>
         )}
-        <Button
-          variant="ghost"
-          size="icon-xs"
-          onClick={() => setMode(null)}
-          aria-label="Close panel"
-          title="Close"
-        >
-          <span className="text-base leading-none">×</span>
-        </Button>
       </div>
 
       <div ref={scrollerRef} className="min-h-0 flex-1 overflow-y-auto px-3 py-3">

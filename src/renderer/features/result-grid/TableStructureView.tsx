@@ -111,11 +111,11 @@ export function TableStructureView() {
         {loading && !structure ? (
           <div className="flex h-full items-center justify-center gap-2 text-muted-foreground">
             <Loader2 className="h-4 w-4 animate-spin" />
-            <span className="font-display text-sm italic">reading the catalog…</span>
+            <span className="text-sm ">reading the catalog…</span>
           </div>
         ) : error ? (
           <div className="max-w-3xl p-8">
-            <div className="font-display text-lg italic text-foreground">
+            <div className="text-lg text-foreground">
               Couldn't read this table's structure
             </div>
             <pre className="mt-2 whitespace-pre-wrap font-mono text-xs text-destructive">
@@ -162,7 +162,7 @@ export function TableStructureView() {
                   ))}
                   {columns.length === 0 && (
                     <tr>
-                      <Td className="font-display italic text-muted-foreground" colSpan={6}>
+                      <Td className="text-muted-foreground" colSpan={6}>
                         no column matches "{filter}"
                       </Td>
                     </tr>
@@ -248,10 +248,10 @@ function Section({
   children: React.ReactNode;
 }) {
   return (
-    <section className="border-b border-border">
-      <h3 className="px-4 pb-1.5 pt-4 font-display text-base italic text-foreground">{title}</h3>
+    <section className="border-b hairline">
+      <h3 className="px-4 pb-1.5 pt-4 text-xs font-semibold text-foreground">{title}</h3>
       {empty ? (
-        <div className="px-4 pb-4 font-display text-sm italic text-muted-foreground">none</div>
+        <div className="px-4 pb-4 text-sm text-muted-foreground">none</div>
       ) : (
         <div className="px-2 pb-3">{children}</div>
       )}
@@ -261,7 +261,7 @@ function Section({
 
 function HeadRow({ cols }: { cols: string[] }) {
   return (
-    <tr className="border-b-2 border-foreground/80 text-left">
+    <tr className="border-b border-[var(--grid-line)] bg-[var(--grid-header)] text-left">
       {cols.map((c) => (
         <th
           key={c}

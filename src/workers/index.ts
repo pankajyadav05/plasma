@@ -146,6 +146,7 @@ process.parentPort.on('message', async (evt: Electron.MessageEvent) => {
           const revision = req.revision ?? 0;
           const result = await pg.query(req.sql, req.params, {
             revision,
+            maxRows: req.maxRows,
             onChunk: (chunk) => {
               send({
                 kind: 'queryChunk',

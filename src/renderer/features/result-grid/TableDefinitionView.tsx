@@ -89,7 +89,7 @@ export function TableDefinitionView() {
   return (
     <div className="relative flex min-h-0 flex-1 flex-col bg-card">
       <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border bg-background px-3">
-        <span className="font-display text-sm italic text-muted-foreground">SQL Definition of</span>
+        <span className="text-sm text-muted-foreground">SQL Definition of</span>
         <span className="font-mono text-sm text-foreground">
           {tab.tableSchema}.{tab.tableName}
         </span>
@@ -114,13 +114,13 @@ export function TableDefinitionView() {
       {loading && (
         <div className="flex flex-1 items-center justify-center text-muted-foreground">
           <Loader2 className="h-4 w-4 animate-spin" />
-          <span className="ml-2 font-display text-sm italic">building definition…</span>
+          <span className="ml-2 text-sm ">building definition…</span>
         </div>
       )}
 
       {!loading && error && (
         <div className="p-6">
-          <div className="mb-2 font-display text-lg italic text-destructive">
+          <div className="mb-2 text-lg text-destructive">
             could not build definition
           </div>
           <pre className="whitespace-pre-wrap break-words text-xs text-muted-foreground">

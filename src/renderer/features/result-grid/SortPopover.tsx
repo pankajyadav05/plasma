@@ -1,5 +1,6 @@
 import { Button } from '@/components/ui/button';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { Pill } from '@/components/ui/workbench';
 import { useActiveTab, useSession } from '@/stores/session';
 import { ArrowDown, ArrowUp, ArrowUpDown, Trash2, X } from 'lucide-react';
 
@@ -139,21 +140,17 @@ export function SortPopover() {
   return (
     <Popover>
       <PopoverTrigger asChild>
-        <Button
-          variant={activeCount > 0 ? 'outline' : 'ghost'}
-          size="xs"
-          className={activeCount > 0 ? 'border-primary text-primary' : ''}
-        >
+        <Pill className={activeCount > 0 ? 'text-primary' : undefined}>
           <ArrowUpDown />
           Sort
           {activeCount > 0 && (
-            <span className="rounded-sm bg-primary px-1 py-0.5 text-xs font-semibold leading-none text-primary-foreground">
+            <span className="rounded-[4px] bg-primary px-1 text-[10px] font-semibold leading-4 text-primary-foreground">
               {activeCount}
             </span>
           )}
-        </Button>
+        </Pill>
       </PopoverTrigger>
-      <PopoverContent align="start" side="bottom" className="w-96 p-0">
+      <PopoverContent align="start" side="top" className="w-96 p-0">
         <div className="flex items-center justify-between border-b border-border px-4 py-2.5">
           <h3 className="text-xs text-muted-foreground">Sort {isTable ? '' : '(client-side)'}</h3>
           {activeCount > 0 && (

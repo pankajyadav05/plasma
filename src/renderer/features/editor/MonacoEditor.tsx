@@ -1,5 +1,5 @@
-import { setEditorCaret } from '@/lib/editor-run-context';
-import type { EditorCursor } from '@/stores/workbench';
+import { statementPosition } from '@/lib/sql-split';
+import type { EditorCursor, TabCaret } from '@/stores/workbench';
 import type { OnChange, OnMount } from '@monaco-editor/react';
 import { binding, monacoKeybinding } from '@shared/keymap';
 import type * as MonacoType from 'monaco-editor';
@@ -12,6 +12,7 @@ import { registerSqlCompletions } from './sqlCompletions';
 const Editor = lazy(() => import('@monaco-editor/react').then((m) => ({ default: m.default })));
 
 const RUNNING_DECORATION = 'plasma-sql-running';
+const CURRENT_STMT_DECORATION = 'plasma-sql-current';
 const ERROR_MARKER_OWNER = 'plasma-sql-error';
 
 interface Props {
@@ -34,6 +35,16 @@ interface Props {
   errorMessage?: string | null;
   /** Caret line/column + selection size, for the editor action bar. */
   onCursorChange?: (cursor: EditorCursor | null) => void;
+  /** Caret offsets for run commands — stored per tab by the caller. */
+  onCaret?: (caret: TabCaret) => void;
+  /**
+   * Model identity. Each distinct path gets its own Monaco model, so a
+   * tab keeps its cursor, scroll position and undo history when you
+   * switch away and back.
+   */
+  path?: string;
+  /** Tint the statement "Run Current" would execute (multi-statement buffers). */
+  highlightCurrentStatement?: boolean;
 }
 
 /**
@@ -57,6 +68,9 @@ export function MonacoEditor({
   errorRange = null,
   errorMessage = null,
   onCursorChange,
+  onCaret,
+  path,
+  highlightCurrentStatement = false,
 }: Props) {
   const monacoRef = useRef<typeof MonacoType | null>(null);
   const editorRef = useRef<MonacoType.editor.IStandaloneCodeEditor | null>(null);
@@ -70,6 +84,13 @@ export function MonacoEditor({
   const onAskAiRef = useRef(onAskAi);
   const onCursorChangeRef = useRef(onCursorChange);
   onCursorChangeRef.current = onCursorChange;
+  const onCaretRef = useRef(onCaret);
+  onCaretRef.current = onCaret;
+  const highlightRef = useRef(highlightCurrentStatement);
+  highlightRef.current = highlightCurrentStatement;
+  // Owned by Monaco (replace-in-place), so re-entrant cursor/content
+  // events can never leak a stale tint the way manual id tracking did.
+  const currentStmtRef = useRef<MonacoType.editor.IEditorDecorationsCollection | null>(null);
   useEffect(() => {
     onRunRef.current = onRun;
     onRunAllRef.current = onRunAll;
@@ -80,28 +101,52 @@ export function MonacoEditor({
 
   const publishCaret = useCallback((editor: MonacoType.editor.IStandaloneCodeEditor) => {
     const model = editor.getModel();
-    if (!model) {
-      setEditorCaret(null);
-      onCursorChangeRef.current?.(null);
-      return;
-    }
     const sel = editor.getSelection();
     const pos = editor.getPosition();
-    if (!sel || !pos) {
-      setEditorCaret(null);
+    if (!model || !sel || !pos) {
       onCursorChangeRef.current?.(null);
       return;
     }
+    const offset = model.getOffsetAt(pos);
+    const selectionLength = model.getValueLengthInRange(sel);
     onCursorChangeRef.current?.({
       line: pos.lineNumber,
       column: pos.column,
-      selectionLength: model.getValueLengthInRange(sel),
+      offset,
+      selectionLength,
     });
-    setEditorCaret({
-      cursorOffset: model.getOffsetAt(pos),
+    onCaretRef.current?.({
+      cursorOffset: offset,
       selectionStart: model.getOffsetAt(sel.getStartPosition()),
       selectionEnd: model.getOffsetAt(sel.getEndPosition()),
+      bufferLength: model.getValueLength(),
     });
+
+    // Current-statement tint: whole lines of the statement at the caret,
+    // only when there is more than one statement and no selection.
+    const monaco = monacoRef.current;
+    if (!monaco) return;
+    const where =
+      highlightRef.current && selectionLength === 0
+        ? statementPosition(model.getValue(), offset)
+        : null;
+    currentStmtRef.current ??= editor.createDecorationsCollection();
+    if (!where || where.total < 2) {
+      currentStmtRef.current.clear();
+      return;
+    }
+    const start = model.getPositionAt(where.statement.start);
+    const end = model.getPositionAt(where.statement.end);
+    currentStmtRef.current.set([
+      {
+        range: new monaco.Range(start.lineNumber, 1, end.lineNumber, 1),
+        options: {
+          isWholeLine: true,
+          className: CURRENT_STMT_DECORATION,
+          linesDecorationsClassName: `${CURRENT_STMT_DECORATION}-bar`,
+        },
+      },
+    ]);
   }, []);
 
   const handleMount = useCallback<OnMount>(
@@ -143,13 +188,14 @@ export function MonacoEditor({
       const disposables = [
         editor.onDidChangeCursorPosition(() => publishCaret(editor)),
         editor.onDidChangeCursorSelection(() => publishCaret(editor)),
+        // Tab switch swaps the model (per-tab `path`); the restored
+        // cursor must be re-published for the new tab.
+        editor.onDidChangeModel(() => publishCaret(editor)),
+        editor.onDidChangeModelContent(() => publishCaret(editor)),
       ];
       editor.onDidDispose(() => {
         for (const d of disposables) d.dispose();
-        if (editorRef.current === editor) {
-          editorRef.current = null;
-          setEditorCaret(null);
-        }
+        if (editorRef.current === editor) editorRef.current = null;
       });
     },
     [theme, publishCaret],
@@ -241,13 +287,21 @@ export function MonacoEditor({
 
   // Inject a lightweight style for the running decoration once.
   useEffect(() => {
-    const id = 'plasma-monaco-u24-styles';
+    const id = 'plasma-monaco-u24-styles-v2';
     if (document.getElementById(id)) return;
     const style = document.createElement('style');
     style.id = id;
     style.textContent = `
       .monaco-editor .${RUNNING_DECORATION} {
         background-color: rgba(235, 94, 78, 0.12);
+      }
+      .monaco-editor .${CURRENT_STMT_DECORATION} {
+        background-color: color-mix(in oklch, var(--primary) 7%, transparent);
+      }
+      .monaco-editor .${CURRENT_STMT_DECORATION}-bar {
+        background-color: var(--primary);
+        width: 2px !important;
+        margin-left: 3px;
       }
     `;
     document.head.appendChild(style);
@@ -270,6 +324,8 @@ export function MonacoEditor({
     >
       <Editor
         language="sql"
+        path={path}
+        defaultValue={value}
         value={value}
         onChange={handleChange}
         onMount={handleMount}

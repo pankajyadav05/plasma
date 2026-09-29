@@ -1,6 +1,5 @@
-import { getEditorCaret } from '@/lib/editor-run-context';
 import { ipc } from '@/lib/ipc';
-import { resolveRunTarget, splitSqlStatements } from '@/lib/sql-split';
+import { type RunMode, resolveRunTarget, splitSqlStatements } from '@/lib/sql-split';
 import {
   type Filter,
   type TableSort,
@@ -31,6 +30,7 @@ import type {
   TxnState,
 } from '@shared/protocol';
 import { create } from 'zustand';
+import { useWorkbench } from './workbench';
 import { looksDestructive, looksLikeDdl } from './session-sql-heuristics';
 import {
   cancelProdGate as cancelProdGateAction,
@@ -582,7 +582,7 @@ interface SessionState {
    * - `{ all: true }`: whole buffer (⌘⇧⏎)
    * - `{ sql, base? }`: run this exact script (prod-gate resume); skips caret resolution
    */
-  runQuery(opts?: { all?: boolean; sql?: string; base?: number }): Promise<void>;
+  runQuery(opts?: { all?: boolean; mode?: RunMode; sql?: string; base?: number }): Promise<void>;
   /** Switch the grid to another statement result from the last multi-result run (U26). */
   setActiveResultIndex(index: number): void;
   /** ⌥← / ⌥→ — cycle the statement switcher. */
@@ -748,7 +748,7 @@ export const useSession = create<SessionState>((set, get) => ({
   connectionActionGate: null,
   availableRoles: [],
 
-  rightPanelMode: null,
+  rightPanelMode: 'details',
 
   editMode: false,
 
@@ -1273,7 +1273,7 @@ export const useSession = create<SessionState>((set, get) => ({
     patchActiveTab(set, get, { sql });
   },
 
-  async runQuery(opts?: { all?: boolean; sql?: string; base?: number }) {
+  async runQuery(opts?: { all?: boolean; mode?: RunMode; sql?: string; base?: number }) {
     const state = get();
     const tab = activeTab(state);
     if (!tab) return;
@@ -1296,8 +1296,12 @@ export const useSession = create<SessionState>((set, get) => ({
       base = opts.base ?? 0;
       if (script.trim().length === 0) return;
     } else {
-      const mode = opts?.all ? 'buffer' : 'smart';
-      const target = resolveRunTarget(tab.sql, mode, getEditorCaret());
+      const mode: RunMode = opts?.mode ?? (opts?.all ? 'buffer' : 'smart');
+      // Only trust this tab's caret, and only if it was read from the
+      // current text — otherwise its offsets point into different SQL.
+      const saved = useWorkbench.getState().carets[tab.id];
+      const caret = saved && saved.bufferLength === tab.sql.length ? saved : null;
+      const target = resolveRunTarget(tab.sql, mode, caret);
       if (!target) return;
       script = target.sql;
       base = target.base;
@@ -1362,7 +1366,13 @@ export const useSession = create<SessionState>((set, get) => ({
           queryRunningRange: { start: stmt.start, end: stmt.end },
         });
         try {
-          const result = await ipc.query.run(stmt.text);
+          // Editor row limit (TablePlus "No limit" menu) — enforced in the
+          // worker's cursor read, so the SQL itself is never rewritten.
+          const rowLimit = useWorkbench.getState().rowLimit;
+          const result =
+            rowLimit === null
+              ? await ipc.query.run(stmt.text)
+              : await ipc.query.run(stmt.text, undefined, { maxRows: rowLimit });
           // Attach any streamed notices that arrived for this statement
           // index (driver also returns notices; merge uniquely by message).
           const current = get().tabs.find((t) => t.id === originTabId);

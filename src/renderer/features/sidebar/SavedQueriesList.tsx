@@ -7,7 +7,7 @@ import {
 import { cn } from '@/lib/cn';
 import { useActiveTab, useSession } from '@/stores/session';
 import type { SavedQuery } from '@shared/protocol';
-import { BookmarkPlus, FileCode, Table2, Trash2 } from 'lucide-react';
+import { BookmarkPlus, ChevronRight, FileCode, Folder, Table2, Trash2 } from 'lucide-react';
 import { useState } from 'react';
 import { SidebarEmpty, SidebarSearch } from './sidebar-parts';
 
@@ -85,7 +85,7 @@ export function SavedQueriesList() {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex items-center gap-1 border-b border-sidebar-border px-3 py-2">
+      <div className="flex items-center gap-1 px-2.5 pb-2">
         <SidebarSearch value={filter} onChange={setFilter} placeholder="Search queries…" />
         <Button
           variant="ghost"
@@ -104,7 +104,7 @@ export function SavedQueriesList() {
       </div>
 
       {naming && (
-        <div className="flex shrink-0 items-center gap-1 border-b border-sidebar-border px-3 py-2">
+        <div className="flex shrink-0 items-center gap-1 px-2.5 pb-2">
           <input
             // biome-ignore lint/a11y/noAutofocus: naming field appears on explicit user action
             autoFocus
@@ -120,7 +120,7 @@ export function SavedQueriesList() {
             }}
             placeholder="Name this query…"
             aria-label="Saved query name"
-            className="h-8 min-w-0 flex-1 rounded-md border border-sidebar-border bg-background px-2 text-sm text-foreground outline-none transition-colors placeholder:text-muted-foreground focus:border-primary"
+            className="glass h-7 min-w-0 flex-1 rounded-[7px] border-0 px-2.5 text-[13px] text-foreground outline-none placeholder:text-muted-foreground focus:ring-2 focus:ring-primary/50"
           />
           <Button
             variant="primary"
@@ -144,7 +144,7 @@ export function SavedQueriesList() {
         ) : (
           <>
             {sqlQueries.length > 0 && (
-              <Section label="SQL" count={sqlQueries.length}>
+              <Section label="SQL queries" count={sqlQueries.length}>
                 {sqlQueries.map((s) => (
                   <SavedRow
                     key={s.id}
@@ -192,6 +192,7 @@ export function SavedQueriesList() {
   );
 }
 
+/** Collapsible folder, TablePlus-style ("Ungrouped" etc.). */
 function Section({
   label,
   count,
@@ -201,13 +202,23 @@ function Section({
   count: number;
   children: React.ReactNode;
 }) {
+  const [open, setOpen] = useState(true);
   return (
-    <div className="mb-1">
-      <div className="flex items-baseline gap-2 px-4 pb-0.5 pt-2">
-        <span className="font-display text-xs italic text-muted-foreground">{label}</span>
-        <span className="font-mono text-[10px] text-muted-foreground/70">{count}</span>
-      </div>
-      {children}
+    <div className="mb-0.5">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        className="mx-1.5 flex h-[26px] w-[calc(100%-0.75rem)] items-center gap-1.5 rounded-[6px] px-1.5 text-left text-[13px] text-foreground transition-colors hover:bg-[var(--glass-fill-hover)]"
+      >
+        <ChevronRight
+          className={cn('h-3 w-3 shrink-0 text-muted-foreground transition-transform', open && 'rotate-90')}
+        />
+        <Folder className="h-3.5 w-3.5 shrink-0 fill-primary/25 text-primary" />
+        <span className="flex-1 truncate">{label}</span>
+        <span className="font-mono text-[10px] text-muted-foreground">{count}</span>
+      </button>
+      {open && <div className="pl-4">{children}</div>}
     </div>
   );
 }
@@ -231,19 +242,19 @@ function SavedRow({
   return (
     <div
       className={cn(
-        'group/saved mx-2 flex items-center gap-1 rounded-md transition-colors hover:bg-sidebar-accent',
-        confirming && 'bg-sidebar-accent',
+        'group/saved mx-1.5 flex items-center gap-1 rounded-[6px] transition-colors hover:bg-[var(--glass-fill-hover)]',
+        confirming && 'bg-[var(--glass-fill-press)]',
       )}
     >
       <button
         type="button"
         onClick={onOpen}
-        className="flex min-w-0 flex-1 items-start gap-2 px-2 py-1.5 text-left"
+        className="flex min-w-0 flex-1 items-start gap-2 px-1.5 py-1 text-left"
         title={isTable ? detail : query.sql}
       >
         <Icon className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
         <span className="min-w-0 flex-1">
-          <span className="block truncate text-sm text-foreground">{query.name}</span>
+          <span className="block truncate text-[13px] text-foreground">{query.name}</span>
           <span className="block truncate font-mono text-[11px] text-muted-foreground">
             {detail}
           </span>

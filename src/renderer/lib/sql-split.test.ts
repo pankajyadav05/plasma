@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { resolveRunTarget, splitSqlStatements, statementAtOffset } from './sql-split';
+import {
+  resolveRunTarget,
+  splitSqlStatements,
+  statementAtOffset,
+  statementPosition,
+} from './sql-split';
 
 function texts(sql: string): string[] {
   return splitSqlStatements(sql).map((s) => s.text);
@@ -125,10 +130,21 @@ describe('statementAtOffset', () => {
     expect(statementAtOffset(sql, 18)?.text).toBe('SELECT 2');
   });
 
-  it('picks the following statement when the cursor is in a gap', () => {
-    const sql = 'SELECT 1;  SELECT 2';
-    // offset 9 is the space after `;`
-    expect(statementAtOffset(sql, 9)?.text).toBe('SELECT 2');
+  it('keeps a caret after the terminator on the statement it ends', () => {
+    // The caret sits right after `;` once you finish typing a query.
+    const sql = 'select 1;\nselect 2;\n\nselect 3';
+    expect(statementAtOffset(sql, 9)?.text).toBe('select 1');
+    expect(statementAtOffset(sql, 19)?.text).toBe('select 2');
+  });
+
+  it('assigns blank lines between statements to the statement above', () => {
+    const sql = 'select 1;\n\n\nselect 2';
+    expect(statementAtOffset(sql, 11)?.text).toBe('select 1');
+    expect(statementAtOffset(sql, 12)?.text).toBe('select 2');
+  });
+
+  it('picks the first statement for a caret above it', () => {
+    expect(statementAtOffset('\n\n  select 1; select 2', 0)?.text).toBe('select 1');
   });
 
   it('returns undefined for an empty buffer', () => {
@@ -167,10 +183,40 @@ describe('resolveRunTarget', () => {
   });
 
   it('smart mode without caret falls back to whole buffer', () => {
-    expect(resolveRunTarget(buffer, 'smart', null)).toEqual({ sql: buffer, base: 0 });
+    // Never widen "Run Current" to the whole script — use the first statement.
+    expect(resolveRunTarget(buffer, 'smart', null)).toEqual({ sql: 'SELECT 1', base: 0 });
   });
 
   it('returns null for an empty buffer', () => {
     expect(resolveRunTarget('  \n', 'buffer', null)).toBeNull();
+  });
+});
+
+describe('resolveRunTarget modes', () => {
+  const buffer = 'SELECT 1;  SELECT 2;  SELECT 3';
+  const sel = { cursorOffset: 19, selectionStart: 11, selectionEnd: 19 };
+  const caretOnly = { cursorOffset: 12, selectionStart: 12, selectionEnd: 12 };
+
+  it('selection mode runs the selection and nothing without one', () => {
+    expect(resolveRunTarget(buffer, 'selection', sel)).toEqual({ sql: 'SELECT 2', base: 11 });
+    expect(resolveRunTarget(buffer, 'selection', caretOnly)).toBeNull();
+  });
+
+  it('current mode ignores the selection', () => {
+    expect(resolveRunTarget(buffer, 'current', { ...sel, cursorOffset: 25 })?.sql).toBe('SELECT 3');
+  });
+
+  it('smart mode ignores a whitespace-only selection', () => {
+    expect(
+      resolveRunTarget(buffer, 'smart', { cursorOffset: 12, selectionStart: 9, selectionEnd: 11 })?.sql,
+    ).toBe('SELECT 2');
+  });
+});
+
+describe('statementPosition', () => {
+  it('reports the caret statement index and total', () => {
+    const sql = 'select 1; select 2; select 3';
+    expect(statementPosition(sql, 12)).toMatchObject({ index: 2, total: 3 });
+    expect(statementPosition('   ', 0)).toBeNull();
   });
 });

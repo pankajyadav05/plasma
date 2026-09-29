@@ -26,6 +26,7 @@ import {
   type WorkerRequest,
   type WorkerResponse,
 } from '@shared/protocol';
+import { MAX_RESULT_ROWS } from '@shared/result-bounds';
 import { BrowserWindow, app, dialog, ipcMain, nativeImage } from 'electron';
 import {
   cancelAiChat,
@@ -591,6 +592,7 @@ function registerIpcHandlers() {
     let sql: string;
     let params: unknown[] | undefined;
     let internal = false;
+    let maxRows: number | undefined;
     if (typeof payload === 'string') {
       sql = payload;
     } else if (payload && typeof payload === 'object' && 'sql' in payload) {
@@ -599,13 +601,17 @@ function registerIpcHandlers() {
       sql = p.sql;
       params = Array.isArray(p.params) ? p.params : undefined;
       internal = p.internal === true;
+      maxRows = parseRowLimit((p as { maxRows?: unknown }).maxRows);
     } else {
       throw new Error('invalid query payload');
     }
     const executedAt = Date.now();
     try {
       const revision = ++queryRequestRevision;
-      const res = await callWorker({ kind: 'query', sql, params, revision }, 'queryResult');
+      const res = await callWorker(
+        { kind: 'query', sql, params, revision, maxRows },
+        'queryResult',
+      );
       if (!internal) {
         try {
           recordHistory({
@@ -985,4 +991,10 @@ function registerIpcHandlers() {
     const res = await callWorker({ kind: 'ping', message: req.message }, 'ping');
     return { echo: res.echo, via: 'worker', timestamp: res.timestamp };
   });
+}
+
+/** Editor row limit from the renderer — a positive integer within the worker cap. */
+function parseRowLimit(v: unknown): number | undefined {
+  if (typeof v !== 'number' || !Number.isInteger(v) || v <= 0) return undefined;
+  return Math.min(v, MAX_RESULT_ROWS);
 }

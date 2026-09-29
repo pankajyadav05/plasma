@@ -96,8 +96,10 @@ describe('prod gate (U11)', () => {
   it('stashes a one-use {sql, tabId, connectionGen} without running', async () => {
     await useSession.getState().runQuery();
     const gate = useSession.getState().prodGate;
+    // Run Current resolves to the statement (terminator stripped), never
+    // the raw buffer — the gate stashes exactly what would execute.
     expect(gate).toEqual({
-      sql: 'DELETE FROM users;',
+      sql: 'DELETE FROM users',
       tabId: 'tab-a',
       connectionGen: 0,
     });

@@ -241,30 +241,35 @@ A faint ink-dot pattern at 2.5% opacity, 4px tile. Invisible individually, colle
 - Sidebar has 1px rule right border
 - Editor/result split: 38% / 1fr vertical, 2px strong bottom border between them
 
-#### Workbench anatomy (TablePlus-derived layout)
+#### Workbench anatomy (TablePlus layout, glass materials)
+
+> Supersedes the Paper Editor chrome above for the connected workspace:
+> native-sans display text, glass control groups, no status bar.
 
 ```text
-┌ toolbar: brand · ⊟ │ ┌ status capsule ───────────────────────────┐ │ changes · safety · ⊡ ┐
-│                      └ ■ engine version · TLS/SSH/plain · tag │ connection ▾ / db / schema ▾ / object │ ⌘K ┘
-├──────┬───────────────┬──────────────────────────────────────┬──────────────┬──────┤
-│ rail │ Items         │ tab strip                            │ Details      │ rail │
-│      │ Queries       ├──────────────────────────────────────┤ Assistant    │      │
-│      │ History       │ SQL editor                           │ (SQL/Role/RLS)│     │
-│      │ (segmented)   ├ Ln/Col ···· Beautify · Ask AI · Run ▾┤              │      │
-│      │               │ result toolbar                       │              │      │
-│      │               │ result tabs #1 #2 #3 ······ Messages │              │      │
-│      │               │ grid / Structure / DDL               │              │      │
-│      │               │ Data·Structure·DDL │ range · paging  │              │      │
-└──────┴───────────────┴──────────────────────────────────────┴──────────────┴──────┘
- status bar: connection health · last result · running · txn          ⌘/ shortcuts
+┌ ●●● [⊟] [✕ 👁 ✓] [🔒 ⛁ SQL] ▐ PostgreSQL 16.2 : TLS : conn ▾ : db : schema ▾ / object  DEV ▌ [↻ ∿ ⌘] [⊡] ┐
+├────────┬───────────────┬──────────────────────────────────────────────┬─────────────────┤
+│ ⛁ db   │ [Items|Queries│ ( tab )( tab )( tab )                      + │ [Details|Asst] ⋯│
+│ ◷ Hist │  |History]    ├──────────────────────────────────────────────┤ Search for field│
+│ ∿ Act  │ Search…       │ SQL editor                                   │                 │
+│        │ tables / saved│ line 3, column 40, location 101  [No limit▾] │ No row selected │
+│        │ folders / days│            [Beautify ▾] [▶ Run Current ▾]    │  — or the row's │
+│        │               │ ( Result 1 )( Result 2 )                     │  fields         │
+│ ⚙ Set  │               │ # │ col │ col │ … dense striped grid          │                 │
+│        │               │ [Data|Message|Chart] 8 ms  ‹ 1–50 of 586 › ⚙ ⌕ Columns Sort Export… │
+└────────┴───────────────┴──────────────────────────────────────────────┴─────────────────┘
 ```
 
-- **Status capsule** owns connection identity. It is tinted by the environment tag (prod = destructive border and wash). Transport reads `TLS`, `SSH` or `plain`, and `plain` is shown in the destructive colour. The status bar no longer repeats identity.
-- **Left sidebar modes** (Postgres): Items (entity browser), Queries (saved SQL and table views), History (this connection, grouped by day; click opens in a new tab). Mode is transient UI state in `stores/workbench.ts`.
-- **Right sidebar**: Details (row inspector with field search, selected column highlighted, table sizes when nothing is selected) is the default pane; Assistant follows.
-- **Editor action bar** sits on the editor's bottom edge: caret position on the left; Beautify, Ask AI and a Run split-button (Run current / Run all / Explain analyze) on the right. There is no editor header row; the tab strip already names the file.
-- **Table footer** starts with the Data · Structure · DDL switch at the lower-left, then paging.
-- **Pending edits** surface in the toolbar (count, discard, commit) as well as in the tray above the status bar.
+- **Materials** (`globals.css`, "Workbench materials"): `chrome` (toolbar, rails, sidebars, footers), `glass` (control groups, inputs, segment tracks: translucent fill, hairline stroke, lit top edge, soft drop), `raised` (active segment/tab), `hairline` borders, and grid tokens (`--grid-line`, `--grid-stripe`, `--grid-header`). Every value is `color-mix`ed from the active theme, so all palettes and light/dark share the materials.
+- **Native vibrancy**: macOS windows use `vibrancy: 'under-window'` with a transparent background; `<html data-vibrancy>` makes `chrome` translucent so the desktop reads through. The editor and grid stay opaque. Other platforms get the same controls on solid chrome.
+- **Primitives** (`components/ui/workbench.tsx`): `ToolbarGroup`/`ToolbarButton`, `Segmented` (`raised` or `accent`), `Pill`, `SplitPill` + `PillChevron`, `MenuItem`.
+- **Status capsule** is filled with the environment colour (`--status-local/dev/staging/prod`); untagged connections use neutral glass. It carries engine + version, transport (`TLS`/`SSH`/`No TLS`), connection switcher, database, schema switcher and the active object. There is no bottom status bar; the open-transaction controls and pending-change review (discard / preview / commit) are toolbar clusters.
+- **Workspace rail**: labelled tiles (database name, History, Activity; Settings at the bottom).
+- **Editor footer**: `statement N of M` (or `N selected`) and caret `line, column, location`; row-limit menu (enforced in the worker's cursor read via `maxRows`, SQL is never rewritten); Beautify split pill (Ask AI in its menu); Run split pill whose label follows the editor — **Run Selected** while text is selected, else **Run Current** — with Run Selected / Run Current / Run All / Explain Analyze in its menu.
+- **Run targeting** (`lib/sql-split.ts`): the current statement is the last one starting at or before the caret, so a caret after `;` or on blank lines below a statement still means that statement. It is tinted in the editor (whole lines, accent bar) whenever the buffer has more than one statement. Each SQL tab has its own Monaco model (`path`), so cursor, scroll and undo survive tab switches, and carets are stored per tab (`useWorkbench.carets`), stamped with the buffer length so a stale caret is never trusted. Without a caret, Run Current uses the first statement; it never widens to the whole script.
+- **Results footer** replaces the old toolbar, messages strip and pagination bar: `Data · Message · Chart` for SQL tabs, `Data · Structure · DDL` for tables, then timing, row range and paging, find, Columns, Sort, ⋯ (PostGIS / pgvector / mock rows), Export….
+- **Grid**: 26px rows, row-number gutter (click selects), vertical grid lines, zebra stripes, sans header with mono type label.
+- **Right sidebar**: `Details | Assistant` segmented header, open by default; compiled SQL / session role / RLS live in its ⋯ menu.
 
 ### 8.2 Top Bar
 
@@ -387,7 +392,7 @@ monaco.editor.defineTheme('paper-editor', {
 - Icon-only buttons get `aria-label`
 - Result grid keyboard-navigable:
   - Arrows move the selected cell
-  - Enter opens the row inspector: the right-sidebar Details pane, or the drawer where no right rail is shown (does **not** enter edit mode)
+  - Enter opens the row inspector: the right-sidebar Details pane, or the drawer where no right sidebar is shown (does **not** enter edit mode)
   - F2 starts an inline edit when the grid is writable; double-click also edits
   - Esc cancels an open edit, or clears the cell selection when not editing
   - Tab / Shift+Tab move to the next / previous cell (commit first if editing)

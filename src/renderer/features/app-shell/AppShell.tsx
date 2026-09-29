@@ -17,23 +17,22 @@ import { NewIndexDialog } from '@/features/opensearch/NewIndexDialog';
 import { OsCanvas } from '@/features/opensearch/OsCanvas';
 import { RedisCanvas } from '@/features/redis/RedisCanvas';
 import { FilterRow } from '@/features/result-grid/FilterRow';
-import { PaginationBar } from '@/features/result-grid/PaginationBar';
-import { PendingEditsTray } from '@/features/result-grid/PendingEditsTray';
 import { ResultGrid } from '@/features/result-grid/ResultGrid';
-import { ResultMessagesStrip } from '@/features/result-grid/ResultMessagesStrip';
-import { ResultToolbar } from '@/features/result-grid/ResultToolbar';
+import { ResultFooter } from '@/features/result-grid/ResultFooter';
+import { ResultMessagesPanel, ResultTabs } from '@/features/result-grid/ResultTabs';
 import { RightRail } from '@/features/right-rail/RightRail';
 import { SchemaDiffDialog } from '@/features/schema-diff/SchemaDiffDialog';
 import { SettingsCanvas } from '@/features/settings/SettingsCanvas';
 import { SettingsSheet } from '@/features/settings/SettingsSheet';
 import { Sidebar } from '@/features/sidebar/Sidebar';
+import { ChartBody } from '@/features/chart/ChartDialog';
 import { useActiveTab, useSession } from '@/stores/session';
+import { useWorkbench } from '@/stores/workbench';
 import { matchGlobalBinding } from '@shared/keymap';
 import { useEffect, useState } from 'react';
 import { DisconnectedHome } from './DisconnectedHome';
 import { IconRail } from './IconRail';
 import { SidebarResizer } from './SidebarResizer';
-import { StatusBar } from './StatusBar';
 import { TopBar } from './TopBar';
 
 /**
@@ -195,7 +194,6 @@ export function AppShell() {
           <ConnectedShell />
         )}
 
-        <StatusBar />
       </div>
 
       {/* Overlays */}
@@ -234,7 +232,7 @@ function ConnectedShell() {
       {!fullPage && (
         <>
           <aside
-            className="relative shrink-0 overflow-hidden border-r bg-sidebar text-sidebar-foreground"
+            className="chrome relative shrink-0 overflow-hidden border-r hairline text-sidebar-foreground"
             style={{
               width: sidebarCollapsed ? 0 : sidebarWidth,
               transition: 'width 220ms cubic-bezier(0.16, 1, 0.3, 1)',
@@ -304,10 +302,9 @@ function SqlOnlyCanvas() {
       {hasResultOrError && (
         <>
           <EditorResizer />
-          <ResultMessagesStrip />
-          <ResultGrid />
-          <PendingEditsTray />
-          <PaginationBar />
+          <ResultTabs />
+          <ResultBody />
+          <ResultFooter />
         </>
       )}
     </main>
@@ -317,11 +314,9 @@ function SqlOnlyCanvas() {
 function DatabaseCanvas() {
   const tab = useActiveTab();
   const isTableData = tab?.kind === 'table' && tab.viewMode === 'data';
-  const showFilterRow = isTableData;
   // SQL tabs get Monaco inline. When there's no result yet, the editor
-  // expands to fill the canvas (the "P · start where you left off" home
-  // panel is suppressed). Once a query has run, the editor caps at ~40%
-  // and the result grid takes the rest.
+  // expands to fill the canvas. Once a query has run, the editor keeps
+  // its user-sized height and the results take the rest.
   const isSqlTab = tab?.kind === 'sql';
   const hasResultOrError = Boolean(
     tab?.queryResult ||
@@ -334,12 +329,39 @@ function DatabaseCanvas() {
       <TabStrip />
       {isSqlTab && <SqlCanvas expanded={!hasResultOrError} />}
       {isSqlTab && hasResultOrError && <EditorResizer />}
-      {showFilterRow && <FilterRow />}
-      {showGrid && (tab?.kind !== 'table' || isTableData) && <ResultToolbar />}
-      {showGrid && <ResultMessagesStrip />}
-      {showGrid && <ResultGrid />}
-      <PendingEditsTray />
-      {showGrid && <PaginationBar />}
+      {isTableData && <FilterRow />}
+      {showGrid && isSqlTab && <ResultTabs />}
+      {showGrid && <ResultBody />}
+      {showGrid && <ResultFooter />}
     </main>
   );
+}
+
+/**
+ * What sits above the footer: the grid, or — for SQL tabs — the
+ * footer's Message / Chart views (TablePlus Data · Message · Chart).
+ */
+function ResultBody() {
+  const tab = useActiveTab();
+  const view = useWorkbench((s) => (tab ? (s.resultViews[tab.id] ?? 'data') : 'data'));
+  if (tab?.kind === 'sql' && view === 'message') return <ResultMessagesPanel />;
+  if (tab?.kind === 'sql' && view === 'chart') {
+    const result = tab.queryResult;
+    return (
+      <div className="min-h-0 flex-1 overflow-auto bg-background p-4">
+        {result && result.columns.length > 0 ? (
+          <ChartBody
+            key={`${tab.id}-${tab.activeResultIndex}-${result.durationMs}`}
+            result={result}
+            tall
+          />
+        ) : (
+          <div className="grid h-full place-items-center text-sm text-muted-foreground">
+            Nothing to chart — run a query that returns rows.
+          </div>
+        )}
+      </div>
+    );
+  }
+  return <ResultGrid />;
 }

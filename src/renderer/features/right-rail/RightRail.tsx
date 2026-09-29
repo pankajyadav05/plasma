@@ -2,6 +2,8 @@ import { Button } from '@/components/ui/button';
 import { Kbd } from '@/components/ui/kbd';
 import { AiPanel } from '@/features/ai/AiPanel';
 import { MonacoEditor } from '@/features/editor/MonacoEditor';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { MenuItem, Segmented, ToolbarButton } from '@/components/ui/workbench';
 import { cn } from '@/lib/cn';
 import { ipc } from '@/lib/ipc';
 import { kbd } from '@/lib/platform';
@@ -13,7 +15,7 @@ import {
   Check,
   Code2,
   Loader2,
-  PanelRight,
+  MoreHorizontal,
   Play,
   RefreshCw,
   Shield,
@@ -28,161 +30,118 @@ import {
 import { useEffect, useState } from 'react';
 import { DetailsPanel } from './DetailsPanel';
 
-const RAIL_WIDTH = 48;
-const PANEL_WIDTH = 460;
+const PANEL_WIDTH = 320;
 
 const NOOP = () => {};
 
-interface RailItem {
-  mode: NonNullable<RightPanelMode>;
-  icon: React.ReactNode;
-  label: string;
-  /** Optional icon override that conveys state (e.g. ShieldOff vs ShieldCheck). */
-  stateIcon?: React.ReactNode;
-}
+type PrimaryPane = 'details' | 'ai' | 'none';
 
 /**
- * Right-side activity bar — Details (row inspector), Assistant, and
- * the Postgres session panes (compiled SQL, Role, RLS). Each opens a
- * panel which slides in to the *left* of the rail. The rail is
- * always visible while connected; the panel only renders when a mode
- * is selected. Clicking the active icon closes the panel.
- *
- * Replaces the old EditorPane (collapsed strip / expanded drawer)
- * pattern. The query slot still owns Monaco; the role and RLS slots
- * subsume what used to be popovers in the toolbar.
+ * Right sidebar, TablePlus layout: a Details | Assistant segmented header
+ * over the pane. Postgres session tools (compiled SQL, session role, RLS
+ * policies) live in the header's ⋯ menu rather than a second icon rail.
+ * Shown/hidden from the toolbar (⇧⌘B); Redis / OpenSearch only get the
+ * Assistant.
  */
 export function RightRail() {
   const mode = useSession((s) => s.rightPanelMode);
   const setMode = useSession((s) => s.setRightPanelMode);
   const engine = useSession((s) => s.activeConfig?.engine ?? 'postgres');
   const tab = useActiveTab();
-  const rlsCount = tab?.kind === 'table' ? tab.rlsPolicyCount : null;
-
   const isTable = tab?.kind === 'table';
-  const isPostgres = engine === 'postgres';
-  // SQL tabs get the Monaco editor inline in the main canvas now, so
-  // the right-rail Query icon would be a duplicate. Show it only for
-  // table tabs (where it surfaces the compiled, read-only SQL). The
-  // RLS / Role / Saved-queries panels are SQL-specific — hidden when
-  // connected to redis / opensearch.
-  const items: RailItem[] = [
-    ...(isPostgres
-      ? [
-          {
-            mode: 'details' as const,
-            icon: <PanelRight className="h-[18px] w-[18px]" />,
-            label: 'Details',
-          },
-        ]
-      : []),
-    ...(isPostgres && isTable
-      ? [
-          {
-            mode: 'query' as const,
-            icon: <Code2 className="h-[18px] w-[18px]" />,
-            label: 'Compiled SQL',
-          },
-        ]
-      : []),
-    {
-      mode: 'ai',
-      icon: <Wand2 className="h-[18px] w-[18px]" />,
-      label: 'Assistant',
-    },
-    ...(isPostgres
-      ? ([
-          {
-            mode: 'role',
-            icon: <UserCircle className="h-[18px] w-[18px]" />,
-            label: 'Session role',
-          },
-          {
-            mode: 'rls',
-            icon: <Shield className="h-[18px] w-[18px]" />,
-            stateIcon:
-              rlsCount === null ? (
-                <Shield className="h-[18px] w-[18px]" />
-              ) : rlsCount === 0 ? (
-                <ShieldOff className="h-[18px] w-[18px]" />
-              ) : (
-                <ShieldCheck className="h-[18px] w-[18px]" />
-              ),
-            label: 'Row-level security',
-          },
-        ] as RailItem[])
-      : []),
-  ];
+  const postgres = engine === 'postgres';
+  const effective = mode === null ? null : postgres ? mode : 'ai';
 
-  // Auto-collapse RLS slot when there's no table tab — it has nothing
-  // meaningful to show. Switch to query if user was on rls.
+  // RLS / compiled SQL are table-scoped — fall back to Details elsewhere.
   useEffect(() => {
-    if (mode === 'rls' && !isTable) setMode('query');
+    if ((mode === 'rls' || mode === 'query') && !isTable) setMode('details');
   }, [mode, isTable, setMode]);
 
-  const handleClick = (next: NonNullable<RightPanelMode>) => {
-    setMode(mode === next ? null : next);
-  };
+  if (!effective) return null;
+
+  const primary: PrimaryPane =
+    effective === 'details' ? 'details' : effective === 'ai' ? 'ai' : 'none';
 
   return (
-    <section
-      className="flex shrink-0 self-stretch border-l border-border bg-background"
-      aria-label="Right-side panels"
+    <aside
+      className="chrome flex shrink-0 flex-col self-stretch border-l hairline"
+      style={{ width: PANEL_WIDTH }}
+      aria-label="Right sidebar"
     >
-      <div
-        className="overflow-hidden transition-[width] duration-base ease-out"
-        style={{ width: mode ? PANEL_WIDTH : 0 }}
-      >
-        <div style={{ width: PANEL_WIDTH }} className="h-full">
-          {mode === 'query' && <QueryPanel />}
-          {mode === 'ai' && <AiPanel />}
-          {mode === 'details' && <DetailsPanel onClose={() => setMode(null)} />}
-          {mode === 'role' && <RolePanel />}
-          {mode === 'rls' && <RlsPanel />}
-        </div>
+      <div className="flex shrink-0 items-center gap-1.5 px-2.5 pb-2 pt-2.5">
+        {postgres ? (
+          <Segmented<PrimaryPane>
+            ariaLabel="Right sidebar pane"
+            stretch
+            value={primary}
+            onChange={(v) => setMode(v === 'none' ? 'details' : v)}
+            options={[
+              { value: 'details', label: 'Details' },
+              { value: 'ai', label: 'Assistant', title: `Assistant (${kbd('L')})` },
+            ]}
+          />
+        ) : (
+          <span className="flex-1 px-1 text-xs font-semibold text-foreground">Assistant</span>
+        )}
+        {postgres && <SessionToolsMenu isTable={isTable} rlsCount={isTable ? tab.rlsPolicyCount : null} />}
       </div>
+      <div className="min-h-0 flex-1 border-t hairline bg-background">
+        {effective === 'query' && <QueryPanel />}
+        {effective === 'ai' && <AiPanel />}
+        {effective === 'details' && <DetailsPanel />}
+        {effective === 'role' && <RolePanel />}
+        {effective === 'rls' && <RlsPanel />}
+      </div>
+    </aside>
+  );
+}
 
-      <nav
-        className="flex shrink-0 flex-col items-center gap-0.5 border-l border-border bg-sidebar py-2"
-        style={{ width: RAIL_WIDTH }}
-        aria-label="Right rail"
-      >
-        {items.map((it) => {
-          const isActive = mode === it.mode;
-          const disabled = it.mode === 'rls' && !isTable;
-          return (
-            <button
-              key={it.mode}
-              type="button"
-              disabled={disabled}
-              onClick={() => handleClick(it.mode)}
-              aria-label={it.label}
-              aria-current={isActive}
-              title={
-                disabled
-                  ? `${it.label} — open a table tab first`
-                  : `${it.label} (${it.mode === 'query' ? kbd('J') : it.mode === 'ai' ? kbd('L') : 'click'})`
-              }
-              className={cn(
-                'relative grid h-9 w-9 cursor-pointer place-items-center rounded-md transition-colors duration-150',
-                isActive
-                  ? 'bg-accent text-primary'
-                  : 'text-muted-foreground hover:bg-accent hover:text-foreground',
-                disabled && 'cursor-not-allowed opacity-40 hover:bg-transparent',
-              )}
-            >
-              {it.stateIcon ?? it.icon}
-              {isActive && (
-                <span
-                  className="absolute -left-px top-1/2 h-4 w-[2px] -translate-y-1/2 rounded-r-full bg-primary"
-                  aria-hidden
-                />
-              )}
-            </button>
-          );
-        })}
-      </nav>
-    </section>
+function SessionToolsMenu({ isTable, rlsCount }: { isTable: boolean; rlsCount: number | null }) {
+  const mode = useSession((s) => s.rightPanelMode);
+  const setMode = useSession((s) => s.setRightPanelMode);
+  const activeRole = useSession((s) => s.activeRole);
+  const [open, setOpen] = useState(false);
+  const pick = (m: NonNullable<RightPanelMode>) => {
+    setOpen(false);
+    setMode(m);
+  };
+  const secondary = mode === 'query' || mode === 'role' || mode === 'rls';
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <ToolbarButton
+          label="Session tools — compiled SQL, role, row-level security"
+          active={secondary}
+          className="h-[28px] w-[28px] rounded-[8px]"
+        >
+          <MoreHorizontal />
+        </ToolbarButton>
+      </PopoverTrigger>
+      <PopoverContent align="end" sideOffset={6} className="w-[240px] p-1" role="menu">
+        <MenuItem
+          icon={<Code2 />}
+          label="Compiled SQL"
+          disabled={!isTable}
+          checked={mode === 'query' ? true : undefined}
+          onClick={() => pick('query')}
+        />
+        <MenuItem
+          icon={<UserCircle />}
+          label="Session role"
+          hint={activeRole ?? 'default'}
+          checked={mode === 'role' ? true : undefined}
+          onClick={() => pick('role')}
+        />
+        <MenuItem
+          icon={rlsCount === 0 ? <ShieldOff /> : rlsCount ? <ShieldCheck /> : <Shield />}
+          label="Row-level security"
+          hint={rlsCount === null ? undefined : `${rlsCount} polic${rlsCount === 1 ? 'y' : 'ies'}`}
+          disabled={!isTable}
+          checked={mode === 'rls' ? true : undefined}
+          onClick={() => pick('rls')}
+        />
+      </PopoverContent>
+    </Popover>
   );
 }
 
@@ -221,7 +180,7 @@ function QueryPanel() {
     void runQuery({ all: true });
   };
 
-  const close = () => setMode(null);
+  const close = () => setMode('details');
 
   return (
     <div className="flex h-full flex-col">
@@ -332,7 +291,7 @@ function RolePanel() {
       <PanelHeader
         title="Session role"
         hint={activeRole ? `SET ROLE ${activeRole}` : 'default'}
-        onClose={() => setMode(null)}
+        onClose={() => setMode('details')}
       />
 
       <div className="border-b border-border px-3 py-2">
@@ -471,7 +430,7 @@ function RlsPanel() {
   if (!tab || tab.kind !== 'table') {
     return (
       <div className="flex h-full flex-col">
-        <PanelHeader title="Row-level security" onClose={() => setMode(null)} />
+        <PanelHeader title="Row-level security" onClose={() => setMode('details')} />
         <PanelEmpty
           title="No table selected"
           hint="Open a table tab to inspect its RLS policies."
@@ -485,7 +444,7 @@ function RlsPanel() {
       <PanelHeader
         title="Row-level security"
         hint={`${tab.tableSchema}.${tab.tableName}`}
-        onClose={() => setMode(null)}
+        onClose={() => setMode('details')}
       />
 
       <div className="min-h-0 flex-1 overflow-y-auto">

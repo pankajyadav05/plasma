@@ -19,7 +19,7 @@ export function SidebarSearch({
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
         aria-label={placeholder.replace(/…$/, '')}
-        className="h-8 w-full rounded-md border border-sidebar-border bg-background pl-8 pr-7 text-sm text-foreground outline-none transition-colors placeholder:text-muted-foreground focus:border-primary"
+        className="glass h-7 w-full rounded-[7px] border-0 pl-8 pr-7 text-[13px] text-foreground outline-none transition-shadow placeholder:text-muted-foreground focus:ring-2 focus:ring-primary/50"
       />
       {value && (
         <button
@@ -38,9 +38,9 @@ export function SidebarSearch({
 export function SidebarEmpty({ title, hint }: { title: string; hint?: string }) {
   return (
     <div className="px-4 py-3">
-      <div className="font-display text-sm italic text-muted-foreground">{title}</div>
+      <div className="text-[13px] text-muted-foreground">{title}</div>
       {hint && (
-        <div className="mt-1 font-display text-xs italic text-muted-foreground/80">{hint}</div>
+        <div className="mt-1 text-xs text-muted-foreground/80">{hint}</div>
       )}
     </div>
   );
