@@ -4,7 +4,17 @@ import { EmptyState, ViewFooter, ViewToolbar } from '@/components/ui/view-parts'
 import { IconButton, MenuItem, Pill, Segmented } from '@/components/ui/workbench';
 import { cn } from '@/lib/cn';
 import { useActiveTab, useSession } from '@/stores/session';
-import { Download, Key, Link2, Maximize, Minus, Plus, RotateCcw, Table2 } from 'lucide-react';
+import {
+  Download,
+  Key,
+  Link2,
+  Maximize,
+  Minus,
+  MoreHorizontal,
+  Plus,
+  RotateCcw,
+  Table2,
+} from 'lucide-react';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   CARD_WIDTH,
@@ -37,6 +47,9 @@ import {
 } from './er-model';
 
 const MODE_KEY = 'plasma.er.columnMode';
+
+/** Below this canvas width the less-used toolbar controls fold into a "…" menu. */
+const COMPACT_WIDTH = 720;
 
 function readMode(): ColumnMode {
   try {
@@ -171,6 +184,9 @@ export function ErDiagramView() {
   );
   const rootRef = useRef<HTMLDivElement>(null);
   const fitted = useRef(false);
+  // Set once the user pans or zooms; until then a resize (e.g. a split pane
+  // opening) re-fits the diagram to the new canvas.
+  const userMoved = useRef(false);
 
   // Columns load per schema (F16); the graph needs those of the scope.
   const schemasNeeded = useMemo(() => {
@@ -221,12 +237,22 @@ export function ErDiagramView() {
     fit();
   }, [graph.nodes.length, size.w]);
 
+  // Keep the diagram usable when the canvas resizes and the user hasn't
+  // taken over the viewport yet.
+  const fitRef = useRef(fit);
+  fitRef.current = fit;
+  useEffect(() => {
+    if (!fitted.current || userMoved.current || size.w < 50 || size.h < 50) return;
+    fitRef.current();
+  }, [size.w, size.h]);
+
   // Wheel zoom (needs a non-passive listener to stop page scroll).
   useEffect(() => {
     const el = rootRef.current;
     if (!el) return;
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
+      userMoved.current = true;
       const rect = el.getBoundingClientRect();
       const factor = Math.exp(-e.deltaY * (e.ctrlKey ? 0.01 : 0.0015));
       setView((v) => zoomAt(v, e.clientX - rect.left, e.clientY - rect.top, factor));
@@ -295,6 +321,7 @@ export function ErDiagramView() {
     const g = gesture.current;
     if (!g) return;
     if (g.kind === 'pan') {
+      if (Math.abs(e.clientX - g.sx) + Math.abs(e.clientY - g.sy) > 2) userMoved.current = true;
       setView((v) => ({ ...v, x: g.vx + e.clientX - g.sx, y: g.vy + e.clientY - g.sy }));
       return;
     }
@@ -338,8 +365,19 @@ export function ErDiagramView() {
     } catch {
       /* storage unavailable */
     }
+    userMoved.current = false;
     fit(auto);
   };
+
+  const zoomBy = (factor: number) => {
+    userMoved.current = true;
+    setView((v) => zoomAt(v, size.w / 2, size.h / 2, factor));
+  };
+  const fitToScreen = () => {
+    userMoved.current = false;
+    fit();
+  };
+  const compact = size.w < COMPACT_WIDTH;
 
   const matches = useMemo(() => matchNodes(graph.nodes, query), [graph.nodes, query]);
   const focus = useMemo(
@@ -417,64 +455,100 @@ export function ErDiagramView() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-[var(--wb-content)]" data-testid="er-diagram">
-      <ViewToolbar>
+      <ViewToolbar className="min-w-0 overflow-hidden">
         <Input
-          className="w-[200px]"
+          className={compact ? 'min-w-0 flex-1' : 'w-[200px]'}
           placeholder="Find table or column"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           aria-label="Find table or column"
         />
         {query.trim() !== '' && (
-          <span className="text-[12px] text-[var(--wb-text-2)]">
+          <span className="shrink-0 text-[12px] text-[var(--wb-text-2)]">
             {matches.size} match{matches.size === 1 ? '' : 'es'}
           </span>
         )}
-        <div className="flex-1" />
-        <Segmented<ColumnMode>
-          variant="track"
-          size="sm"
-          ariaLabel="Columns shown"
-          value={mode}
-          onChange={changeMode}
-          options={[
-            { value: 'all', label: 'All columns' },
-            { value: 'keys', label: 'Keys' },
-            { value: 'none', label: 'Names' },
-          ]}
-        />
-        <IconButton
-          label="Zoom out"
-          onClick={() => setView((v) => zoomAt(v, size.w / 2, size.h / 2, 0.8))}
-        >
+        {!compact && <div className="flex-1" />}
+        {!compact && (
+          <Segmented<ColumnMode>
+            variant="track"
+            size="sm"
+            ariaLabel="Columns shown"
+            value={mode}
+            onChange={changeMode}
+            options={[
+              { value: 'all', label: 'All columns' },
+              { value: 'keys', label: 'Keys' },
+              { value: 'none', label: 'Names' },
+            ]}
+          />
+        )}
+        <IconButton label="Zoom out" onClick={() => zoomBy(0.8)}>
           <Minus />
         </IconButton>
-        <span className="w-10 text-center text-[12px] tabular-nums text-[var(--wb-text-2)]">
+        <span className="w-10 shrink-0 text-center text-[12px] tabular-nums text-[var(--wb-text-2)]">
           {Math.round(view.scale * 100)}%
         </span>
-        <IconButton
-          label="Zoom in"
-          onClick={() => setView((v) => zoomAt(v, size.w / 2, size.h / 2, 1.25))}
-        >
+        <IconButton label="Zoom in" onClick={() => zoomBy(1.25)}>
           <Plus />
         </IconButton>
-        <IconButton label="Fit to screen" onClick={() => fit()}>
+        <IconButton label="Fit to screen" onClick={fitToScreen}>
           <Maximize />
         </IconButton>
-        <IconButton label="Reset layout" onClick={resetLayout}>
-          <RotateCcw />
-        </IconButton>
-        <Popover>
-          <PopoverTrigger asChild>
-            <Pill aria-label="Export diagram">
-              <Download /> Export
-            </Pill>
-          </PopoverTrigger>
-          <PopoverContent align="end" className="w-[160px] p-1" role="menu">
-            <MenuItem label="PNG image" onClick={() => void exportDiagram('png')} />
-            <MenuItem label="SVG image" onClick={() => void exportDiagram('svg')} />
-          </PopoverContent>
-        </Popover>
+        {!compact && (
+          <IconButton label="Reset layout" onClick={resetLayout}>
+            <RotateCcw />
+          </IconButton>
+        )}
+        {compact ? (
+          <Popover>
+            <PopoverTrigger asChild>
+              <IconButton label="More diagram options">
+                <MoreHorizontal />
+              </IconButton>
+            </PopoverTrigger>
+            <PopoverContent align="end" className="w-[180px] p-1" role="menu">
+              <MenuItem
+                label="All columns"
+                checked={mode === 'all'}
+                onClick={() => changeMode('all')}
+              />
+              <MenuItem
+                label="Keys only"
+                checked={mode === 'keys'}
+                onClick={() => changeMode('keys')}
+              />
+              <MenuItem
+                label="Names only"
+                checked={mode === 'none'}
+                onClick={() => changeMode('none')}
+              />
+              <MenuItem icon={<RotateCcw />} label="Reset layout" onClick={resetLayout} />
+              <MenuItem
+                icon={<Download />}
+                label="Export PNG"
+                onClick={() => void exportDiagram('png')}
+              />
+              <MenuItem
+                icon={<Download />}
+                label="Export SVG"
+                onClick={() => void exportDiagram('svg')}
+              />
+            </PopoverContent>
+          </Popover>
+        ) : (
+          <Popover>
+            <PopoverTrigger asChild>
+              <Pill aria-label="Export diagram">
+                <Download /> Export
+              </Pill>
+            </PopoverTrigger>
+            <PopoverContent align="end" className="w-[160px] p-1" role="menu">
+              <MenuItem label="PNG image" onClick={() => void exportDiagram('png')} />
+              <MenuItem label="SVG image" onClick={() => void exportDiagram('svg')} />
+            </PopoverContent>
+          </Popover>
+        )}
       </ViewToolbar>
 
       <div

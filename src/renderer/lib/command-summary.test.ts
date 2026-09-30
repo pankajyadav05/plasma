@@ -4,9 +4,9 @@ import { commandDetail, commandTitle } from './command-summary';
 describe('commandTitle', () => {
   it('names the object kind for DDL', () => {
     expect(commandTitle('CREATE', 'create or replace view v as select 1')).toBe('CREATE VIEW');
-    expect(commandTitle('CREATE', '-- note\n/* x */\nCREATE MATERIALIZED VIEW mv AS SELECT 1')).toBe(
-      'CREATE MATERIALIZED VIEW',
-    );
+    expect(
+      commandTitle('CREATE', '-- note\n/* x */\nCREATE MATERIALIZED VIEW mv AS SELECT 1'),
+    ).toBe('CREATE MATERIALIZED VIEW');
     expect(commandTitle('DROP', 'drop table if exists t')).toBe('DROP TABLE');
     expect(commandTitle('CREATE', 'CREATE UNIQUE INDEX i ON t(a)')).toBe('CREATE UNIQUE INDEX');
   });

@@ -115,9 +115,7 @@ describe('U03 origin-tab SQL publish', () => {
     queryRun.mockReturnValueOnce(pending.promise);
 
     const runPromise = useSession.getState().runQuery();
-    expect(useSession.getState().tabs.find((t) => t.id === 'tab-a')?.queryRunState).toBe(
-      'running',
-    );
+    expect(useSession.getState().tabs.find((t) => t.id === 'tab-a')?.queryRunState).toBe('running');
 
     useSession.getState().setActiveTab('tab-b');
     expect(useSession.getState().activeTabId).toBe('tab-b');
@@ -183,7 +181,9 @@ describe('U03 origin-tab SQL publish', () => {
     // Simulate a newer request claiming the tab (U01/U03 supersession).
     useSession.setState((s) => ({
       tabs: s.tabs.map((t) =>
-        t.id === 'tab-a' ? { ...t, queryGeneration: genAfterStart + 1, queryRunState: 'running' } : t,
+        t.id === 'tab-a'
+          ? { ...t, queryGeneration: genAfterStart + 1, queryRunState: 'running' }
+          : t,
       ),
     }));
 

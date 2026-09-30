@@ -7,9 +7,8 @@
  * (Notebook, Mock data, Explain ANALYZE) so none of them bypasses the
  * prod-tag confirmation.
  */
-import { splitSqlStatements } from '@/lib/sql-split';
 import { type GateDecision, effectiveSafeMode, safeModeDecision } from './safe-mode';
-import { looksDestructive } from './session-sql-heuristics';
+import type { SliceCreator } from './session-types';
 
 /**
  * Zustand set/get are typed loosely here so this module can compose into
@@ -43,9 +42,19 @@ export function evaluateGate(get: Get, sql: string, force = false): GateDecision
   });
 }
 
-/** True when any statement in `sql` looks destructive. */
-export function scriptLooksDestructive(sql: string): boolean {
-  return splitSqlStatements(sql).some((s) => looksDestructive(s.text));
+/** Stash `sql` and show the confirm dialog for the editor's run (resumed by `confirmProdGate`). */
+export function armProdGate(
+  set: Set,
+  get: Get,
+  gate: {
+    sql: string;
+    tabId: string;
+    reason: 'prod' | 'safe-mode';
+    kind?: 'external';
+    summary?: string;
+  },
+): void {
+  set({ prodGate: { ...gate, connectionGen: get().connectionGen ?? 0 } });
 }
 
 /**
@@ -67,15 +76,12 @@ export function requestProdConfirm(
   if (get().prodGate != null) return Promise.resolve(false);
   return new Promise<boolean>((resolve) => {
     externalResolve = resolve;
-    set({
-      prodGate: {
-        sql,
-        tabId: get().activeTabId ?? '',
-        connectionGen: get().connectionGen ?? 0,
-        kind: 'external',
-        reason: decision.reason,
-        summary: opts?.summary,
-      },
+    armProdGate(set, get, {
+      sql,
+      tabId: get().activeTabId ?? '',
+      kind: 'external',
+      reason: decision.reason,
+      summary: opts?.summary,
     });
   });
 }
@@ -91,3 +97,78 @@ export function cancelProdGate(set: Set): void {
   set({ prodGate: null });
   settleExternalProdGate(false);
 }
+
+// ─── Slice ───────────────────────────────────────────────────────────
+
+export interface ProdGateSlice {
+  /**
+   * When the user fires a destructive query (DELETE/TRUNCATE/DROP/
+   * UPDATE without WHERE) against a prod-tagged connection, runQuery
+   * stashes the pending SQL here and renders a confirm dialog. The
+   * user's choice resumes (or aborts) the run.
+   */
+  prodGate: {
+    sql: string;
+    tabId: string;
+    connectionGen: number;
+    /**
+     * 'commitEdits' = the grid's pending-changes tray (resumes the commit).
+     * 'external' = Notebook / Mock data / Explain waiting on `confirmUserSql`.
+     */
+    kind?: 'commitEdits' | 'external';
+    /** Why it's asking: the PROD tag, or the connection's safe-mode level. */
+    reason?: 'prod' | 'safe-mode';
+    summary?: string;
+  } | null;
+  /** Resume a prod-gated runQuery after user confirms. */
+  confirmProdGate(): void;
+  cancelProdGate(): void;
+  /**
+   * Prod-gate check for user SQL run outside the editor (Notebook, Mock
+   * data, Explain ANALYZE). Resolves true when it may run. `force` asks
+   * even for non-destructive SQL (e.g. inserting mock rows).
+   */
+  confirmUserSql(sql: string, opts?: { force?: boolean; summary?: string }): Promise<boolean>;
+}
+
+export const createProdGateSlice: SliceCreator<ProdGateSlice> = (set, get) => ({
+  prodGate: null,
+
+  confirmProdGate() {
+    const gate = get().prodGate;
+    if (!gate) return;
+    set({ prodGate: null });
+    if (gate.kind === 'external') {
+      settleExternalProdGate((get().connectionGen ?? 0) === gate.connectionGen);
+      return;
+    }
+    // F8: the approved SQL only ever runs on the connection and tab it was
+    // approved for. A reconnect in between voids the approval.
+    if ((get().connectionGen ?? 0) !== gate.connectionGen) return;
+    if (gate.kind === 'commitEdits') {
+      // The grid's pending-changes tray: resume the confirmed commit.
+      // Failures land in `pendingEditsError` for the grid to show.
+      void get()
+        .commitPendingEdits({ confirmed: true })
+        .catch(() => undefined);
+      return;
+    }
+    // Re-enter runQuery with the captured payload so a selection/statement
+    // run does not re-resolve from a moved caret (and so the gate does not
+    // loop on the same destructive script). runQuery targets the active
+    // tab, so bring the origin tab back first — or drop it if it's gone.
+    if (get().activeTabId !== gate.tabId) {
+      if (!get().tabs.some((t) => t.id === gate.tabId)) return;
+      set({ activeTabId: gate.tabId });
+    }
+    void get().runQuery({ sql: gate.sql });
+  },
+
+  confirmUserSql(sql, opts) {
+    return requestProdConfirm(set, get, sql, opts);
+  },
+
+  cancelProdGate() {
+    cancelProdGate(set);
+  },
+});

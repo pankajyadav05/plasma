@@ -13,3 +13,6 @@ allowBuilds:
   cpu-features: false
 ignoredOptionalDependencies:
   - cpu-features
+overrides:
+  # @electron/rebuild bundles a node-abi that predates Electron 44's ABI.
+  node-abi@^4: ^4.35.0

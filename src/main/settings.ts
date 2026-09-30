@@ -127,14 +127,18 @@ export function applySettingsPatch(patch: unknown): Settings {
   }
 
   // ── Merge non-secret keys ──
-  const mergedPatch: Record<string, unknown> = { ...rawPatch };
-  delete mergedPatch.openrouterApiKey;
-  delete mergedPatch.claudeApiKey;
-  delete mergedPatch.connectionSsh;
-  for (const k of RESPONSE_ONLY_KEYS) delete mergedPatch[k];
-  // Also strip has* flags nested under connectionSsh if any slipped in
-  delete mergedPatch.hasOpenrouterApiKey;
-  delete mergedPatch.hasClaudeApiKey;
+  const STRIPPED_PATCH_KEYS = new Set<string>([
+    'openrouterApiKey',
+    'claudeApiKey',
+    'connectionSsh',
+    ...RESPONSE_ONLY_KEYS,
+    // Also strip has* flags if any slipped in
+    'hasOpenrouterApiKey',
+    'hasClaudeApiKey',
+  ]);
+  const mergedPatch: Record<string, unknown> = Object.fromEntries(
+    Object.entries(rawPatch).filter(([k]) => !STRIPPED_PATCH_KEYS.has(k)),
+  );
 
   const merged = SettingsShape.parse({
     ...prevRaw,

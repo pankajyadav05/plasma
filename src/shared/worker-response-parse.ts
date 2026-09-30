@@ -30,10 +30,9 @@ export function extractCorrelatedId(raw: unknown): string | null {
  * Shallow-validate a queryResult payload without per-cell Zod walks.
  * Returns null when the shape is wrong so the caller can fall back or error.
  */
-export function parseQueryResultEnvelope(raw: unknown): Extract<
-  WorkerResponse,
-  { kind: 'queryResult' }
-> | null {
+export function parseQueryResultEnvelope(
+  raw: unknown,
+): Extract<WorkerResponse, { kind: 'queryResult' }> | null {
   const obj = asRecord(raw);
   if (!obj || obj.kind !== 'queryResult') return null;
   if (typeof obj.id !== 'string' || obj.id.length === 0) return null;
@@ -52,8 +51,7 @@ export function parseQueryResultEnvelope(raw: unknown): Extract<
   const rowsUnknown = resultObj.rows;
   if (rowsUnknown.length > 0 && !Array.isArray(rowsUnknown[0])) return null;
 
-  const truncated =
-    typeof resultObj.truncated === 'boolean' ? resultObj.truncated : false;
+  const truncated = typeof resultObj.truncated === 'boolean' ? resultObj.truncated : false;
   const command = typeof resultObj.command === 'string' ? resultObj.command : undefined;
 
   const result: QueryResult = {

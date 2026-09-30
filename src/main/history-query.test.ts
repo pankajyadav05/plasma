@@ -8,11 +8,11 @@ import {
 
 describe('escapeLike', () => {
   it('escapes backslash, percent, and underscore', () => {
-    expect(escapeLike(`a%b_c\\d`)).toBe(`a\\%b\\_c\\\\d`);
+    expect(escapeLike('a%b_c\\d')).toBe('a\\%b\\_c\\\\d');
   });
 
   it('leaves ordinary SQL text alone', () => {
-    expect(escapeLike(`SELECT * FROM users WHERE id = 1`)).toBe(`SELECT * FROM users WHERE id = 1`);
+    expect(escapeLike('SELECT * FROM users WHERE id = 1')).toBe('SELECT * FROM users WHERE id = 1');
   });
 });
 

@@ -1,6 +1,6 @@
-import { cleanIpcError } from '@/lib/errors';
 import { Pill } from '@/components/ui/workbench';
 import { PLASMA_THEME_ID, applyMonacoTheme } from '@/features/editor/paperTheme';
+import { cleanIpcError } from '@/lib/errors';
 import { ipc } from '@/lib/ipc';
 import { buildTableDdlSql, composeTableDdl } from '@/lib/table-ddl';
 import { useActiveTab, useSession } from '@/stores/session';
@@ -28,8 +28,11 @@ export function TableDefinitionView() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  const tableSchema = tab?.kind === 'table' ? tab.tableSchema : undefined;
+  const tableName = tab?.kind === 'table' ? tab.tableName : undefined;
+
   useEffect(() => {
-    if (!tab || tab.kind !== 'table' || !tab.tableSchema || !tab.tableName) return;
+    if (!tableSchema || !tableName) return;
     let cancelled = false;
     setLoading(true);
     setError(null);
@@ -37,10 +40,10 @@ export function TableDefinitionView() {
       try {
         // PF10: views/matviews via pg_get_viewdef; tables with identity,
         // constraints, indexes, triggers, comments, RLS and owner.
-        const { sql, params } = buildTableDdlSql(tab.tableSchema!, tab.tableName!);
+        const { sql, params } = buildTableDdlSql(tableSchema, tableName);
         const res = await ipc.query.sideband(sql, params, { timeoutMs: 15_000 });
         if (cancelled) return;
-        setDdl(composeTableDdl(tab.tableSchema!, tab.tableName!, res.rows));
+        setDdl(composeTableDdl(tableSchema, tableName, res.rows));
       } catch (err) {
         if (!cancelled) {
           setError(cleanIpcError(err instanceof Error ? err.message : String(err)));
@@ -52,7 +55,7 @@ export function TableDefinitionView() {
     return () => {
       cancelled = true;
     };
-  }, [tab?.tableSchema, tab?.tableName, tab?.kind]);
+  }, [tableSchema, tableName]);
 
   const handleMount: OnMount = (_editor, monaco) => {
     applyMonacoTheme(monaco as typeof MonacoType, theme);

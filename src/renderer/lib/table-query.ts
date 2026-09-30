@@ -62,9 +62,10 @@ export function splitFilterList(value: string): string[] {
 
 /** BETWEEN bounds from `a, b` or `a and b`; null when incomplete. */
 export function betweenBounds(value: string): [string, string] | null {
-  const parts = /\band\b/i.test(value) && !value.includes(',')
-    ? value.split(/\band\b/i).map((p) => p.trim())
-    : splitFilterList(value);
+  const parts =
+    /\band\b/i.test(value) && !value.includes(',')
+      ? value.split(/\band\b/i).map((p) => p.trim())
+      : splitFilterList(value);
   if (parts.length !== 2 || parts.some((p) => p === '')) return null;
   return [parts[0]!, parts[1]!];
 }

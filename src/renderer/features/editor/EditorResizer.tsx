@@ -54,6 +54,7 @@ export function EditorResizer() {
   };
 
   return (
+    // biome-ignore lint/a11y/useFocusableInteractive: pointer-only drag handle (the editor/results split has no keyboard resize yet)
     <div
       role="separator"
       aria-orientation="horizontal"

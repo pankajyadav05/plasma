@@ -28,6 +28,12 @@ const MENU_COMMANDS: ReadonlyArray<readonly [EventChannel, CommandId]> = [
   ['plasma:menu:commitEdits', 'commitEdits'],
   ['plasma:menu:saveFileAs', 'saveFileAs'],
   ['plasma:menu:openFile', 'openFile'],
+  ['plasma:menu:backup', 'backup'],
+  ['plasma:menu:restore', 'restore'],
+  ['plasma:menu:roles', 'roles'],
+  ['plasma:menu:dbSearch', 'dbSearch'],
+  ['plasma:menu:erDiagram', 'erDiagram'],
+  ['plasma:menu:splitPane', 'splitPane'],
 ];
 
 export function App() {

@@ -118,10 +118,7 @@ export function CommandPalette() {
   }, [open]);
 
   return (
-    <Dialog
-      open={open}
-      onOpenChange={setOpen}
-    >
+    <Dialog open={open} onOpenChange={setOpen}>
       <DialogPortal>
         <DialogOverlay />
         <DialogPrimitive.Content className="fixed left-1/2 top-[15vh] z-50 w-[620px] max-w-[90vw] -translate-x-1/2 rounded-lg border bg-popover text-popover-foreground shadow-lg focus:outline-none data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 duration-200">

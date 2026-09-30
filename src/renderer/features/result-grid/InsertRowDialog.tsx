@@ -1,4 +1,3 @@
-import { cleanIpcError } from '@/lib/errors';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -9,6 +8,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
+import { cleanIpcError } from '@/lib/errors';
 import { useActiveTab, useSession } from '@/stores/session';
 import { useEffect, useState } from 'react';
 

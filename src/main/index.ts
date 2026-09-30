@@ -297,7 +297,7 @@ app
         if (parts.length === 0) return JSON.stringify({ error: 'parts required' });
         if (!isReadOnlyRedisCommand(parts)) {
           return JSON.stringify({
-            error: `rejected: ${parts[0]}${parts[1] ? ' ' + parts[1] : ''} is not in the read-only allow-list`,
+            error: `rejected: ${parts[0]}${parts[1] ? ` ${parts[1]}` : ''} is not in the read-only allow-list`,
           });
         }
         try {

@@ -40,7 +40,6 @@ export function SidebarResizer({ side = 'left' }: { side?: Side }) {
     const s = useSession.getState().settings;
     const finalWidth = isLeft ? s.sidebarWidth : s.rightSidebarWidth;
     ipc.settings.set({ [settingKey]: finalWidth }).catch((err) => {
-      // biome-ignore lint/suspicious/noConsole: diagnostic
       console.error(`[plasma] persist ${settingKey} failed`, err);
     });
   }, [isLeft, settingKey]);
@@ -83,6 +82,7 @@ export function SidebarResizer({ side = 'left' }: { side?: Side }) {
   if (collapsed) return null;
 
   return (
+    // biome-ignore lint/a11y/useSemanticElements: a focusable, keyboard-operable splitter cannot be an <hr>
     <div
       role="separator"
       aria-orientation="vertical"

@@ -11,7 +11,7 @@ Plasma — Electron + React + TypeScript Postgres client.
 
 - TypeScript strict; typed IPC protocol lives in `src/shared/protocol.ts` (Zod).
 - DB drivers run in isolated `utilityProcess` workers (`src/workers/`).
-- Tailwind CSS 3 with the Paper Editor tokens — see `DESIGN.md`.
+- Tailwind CSS 4 with the Paper Editor tokens — see `DESIGN.md`.
 
 ## Never touch
 

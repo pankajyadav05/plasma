@@ -12,8 +12,11 @@ import type {
   ConnectionConfig,
   RedisBulkDeleteResult,
   RedisKeyMeta,
+  RedisOverview,
   RedisScanResult,
 } from '@shared/protocol';
+import { createEmptyTab } from './session-tab-model';
+import type { SliceCreator } from './session-types';
 
 // biome-ignore lint/suspicious/noExplicitAny: slice composed into SessionState (avoids an import cycle)
 type SetFn = (partial: any, ...args: any[]) => void;
@@ -362,3 +365,73 @@ export function createRedisActions(
     },
   };
 }
+
+// ─── Slice ───────────────────────────────────────────────────────────
+
+export interface RedisSlice {
+  // ── non-relational engine state ──
+  /** Latest INFO snapshot for a connected Redis instance. */
+  redisOverview: RedisOverview | null;
+  /** Cached SCAN page used by the Redis sidebar key tree. */
+  redisKeys: RedisScanResult | null;
+  /** SCAN MATCH filter typed by the user; null = no filter. */
+  redisMatch: string | null;
+  redisLoading: boolean;
+  /** Database the Redis sidebar browses (R20). */
+  redisDb: number;
+  /** Last Redis read error (scan / overview), shown in the sidebar (R7). */
+  redisError: string | null;
+  /** SCAN TYPE filter; null = all types (R30). */
+  redisTypeFilter: string | null;
+  /** A scan page is in flight. */
+  redisScanning: boolean;
+  /** Last-opened resource per non-relational engine, used to highlight sidebar. */
+  activeRedisKey: string | null;
+  // ── Bulk-select (Redis sidebar) ──
+  /** When true, the Redis sidebar shows checkboxes next to each key. */
+  redisBulkMode: boolean;
+  /** Keys currently checked in bulk mode. Cleared on disconnect / mode-off. */
+  selectedRedisKeys: Set<string>;
+  // ── Non-relational engine actions ──
+  refreshRedisOverview(): Promise<void>;
+  scanRedisKeys(opts?: { cursor?: string; match?: string }): Promise<void>;
+  setRedisMatch(match: string | null): void;
+  setRedisTypeFilter(type: string | null): void;
+  setRedisDb(db: number): void;
+  openRedisKey(key: string, db?: number): void;
+  openRedisCli(): void;
+  openRedisPubsub(channel: string, pattern: boolean): void;
+  openRedisAnalyze(): void;
+  openRedisSlowlog(): void;
+  openRedisServer(): void;
+  /** Rejects on failure (R7). */
+  deleteRedisKey(key: string, db?: number): Promise<void>;
+  /** Rejects on failure (R7). */
+  setRedisTtl(
+    key: string,
+    seconds: number,
+    opts?: { db?: number; mode?: 'expire' | 'pexpire' | 'expireat' | 'persist' },
+  ): Promise<void>;
+  redisKeysRemoved(keys: string[], db: number): void;
+  redisKeyAdded(meta: RedisKeyMeta, db: number): void;
+  redisKeyRenamed(from: string, to: string, db: number): void;
+
+  // Bulk select
+  toggleRedisBulkMode(): void;
+  toggleRedisKeyChecked(key: string): void;
+  clearRedisSelected(): void;
+  /** Resolves with the per-key result; rejects when the request failed (R1/R7). */
+  bulkDeleteSelectedRedisKeys(): Promise<RedisBulkDeleteResult>;
+}
+
+export const createRedisSlice: SliceCreator<RedisSlice> = (set, get) => ({
+  redisOverview: null,
+  redisKeys: null,
+  redisMatch: null,
+  redisLoading: false,
+  ...REDIS_INITIAL_STATE,
+  activeRedisKey: null,
+  redisBulkMode: false,
+  selectedRedisKeys: new Set<string>(),
+  ...createRedisActions(set, get, createEmptyTab),
+});

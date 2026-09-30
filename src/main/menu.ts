@@ -102,6 +102,10 @@ export function appMenuTemplate(
         ...keyItem('toggleEditor', 'Toggle Query Editor'),
         ...keyItem('palette', 'Command Palette…'),
         ...keyItem('toggleAi', 'Toggle AI Panel'),
+        {
+          label: 'Split Pane Right',
+          click: () => sendToFocusedWindow('plasma:menu:splitPane'),
+        },
         { type: 'separator' },
         ...keyItem('refresh', 'Refresh'),
         { type: 'separator' },
@@ -115,6 +119,32 @@ export function appMenuTemplate(
             ] as MenuItemConstructorOptions[])
           : []),
         { role: 'togglefullscreen' },
+      ],
+    },
+    {
+      label: 'Database',
+      submenu: [
+        {
+          label: 'Back Up Database…',
+          click: () => sendToFocusedWindow('plasma:menu:backup'),
+        },
+        {
+          label: 'Restore Database…',
+          click: () => sendToFocusedWindow('plasma:menu:restore'),
+        },
+        { type: 'separator' },
+        {
+          label: 'Roles and Privileges…',
+          click: () => sendToFocusedWindow('plasma:menu:roles'),
+        },
+        {
+          label: 'Search in Database…',
+          click: () => sendToFocusedWindow('plasma:menu:dbSearch'),
+        },
+        {
+          label: 'Show Diagram',
+          click: () => sendToFocusedWindow('plasma:menu:erDiagram'),
+        },
       ],
     },
     {

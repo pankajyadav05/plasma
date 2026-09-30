@@ -13,11 +13,7 @@ export type CellCoord = { row: number; col: number };
  * Returns null when the grid is empty or dimensions are invalid.
  * Wraps from the last cell back to the first.
  */
-export function nextCell(
-  current: CellCoord,
-  rowCount: number,
-  colCount: number,
-): CellCoord | null {
+export function nextCell(current: CellCoord, rowCount: number, colCount: number): CellCoord | null {
   if (rowCount <= 0 || colCount <= 0) return null;
   const row = clamp(current.row, 0, rowCount - 1);
   const col = clamp(current.col, 0, colCount - 1);
@@ -29,11 +25,7 @@ export function nextCell(
 /**
  * Previous cell before `current`. Wraps from the first cell to the last.
  */
-export function prevCell(
-  current: CellCoord,
-  rowCount: number,
-  colCount: number,
-): CellCoord | null {
+export function prevCell(current: CellCoord, rowCount: number, colCount: number): CellCoord | null {
   if (rowCount <= 0 || colCount <= 0) return null;
   const row = clamp(current.row, 0, rowCount - 1);
   const col = clamp(current.col, 0, colCount - 1);

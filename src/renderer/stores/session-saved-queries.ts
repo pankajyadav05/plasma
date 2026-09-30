@@ -3,7 +3,20 @@
  * entry in place, and patch name / folder / favourite. Pure so the
  * session actions stay thin and the rules are unit-testable.
  */
+import { ipc } from '@/lib/ipc';
 import type { SavedQuery } from '@shared/protocol';
+import {
+  activeTab,
+  createEmptyTab,
+  createTableTab,
+  freshId,
+  loadTableColumnStateInto,
+} from './session-tab-model';
+import { loadTableTab } from './session-table-query';
+import type { QueryTab, SessionState, SliceCreator } from './session-types';
+import { useWorkbench } from './workbench';
+
+type SetSession = (partial: Partial<SessionState>) => void;
 
 /** The tab fields a saved query snapshots. */
 export interface SavableTab {
@@ -111,3 +124,180 @@ export function savedQueryFolders(list: SavedQuery[]): string[] {
     (a, b) => a.localeCompare(b),
   );
 }
+
+// ─── Slice ───────────────────────────────────────────────────────────
+
+export interface SavedQueriesSlice {
+  saveCurrentTab(name: string): Promise<void>;
+  deleteSavedQuery(id: string): Promise<void>;
+  openSavedQuery(id: string): void;
+  /** Rename / move to folder / (un)favourite a saved query. */
+  updateSavedQuery(id: string, patch: SavedQueryPatch): Promise<void>;
+  /** Overwrite saved query `id` with the active tab's current contents. */
+  updateSavedQueryFromTab(id: string): Promise<void>;
+  /** Save arbitrary SQL (e.g. a history entry) as a saved query. */
+  saveSqlAsQuery(name: string, sql: string): Promise<void>;
+}
+
+type SavedQueriesMap = Record<string, SavedQuery[]>;
+
+/** Persist the whole map; a failed write is logged and the in-memory copy stays. */
+async function persistSavedQueries(savedQueries: SavedQueriesMap): Promise<void> {
+  try {
+    await ipc.settings.set({ savedQueries });
+  } catch (err) {
+    console.error('[plasma] persist savedQueries failed', err);
+  }
+}
+
+/**
+ * Prepend a plain SQL snippet to `connectionId`'s saved queries (defaults to
+ * the active connection). Shared by "Save as query" and history "Save as snippet".
+ */
+export async function addSqlSnippet(
+  set: SetSession,
+  get: () => SessionState,
+  name: string,
+  sql: string,
+  connectionId?: string | null,
+): Promise<void> {
+  const state = get();
+  const connId = connectionId || state.activeConfig?.id;
+  const trimmed = name.trim();
+  if (!connId || !trimmed || !sql.trim()) return;
+  const now = Date.now();
+  const entry: SavedQuery = {
+    kind: 'sql',
+    id: freshId(),
+    name: trimmed,
+    createdAt: now,
+    updatedAt: now,
+    sql,
+    pageSize: state.settings.defaultPageSize,
+  };
+  const current = state.settings.savedQueries ?? {};
+  const nextMap = { ...current, [connId]: [entry, ...(current[connId] ?? [])] };
+  set({ settings: { ...state.settings, savedQueries: nextMap } });
+  await persistSavedQueries(nextMap);
+}
+
+export const createSavedQueriesSlice: SliceCreator<SavedQueriesSlice> = (set, get) => ({
+  async saveCurrentTab(name) {
+    const state = get();
+    const tab = activeTab(state);
+    const connId = state.activeConfig?.id;
+    if (!tab || !connId) return;
+    const trimmed = name.trim();
+    if (!trimmed) return;
+
+    const entry = savedQueryFromTab(tab, { id: freshId(), name: trimmed, now: Date.now() });
+    const current = state.settings.savedQueries ?? {};
+    const list = current[connId] ?? [];
+    const nextMap = { ...current, [connId]: [entry, ...list] };
+    set({
+      settings: { ...state.settings, savedQueries: nextMap },
+      // Later "Update" writes back to this entry instead of duplicating it (PC6).
+      tabs: get().tabs.map((t) =>
+        t.id === tab.id ? { ...t, savedQueryId: entry.id, cleanSql: t.sql } : t,
+      ),
+    });
+    await persistSavedQueries(nextMap);
+  },
+
+  async updateSavedQueryFromTab(id) {
+    const state = get();
+    const tab = activeTab(state);
+    const connId = state.activeConfig?.id;
+    if (!tab || !connId) return;
+    const current = state.settings.savedQueries ?? {};
+    const list = current[connId] ?? [];
+    const base = list.find((q) => q.id === id);
+    if (!base) return;
+    const entry = savedQueryFromTab(tab, { id, name: base.name, now: Date.now() }, base);
+    const nextMap = { ...current, [connId]: replaceSavedQuery(list, entry) };
+    set({
+      settings: { ...state.settings, savedQueries: nextMap },
+      tabs: get().tabs.map((t) =>
+        t.id === tab.id ? { ...t, savedQueryId: id, cleanSql: t.sql } : t,
+      ),
+    });
+    await persistSavedQueries(nextMap);
+  },
+
+  async updateSavedQuery(id, patch) {
+    const state = get();
+    const connId = state.activeConfig?.id;
+    if (!connId) return;
+    const current = state.settings.savedQueries ?? {};
+    const list = current[connId] ?? [];
+    const nextList = patchSavedQuery(list, id, patch, Date.now());
+    if (nextList === list) return;
+    const nextMap = { ...current, [connId]: nextList };
+    set({ settings: { ...state.settings, savedQueries: nextMap } });
+    await persistSavedQueries(nextMap);
+  },
+
+  async saveSqlAsQuery(name, sql) {
+    await addSqlSnippet(set, get, name, sql);
+  },
+
+  async deleteSavedQuery(id) {
+    const state = get();
+    const connId = state.activeConfig?.id;
+    if (!connId) return;
+    const current = state.settings.savedQueries ?? {};
+    const list = current[connId] ?? [];
+    const nextList = list.filter((q) => q.id !== id);
+    if (nextList.length === list.length) return;
+    const nextMap = { ...current, [connId]: nextList };
+    set({ settings: { ...state.settings, savedQueries: nextMap } });
+    await persistSavedQueries(nextMap);
+  },
+
+  openSavedQuery(id) {
+    const state = get();
+    const connId = state.activeConfig?.id;
+    if (!connId) return;
+    const entry = (state.settings.savedQueries?.[connId] ?? []).find((q) => q.id === id);
+    if (!entry) return;
+
+    if (entry.kind === 'sql') {
+      // Spawn a fresh SQL tab pre-loaded with the saved text. Avoids
+      // clobbering whatever the user has in their current tab.
+      const tab = createEmptyTab(entry.pageSize, entry.name);
+      tab.sql = entry.sql;
+      tab.cleanSql = entry.sql;
+      tab.savedQueryId = entry.id;
+      // E1: open in the editor without closing the right sidebar.
+      set({
+        tabs: [...state.tabs, tab],
+        activeTabId: tab.id,
+        canvasMode: 'database',
+      });
+      useWorkbench.getState().showEditor();
+      return;
+    }
+
+    // Table snapshot: build a fresh table tab with the saved
+    // filters/sort/hidden/sticky pre-applied, then run.
+    void get().ensureSchemaColumns(entry.tableSchema);
+    const baseTab = createTableTab(entry.pageSize, entry.tableSchema, entry.tableName);
+    const persistedPatch = loadTableColumnStateInto(state, entry.tableSchema, entry.tableName);
+    const tab: QueryTab = {
+      ...baseTab,
+      ...persistedPatch,
+      filters: entry.filters.map((f) => ({ ...f })),
+      tableSort: entry.sort.map((s) => ({ ...s })),
+      hiddenColumns: new Set(entry.hidden),
+      stickyColumns: new Set(entry.sticky),
+      pageSize: entry.pageSize,
+      savedQueryId: entry.id,
+    };
+    set({
+      tabs: [...state.tabs, tab],
+      activeTabId: tab.id,
+      activeTable: { schema: entry.tableSchema, name: entry.tableName },
+    });
+    loadTableTab(set, get, tab.id, true);
+  },
+});

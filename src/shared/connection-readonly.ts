@@ -10,8 +10,6 @@
 export type ConnectionEnvTag = 'prod' | 'staging' | 'dev' | 'local';
 
 /** Prod-tagged connections suggest read-only by default. */
-export function suggestReadOnlyForTag(
-  tag: ConnectionEnvTag | null | undefined,
-): boolean {
+export function suggestReadOnlyForTag(tag: ConnectionEnvTag | null | undefined): boolean {
   return tag === 'prod';
 }

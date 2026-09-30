@@ -11,7 +11,6 @@ import './styles/globals.css';
 if (window.plasma?.platform) {
   document.documentElement.dataset.platform = window.plasma.platform;
 } else {
-  // biome-ignore lint/suspicious/noConsole: startup diagnostics
   console.error(
     '[plasma] window.plasma is not available — preload did not load. ' +
       'Hard-restart the dev server (Ctrl+C, then `pnpm dev`).',

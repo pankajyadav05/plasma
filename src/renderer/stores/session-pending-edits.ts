@@ -20,8 +20,8 @@ import { cleanIpcError } from '@/lib/errors';
 import { ipc } from '@/lib/ipc';
 import { buildDeleteSql, buildUpdateSql, quoteIdent } from '@/lib/table-query';
 import type { ColumnMeta, SchemaInfo } from '@shared/protocol';
-import type { PendingEdit, QueryTab } from './session';
 import { evaluateGate } from './session-prod-gate';
+import type { PendingEdit, QueryTab } from './session-types';
 
 /**
  * Zustand set/get are typed loosely here so this module can compose into

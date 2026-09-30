@@ -1,6 +1,6 @@
 import { app } from 'electron';
-import type { WorkerSupervisor } from './worker-supervisor';
 import { logger } from './logger';
+import type { WorkerSupervisor } from './worker-supervisor';
 
 /**
  * E2E-only hooks. Registered exclusively when `PLASMA_E2E=1`. Exposed on

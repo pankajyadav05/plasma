@@ -132,7 +132,9 @@ describe('E-QUERY publish boundary (release-main A1/A2)', () => {
     // Statement 1 resolves; statement 2 stays pending. Disconnect clears
     // results. Late rejection of statement 2 must NOT republish statement-1 rows.
     const pending2 = deferred<typeof sampleResult>();
-    queryRun.mockReturnValueOnce(Promise.resolve(sampleResult)).mockReturnValueOnce(pending2.promise);
+    queryRun
+      .mockReturnValueOnce(Promise.resolve(sampleResult))
+      .mockReturnValueOnce(pending2.promise);
 
     // Run All: the buffer holds two statements and both must execute
     // (Run Current without a caret runs only the first).
@@ -177,7 +179,12 @@ describe('E-QUERY publish boundary (release-main A1/A2)', () => {
       connectionGen: (s.connectionGen ?? 0) + 1,
       tabs: s.tabs.map((t) =>
         t.id === 'tab-a'
-          ? { ...t, queryGeneration: genAfterStart + 1, queryRunState: 'running' as const, queryError: null }
+          ? {
+              ...t,
+              queryGeneration: genAfterStart + 1,
+              queryRunState: 'running' as const,
+              queryError: null,
+            }
           : t,
       ),
     }));

@@ -72,7 +72,6 @@ export function GridContextMenu({
         className="w-[248px] p-1"
         onOpenAutoFocus={(e) => e.preventDefault()}
       >
-        {/* biome-ignore lint/a11y/useFocusableInteractive: focus moves to the menu items (roving focus) */}
         <div ref={listRef} role="menu" aria-label="Cell actions" onKeyDown={onKeyDown}>
           {entries.map((entry, i) => {
             if (entry.kind === 'separator') {

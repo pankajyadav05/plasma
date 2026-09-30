@@ -161,7 +161,16 @@ describe('U01 connection generation + pending edits', () => {
     await useSession.getState().updateCell(0, 1, 'new@b.co');
     // Add a second tab so closeTab does not reset the only tab.
     useSession.setState((s) => ({
-      tabs: [...s.tabs, { ...baseTab('tab-b'), kind: 'sql', tableSchema: undefined, tableName: undefined, queryResult: null }],
+      tabs: [
+        ...s.tabs,
+        {
+          ...baseTab('tab-b'),
+          kind: 'sql',
+          tableSchema: undefined,
+          tableName: undefined,
+          queryResult: null,
+        },
+      ],
       activeTabId: 'tab-b',
     }));
     useSession.getState().closeTab('tab-a');
@@ -213,9 +222,7 @@ describe('U01 connection generation + pending edits', () => {
     await useSession.getState().updateCell(0, 1, 'new@b.co');
     // Simulate a connection switch that somehow left stale edits (defense in depth).
     useSession.setState({ connectionGen: 2 });
-    await expect(useSession.getState().commitPendingEdits()).rejects.toThrow(
-      /previous connection/,
-    );
+    await expect(useSession.getState().commitPendingEdits()).rejects.toThrow(/previous connection/);
     expect(commitEditBatch).not.toHaveBeenCalled();
   });
 
@@ -301,9 +308,7 @@ describe('U01 connection generation + pending edits', () => {
     // The server-side transaction did not survive the reconnect.
     expect(useSession.getState().txnState).toBe('none');
     // Edits stamped with the old generation must not be written blind.
-    await expect(useSession.getState().commitPendingEdits()).rejects.toThrow(
-      /previous connection/,
-    );
+    await expect(useSession.getState().commitPendingEdits()).rejects.toThrow(/previous connection/);
     expect(commitEditBatch).not.toHaveBeenCalled();
   });
 });

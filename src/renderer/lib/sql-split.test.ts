@@ -10,7 +10,6 @@ function texts(sql: string): string[] {
   return splitSqlStatements(sql).map((s) => s.text);
 }
 
-
 describe('splitSqlStatements', () => {
   it('splits on semicolons and strips the terminator', () => {
     expect(texts('SELECT 1; SELECT 2;')).toEqual(['SELECT 1', 'SELECT 2']);
@@ -208,7 +207,8 @@ describe('resolveRunTarget modes', () => {
 
   it('smart mode ignores a whitespace-only selection', () => {
     expect(
-      resolveRunTarget(buffer, 'smart', { cursorOffset: 12, selectionStart: 9, selectionEnd: 11 })?.sql,
+      resolveRunTarget(buffer, 'smart', { cursorOffset: 12, selectionStart: 9, selectionEnd: 11 })
+        ?.sql,
     ).toBe('SELECT 2');
   });
 });

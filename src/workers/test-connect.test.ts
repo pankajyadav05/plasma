@@ -1,6 +1,6 @@
-import { describe, expect, it, vi } from 'vitest';
 import type { ConnectionConfig } from '@shared/protocol';
-import { runIsolatedTestConnect, type TestableDriver } from './test-connect';
+import { describe, expect, it, vi } from 'vitest';
+import { type TestableDriver, runIsolatedTestConnect } from './test-connect';
 
 function baseConfig(over: Partial<ConnectionConfig> = {}): ConnectionConfig {
   return {

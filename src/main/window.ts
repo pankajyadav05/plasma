@@ -27,12 +27,10 @@ export function resolveIconPath(): string | undefined {
   ];
   for (const candidate of candidates) {
     if (candidate && existsSync(candidate)) {
-      // biome-ignore lint/suspicious/noConsole: diagnostic — useful in dev logs
       console.log('[plasma] window icon:', candidate);
       return candidate;
     }
   }
-  // biome-ignore lint/suspicious/noConsole: diagnostic
   console.warn(
     '[plasma] window icon not found. Run `pnpm install` (triggers prepare script) ' +
       'or `pnpm build:icons` to generate resources/icon.png. Tried:',

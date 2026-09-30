@@ -56,10 +56,7 @@ export type ScanMetaFields = {
 };
 
 /** Read TYPE + PTTL tuples for one key; errors → unknown type / null ttl. */
-export function readScanMeta(
-  typeEntry: PipelineTuple,
-  ttlEntry: PipelineTuple,
-): ScanMetaFields {
+export function readScanMeta(typeEntry: PipelineTuple, ttlEntry: PipelineTuple): ScanMetaFields {
   const typeErr = pipelineCommandError(typeEntry);
   const ttlErr = pipelineCommandError(ttlEntry);
   const typeRaw = typeErr ? 'unknown' : String(typeEntry?.[1] ?? 'unknown');

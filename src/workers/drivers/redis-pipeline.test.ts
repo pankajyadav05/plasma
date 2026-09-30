@@ -12,9 +12,12 @@ describe('pipelineCommandError', () => {
   });
 
   it('returns the Error message for a command failure', () => {
-    expect(pipelineCommandError([new Error('NOPERM this user has no permissions to run the \'del\' command'), null])).toBe(
-      "NOPERM this user has no permissions to run the 'del' command",
-    );
+    expect(
+      pipelineCommandError([
+        new Error("NOPERM this user has no permissions to run the 'del' command"),
+        null,
+      ]),
+    ).toBe("NOPERM this user has no permissions to run the 'del' command");
   });
 
   it('reports a missing reply', () => {
@@ -64,9 +67,7 @@ describe('readScanMeta', () => {
   });
 
   it('uses unknown type and null ttl when commands error', () => {
-    expect(
-      readScanMeta([new Error('NOPERM'), null], [new Error('NOPERM'), null]),
-    ).toEqual({
+    expect(readScanMeta([new Error('NOPERM'), null], [new Error('NOPERM'), null])).toEqual({
       typeRaw: 'unknown',
       pttl: null,
       typeError: true,
@@ -85,9 +86,7 @@ describe('readAnalyzeMeta', () => {
   });
 
   it('uses null bytes when MEMORY USAGE fails instead of zero', () => {
-    expect(
-      readAnalyzeMeta([null, 'hash'], [null, -1], [new Error('NOPERM'), null]),
-    ).toEqual({
+    expect(readAnalyzeMeta([null, 'hash'], [null, -1], [new Error('NOPERM'), null])).toEqual({
       typeRaw: 'hash',
       pttl: -1,
       bytes: null,

@@ -40,13 +40,15 @@ vi.mock('@/lib/ipc', () => ({
 
 import { useSession } from './session';
 
-function makeResult(overrides: Partial<{
-  command: string;
-  rowCount: number;
-  cols: number;
-  durationMs: number;
-  notices: Array<{ message: string; severity?: string }>;
-}> = {}) {
+function makeResult(
+  overrides: Partial<{
+    command: string;
+    rowCount: number;
+    cols: number;
+    durationMs: number;
+    notices: Array<{ message: string; severity?: string }>;
+  }> = {},
+) {
   const cols = overrides.cols ?? 1;
   return {
     columns:
@@ -143,7 +145,11 @@ describe('U26 multi-result runQuery', () => {
     const tab = useSession.getState().tabs[0]!;
     expect(queryRun).toHaveBeenCalledTimes(3);
     expect(tab.queryResults).toHaveLength(3);
-    expect(tab.queryResults.map((r: { command?: string }) => r.command)).toEqual(['INSERT', 'SELECT', 'SELECT']);
+    expect(tab.queryResults.map((r: { command?: string }) => r.command)).toEqual([
+      'INSERT',
+      'SELECT',
+      'SELECT',
+    ]);
     // Last SELECT is index 2
     expect(tab.activeResultIndex).toBe(2);
     expect(tab.queryResult?.durationMs).toBe(4);

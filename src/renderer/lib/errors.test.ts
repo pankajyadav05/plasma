@@ -23,6 +23,8 @@ describe('describeConnectError', () => {
   });
 
   it('explains a refused connection', () => {
-    expect(describeConnectError('connect ECONNREFUSED 127.0.0.1:6380')).toMatch(/nothing is listening/);
+    expect(describeConnectError('connect ECONNREFUSED 127.0.0.1:6380')).toMatch(
+      /nothing is listening/,
+    );
   });
 });

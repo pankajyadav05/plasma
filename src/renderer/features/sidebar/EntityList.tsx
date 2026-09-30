@@ -9,7 +9,6 @@ import { type EntityKind, useSession } from '@/stores/session';
 import { defaultSchemaName } from '@/stores/session-schema';
 import type { SchemaInfo } from '@shared/protocol';
 import {
-  Network,
   Blocks,
   Braces,
   ChevronRight,
@@ -25,6 +24,7 @@ import {
   Globe,
   Hash,
   Layers,
+  Network,
   Plus,
   RefreshCw,
   SlidersHorizontal,
@@ -399,7 +399,8 @@ export function EntityList() {
                 type: 'item',
                 label: 'Show diagram',
                 icon: <Network />,
-                onSelect: () => useSession.getState().openErDiagram({ schema: effectiveSchema ?? 'public' }),
+                onSelect: () =>
+                  useSession.getState().openErDiagram({ schema: effectiveSchema ?? 'public' }),
               },
               {
                 type: 'item',
@@ -642,8 +643,10 @@ function useEntityActions({
               // This table plus the tables it references / is referenced by.
               const ids = new Set([`${t.schema}.${t.name}`]);
               for (const fk of session().schema?.foreignKeys ?? []) {
-                if (fk.schema === t.schema && fk.table === t.name) ids.add(`${fk.refSchema}.${fk.refTable}`);
-                if (fk.refSchema === t.schema && fk.refTable === t.name) ids.add(`${fk.schema}.${fk.table}`);
+                if (fk.schema === t.schema && fk.table === t.name)
+                  ids.add(`${fk.refSchema}.${fk.refTable}`);
+                if (fk.refSchema === t.schema && fk.refTable === t.name)
+                  ids.add(`${fk.schema}.${fk.table}`);
               }
               useSession.getState().openErDiagram({ schema: t.schema, tables: [...ids] });
             },

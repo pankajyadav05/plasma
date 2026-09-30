@@ -26,3 +26,14 @@ test('every keymap menu channel is bridged by the preload', () => {
   );
   expect(missing).toEqual([]);
 });
+
+/** Literal `plasma:menu:*` channels sent by main/menu.ts (non-keymap items). */
+test('every channel literal in the native menu is bridged and handled by the renderer', async () => {
+  const { readFileSync } = await import('node:fs');
+  const menu = readFileSync(new URL('../main/menu.ts', import.meta.url), 'utf8');
+  const app = readFileSync(new URL('../renderer/app/App.tsx', import.meta.url), 'utf8');
+  const literals = [...new Set(menu.match(/plasma:menu:[A-Za-z]+/g) ?? [])];
+  expect(literals.length).toBeGreaterThan(0);
+  expect(literals.filter((c) => !eventChannels.some((e) => e === c))).toEqual([]);
+  expect(literals.filter((c) => !app.includes(`'${c}'`))).toEqual([]);
+});

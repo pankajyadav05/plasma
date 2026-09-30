@@ -11,6 +11,8 @@
  */
 import { ipc } from '@/lib/ipc';
 import type { SchemaInfo } from '@shared/protocol';
+import { toggled } from './session-tab-model';
+import type { SliceCreator } from './session-types';
 
 // biome-ignore lint/suspicious/noExplicitAny: slice composed into SessionState
 type Set_ = (partial: any, ...args: any[]) => void;
@@ -162,3 +164,51 @@ export async function ensureAllSchemaColumns(set: Set_, get: Get): Promise<void>
     console.error('[plasma] column introspect failed', err);
   }
 }
+
+// ─── Slice ───────────────────────────────────────────────────────────
+
+export interface SchemaSlice {
+  // ── schema introspection ──
+  schema: SchemaInfo | null;
+  schemaLoading: boolean;
+  /** Last introspection failure, shown by the sidebar (PC8). */
+  schemaError: string | null;
+  /** Schemas whose columns + FKs are loaded into `schema` (lazy, F16). */
+  columnSchemas: Set<string>;
+  expandedSchemas: Set<string>;
+  /** The last-opened table, used to highlight the current row in the sidebar. */
+  activeTable: { schema: string; name: string } | null;
+  refreshSchema(): Promise<void>;
+  /** Load columns for one schema on demand (no-op when already loaded). */
+  ensureSchemaColumns(schemaName: string): Promise<void>;
+  /** Load columns for every schema (whole-database views such as schema diff). */
+  ensureAllSchemaColumns(): Promise<void>;
+  toggleSchema(name: string): void;
+}
+
+export const createSchemaSlice: SliceCreator<SchemaSlice> = (set, get) => ({
+  schema: null,
+  schemaLoading: false,
+  schemaError: null,
+  columnSchemas: new Set<string>(),
+  expandedSchemas: new Set(),
+  activeTable: null,
+
+  async refreshSchema() {
+    // Coalesced + incremental: objects for the whole database, columns
+    // only for schemas already loaded (see session-schema.ts).
+    await refreshSchemaCoalesced(set, get);
+  },
+
+  ensureSchemaColumns(schemaName) {
+    return ensureSchemaColumns(set, get, schemaName);
+  },
+
+  ensureAllSchemaColumns() {
+    return ensureAllSchemaColumns(set, get);
+  },
+
+  toggleSchema(name) {
+    set({ expandedSchemas: toggled(get().expandedSchemas, name) });
+  },
+});

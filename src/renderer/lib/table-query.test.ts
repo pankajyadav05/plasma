@@ -1,13 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
-  betweenBounds,
-  splitFilterList,
   type BuildInput,
   type Filter,
+  betweenBounds,
   buildCountSql,
   buildDataSql,
   buildUpdateSql,
   quoteIdent,
+  splitFilterList,
 } from './table-query';
 
 function input(overrides: Partial<BuildInput> = {}): BuildInput {
@@ -220,12 +220,18 @@ describe('deterministic paging (B5/F17) and bounded lookups (A7)', () => {
 
   it('orders by the primary key when nothing is sorted', async () => {
     const { buildDataSql } = await import('./table-query');
-    expect(buildDataSql({ ...base, primaryKey: ['id'] }).sql).toContain('ORDER BY "id" ASC\nLIMIT 10 OFFSET 10');
+    expect(buildDataSql({ ...base, primaryKey: ['id'] }).sql).toContain(
+      'ORDER BY "id" ASC\nLIMIT 10 OFFSET 10',
+    );
   });
 
   it('adds the primary key as a tie-breaker after the user sort', async () => {
     const { buildDataSql } = await import('./table-query');
-    const sql = buildDataSql({ ...base, sort: [{ column: 'a', direction: 'desc' }], primaryKey: ['id'] }).sql;
+    const sql = buildDataSql({
+      ...base,
+      sort: [{ column: 'a', direction: 'desc' }],
+      primaryKey: ['id'],
+    }).sql;
     expect(sql).toContain('ORDER BY "a" DESC, "id" ASC');
   });
 
@@ -245,7 +251,10 @@ describe('deterministic paging (B5/F17) and bounded lookups (A7)', () => {
 
   it('filters a loaded sample locally, prefix matches first', async () => {
     const { filterSuggestions } = await import('./table-query');
-    expect(filterSuggestions(['banana', 'apple', 'pineapple'], 'app')).toEqual(['apple', 'pineapple']);
+    expect(filterSuggestions(['banana', 'apple', 'pineapple'], 'app')).toEqual([
+      'apple',
+      'pineapple',
+    ]);
   });
 });
 
@@ -288,7 +297,7 @@ describe('F6 filter operators', () => {
   });
 
   it('splits lists and between bounds', () => {
-    expect(splitFilterList("a, 'b,c', \"d\"")).toEqual(['a', 'b,c', 'd']);
+    expect(splitFilterList('a, \'b,c\', "d"')).toEqual(['a', 'b,c', 'd']);
     expect(betweenBounds('1, 2')).toEqual(['1', '2']);
     expect(betweenBounds('1')).toBeNull();
   });
