@@ -13,37 +13,89 @@
  */
 
 import { spawnSync } from 'node:child_process'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
 
 /**
  * pnpm doesn't always run electron's own install script (e.g. after the
- * version in the lockfile changes), leaving node_modules/electron without its
- * binary — `pnpm dev` then fails with "Electron uninstall". Download it here
- * when it's missing.
+ * version in the lockfile changes), and on macOS that script can also fail:
+ * Electron 44 needs Node >= 22.12 (it require()s an ESM extractor) and its
+ * native unzip binding can be blocked by the OS. Either way node_modules/electron
+ * is left without its binary and `pnpm dev` fails with "Electron uninstall".
+ * Try electron's installer first, then fall back to downloading the zip with
+ * @electron/get and unpacking it with the system's own tools.
  */
-function ensureElectronBinary() {
+function electronBinaryPath(dir) {
+  const pathTxt = join(dir, 'path.txt')
+  if (!existsSync(pathTxt)) return null
+  const binary = join(dir, 'dist', readFileSync(pathTxt, 'utf8').trim())
+  return existsSync(binary) ? binary : null
+}
+
+function platformPath() {
+  if (process.platform === 'darwin') return 'Electron.app/Contents/MacOS/Electron'
+  if (process.platform === 'win32') return 'electron.exe'
+  return 'electron'
+}
+
+async function fallbackInstall(dir) {
+  const req = createRequire(join(dir, 'package.json'))
+  const { version } = req('./package.json')
+  const { downloadArtifact } = req('@electron/get')
+  const zip = await downloadArtifact({
+    version,
+    artifactName: 'electron',
+    platform: process.platform,
+    arch: process.arch,
+    checksums: req('./checksums.json'),
+  })
+  const dist = join(dir, 'dist')
+  rmSync(dist, { recursive: true, force: true })
+  mkdirSync(dist, { recursive: true })
+  // ditto keeps the .app bundle's symlinks and permissions intact on macOS.
+  const unzip =
+    process.platform === 'darwin'
+      ? spawnSync('ditto', ['-x', '-k', zip, dist], { stdio: 'inherit' })
+      : process.platform === 'win32'
+        ? spawnSync(
+            'powershell',
+            ['-NoProfile', '-Command', `Expand-Archive -Force -LiteralPath '${zip}' -DestinationPath '${dist}'`],
+            { stdio: 'inherit' },
+          )
+        : spawnSync('unzip', ['-q', '-o', zip, '-d', dist], { stdio: 'inherit' })
+  if (unzip.status !== 0) throw new Error('unzip failed')
+  const types = join(dist, 'electron.d.ts')
+  if (existsSync(types)) renameSync(types, join(dir, 'electron.d.ts'))
+  writeFileSync(join(dir, 'path.txt'), platformPath())
+}
+
+async function ensureElectronBinary() {
   let dir
   try {
     dir = dirname(createRequire(import.meta.url).resolve('electron/package.json'))
   } catch {
     return
   }
-  const pathTxt = join(dir, 'path.txt')
-  const binary = existsSync(pathTxt)
-    ? join(dir, 'dist', readFileSync(pathTxt, 'utf8').trim())
-    : null
-  if (binary && existsSync(binary)) return
+  if (electronBinaryPath(dir)) return
   console.log('[postinstall] Electron binary missing, downloading it')
-  const r = spawnSync(process.execPath, [join(dir, 'install.js')], { stdio: 'inherit', cwd: dir })
-  if (r.status !== 0) {
-    console.error('[postinstall] Electron download failed; run `node node_modules/electron/install.js`')
-    process.exit(r.status ?? 1)
+  spawnSync(process.execPath, [join(dir, 'install.js')], { stdio: 'inherit', cwd: dir })
+  if (electronBinaryPath(dir)) return
+  console.log('[postinstall] electron install.js failed, using the fallback download')
+  try {
+    await fallbackInstall(dir)
+  } catch (err) {
+    console.error(`[postinstall] ${err instanceof Error ? err.message : err}`)
+  }
+  if (!electronBinaryPath(dir)) {
+    console.error(
+      `[postinstall] Could not install Electron (Node ${process.version}; Electron 44 needs >= 22.12).`,
+    )
+    process.exit(1)
   }
 }
 
-ensureElectronBinary()
+await ensureElectronBinary()
 
 if (process.env.CI) {
   console.log('[postinstall] CI detected, skipping electron-rebuild (CI runs `electron-builder install-app-deps` instead)')
