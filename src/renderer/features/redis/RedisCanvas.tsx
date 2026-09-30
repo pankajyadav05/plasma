@@ -1,5 +1,5 @@
 import { TabStrip } from '@/features/editor/TabStrip';
-import { useActiveTab, useSession } from '@/stores/session';
+import { useActiveTabSelect, useSession } from '@/stores/session';
 import { REDIS_TAB_KINDS } from '@/stores/session-redis';
 import { RedisAnalyzeView } from './RedisAnalyzeView';
 import { RedisCliView } from './RedisCliView';
@@ -22,8 +22,7 @@ import { RedisSlowlogView } from './RedisSlowlogView';
  */
 
 export function RedisCanvas() {
-  const tab = useActiveTab();
-  const hasTabs = tab ? REDIS_TAB_KINDS.has(tab.kind) : false;
+  const hasTabs = useActiveTabSelect((t) => (t ? REDIS_TAB_KINDS.has(t.kind) : false));
   return (
     <main className="flex min-h-0 min-w-0 flex-1 flex-col bg-[var(--wb-content)] text-[var(--wb-text)]">
       {hasTabs && <TabStrip />}
@@ -33,7 +32,18 @@ export function RedisCanvas() {
 }
 
 function RedisBody() {
-  const tab = useActiveTab();
+  const tab = useActiveTabSelect((t) =>
+    t
+      ? {
+          id: t.id,
+          kind: t.kind,
+          redisKey: t.redisKey,
+          redisDb: t.redisDb,
+          redisChannel: t.redisChannel,
+          redisPattern: t.redisPattern,
+        }
+      : undefined,
+  );
   const sidebarDb = useSession((s) => s.redisDb as number);
   if (!tab) return <RedisHomeView />;
   if (tab.kind === 'redis-key' && tab.redisKey) {

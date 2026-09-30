@@ -100,7 +100,7 @@ export function ActionDialog({
     <Dialog open={open} onOpenChange={(o) => !busy && onOpenChange(o)}>
       <DialogContent className={DIALOG_CLASS}>
         <DialogHeader>
-          <DialogTitle className="text-[15px]">{title}</DialogTitle>
+          <DialogTitle>{title}</DialogTitle>
           {description && (
             <DialogDescription className="text-[12px] text-[var(--wb-text-2)]">
               {description}
@@ -248,7 +248,7 @@ export function CreateKeyDialog({
     <Dialog open={open} onOpenChange={(o) => !busy && onOpenChange(o)}>
       <DialogContent className="max-w-[520px] gap-3 bg-[var(--wb-sidebar)] p-5">
         <DialogHeader>
-          <DialogTitle className="text-[15px]">New key</DialogTitle>
+          <DialogTitle>New key</DialogTitle>
           <DialogDescription className="text-[12px] text-[var(--wb-text-2)]">
             Created in db{db}. Fails if the key already exists.
           </DialogDescription>
@@ -404,9 +404,7 @@ export function RenameCopyDialog({
     <Dialog open={open} onOpenChange={(o) => !busy && onOpenChange(o)}>
       <DialogContent className={DIALOG_CLASS}>
         <DialogHeader>
-          <DialogTitle className="text-[15px]">
-            {mode === 'rename' ? 'Rename key' : 'Duplicate key'}
-          </DialogTitle>
+          <DialogTitle>{mode === 'rename' ? 'Rename key' : 'Duplicate key'}</DialogTitle>
           <DialogDescription className="text-[12px] text-[var(--wb-text-2)]">
             {mode === 'rename'
               ? 'RENAMENX — keeps the value and TTL.'
@@ -536,7 +534,7 @@ export function PatternDeleteDialog({
     >
       <DialogContent className={DIALOG_CLASS}>
         <DialogHeader>
-          <DialogTitle className="text-[15px]">Delete keys matching a pattern</DialogTitle>
+          <DialogTitle>Delete keys matching a pattern</DialogTitle>
           <DialogDescription className="text-[12px] text-[var(--wb-text-2)]">
             SCAN MATCH in db{db}, then UNLINK in batches. Preview first — nothing is deleted until
             you confirm.
@@ -639,7 +637,7 @@ export function PubsubDialog({
     >
       <DialogContent className="max-w-[420px] gap-3 bg-[var(--wb-sidebar)] p-5">
         <DialogHeader>
-          <DialogTitle className="text-[15px]">Subscribe to a channel</DialogTitle>
+          <DialogTitle>Subscribe to a channel</DialogTitle>
           <DialogDescription className="text-[12px] text-[var(--wb-text-2)]">
             Opens a live tail tab. Use a pattern to PSUBSCRIBE to many channels.
           </DialogDescription>

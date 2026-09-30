@@ -10,9 +10,11 @@ import {
 } from '@/components/ui/select';
 import { SectionHeading } from '@/components/ui/view-parts';
 import { Segmented } from '@/components/ui/workbench';
+import { PgBinDirField } from '@/features/backup/PgBinDirField';
 import { isMac } from '@/lib/platform';
 import { describeUpdateStatus } from '@/lib/update-status';
 import { useUpdate } from '@/lib/use-update';
+import { SAFE_MODE_LABEL, SAFE_MODE_LEVELS } from '@/stores/safe-mode';
 import { useSession } from '@/stores/session';
 import { ROW_LIMIT_CHOICES, useWorkbench } from '@/stores/workbench';
 import { cheatSheetSections, formatBinding, formatKeys } from '@shared/keymap';
@@ -100,20 +102,8 @@ const FONT_MONO_OPTIONS: Array<{ id: Settings['fontMono']; label: string; sample
   { id: 'system', label: 'System mono', sample: 'ui-monospace, monospace' },
 ];
 
-const SAFE_MODE_OPTIONS: Array<{ id: SafeMode; label: string; hint: string }> = [
-  { id: 'off', label: 'Off', hint: 'Run everything without asking.' },
-  {
-    id: 'confirm-dangerous',
-    label: 'Confirm dangerous statements',
-    hint: 'DROP, TRUNCATE, ALTER and DELETE / UPDATE without WHERE ask first.',
-  },
-  {
-    id: 'confirm-writes',
-    label: 'Confirm every write',
-    hint: 'Any statement that writes asks first.',
-  },
-  { id: 'read-only', label: 'Read-only', hint: 'Writes are refused.' },
-];
+const SAFE_MODE_OPTIONS: Array<{ id: SafeMode; label: string; hint: string }> =
+  SAFE_MODE_LEVELS.map((id) => ({ id, ...SAFE_MODE_LABEL[id] }));
 
 const TIMEOUT_CHOICES = [0, 5_000, 15_000, 30_000, 60_000, 300_000, 900_000];
 
@@ -555,6 +545,7 @@ function SecuritySection() {
 
 function AiSection() {
   const settings = useSession((s) => s.settings);
+  const clearAiApiKey = useSession((s) => s.clearAiApiKey);
   const updateSettings = useSession((s) => s.updateSettings);
   return (
     <Rows>
@@ -570,17 +561,29 @@ function AiSection() {
           </>
         }
       >
-        <DebouncedSettingsInput
-          id="openrouter-key"
-          type="password"
-          value={settings.openrouterApiKey}
-          onCommit={(v) => void updateSettings({ openrouterApiKey: v })}
-          placeholder={
-            settings.hasOpenrouterApiKey || settings.hasClaudeApiKey
-              ? 'Saved — paste a new key to replace'
-              : 'sk-or-…'
-          }
-        />
+        <div className="flex items-center gap-2">
+          <DebouncedSettingsInput
+            id="openrouter-key"
+            type="password"
+            value={settings.openrouterApiKey}
+            onCommit={(v) => void updateSettings({ openrouterApiKey: v })}
+            placeholder={
+              settings.hasOpenrouterApiKey || settings.hasClaudeApiKey
+                ? 'Saved — paste a new key to replace'
+                : 'sk-or-…'
+            }
+          />
+          {(settings.hasOpenrouterApiKey || settings.hasClaudeApiKey) && (
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => void clearAiApiKey()}
+              aria-label="Remove saved API key"
+            >
+              Remove key
+            </Button>
+          )}
+        </div>
       </Row>
       <Row
         label="Model"
@@ -664,6 +667,13 @@ function AdvancedSection() {
           checked={settings.transactionMode}
           onChange={(v) => void updateSettings({ transactionMode: v })}
         />
+        <Row
+          label="PostgreSQL tools"
+          htmlFor="pg-bin-dir"
+          hint="Folder with pg_dump, pg_restore and psql for backup and restore. Leave empty to use PATH."
+        >
+          <PgBinDirField id="pg-bin-dir" />
+        </Row>
       </Rows>
       <SubHeading>About</SubHeading>
       <div className="px-4">

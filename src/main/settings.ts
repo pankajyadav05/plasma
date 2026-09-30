@@ -1,12 +1,7 @@
 import type { Settings } from '@shared/protocol';
 import { SettingsShape } from '@shared/protocol';
 import { getDb } from './db';
-import {
-  deleteSshSecrets,
-  putSecret,
-  redactSettingsForRenderer,
-  setSshSecrets,
-} from './vault';
+import { deleteSshSecrets, putSecret, redactSettingsForRenderer, setSshSecrets } from './vault';
 
 /**
  * Key-value settings store backed by SQLite.
@@ -17,10 +12,7 @@ import {
  * plaintext secrets — use getPublicSettings / applySettingsPatch.
  */
 
-const RESPONSE_ONLY_KEYS = new Set([
-  'hasOpenrouterApiKey',
-  'hasClaudeApiKey',
-]);
+const RESPONSE_ONLY_KEYS = new Set(['hasOpenrouterApiKey', 'hasClaudeApiKey']);
 
 export function getSetting<T>(key: string, fallback: T): T {
   const row = getDb()
@@ -121,6 +113,8 @@ export function applySettingsPatch(patch: unknown): Settings {
         password: '',
         privateKey: '',
         passphrase: '',
+        privateKeyPath: ssh.privateKeyPath ?? '',
+        useAgent: ssh.useAgent ?? false,
       };
       setSshSecrets(id, {
         password: ssh.password,
@@ -170,12 +164,24 @@ export function applySettingsPatch(patch: unknown): Settings {
 
 function stripSshSecrets(
   map: Settings['connectionSsh'],
-): Record<string, { host: string; port: number; user: string }> {
-  const out: Record<string, { host: string; port: number; user: string }> = {};
+): Record<
+  string,
+  { host: string; port: number; user: string; privateKeyPath: string; useAgent: boolean }
+> {
+  const out: Record<
+    string,
+    { host: string; port: number; user: string; privateKeyPath: string; useAgent: boolean }
+  > = {};
   for (const [id, ssh] of Object.entries(map ?? {})) {
-    out[id] = { host: ssh.host, port: ssh.port, user: ssh.user };
+    out[id] = {
+      host: ssh.host,
+      port: ssh.port,
+      user: ssh.user,
+      privateKeyPath: ssh.privateKeyPath ?? '',
+      useAgent: ssh.useAgent ?? false,
+    };
   }
   return out;
 }
 
-export { changedSettings, settingsValueEqual } from "./settings-changed";
+export { changedSettings, settingsValueEqual } from './settings-changed';

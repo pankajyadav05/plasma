@@ -222,7 +222,7 @@ function PlanNode({
         {/* Heat bar — left-edge red stripe scaled to time share. */}
         <span
           aria-hidden
-          className="absolute inset-y-0 left-0 w-[3px] rounded-l-md bg-primary/60"
+          className="absolute inset-y-0 left-0 w-[3px] rounded-l-md bg-destructive"
           style={{ opacity: 0.2 + (heatPct / 100) * 0.8 }}
         />
         <div className="flex items-center gap-2">
@@ -249,7 +249,7 @@ function PlanNode({
             </span>
           )}
           {node['Index Name'] && (
-            <span className="font-mono text-[11px] text-primary">
+            <span className="font-mono text-[11px] text-[var(--wb-text-2)]">
               using {String(node['Index Name'])}
             </span>
           )}

@@ -11,6 +11,15 @@ describe('assertAllowedOnReadOnly (C1)', () => {
     refused({ kind: 'commitEditBatch', connectionGen: 1, updates: [] });
   });
 
+  it('refuses structure DDL and imports, but lets an import be cancelled', () => {
+    refused({
+      kind: 'applyDdl',
+      request: { connectionGen: 1, transactional: ['DROP TABLE t'], concurrent: [] },
+    });
+    refused({ kind: 'importRun', job: {} });
+    ok({ kind: 'importCancel', jobId: 'j' });
+  });
+
   it('lets SQL through (the server enforces read-only) unless it flips the switch', () => {
     ok({ kind: 'query', sql: 'SELECT * FROM users' });
     ok({ kind: 'sidebandQuery', sql: 'SELECT * FROM pg_stat_activity' });
@@ -53,6 +62,10 @@ describe('assertAllowedOnReadOnly (C1)', () => {
     refused({ kind: 'redisCommand', parts: ['DEL', 'a'] });
     refused({ kind: 'redisCommand', parts: ['FLUSHALL'] });
     refused({ kind: 'redisCommand', parts: [] });
+  });
+
+  it('refuses restoring a backup (pg_restore / psql)', () => {
+    refused({ kind: 'adminRestore' });
   });
 
   it('refuses OpenSearch index and document writes', () => {

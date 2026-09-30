@@ -4,7 +4,7 @@ import type { BrowserWindow } from 'electron';
 import { app, ipcMain } from 'electron';
 import electronUpdater, { type UpdateInfo, type ProgressInfo } from 'electron-updater';
 import { logger } from './logger';
-import { readPublisherName, updatePolicy } from './update-policy';
+import { type WindowRef, readPublisherName, resolveWindow, updatePolicy } from './update-policy';
 
 const { autoUpdater } = electronUpdater;
 
@@ -44,8 +44,18 @@ let pollTimer: ReturnType<typeof setInterval> | null = null;
 const POLL_AFTER_LAUNCH_MS = 30_000; // first auto-check 30s after window open
 const POLL_INTERVAL_MS = 6 * 60 * 60 * 1000; // every 6h while running
 
-function broadcast(window: BrowserWindow | null, status: UpdateStatus) {
+/**
+ * C33: the updater outlives any one window (macOS reopen creates a new
+ * one), so it asks for the current main window on every broadcast
+ * instead of keeping the first one it was given.
+ */
+export type WindowSource = WindowRef<BrowserWindow>;
+
+let windowSource: () => BrowserWindow | null = () => null;
+
+function broadcast(status: UpdateStatus) {
   lastStatus = status;
+  const window = windowSource();
   if (window && !window.isDestroyed()) {
     window.webContents.send('plasma:update:status', status);
   }
@@ -63,7 +73,8 @@ function packagedPublisherName(): string | null {
   }
 }
 
-export function initUpdater(window: BrowserWindow): void {
+export function initUpdater(window: WindowSource): void {
+  windowSource = resolveWindow(window);
   // Packaged E2E / agent runs must not hit the R2 updater feed.
   if (process.env.PLASMA_DISABLE_UPDATER === '1') {
     logger.info('[updater] skipped — PLASMA_DISABLE_UPDATER=1');
@@ -111,11 +122,11 @@ export function initUpdater(window: BrowserWindow): void {
   } as typeof autoUpdater.logger;
 
   autoUpdater.on('checking-for-update', () => {
-    broadcast(window, { kind: 'checking' });
+    broadcast({ kind: 'checking' });
   });
 
   autoUpdater.on('update-not-available', (info: UpdateInfo) => {
-    broadcast(window, { kind: 'not-available', version: info.version });
+    broadcast({ kind: 'not-available', version: info.version });
   });
 
   autoUpdater.on('update-available', (info: UpdateInfo) => {
@@ -125,11 +136,11 @@ export function initUpdater(window: BrowserWindow): void {
         : Array.isArray(info.releaseNotes)
           ? info.releaseNotes.map((n) => n.note ?? '').join('\n')
           : null;
-    broadcast(window, { kind: 'available', version: info.version, releaseNotes });
+    broadcast({ kind: 'available', version: info.version, releaseNotes });
   });
 
   autoUpdater.on('download-progress', (p: ProgressInfo) => {
-    broadcast(window, {
+    broadcast({
       kind: 'downloading',
       percent: p.percent,
       bytesPerSecond: p.bytesPerSecond,
@@ -145,11 +156,11 @@ export function initUpdater(window: BrowserWindow): void {
         : Array.isArray(info.releaseNotes)
           ? info.releaseNotes.map((n) => n.note ?? '').join('\n')
           : null;
-    broadcast(window, { kind: 'downloaded', version: info.version, releaseNotes });
+    broadcast({ kind: 'downloaded', version: info.version, releaseNotes });
   });
 
   autoUpdater.on('error', (err) => {
-    broadcast(window, { kind: 'error', message: err?.message ?? String(err) });
+    broadcast({ kind: 'error', message: err?.message ?? String(err) });
   });
 
   // ── IPC: manual triggers ─────────────────────────────────────────
@@ -157,7 +168,7 @@ export function initUpdater(window: BrowserWindow): void {
     try {
       await autoUpdater.checkForUpdates();
     } catch (err) {
-      broadcast(window, {
+      broadcast({
         kind: 'error',
         message: err instanceof Error ? err.message : String(err),
       });

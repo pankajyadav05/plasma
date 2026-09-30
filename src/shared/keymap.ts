@@ -27,6 +27,8 @@ export type KeyId =
   | 'schemaDiff'
   | 'nextTab'
   | 'prevTab'
+  | 'nextPane'
+  | 'prevPane'
   | 'selectTab'
   | 'toggleRightSidebar'
   | 'settings'
@@ -208,6 +210,21 @@ export const KEYMAP: readonly KeyBinding[] = [
     id: 'prevTab',
     chord: { key: '[', mod: true, shift: true },
     label: 'Previous tab',
+    category: 'Tabs',
+    scope: 'global',
+  },
+  {
+    // Split editor panes ("Split pane right"): ⌥⌘] / ⌥⌘[ move focus between them.
+    id: 'nextPane',
+    chord: { key: ']', mod: true, alt: true },
+    label: 'Next pane',
+    category: 'Tabs',
+    scope: 'global',
+  },
+  {
+    id: 'prevPane',
+    chord: { key: '[', mod: true, alt: true },
+    label: 'Previous pane',
     category: 'Tabs',
     scope: 'global',
   },
@@ -616,6 +633,8 @@ export const EDITOR_PASSTHROUGH: ReadonlySet<KeyId> = new Set<KeyId>([
   'closeTab',
   'nextTab',
   'prevTab',
+  'nextPane',
+  'prevPane',
   'history',
   'exportCsv',
   'codegen',

@@ -220,7 +220,7 @@ function EditorActionBar({
 
   return (
     <div
-      className="flex h-9 shrink-0 items-center gap-1.5 border-t border-[var(--wb-separator)] bg-[var(--wb-content)] px-2.5"
+      className="flex h-9 min-w-0 shrink-0 items-center gap-1.5 overflow-hidden whitespace-nowrap border-t border-[var(--wb-separator)] bg-[var(--wb-content)] px-2.5"
       data-testid="editor-action-bar"
     >
       <SlidersHorizontal

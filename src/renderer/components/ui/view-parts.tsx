@@ -40,7 +40,7 @@ export function ViewFooter({
   return (
     <div
       className={cn(
-        'flex h-9 shrink-0 items-center gap-2 border-t border-[var(--wb-separator)] bg-[var(--wb-content)] px-2.5 text-[13px] text-[var(--wb-text-2)]',
+        'flex h-9 min-w-0 shrink-0 items-center gap-2 overflow-hidden whitespace-nowrap border-t border-[var(--wb-separator)] bg-[var(--wb-content)] px-2.5 text-[13px] text-[var(--wb-text-2)]',
         className,
       )}
       data-testid={testId}
@@ -124,7 +124,7 @@ export function EmptyState({
   );
 }
 
-/** Neutral small badge (type tags like HASH / ZSET, health, counts). */
+/** Neutral small sentence-case badge (type tags like Hash / ZSet, health, counts). */
 export function Badge({
   children,
   tone = 'neutral',
@@ -137,7 +137,7 @@ export function Badge({
   return (
     <span
       className={cn(
-        'inline-flex shrink-0 items-center rounded-[4px] px-1.5 py-px font-mono text-[10px] font-semibold uppercase',
+        'inline-flex shrink-0 items-center rounded-[4px] px-1.5 py-px text-[11px] font-medium leading-4',
         tone === 'neutral' && 'bg-[var(--wb-control)] text-[var(--wb-text-2)]',
         tone === 'accent' &&
           'bg-[color-mix(in_srgb,var(--wb-accent)_22%,transparent)] text-[var(--wb-text)]',

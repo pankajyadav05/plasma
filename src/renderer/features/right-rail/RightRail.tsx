@@ -25,6 +25,7 @@ import {
   ShieldOff,
   Sparkles,
   Square,
+  Table2,
   UserCircle,
   Wand2,
   X,
@@ -237,7 +238,13 @@ function QueryPanel() {
 
   return (
     <div className="flex h-full flex-col">
-      <PanelHeader title={tab.title} hint={isTable ? 'table' : undefined} onClose={close}>
+      <PanelHeader
+        title={tab.title}
+        icon={
+          isTable ? <Table2 className="h-3.5 w-3.5" aria-label="Table" role="img" /> : undefined
+        }
+        onClose={close}
+      >
         {!isTable && hasApiKey && (
           <Button
             variant="ghost"
@@ -247,7 +254,7 @@ function QueryPanel() {
             onClick={() => setMode('ai')}
           >
             <Sparkles className="h-3.5 w-3.5" />
-            ask
+            Ask
           </Button>
         )}
         {!isTable && (
@@ -291,7 +298,7 @@ function QueryPanel() {
       <div className="relative min-h-0 flex-1 overflow-hidden pt-3">
         {isTable && (
           <div className="absolute left-4 top-1 z-10 text-[11px] text-[var(--wb-text-3)]">
-            compiled from table browser — read-only
+            Compiled from the table browser — read-only
           </div>
         )}
         <MonacoEditor
@@ -306,6 +313,7 @@ function QueryPanel() {
           theme={theme}
           fontSize={fontSize}
           readOnly={isTable}
+          hideOverviewRuler
           onFormat={isTable ? undefined : () => void formatActiveSql()}
           onAskAi={
             isTable
@@ -527,12 +535,12 @@ function PolicyItem({ p }: { p: PolicyRow }) {
     <div className="border-b border-[var(--wb-separator)] px-3 py-2 last:border-b-0">
       <div className="flex items-center gap-2">
         <span className="font-mono text-[12px] font-semibold text-[var(--wb-text)]">{p.name}</span>
-        <span className="rounded-[4px] bg-[var(--wb-control)] px-1 py-0.5 font-mono text-[9px] uppercase text-[var(--wb-text-2)]">
+        <span className="rounded-[4px] bg-[var(--wb-control)] px-1 py-0.5 font-mono text-[10px] text-[var(--wb-text-2)]">
           {p.cmd || 'ALL'}
         </span>
         {p.permissive === 'PERMISSIVE' && (
-          <span className="rounded-[4px] bg-[var(--wb-control)] px-1 py-0.5 font-mono text-[9px] uppercase text-[var(--wb-text-2)]">
-            permissive
+          <span className="rounded-[4px] bg-[var(--wb-control)] px-1 py-0.5 font-mono text-[10px] text-[var(--wb-text-2)]">
+            Permissive
           </span>
         )}
         <span className="ml-auto font-mono text-[10px] text-[var(--wb-text-3)]">{p.roles}</span>
@@ -562,23 +570,39 @@ function PolicyItem({ p }: { p: PolicyRow }) {
 function PanelHeader({
   title,
   hint,
+  icon,
   onClose,
   children,
 }: {
   title: string;
   hint?: string;
+  /** Small kind glyph after the title (VF27: an icon instead of a pill). */
+  icon?: React.ReactNode;
   onClose?: () => void;
   children?: React.ReactNode;
 }) {
   return (
     <div className="flex h-9 shrink-0 items-center gap-1.5 border-b border-[var(--wb-separator)] pl-3 pr-2">
-      <span className="truncate text-[13px] font-semibold text-[var(--wb-text)]">{title}</span>
-      {hint && (
-        <span className="truncate rounded-[4px] bg-[var(--wb-control)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--wb-text-2)]">
-          {hint}
+      {/* VF27: the title block takes the free space and truncates last. */}
+      <div className="flex min-w-0 flex-1 items-center gap-1.5">
+        <span
+          className="min-w-0 truncate text-[13px] font-semibold text-[var(--wb-text)]"
+          title={title}
+        >
+          {title}
         </span>
-      )}
-      <div className="flex-1" />
+        {icon && (
+          <span className="grid shrink-0 place-items-center text-[var(--wb-text-3)]">{icon}</span>
+        )}
+        {hint && (
+          <span
+            className="min-w-0 truncate rounded-[4px] bg-[var(--wb-control)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--wb-text-2)]"
+            title={hint}
+          >
+            {hint}
+          </span>
+        )}
+      </div>
       {children}
       {onClose && (
         <IconButton variant="plain" label="Close panel" title="Close" onClick={onClose}>

@@ -8,6 +8,7 @@
  * prod-tag confirmation.
  */
 import { splitSqlStatements } from '@/lib/sql-split';
+import { type GateDecision, effectiveSafeMode, safeModeDecision } from './safe-mode';
 import { looksDestructive } from './session-sql-heuristics';
 
 /**
@@ -28,6 +29,20 @@ export function isProdTagged(get: Get): boolean {
   return (connId ? state.settings?.connectionTags?.[connId] : undefined) === 'prod';
 }
 
+/**
+ * What the gate does with `sql` on the active connection: the connection's
+ * safe-mode level plus the prod tag's own confirmation.
+ */
+export function evaluateGate(get: Get, sql: string, force = false): GateDecision {
+  const state = get();
+  return safeModeDecision({
+    sql,
+    force,
+    prodTagged: isProdTagged(get),
+    level: effectiveSafeMode(state.settings, state.activeConfig?.id),
+  });
+}
+
 /** True when any statement in `sql` looks destructive. */
 export function scriptLooksDestructive(sql: string): boolean {
   return splitSqlStatements(sql).some((s) => looksDestructive(s.text));
@@ -46,8 +61,9 @@ export function requestProdConfirm(
   sql: string,
   opts?: { force?: boolean; summary?: string },
 ): Promise<boolean> {
-  if (!isProdTagged(get)) return Promise.resolve(true);
-  if (!opts?.force && !scriptLooksDestructive(sql)) return Promise.resolve(true);
+  const decision = evaluateGate(get, sql, opts?.force);
+  if (decision.kind === 'run') return Promise.resolve(true);
+  if (decision.kind === 'refuse') return Promise.resolve(false);
   if (get().prodGate != null) return Promise.resolve(false);
   return new Promise<boolean>((resolve) => {
     externalResolve = resolve;
@@ -57,6 +73,7 @@ export function requestProdConfirm(
         tabId: get().activeTabId ?? '',
         connectionGen: get().connectionGen ?? 0,
         kind: 'external',
+        reason: decision.reason,
         summary: opts?.summary,
       },
     });

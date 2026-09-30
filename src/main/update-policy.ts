@@ -38,3 +38,11 @@ export function readPublisherName(yaml: string): string | null {
   const list = /^publisherName:\s*\n\s*-\s*(.+)$/m.exec(yaml);
   return list?.[1]?.trim().replace(/^["']|["']$/g, '') || null;
 }
+
+/** A window, or a getter for whichever window is current (C33). */
+export type WindowRef<W> = W | null | (() => W | null);
+
+/** Normalise a `WindowRef` into a getter that is read on every use. */
+export function resolveWindow<W>(ref: WindowRef<W>): () => W | null {
+  return typeof ref === 'function' ? (ref as () => W | null) : () => ref;
+}

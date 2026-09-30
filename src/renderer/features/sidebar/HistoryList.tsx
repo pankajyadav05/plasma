@@ -12,6 +12,7 @@ import {
   Maximize2,
   RefreshCw,
   SlidersHorizontal,
+  Trash2,
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { type ContextMenuState, SidebarContextMenu } from './SidebarContextMenu';
@@ -35,6 +36,7 @@ export function HistoryList() {
   // statement that just ran shows up without a manual refresh.
   const anyRunning = useSession((s) => s.tabs.some((t) => t.queryRunState === 'running'));
   const saveSqlAsQuery = useSession((s) => s.saveSqlAsQuery);
+  const deleteHistoryEntry = useSession((s) => s.deleteHistoryEntry);
 
   const [search, setSearch] = useState('');
   const [entries, setEntries] = useState<HistoryEntry[] | null>(null);
@@ -201,6 +203,19 @@ export function HistoryList() {
                               sql: e.sql,
                               name: e.sql.replace(/\s+/g, ' ').trim().slice(0, 40),
                             }),
+                        },
+                        { type: 'separator' },
+                        {
+                          type: 'item',
+                          label: 'Delete from history',
+                          icon: <Trash2 />,
+                          destructive: true,
+                          onSelect: () => {
+                            setEntries((cur) => cur?.filter((x) => x.id !== e.id) ?? cur);
+                            void deleteHistoryEntry(e.id).catch((err) =>
+                              setNotice(err instanceof Error ? err.message : String(err)),
+                            );
+                          },
                         },
                       ],
                     });

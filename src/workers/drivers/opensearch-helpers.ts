@@ -317,3 +317,98 @@ export function responseFromError(err: unknown): { status: number; body: unknown
   }
   return null;
 }
+
+/** Connection-level options for the OpenSearch client (O12). */
+export interface OsConnectionPlan {
+  /** Every node URL, main endpoint first. */
+  nodes: string[];
+  /** Basic auth, when that is the chosen mode. */
+  basic?: { username: string; password: string };
+  /** Extra request headers (API key). */
+  headers: Record<string, string>;
+  /** AWS SigV4 settings, when that is the chosen mode. */
+  sigv4?: {
+    region: string;
+    service: 'es' | 'aoss';
+    credentials: { accessKeyId: string; secretAccessKey: string; sessionToken?: string };
+  };
+}
+
+/** `/search/` → `/search`; blank → ''. */
+export function normalisePathPrefix(prefix: string | undefined): string {
+  const t = (prefix ?? '').trim().replace(/\/+$/, '');
+  if (!t) return '';
+  return t.startsWith('/') ? t : `/${t}`;
+}
+
+/** An `id:key` API key becomes its base64 form; an already-encoded one passes through. */
+export function apiKeyHeaderValue(key: string): string {
+  const k = key.trim();
+  if (k.includes(':')) return Buffer.from(k, 'utf8').toString('base64');
+  return k;
+}
+
+export function planOpenSearchConnection(config: {
+  host: string;
+  port: number;
+  ssl: boolean;
+  user?: string;
+  password?: string;
+  opensearch?: {
+    auth?: 'basic' | 'apiKey' | 'sigv4';
+    apiKey?: string;
+    awsRegion?: string;
+    awsService?: 'es' | 'aoss';
+    awsAccessKeyId?: string;
+    awsSecretAccessKey?: string;
+    awsSessionToken?: string;
+    pathPrefix?: string;
+    nodes?: string[];
+  };
+}): OsConnectionPlan {
+  const o = config.opensearch ?? {};
+  const protocol = config.ssl ? 'https' : 'http';
+  const prefix = normalisePathPrefix(o.pathPrefix);
+  const withPrefix = (url: string): string => {
+    const u = new URL(url);
+    if (prefix && (u.pathname === '/' || u.pathname === '')) u.pathname = prefix;
+    return u.toString().replace(/\/$/, '');
+  };
+  const nodes = [withPrefix(`${protocol}://${config.host}:${config.port}`)];
+  for (const raw of o.nodes ?? []) {
+    const t = raw.trim();
+    if (!t) continue;
+    const url = /^[a-z][a-z0-9+.-]*:\/\//i.test(t) ? t : `${protocol}://${t}`;
+    let node: string;
+    try {
+      node = withPrefix(url);
+    } catch {
+      throw new Error(`"${t}" is not a valid node URL`);
+    }
+    if (!nodes.includes(node)) nodes.push(node);
+  }
+
+  const auth = o.auth ?? 'basic';
+  const plan: OsConnectionPlan = { nodes, headers: {} };
+  if (auth === 'apiKey') {
+    if (!o.apiKey?.trim()) throw new Error('An API key is required for API key authentication');
+    plan.headers.Authorization = `ApiKey ${apiKeyHeaderValue(o.apiKey)}`;
+  } else if (auth === 'sigv4') {
+    if (!o.awsRegion?.trim()) throw new Error('An AWS region is required for SigV4 authentication');
+    if (!o.awsAccessKeyId?.trim() || !o.awsSecretAccessKey) {
+      throw new Error('AWS access key id and secret access key are required for SigV4');
+    }
+    plan.sigv4 = {
+      region: o.awsRegion.trim(),
+      service: o.awsService ?? 'es',
+      credentials: {
+        accessKeyId: o.awsAccessKeyId.trim(),
+        secretAccessKey: o.awsSecretAccessKey,
+        ...(o.awsSessionToken ? { sessionToken: o.awsSessionToken } : {}),
+      },
+    };
+  } else if (config.user || config.password) {
+    plan.basic = { username: config.user || '', password: config.password || '' };
+  }
+  return plan;
+}

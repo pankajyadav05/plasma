@@ -4,6 +4,7 @@ import {
   fieldStatsCardKey,
   fieldStatsTopKey,
   isMissingSqlEndpointError,
+  planOpenSearchConnection,
   readFieldStat,
 } from './opensearch-helpers';
 
@@ -205,5 +206,70 @@ describe('request helpers (O14)', () => {
       body: { found: false },
     });
     expect(responseFromError(new Error('ECONNREFUSED'))).toBeNull();
+  });
+});
+
+describe('planOpenSearchConnection (O12)', () => {
+  const base = { host: 'search.example.com', port: 9200, ssl: true };
+  it('defaults to one node with basic auth from user/password', () => {
+    expect(planOpenSearchConnection({ ...base, user: 'u', password: 'p' })).toEqual({
+      nodes: ['https://search.example.com:9200'],
+      basic: { username: 'u', password: 'p' },
+      headers: {},
+    });
+    expect(planOpenSearchConnection(base).basic).toBeUndefined();
+  });
+  it('applies the path prefix and extra nodes (deduplicated)', () => {
+    const plan = planOpenSearchConnection({
+      ...base,
+      opensearch: {
+        pathPrefix: 'search/',
+        nodes: ['b.example.com:9200', 'https://c:9200/other', 'b.example.com:9200'],
+      },
+    });
+    expect(plan.nodes).toEqual([
+      'https://search.example.com:9200/search',
+      'https://b.example.com:9200/search',
+      'https://c:9200/other',
+    ]);
+  });
+  it('sends an API key as an Authorization header, encoding id:key', () => {
+    const plan = planOpenSearchConnection({
+      ...base,
+      user: 'ignored',
+      opensearch: { auth: 'apiKey', apiKey: 'id:secret' },
+    });
+    expect(plan.headers.Authorization).toBe(
+      `ApiKey ${Buffer.from('id:secret').toString('base64')}`,
+    );
+    expect(plan.basic).toBeUndefined();
+    expect(
+      planOpenSearchConnection({ ...base, opensearch: { auth: 'apiKey', apiKey: 'ZW5jb2RlZA==' } })
+        .headers.Authorization,
+    ).toBe('ApiKey ZW5jb2RlZA==');
+  });
+  it('builds SigV4 credentials and validates required fields', () => {
+    const plan = planOpenSearchConnection({
+      ...base,
+      opensearch: {
+        auth: 'sigv4',
+        awsRegion: 'eu-west-1',
+        awsService: 'aoss',
+        awsAccessKeyId: 'AKIA',
+        awsSecretAccessKey: 'sec',
+        awsSessionToken: 'tok',
+      },
+    });
+    expect(plan.sigv4).toEqual({
+      region: 'eu-west-1',
+      service: 'aoss',
+      credentials: { accessKeyId: 'AKIA', secretAccessKey: 'sec', sessionToken: 'tok' },
+    });
+    expect(() => planOpenSearchConnection({ ...base, opensearch: { auth: 'sigv4' } })).toThrow(
+      /region/,
+    );
+    expect(() =>
+      planOpenSearchConnection({ ...base, opensearch: { auth: 'apiKey', apiKey: ' ' } }),
+    ).toThrow(/API key/);
   });
 });

@@ -22,8 +22,6 @@ const FIELD_CLASS =
 
 const DIALOG_CLASS =
   'gap-3 rounded-[10px] border-[var(--wb-separator)] bg-[var(--wb-content)] p-5 text-[13px] text-[var(--wb-text)]';
-const TITLE_CLASS = 'font-sans text-[15px] font-semibold not-italic leading-tight tracking-normal';
-const DESC_CLASS = 'font-sans text-[13px] not-italic leading-snug text-[var(--wb-text-2)]';
 
 /** Global OpenSearch dialogs: write confirmation + document editor. */
 export function OsDialogs() {
@@ -60,8 +58,8 @@ function OsConfirmDialog() {
     <Dialog open onOpenChange={(o) => !o && close(false)}>
       <DialogContent className={`max-w-[460px] ${DIALOG_CLASS}`}>
         <DialogHeader className="space-y-1">
-          <DialogTitle className={TITLE_CLASS}>{req.title}</DialogTitle>
-          <DialogDescription className={DESC_CLASS}>{req.description}</DialogDescription>
+          <DialogTitle>{req.title}</DialogTitle>
+          <DialogDescription>{req.description}</DialogDescription>
         </DialogHeader>
         {req.prod && (
           <div className="flex items-center gap-2 rounded-[6px] bg-[color-mix(in_srgb,var(--destructive)_12%,transparent)] px-2.5 py-2 text-[12px]">
@@ -286,10 +284,10 @@ function OsDocDialog() {
     <Dialog open onOpenChange={(o) => !o && close()}>
       <DialogContent className="flex h-[80vh] w-[min(860px,92vw)] max-w-none flex-col gap-0 rounded-[10px] border-[var(--wb-separator)] bg-[var(--wb-content)] p-0 text-[13px] text-[var(--wb-text)]">
         <DialogHeader className="shrink-0 space-y-1 border-b border-[var(--wb-separator)] px-5 py-3.5">
-          <DialogTitle className={TITLE_CLASS}>
+          <DialogTitle>
             {creating ? 'New document' : access.canWrite ? 'Edit document' : 'Document'}
           </DialogTitle>
-          <DialogDescription className={`${DESC_CLASS} truncate font-mono`}>
+          <DialogDescription className="truncate font-mono">
             {target.index}
             {creating ? '' : ` / ${target.id}`}
             {doc?.seqNo !== null && doc?.seqNo !== undefined

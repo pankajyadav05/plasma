@@ -105,6 +105,12 @@ export function latestHistory(
   return null;
 }
 
+/** Remove one entry; returns whether a row was deleted. */
+export function deleteHistoryEntry(id: number): boolean {
+  if (!Number.isInteger(id)) return false;
+  return getDb().prepare('DELETE FROM query_history WHERE id = ?').run(id).changes > 0;
+}
+
 export function clearHistory(): void {
   getDb().prepare('DELETE FROM query_history').run();
 }

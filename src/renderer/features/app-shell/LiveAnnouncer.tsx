@@ -1,4 +1,4 @@
-import { useActiveTab, useSession } from '@/stores/session';
+import { useActiveTabSelect, useSession } from '@/stores/session';
 import { useEffect, useRef, useState } from 'react';
 import { describeQueryOutcome } from './live-announce';
 
@@ -9,7 +9,16 @@ import { describeQueryOutcome } from './live-announce';
  * for status, assertive for errors.
  */
 export function LiveAnnouncer() {
-  const tab = useActiveTab();
+  const tab = useActiveTabSelect((t) =>
+    t
+      ? {
+          id: t.id,
+          queryRunState: t.queryRunState,
+          queryResult: t.queryResult,
+          queryError: t.queryError,
+        }
+      : undefined,
+  );
   const connectionState = useSession((s) => s.connectionState);
   const connName = useSession((s) => s.activeConfig?.name);
   const commitError = useSession((s) => s.pendingEditsError?.message ?? null);

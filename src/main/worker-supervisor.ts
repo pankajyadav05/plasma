@@ -26,7 +26,11 @@ import { logger } from './logger';
  */
 export type WorkerBroadcast = Extract<
   WorkerResponse,
-  { kind: 'redisPubsub' } | { kind: 'queryChunk' } | { kind: 'pgNotice' }
+  | { kind: 'redisPubsub' }
+  | { kind: 'queryChunk' }
+  | { kind: 'pgNotice' }
+  | { kind: 'importProgress' }
+  | { kind: 'exportProgress' }
 >;
 
 export class WorkerSupervisor {
@@ -123,7 +127,13 @@ export class WorkerSupervisor {
       const data = parsed.data;
       // Broadcast events aren't request-correlated final responses — fan them
       // out to whoever subscribed (redis pubsub, query chunks, pg notices).
-      if (data.kind === 'redisPubsub' || data.kind === 'queryChunk' || data.kind === 'pgNotice') {
+      if (
+        data.kind === 'redisPubsub' ||
+        data.kind === 'queryChunk' ||
+        data.kind === 'pgNotice' ||
+        data.kind === 'importProgress' ||
+        data.kind === 'exportProgress'
+      ) {
         this.broadcastHandler?.(data);
         return;
       }

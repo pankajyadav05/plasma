@@ -59,7 +59,16 @@ function readWordWrap(): boolean {
 }
 
 /** App-level dialogs any command (keymap, palette, menu) can open. */
-export type Overlay = 'codegen' | 'notebook' | 'schemaDiff' | 'cheatSheet' | null;
+export type Overlay =
+  | 'codegen'
+  | 'notebook'
+  | 'schemaDiff'
+  | 'cheatSheet'
+  | 'backup'
+  | 'restore'
+  | 'roles'
+  | 'dbSearch'
+  | null;
 
 /** Caret for one SQL tab, stamped with the buffer length it was read from. */
 export interface TabCaret extends EditorCaret {

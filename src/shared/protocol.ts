@@ -1,5 +1,12 @@
 import { z } from 'zod';
 import { CONNECTION_LOST } from './connection-loss';
+import type {
+  AdminStartResult,
+  BackupRequest,
+  PickPathRequest,
+  RestoreRequest,
+  ToolInfo,
+} from './pg-backup';
 
 /**
  * IPC protocol — the single source of truth for the shape of messages
@@ -46,7 +53,14 @@ export type ConnectionEngine = z.infer<typeof ConnectionEngine>;
  * `insecure` is the pre-C9 spelling of `require` and is kept so old
  * rows still parse.
  */
-export const TlsMode = z.enum(['disable', 'prefer', 'require', 'verify-ca', 'verify-full', 'insecure']);
+export const TlsMode = z.enum([
+  'disable',
+  'prefer',
+  'require',
+  'verify-ca',
+  'verify-full',
+  'insecure',
+]);
 export type TlsMode = z.infer<typeof TlsMode>;
 export const ConnectionTls = z.object({
   mode: TlsMode.default('verify-full'),
@@ -61,6 +75,33 @@ export const ConnectionTls = z.object({
   servername: z.string().optional(),
 });
 export type ConnectionTls = z.infer<typeof ConnectionTls>;
+
+/**
+ * OpenSearch endpoint + auth options (O12). Secret fields (`apiKey`,
+ * `awsSecretAccessKey`, `awsSessionToken`) live in the vault; the renderer
+ * gets them back blank with `has*` flags, and a blank value on save keeps
+ * the stored one.
+ */
+export const OpenSearchOptions = z.object({
+  /** Which credentials to send: HTTP basic (user/password), an API key, or AWS SigV4. */
+  auth: z.enum(['basic', 'apiKey', 'sigv4']).optional(),
+  /** `id:key` or the already base64-encoded key. */
+  apiKey: z.string().optional(),
+  awsRegion: z.string().optional(),
+  /** `es` = managed domain, `aoss` = OpenSearch Serverless. */
+  awsService: z.enum(['es', 'aoss']).optional(),
+  awsAccessKeyId: z.string().optional(),
+  awsSecretAccessKey: z.string().optional(),
+  awsSessionToken: z.string().optional(),
+  /** Path the cluster is served under behind a proxy, e.g. `/search`. */
+  pathPrefix: z.string().optional(),
+  /** Extra node URLs (round-robin) besides host:port. */
+  nodes: z.array(z.string()).optional(),
+  hasApiKey: z.boolean().optional(),
+  hasAwsSecretAccessKey: z.boolean().optional(),
+  hasAwsSessionToken: z.boolean().optional(),
+});
+export type OpenSearchOptions = z.infer<typeof OpenSearchOptions>;
 
 export const ConnectionConfig = z.object({
   id: z.string(),
@@ -77,11 +118,21 @@ export const ConnectionConfig = z.object({
   ssl: z.boolean().default(false),
   tls: ConnectionTls.optional(),
   readOnly: z.boolean().default(false),
+  /** Folder the connection is listed under (C28); empty/absent = top level. */
+  group: z.string().optional(),
+  /** Postgres: statements run right after connecting (SET search_path…). */
+  bootstrapSql: z.string().optional(),
+  /** OpenSearch auth + endpoints (O12). */
+  opensearch: OpenSearchOptions.optional(),
 });
-export type ConnectionConfig = Omit<z.infer<typeof ConnectionConfig>, 'readOnly'> & { readOnly?: boolean };
+export type ConnectionConfig = Omit<z.infer<typeof ConnectionConfig>, 'readOnly'> & {
+  readOnly?: boolean;
+};
 
 export const SavedConnection = ConnectionConfig.omit({ password: true });
-export type SavedConnection = Omit<z.infer<typeof SavedConnection>, 'readOnly'> & { readOnly?: boolean };
+export type SavedConnection = Omit<z.infer<typeof SavedConnection>, 'readOnly'> & {
+  readOnly?: boolean;
+};
 
 export const ConnectionInfo = z.object({
   serverVersion: z.string(),
@@ -114,7 +165,16 @@ export const ConnectionRecovered = z.object({
   connectionId: z.string().optional(),
 });
 export type ConnectionRecovered = z.infer<typeof ConnectionRecovered>;
-export const ConnectionSshConfig = z.object({ host: z.string().min(1), port: z.number().int().positive().max(65535).default(22), user: z.string().min(1), password: z.string().default(''), privateKey: z.string().default(''), passphrase: z.string().default('') });
+export const ConnectionSshConfig = z.object({
+  host: z.string().min(1),
+  port: z.number().int().positive().max(65535).default(22),
+  user: z.string().min(1),
+  password: z.string().default(''),
+  privateKey: z.string().default(''),
+  passphrase: z.string().default(''),
+  privateKeyPath: z.string().default(''),
+  useAgent: z.boolean().default(false),
+});
 export type ConnectionSshConfig = z.infer<typeof ConnectionSshConfig>;
 
 /** Payload of `IpcChannel.SshHostKeyPromptEvent` (C8). */
@@ -313,7 +373,10 @@ export const RedisAnalyzeResult = z.object({
 export type RedisAnalyzeResult = z.infer<typeof RedisAnalyzeResult>;
 export const RedisBulkDeleteFailure = z.object({ key: z.string(), error: z.string() });
 export type RedisBulkDeleteFailure = z.infer<typeof RedisBulkDeleteFailure>;
-export const RedisBulkDeleteResult = z.object({ deleted: z.array(z.string()), failed: z.array(RedisBulkDeleteFailure) });
+export const RedisBulkDeleteResult = z.object({
+  deleted: z.array(z.string()),
+  failed: z.array(RedisBulkDeleteFailure),
+});
 export type RedisBulkDeleteResult = z.infer<typeof RedisBulkDeleteResult>;
 
 export const RedisSlowlogEntry = z.object({
@@ -424,7 +487,12 @@ export const RedisWriteOp = z.discriminatedUnion('kind', [
     fields: z.array(z.tuple([z.string(), z.string()])).min(1),
   }),
   z.object({ kind: z.literal('streamDel'), key: z.string(), ids: z.array(z.string()).min(1) }),
-  z.object({ kind: z.literal('jsonSet'), key: z.string(), path: z.string().optional(), value: z.string() }),
+  z.object({
+    kind: z.literal('jsonSet'),
+    key: z.string(),
+    path: z.string().optional(),
+    value: z.string(),
+  }),
 ]);
 export type RedisWriteOp = z.infer<typeof RedisWriteOp>;
 
@@ -607,6 +675,16 @@ export type QueryResult = z.infer<typeof QueryResult>;
 export const ExportFormat = z.enum(['csv', 'json', 'sql']);
 export type ExportFormat = z.infer<typeof ExportFormat>;
 
+/** CSV dialect (Settings → Data → CSV export); mirrors `CsvOptions` in export-format. */
+export const CsvExportOptions = z.object({
+  delimiter: z.enum([',', ';', '\t', '|']).catch(',').default(','),
+  header: z.boolean().catch(true).default(true),
+  quote: z.enum(['"', "'"]).catch('"').default('"'),
+  /** How SQL NULL is written: empty field or the literal `NULL`. */
+  nullAs: z.enum(['empty', 'NULL']).catch('empty').default('empty'),
+  lineEnding: z.enum(['lf', 'crlf']).catch('lf').default('lf'),
+});
+
 export const ExportSaveRequest = z.object({
   format: ExportFormat,
   /** Suggested filename stem or full name for the save dialog. */
@@ -622,8 +700,135 @@ export const ExportSaveRequest = z.object({
   params: z.array(z.unknown()).optional(),
   /** Qualified, quoted INSERT target for SQL export (e.g. `"public"."users"`). */
   targetTable: z.string().optional(),
+  /** Correlates progress events and `export.cancel` with this export (C30). */
+  jobId: z.string().optional(),
 });
 export type ExportSaveRequest = z.infer<typeof ExportSaveRequest>;
+
+// ─── Structure editing + import (wave 2) ─────────────────────────────
+
+/** Statements from the structure editor / create-table dialog (built by `pg-ddl`). */
+export const DdlApplyRequest = z.object({
+  connectionGen: z.number().int().nonnegative(),
+  /** Run together in one transaction. */
+  transactional: z.array(z.string().min(1)).max(2000),
+  /** CREATE/DROP INDEX CONCURRENTLY — each runs alone, after the transaction. */
+  concurrent: z.array(z.string().min(1)).max(200).default([]),
+});
+export type DdlApplyRequest = z.infer<typeof DdlApplyRequest>;
+
+export const DdlApplyResult = z.object({
+  /** Statements that ran (transactional ones count only if the batch committed). */
+  executed: z.number().int().nonnegative(),
+  error: z
+    .object({ message: z.string(), statement: z.string(), index: z.number().int().nonnegative() })
+    .optional(),
+});
+export type DdlApplyResult = z.infer<typeof DdlApplyResult>;
+
+export const ImportFormat = z.enum(['csv', 'tsv', 'json', 'ndjson', 'sql']);
+export type ImportFormat = z.infer<typeof ImportFormat>;
+
+export const ImportCsvOptions = z.object({
+  delimiter: z.string().length(1),
+  quote: z.string().max(1),
+  header: z.boolean(),
+  nullString: z.string().nullable(),
+});
+export type ImportCsvOptions = z.infer<typeof ImportCsvOptions>;
+
+export const ImportJobSpec = z.object({
+  jobId: z.string().min(1),
+  connectionGen: z.number().int().nonnegative(),
+  filePath: z.string().min(1),
+  format: ImportFormat,
+  schema: z.string().min(1),
+  table: z.string().min(1),
+  csv: ImportCsvOptions.optional(),
+  /** Target column <- CSV column index or JSON key. Empty for .sql files. */
+  columns: z
+    .array(
+      z.object({
+        target: z.string().min(1),
+        source: z.union([z.number().int().nonnegative(), z.string()]),
+      }),
+    )
+    .max(1600),
+  /** DDL to run first, in the same transaction (create-a-new-table option). */
+  preStatements: z.array(z.string().min(1)).max(200).default([]),
+  batchRows: z.number().int().positive().max(10000).optional(),
+});
+export type ImportJobSpec = z.infer<typeof ImportJobSpec>;
+
+export const ExportProgress = z.object({
+  jobId: z.string(),
+  rowCount: z.number().int().nonnegative(),
+  bytesWritten: z.number().nonnegative(),
+});
+export type ExportProgress = z.infer<typeof ExportProgress>;
+
+export const ImportProgress = z.object({
+  jobId: z.string(),
+  rowsRead: z.number().int().nonnegative(),
+  rowsImported: z.number().int().nonnegative(),
+  bytesRead: z.number().nonnegative(),
+  totalBytes: z.number().nonnegative(),
+});
+export type ImportProgress = z.infer<typeof ImportProgress>;
+
+export const ImportResult = z.object({
+  jobId: z.string(),
+  /** Rows committed. Always 0 unless `ok`. */
+  rowsImported: z.number().int().nonnegative(),
+  rowsRead: z.number().int().nonnegative(),
+  /** SQL files: statements executed. */
+  statements: z.number().int().nonnegative().optional(),
+  ok: z.boolean(),
+  cancelled: z.boolean().optional(),
+  error: z
+    .object({
+      message: z.string(),
+      /** 1-based data row (or statement) that failed first, when known. */
+      row: z.number().int().positive().optional(),
+      /** A short rendering of that row / statement. */
+      sample: z.string().optional(),
+    })
+    .optional(),
+});
+export type ImportResult = z.infer<typeof ImportResult>;
+
+export const ImportPreviewRequest = z.object({
+  path: z.string().min(1),
+  format: ImportFormat,
+  csv: ImportCsvOptions.partial().optional(),
+});
+export type ImportPreviewRequest = z.infer<typeof ImportPreviewRequest>;
+
+export const ImportPreview = z.object({
+  path: z.string(),
+  format: ImportFormat,
+  size: z.number().nonnegative(),
+  csv: ImportCsvOptions.optional(),
+  /** Column labels: header cells, JSON keys, or "column 1…". */
+  columns: z.array(z.string()),
+  /** First rows, already null-aware. Cells are null or text. */
+  rows: z.array(z.array(z.string().nullable())),
+  /** Inferred pg type per column (for create-a-new-table). */
+  types: z.array(z.string()),
+  /** SQL files: the first statements. */
+  statements: z.array(z.string()).optional(),
+  /** True when the sample ended before the end of the file. */
+  truncated: z.boolean(),
+});
+export type ImportPreview = z.infer<typeof ImportPreview>;
+
+export const ImportPickedFile = z.object({
+  path: z.string(),
+  name: z.string(),
+  size: z.number().nonnegative(),
+  format: ImportFormat.nullable(),
+});
+export type ImportPickedFile = z.infer<typeof ImportPickedFile>;
 
 export const ExportSaveResult = z.discriminatedUnion('ok', [
   z.object({
@@ -842,7 +1047,12 @@ export const WorkerRequest = z.discriminatedUnion('kind', [
    * runs inside BEGIN … ROLLBACK (or SAVEPOINT … ROLLBACK TO when a user
    * transaction is open), so nothing it changes is kept (F2).
    */
-  z.object({ kind: z.literal('explain'), id: z.string(), sql: z.string().min(1), analyze: z.boolean() }),
+  z.object({
+    kind: z.literal('explain'),
+    id: z.string(),
+    sql: z.string().min(1),
+    analyze: z.boolean(),
+  }),
   z.object({ kind: z.literal('introspect'), id: z.string(), opts: IntrospectOpts.optional() }),
   z.object({ kind: z.literal('beginTxn'), id: z.string() }),
   z.object({ kind: z.literal('commitTxn'), id: z.string() }),
@@ -853,7 +1063,20 @@ export const WorkerRequest = z.discriminatedUnion('kind', [
    * Params are text or null — Postgres casts them to the column type.
    * `label` names the edit in error messages (e.g. `public.users id=5 → email`).
    */
-  z.object({ kind: z.literal('commitEditBatch'), id: z.string(), connectionGen: z.number().int().nonnegative(), updates: z.array(z.object({ sql: z.string().min(1), params: z.array(z.unknown()).optional(), label: z.string().optional() })).min(1) }),
+  z.object({
+    kind: z.literal('commitEditBatch'),
+    id: z.string(),
+    connectionGen: z.number().int().nonnegative(),
+    updates: z
+      .array(
+        z.object({
+          sql: z.string().min(1),
+          params: z.array(z.unknown()).optional(),
+          label: z.string().optional(),
+        }),
+      )
+      .min(1),
+  }),
   // Aux query — runs on the dedicated aux connection (AI/monitor) so it
   // never shares a session with cancel. Cancel uses a separate control
   // client (U19).
@@ -866,7 +1089,12 @@ export const WorkerRequest = z.discriminatedUnion('kind', [
     /** Per-statement timeout for Plasma's own metadata/lookup queries (F12). */
     timeoutMs: z.number().int().positive().optional(),
   }),
-  z.object({ kind: z.literal('aiQuery'), id: z.string(), sql: z.string(), params: z.array(z.unknown()).optional() }),
+  z.object({
+    kind: z.literal('aiQuery'),
+    id: z.string(),
+    sql: z.string(),
+    params: z.array(z.unknown()).optional(),
+  }),
   // Apply PG statement_timeout on primary + aux (U20). 0 disables.
   z.object({
     kind: z.literal('setStatementTimeout'),
@@ -1048,21 +1276,33 @@ export const WorkerRequest = z.discriminatedUnion('kind', [
   z.object({
     kind: z.literal('exportRows'),
     id: z.string(),
+    jobId: z.string().optional(),
+    csv: CsvExportOptions.optional(),
     format: ExportFormat,
     filePath: z.string().min(1),
     columns: z.array(ColumnMeta),
     rows: z.array(z.array(z.unknown())),
     targetTable: z.string().optional(),
   }),
+  /** Stop a running export (C30); the partial file is removed. */
+  z.object({ kind: z.literal('exportCancel'), id: z.string(), jobId: z.string() }),
+  /** Stop whatever is running on the aux connection (AI tool query, monitor lookup). */
+  z.object({ kind: z.literal('cancelAux'), id: z.string() }),
   z.object({
     kind: z.literal('exportQuery'),
     id: z.string(),
+    jobId: z.string().optional(),
+    csv: CsvExportOptions.optional(),
     format: ExportFormat,
     filePath: z.string().min(1),
     sql: z.string().min(1),
     params: z.array(z.unknown()).optional(),
     targetTable: z.string().optional(),
   }),
+  // ── Structure editing + import ──
+  z.object({ kind: z.literal('applyDdl'), id: z.string(), request: DdlApplyRequest }),
+  z.object({ kind: z.literal('importRun'), id: z.string(), job: ImportJobSpec }),
+  z.object({ kind: z.literal('importCancel'), id: z.string(), jobId: z.string() }),
 ]);
 export type WorkerRequest = z.infer<typeof WorkerRequest>;
 
@@ -1078,7 +1318,7 @@ export const WorkerResponse = z.discriminatedUnion('kind', [
     id: z.string(),
     serverVersion: z.string(),
     engine: ConnectionEngine.default('postgres'),
-  connectionGen: z.number().int().nonnegative().optional(),
+    connectionGen: z.number().int().nonnegative().optional(),
   }),
   z.object({ kind: z.literal('disconnected'), id: z.string() }),
   z.object({ kind: z.literal('queryResult'), id: z.string(), result: QueryResult }),
@@ -1088,7 +1328,12 @@ export const WorkerResponse = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('statementTimeoutSet'), id: z.string() }),
   z.object({ kind: z.literal('schemaInfo'), id: z.string(), info: SchemaInfo }),
   z.object({ kind: z.literal('txnState'), id: z.string(), state: TxnState }),
-  z.object({ kind: z.literal('editBatchResult'), id: z.string(), state: TxnState, applied: z.number().int().nonnegative() }),
+  z.object({
+    kind: z.literal('editBatchResult'),
+    id: z.string(),
+    state: TxnState,
+    applied: z.number().int().nonnegative(),
+  }),
   /**
    * `fatal: 'connection-lost'` means the driver's transport is gone (VPN
    * drop, sleep, network switch), not that the statement was bad. Main
@@ -1108,9 +1353,17 @@ export const WorkerResponse = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('redisCommand'), id: z.string(), result: RedisCommandResult }),
   z.object({ kind: z.literal('redisAck'), id: z.string() }),
   z.object({ kind: z.literal('redisBulkDelete'), id: z.string(), result: RedisBulkDeleteResult }),
-  z.object({ kind: z.literal('redisPatternDelete'), id: z.string(), result: RedisPatternDeleteResult }),
+  z.object({
+    kind: z.literal('redisPatternDelete'),
+    id: z.string(),
+    result: RedisPatternDeleteResult,
+  }),
   z.object({ kind: z.literal('redisAnalyze'), id: z.string(), result: RedisAnalyzeResult }),
-  z.object({ kind: z.literal('redisSlowlog'), id: z.string(), entries: z.array(RedisSlowlogEntry) }),
+  z.object({
+    kind: z.literal('redisSlowlog'),
+    id: z.string(),
+    entries: z.array(RedisSlowlogEntry),
+  }),
   /**
    * Pub/sub message broadcast — not request-correlated. The id is a
    * constant `'pubsub-event'` sentinel so the supervisor can route it
@@ -1150,6 +1403,12 @@ export const WorkerResponse = z.discriminatedUnion('kind', [
     rowCount: z.number().int().nonnegative(),
     bytesWritten: z.number().int().nonnegative(),
   }),
+  z.object({ kind: z.literal('ddlResult'), id: z.string(), result: DdlApplyResult }),
+  z.object({ kind: z.literal('importResult'), id: z.string(), result: ImportResult }),
+  /** Export progress broadcast (C30) — not request-correlated. */
+  z.object({ kind: z.literal('exportProgress'), id: z.string(), progress: ExportProgress }),
+  /** Import progress broadcast — not request-correlated (like pgNotice). */
+  z.object({ kind: z.literal('importProgress'), id: z.string(), progress: ImportProgress }),
 ]);
 export type WorkerResponse = z.infer<typeof WorkerResponse>;
 
@@ -1211,29 +1470,28 @@ export const SettingsShape = z.object({
    * Default safe-mode level for connections without their own choice:
    * `off` (no prompts), `confirm-dangerous` (DROP / TRUNCATE / unqualified
    * DELETE / UPDATE ask first), `confirm-writes` (every write asks),
-   * `read-only` (writes refused). A PROD tag always confirms.
+   * `confirm-all` (every statement asks), `read-only` (writes refused). A PROD tag always confirms.
    */
   safeModeDefault: z
-    .enum(['off', 'confirm-dangerous', 'confirm-writes', 'read-only'])
+    .enum(['off', 'confirm-dangerous', 'confirm-writes', 'confirm-all', 'read-only'])
     .catch('confirm-dangerous')
     .default('confirm-dangerous'),
   /** Per-connection safe-mode override, keyed by connection id. */
   connectionSafeMode: z
-    .record(z.string(), z.enum(['off', 'confirm-dangerous', 'confirm-writes', 'read-only']))
+    .record(
+      z.string(),
+      z.enum(['off', 'confirm-dangerous', 'confirm-writes', 'confirm-all', 'read-only']),
+    )
     .catch({})
     .default({}),
   /** Defaults for CSV export (the export dialog starts from these). */
-  csvExport: z
-    .object({
-      delimiter: z.enum([',', ';', '\t', '|']).catch(',').default(','),
-      header: z.boolean().catch(true).default(true),
-      quote: z.enum(['"', "'"]).catch('"').default('"'),
-      /** How SQL NULL is written: empty field or the literal `NULL`. */
-      nullAs: z.enum(['empty', 'NULL']).catch('empty').default('empty'),
-      lineEnding: z.enum(['lf', 'crlf']).catch('lf').default('lf'),
-    })
-    .catch({ delimiter: ',', header: true, quote: '"', nullAs: 'empty', lineEnding: 'lf' })
-    .default({}),
+  csvExport: CsvExportOptions.catch({
+    delimiter: ',',
+    header: true,
+    quote: '"',
+    nullAs: 'empty',
+    lineEnding: 'lf',
+  }).default({}),
   /** Zebra-stripe result grid rows. */
   gridAlternatingRows: z.boolean().catch(true).default(true),
   /**
@@ -1255,6 +1513,8 @@ export const SettingsShape = z.object({
   claudeApiKey: z.string().default(''),
   hasClaudeApiKey: z.boolean().optional(),
   transactionMode: z.boolean().default(false),
+  /** Folder holding pg_dump / pg_restore / psql; empty = look on PATH. */
+  pgBinDir: z.string().default(''),
   /** Connect to `lastConnectionId` when Plasma starts. */
   autoConnectOnLaunch: z.boolean().default(true),
   /** Retry with backoff when a live connection drops and can't be recovered. */
@@ -1291,13 +1551,28 @@ export const SettingsShape = z.object({
         password: z.string().default(''),
         privateKey: z.string().default(''),
         passphrase: z.string().default(''),
+        /** Private key file on disk (not a secret; read at connect time). */
+        privateKeyPath: z.string().default(''),
+        /** Authenticate through the running ssh-agent (SSH_AUTH_SOCK / Pageant). */
+        useAgent: z.boolean().default(false),
         hasPassword: z.boolean().optional(),
         hasPrivateKey: z.boolean().optional(),
         hasPassphrase: z.boolean().optional(),
       }),
     )
     .default({}),
-  sshKnownHosts: z.record(z.string(), z.object({ host: z.string(), port: z.number().int().positive().max(65535), key: z.string().min(1), type: z.string().optional(), addedAt: z.number().int().nonnegative() })).optional(),
+  sshKnownHosts: z
+    .record(
+      z.string(),
+      z.object({
+        host: z.string(),
+        port: z.number().int().positive().max(65535),
+        key: z.string().min(1),
+        type: z.string().optional(),
+        addedAt: z.number().int().nonnegative(),
+      }),
+    )
+    .optional(),
   /**
    * Schema snapshots used by the diff tool. Keyed by snapshot id; the
    * payload holds the connection it came from, a user label, the
@@ -1593,6 +1868,15 @@ export const IpcChannel = {
   QueryCommitEditBatch: 'plasma:query:commitEditBatch',
   QueryExplain: 'plasma:query:explain',
   PgNoticeEvent: 'plasma:pg:notice',
+  StructureApply: 'plasma:structure:apply',
+  ImportPickFile: 'plasma:import:pickFile',
+  ImportPreview: 'plasma:import:preview',
+  ImportRun: 'plasma:import:run',
+  ImportCancel: 'plasma:import:cancel',
+  ImportProgressEvent: 'plasma:import:progress',
+  ExportCancel: 'plasma:export:cancel',
+  ExportProgressEvent: 'plasma:export:progress',
+  QueryCancelAux: 'plasma:query:cancelAux',
   // OpenSearch ops
   OsOverview: 'plasma:os:overview',
   OsMapping: 'plasma:os:mapping',
@@ -1609,11 +1893,18 @@ export const IpcChannel = {
   VaultDelete: 'plasma:vault:delete',
   VaultConnectById: 'plasma:vault:connectById',
   VaultGetConfig: 'plasma:vault:getConfig',
+  /** Save a connection without connecting (C28). */
+  VaultSave: 'plasma:vault:save',
+  /** Copy a saved connection, secrets included, under a new id (C28). */
+  VaultDuplicate: 'plasma:vault:duplicate',
   HistoryList: 'plasma:history:list',
   HistoryLatest: 'plasma:history:latest',
   HistoryClear: 'plasma:history:clear',
+  HistoryDelete: 'plasma:history:delete',
   SettingsGet: 'plasma:settings:get',
   SettingsSet: 'plasma:settings:set',
+  /** Remove the saved AI API key(s) from the vault. */
+  SettingsClearApiKey: 'plasma:settings:clearApiKey',
   TxnBegin: 'plasma:txn:begin',
   TxnCommit: 'plasma:txn:commit',
   TxnRollback: 'plasma:txn:rollback',
@@ -1639,6 +1930,14 @@ export const IpcChannel = {
   PingWorker: 'plasma:ping:worker',
   /** Worker/main-backed incremental result export (U16). */
   ExportSave: 'plasma:export:save',
+  /** Backup / restore (pg_dump, pg_restore, psql) — see `pg-backup.ts`. */
+  AdminTools: 'plasma:admin:tools',
+  AdminBackup: 'plasma:admin:backup',
+  AdminRestore: 'plasma:admin:restore',
+  AdminCancel: 'plasma:admin:cancel',
+  AdminPickPath: 'plasma:admin:pickPath',
+  /** Push: log line / completion of a backup or restore job. */
+  AdminJobEvent: 'plasma:admin:jobEvent',
 } as const;
 
 // ─── Auto-update ─────────────────────────────────────────────────────
@@ -1699,6 +1998,10 @@ export interface PlasmaAPI {
      * Returns null if no connection with that id exists.
      */
     getConfig(id: string): Promise<ConnectionConfig | null>;
+    /** Save without connecting. A blank password / secret keeps the stored one. */
+    save(config: ConnectionConfig): Promise<SavedConnection>;
+    /** Copy a saved connection (with its secrets, tag, SSH and safe-mode settings). */
+    duplicate(id: string): Promise<SavedConnection>;
   };
   query: {
     /**
@@ -1708,16 +2011,25 @@ export interface PlasmaAPI {
      *   lookup, count queries, table-tab data, role list, SET ROLE,
      *   table definition). User-written queries should leave this off.
      */
-    run(sql: string, params?: unknown[], opts?: { internal?: boolean; maxRows?: number }): Promise<QueryResult>;
+    run(
+      sql: string,
+      params?: unknown[],
+      opts?: { internal?: boolean; maxRows?: number },
+    ): Promise<QueryResult>;
     /**
      * Commit grid edits in one transaction (SAVEPOINT inside an open user
      * transaction, which stays open). Params are text or null. Rejects with
      * `Edit N of M (<label>) …` naming the failing edit; nothing is kept.
      */
-    commitEditBatch(req: { connectionGen: number; updates: Array<{ sql: string; params?: unknown[]; label?: string }> }): Promise<{ state: TxnState; applied: number }>;
+    commitEditBatch(req: {
+      connectionGen: number;
+      updates: Array<{ sql: string; params?: unknown[]; label?: string }>;
+    }): Promise<{ state: TxnState; applied: number }>;
     /** EXPLAIN (FORMAT JSON) one statement; ANALYZE runs it inside a rolled-back transaction. */
     explain(req: { sql: string; analyze: boolean }): Promise<QueryResult>;
     cancel(): Promise<void>;
+    /** Cancel whatever runs on the aux connection (AI tool query, lookups). */
+    cancelAux(): Promise<void>;
     /**
      * Run a query on the worker's sideband connection — never recorded
      * in history. Used by the live monitor + pg_terminate_backend so a
@@ -1745,7 +2057,11 @@ export interface PlasmaAPI {
       opts?: { db?: number; mode?: 'expire' | 'pexpire' | 'expireat' | 'persist' },
     ): Promise<void>;
     command(parts: string[], opts?: { db?: number }): Promise<RedisCommandResult>;
-    analyze(opts?: { sampleCap?: number; match?: string; db?: number }): Promise<RedisAnalyzeResult>;
+    analyze(opts?: {
+      sampleCap?: number;
+      match?: string;
+      db?: number;
+    }): Promise<RedisAnalyzeResult>;
     slowlog(limit?: number): Promise<RedisSlowlogEntry[]>;
     bulkDelete(keys: string[], opts?: { db?: number }): Promise<RedisBulkDeleteResult>;
     write(op: RedisWriteOp, opts?: { db?: number }): Promise<void>;
@@ -1818,10 +2134,14 @@ export interface PlasmaAPI {
     /** Most recent entry for ⌘↑ recall (empty editor). */
     latest(opts?: { connectionId?: string }): Promise<HistoryEntry | null>;
     clear(): Promise<void>;
+    /** Remove a single entry by id. */
+    delete(id: number): Promise<void>;
   };
   settings: {
     get(): Promise<Settings>;
     set(patch: Partial<Settings>): Promise<Settings>;
+    /** Delete the stored AI API key (OpenRouter + legacy slot); returns fresh settings. */
+    clearApiKey(): Promise<Settings>;
   };
   txn: {
     begin(): Promise<TxnState>;
@@ -1838,12 +2158,41 @@ export interface PlasmaAPI {
     close(): Promise<void>;
     isMaximized(): Promise<boolean>;
   };
+  admin: {
+    /** Locate pg_dump / pg_restore / psql (optionally in `binDir`) and read their versions. */
+    tools(binDir?: string): Promise<ToolInfo[]>;
+    backup(req: BackupRequest): Promise<AdminStartResult>;
+    restore(req: RestoreRequest): Promise<AdminStartResult>;
+    cancel(jobId: string): Promise<void>;
+    /** Native file / folder picker. Resolves null when cancelled. */
+    pickPath(req: PickPathRequest): Promise<string | null>;
+  };
   export: {
     /**
      * Show a save dialog and stream CSV/JSON/SQL to disk via worker/main (U16).
      * Prefer `sql` (omit rows) when the on-screen result is truncated.
      */
     save(req: ExportSaveRequest): Promise<ExportSaveResult>;
+    /** Stop the export started with this `jobId` (C30). */
+    cancel(jobId: string): Promise<void>;
+  };
+  structure: {
+    /**
+     * Run DDL built by `pg-ddl`: `transactional` in one transaction (all or
+     * nothing), then each `concurrent` statement on its own. Rejects on
+     * read-only connections. Resolves with `error` instead of throwing so
+     * the UI can show which statement failed.
+     */
+    apply(req: DdlApplyRequest): Promise<DdlApplyResult>;
+  };
+  dataImport: {
+    /** Native open dialog; resolves null when cancelled. */
+    pickFile(): Promise<ImportPickedFile | null>;
+    /** Read the head of a file: detected options, first rows, inferred types. */
+    preview(req: ImportPreviewRequest): Promise<ImportPreview>;
+    /** Stream the file into Postgres in one transaction (rolled back on error / cancel). */
+    run(job: ImportJobSpec): Promise<ImportResult>;
+    cancel(jobId: string): Promise<void>;
   };
   update: {
     /** Trigger an explicit check now. Returns the status post-check. */

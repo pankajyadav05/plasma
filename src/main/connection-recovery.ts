@@ -95,6 +95,12 @@ const POLICY_BY_KIND: Partial<Record<WorkerRequest['kind'], RecoveryPolicy>> = {
   // Write boundary (U01): an edit batch belongs to the generation it was
   // stamped with and must be re-staged by the user, never auto-replayed.
   commitEditBatch: 'reconnect-only',
+  // Structure DDL and imports: never replayed onto a fresh session.
+  applyDdl: 'reconnect-only',
+  importRun: 'reconnect-only',
+  importCancel: 'none',
+  exportCancel: 'none',
+  cancelAux: 'reconnect-only',
   // C5: transaction control. A COMMIT replayed on a fresh session reports
   // success for work that was rolled back; BEGIN would silently open a
   // transaction the user thinks failed.

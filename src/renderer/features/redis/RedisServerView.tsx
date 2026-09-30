@@ -3,7 +3,7 @@ import { EmptyState, ViewFooter, ViewTitle, ViewToolbar } from '@/components/ui/
 import { IconButton, Pill, Segmented } from '@/components/ui/workbench';
 import { SidebarSearch } from '@/features/sidebar/sidebar-parts';
 import { ipc } from '@/lib/ipc';
-import { useActiveTab } from '@/stores/session';
+import { useSession } from '@/stores/session';
 import { useWorkbench } from '@/stores/workbench';
 import { Loader2, Pencil, RefreshCw, X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -87,7 +87,7 @@ const COLUMNS: Record<Section, { label: string; width?: number; align?: 'right' 
 };
 
 export function RedisServerView() {
-  const tabId = useActiveTab()?.id ?? null;
+  const tabId = useSession((s) => s.activeTabId);
   const { canWrite } = useRedisWriteGate();
   const [section, setSection] = useState<Section>('info');
   const [rows, setRows] = useState<Row[]>([]);

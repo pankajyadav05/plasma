@@ -29,12 +29,15 @@ type GuardedRequest = { kind: string } & Record<string, unknown>;
 /** Always a write, whatever the arguments. */
 const WRITE_KINDS = new Set<string>([
   'commitEditBatch',
+  'applyDdl',
+  'importRun',
   'redisWrite',
   'redisDeleteKey',
   'redisBulkDelete',
   'redisSetTtl',
   'osCreateIndex',
   'osDeleteIndex',
+  'adminRestore',
 ]);
 
 /** Reads (or session plumbing) whose names would trip the fallback pattern. */
@@ -51,6 +54,9 @@ const READ_KINDS = new Set<string>([
   'osCancel',
   'redisSubscribe',
   'redisUnsubscribe',
+  'importCancel', // stops a job; writes nothing
+  'exportCancel', // stops a file export
+  'cancelAux', // cancels a read on the aux connection
   'exportRows', // writes a local file from rows already fetched
 ]);
 
@@ -125,6 +131,10 @@ function describeKind(kind: string): string {
   switch (kind) {
     case 'commitEditBatch':
       return 'committing grid edits';
+    case 'applyDdl':
+      return 'changing the table structure';
+    case 'importRun':
+      return 'importing data';
     case 'redisWrite':
       return 'writing keys';
     case 'redisDeleteKey':
@@ -136,6 +146,8 @@ function describeKind(kind: string): string {
       return 'creating an index';
     case 'osDeleteIndex':
       return 'deleting an index';
+    case 'adminRestore':
+      return 'restoring a backup';
     default:
       return kind;
   }

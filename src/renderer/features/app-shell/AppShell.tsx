@@ -1,3 +1,5 @@
+import { BackupDialog } from '@/features/backup/BackupDialog';
+import { RestoreDialog } from '@/features/backup/RestoreDialog';
 import { ChartBody } from '@/features/chart/ChartDialog';
 import { CodegenDialog } from '@/features/codegen/CodegenDialog';
 import { CommandPalette } from '@/features/command-palette/CommandPalette';
@@ -5,11 +7,13 @@ import { ConnectionDialog } from '@/features/connection-manager/ConnectionDialog
 import { DeleteConfirmDialog } from '@/features/connection-manager/DeleteConfirmDialog';
 import { PendingEditsGateDialog } from '@/features/connection-manager/PendingEditsGateDialog';
 import { ProdGateDialog } from '@/features/connection-manager/ProdGateDialog';
+import { DbSearchDialog } from '@/features/db-search/DbSearchDialog';
 import { CloseTabsDialog } from '@/features/editor/CloseTabsDialog';
 import { EditorResizer } from '@/features/editor/EditorResizer';
 import { RunningPlaceholder } from '@/features/editor/RunningPlaceholder';
 import { SqlCanvas } from '@/features/editor/SqlCanvas';
 import { TabStrip } from '@/features/editor/TabStrip';
+import { ErDiagramView } from '@/features/er-diagram/ErDiagramView';
 import { HistoryCanvas } from '@/features/history/HistoryCanvas';
 import { ShortcutCheatSheet } from '@/features/keymap/ShortcutCheatSheet';
 import { runCommand, selectTabAt } from '@/features/keymap/commands';
@@ -24,9 +28,14 @@ import { ResultFooter } from '@/features/result-grid/ResultFooter';
 import { ResultGrid } from '@/features/result-grid/ResultGrid';
 import { ResultMessagesPanel, ResultTabs } from '@/features/result-grid/ResultTabs';
 import { RightRail } from '@/features/right-rail/RightRail';
+import { RolesDialog } from '@/features/roles/RolesDialog';
 import { SchemaDiffDialog } from '@/features/schema-diff/SchemaDiffDialog';
 import { SettingsCanvas } from '@/features/settings/SettingsCanvas';
 import { Sidebar } from '@/features/sidebar/Sidebar';
+import { StructureDialogsHost } from '@/features/structure/StructureDialogsHost';
+import { PaneTabContext } from '@/stores/pane-context';
+import { type PaneId, activeIn, isSplit } from '@/stores/pane-state';
+import { usePanes } from '@/stores/panes';
 import { useActiveTabSelect, useSession } from '@/stores/session';
 import { type Overlay, useWorkbench } from '@/stores/workbench';
 import { type KeyId, matchGlobalBinding, selectTabIndex } from '@shared/keymap';
@@ -131,12 +140,17 @@ export function AppShell() {
       <ProdGateDialog />
       <PendingEditsGateDialog />
       <NewIndexDialog />
+      <StructureDialogsHost />
       <DeleteIndexDialog />
       <CloseTabsDialog />
       <CodegenDialog {...overlayProps('codegen')} />
       <SchemaDiffDialog {...overlayProps('schemaDiff')} />
       <NotebookDialog {...overlayProps('notebook')} />
       <ShortcutCheatSheet {...overlayProps('cheatSheet')} />
+      <BackupDialog {...overlayProps('backup')} />
+      <RestoreDialog {...overlayProps('restore')} />
+      <RolesDialog {...overlayProps('roles')} />
+      <DbSearchDialog {...overlayProps('dbSearch')} />
     </>
   );
 }
@@ -226,6 +240,59 @@ function EngineCanvas() {
 }
 
 function DatabaseCanvas() {
+  const split = usePanes((s) => isSplit(s));
+  // No split: exactly the single-pane layout, no wrapper, no context.
+  if (!split) return <PaneCanvas />;
+  return <SplitCanvas />;
+}
+
+/** Two panes side by side; each renders its own active tab (TablePlus "Split pane right"). */
+function SplitCanvas() {
+  const paneState = usePanes();
+  const tabIds = useSession((s) => s.tabs.map((t) => t.id).join('\u0001'));
+  const ids = tabIds.split('\u0001');
+  return (
+    <div className="flex min-h-0 min-w-0 flex-1" data-testid="split-panes">
+      {(['primary', 'secondary'] as const).map((pane) => (
+        <PaneSlot
+          key={pane}
+          pane={pane}
+          tabId={activeIn(paneState, ids, pane)}
+          focused={paneState.focus === pane}
+        />
+      ))}
+    </div>
+  );
+}
+
+function PaneSlot({
+  pane,
+  tabId,
+  focused,
+}: { pane: PaneId; tabId: string | null; focused: boolean }) {
+  const focusPane = usePanes((s) => s.focusPane);
+  return (
+    <PaneTabContext.Provider value={tabId}>
+      <div
+        className={
+          pane === 'secondary'
+            ? 'flex min-h-0 min-w-0 flex-1 basis-0 border-l border-[var(--wb-separator)]'
+            : 'flex min-h-0 min-w-0 flex-1 basis-0'
+        }
+        data-pane={pane}
+        data-focused={focused || undefined}
+        // Interacting with a pane makes it the focused one, so "the active
+        // tab" everywhere else in the app means this pane's tab.
+        onPointerDownCapture={() => focusPane(pane)}
+        onFocusCapture={() => focusPane(pane)}
+      >
+        <PaneCanvas pane={pane} />
+      </div>
+    </PaneTabContext.Provider>
+  );
+}
+
+function PaneCanvas({ pane }: { pane?: PaneId } = {}) {
   // Narrow selectors (F13): typing in the editor patches `sql` on every
   // keystroke; this layout only re-renders when its shape changes.
   const { kind, viewMode, hasResultOrError, running } = useActiveTabSelect((t) => ({
@@ -243,12 +310,14 @@ function DatabaseCanvas() {
   // doesn't jump) the editor keeps its user-sized height and the results
   // take the rest. ⌘J hides the editor while there are results to show.
   const isSqlTab = kind === 'sql';
+  const isDiagram = kind === 'er-diagram';
   const hasResults = hasResultOrError || running;
   const showEditor = isSqlTab && (!editorHidden || !hasResults);
-  const showGrid = !isSqlTab || hasResults;
+  const showGrid = !isDiagram && (!isSqlTab || hasResults);
   return (
     <main className="flex min-h-0 min-w-0 flex-1 flex-col bg-[var(--wb-content)]">
-      <TabStrip />
+      <TabStrip pane={pane} />
+      {isDiagram && <ErDiagramView />}
       {showEditor && <SqlCanvas expanded={!hasResults} />}
       {showEditor && hasResults && <EditorResizer />}
       {isTableData && <FilterRow />}

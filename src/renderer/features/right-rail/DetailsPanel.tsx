@@ -4,6 +4,7 @@ import { IconButton, MenuItem } from '@/components/ui/workbench';
 import { SidebarSearch } from '@/features/sidebar/sidebar-parts';
 import { cn } from '@/lib/cn';
 import { ipc } from '@/lib/ipc';
+import { readableTypeName } from '@/lib/pg-types';
 import { quoteIdent } from '@/lib/table-query';
 import { useActiveTab, useSession } from '@/stores/session';
 import { editKind, pkValuesFromRow, rowKeyOf, tablePkNames } from '@/stores/session-pending-edits';
@@ -233,7 +234,9 @@ function FieldRow({
         <span className="min-w-0 truncate text-[13px] font-semibold text-[var(--wb-text)]">
           {col.name}
         </span>
-        <span className="shrink-0 text-[11px] text-[var(--wb-text-3)]">{col.dataTypeName}</span>
+        <span className="shrink-0 text-[11px] text-[var(--wb-text-3)]">
+          {readableTypeName(col)}
+        </span>
         {isPending && (
           <span className="shrink-0 text-[11px] font-medium text-[var(--wb-accent)]">edited</span>
         )}

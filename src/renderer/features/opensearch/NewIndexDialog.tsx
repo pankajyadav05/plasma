@@ -253,11 +253,9 @@ export function NewIndexDialog() {
         <DialogHeader className="shrink-0 space-y-1 border-b border-[var(--wb-separator)] px-5 py-3.5">
           <div className="flex items-center gap-2">
             <Boxes className="h-4 w-4 text-[var(--wb-text-2)]" />
-            <DialogTitle className="font-sans text-[15px] font-semibold not-italic leading-tight tracking-normal">
-              New OpenSearch index
-            </DialogTitle>
+            <DialogTitle>New OpenSearch index</DialogTitle>
           </div>
-          <DialogDescription className="font-sans text-[13px] not-italic leading-snug text-[var(--wb-text-2)]">
+          <DialogDescription>
             Define settings + mappings via the form, paste raw JSON to round-trip, or mix both —
             anything the form can&apos;t edit is preserved verbatim.
           </DialogDescription>

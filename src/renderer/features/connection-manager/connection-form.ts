@@ -1,3 +1,4 @@
+import { redisEndpointKind, sshUnsupportedReason } from '@shared/connection-endpoint';
 import type { ConnectionConfig, ConnectionEngine, TlsMode } from '@shared/protocol';
 
 /**
@@ -15,6 +16,9 @@ export type FormField =
   | 'sshPort'
   | 'sshUser'
   | 'sshAuth'
+  | 'ssh'
+  | 'osAuth'
+  | 'osNodes'
   | 'tlsCert'
   | 'tlsKey';
 
@@ -27,6 +31,10 @@ export interface SshFormState {
   password: string;
   privateKey: string;
   passphrase: string;
+  /** Private key file to read at connect time (C28). */
+  privateKeyPath?: string;
+  /** Authenticate through the running ssh-agent (C28). */
+  useAgent?: boolean;
 }
 
 export interface ConnectionFormInput {
@@ -36,7 +44,12 @@ export interface ConnectionFormInput {
   useSsh: boolean;
   ssh: SshFormState;
   /** Secrets already stored for this connection (blank field = keep). */
-  savedSsh?: { hasPassword?: boolean; hasPrivateKey?: boolean };
+  savedSsh?: {
+    hasPassword?: boolean;
+    hasPrivateKey?: boolean;
+    privateKeyPath?: string;
+    useAgent?: boolean;
+  };
 }
 
 function portError(text: string): string | undefined {
@@ -57,7 +70,9 @@ export function validateConnectionForm(input: ConnectionFormInput): FormErrors {
 
   const host = config.host.trim();
   if (!host) errors.host = 'Host is required';
-  else if (/^[a-z][a-z0-9+.-]*:\/\//i.test(host))
+  else if (engine === 'redis' && redisEndpointKind(host) !== 'tcp') {
+    // unix:/path, /path, sentinel://… and cluster://… are real Redis endpoints.
+  } else if (/^[a-z][a-z0-9+.-]*:\/\//i.test(host))
     errors.host = 'Enter just the host name — paste full URLs into Import URL';
   else if (/\s/.test(host)) errors.host = 'Host cannot contain spaces';
 
@@ -74,9 +89,26 @@ export function validateConnectionForm(input: ConnectionFormInput): FormErrors {
     if (sp) errors.sshPort = sp.replace('Port', 'SSH port');
     if (!ssh.user.trim()) errors.sshUser = 'SSH user is required';
     const hasSecret =
-      Boolean(ssh.password || ssh.privateKey) ||
+      Boolean(ssh.password || ssh.privateKey || ssh.privateKeyPath?.trim() || ssh.useAgent) ||
       Boolean(input.savedSsh?.hasPassword || input.savedSsh?.hasPrivateKey);
-    if (!hasSecret) errors.sshAuth = 'Enter an SSH password or a private key';
+    if (!hasSecret) errors.sshAuth = 'Enter an SSH password, a private key or use the ssh-agent';
+    const unsupported = sshUnsupportedReason({ engine, host });
+    if (unsupported) errors.ssh = unsupported;
+  }
+
+  if (engine === 'opensearch') {
+    const os = config.opensearch ?? {};
+    const auth = os.auth ?? 'basic';
+    if (auth === 'apiKey' && !os.apiKey && !os.hasApiKey) {
+      errors.osAuth = 'Enter the API key (id:key or base64)';
+    }
+    if (auth === 'sigv4') {
+      if (!os.awsRegion?.trim()) errors.osAuth = 'AWS region is required (e.g. eu-west-1)';
+      else if (!os.awsAccessKeyId?.trim() || (!os.awsSecretAccessKey && !os.hasAwsSecretAccessKey))
+        errors.osAuth = 'AWS access key id and secret access key are required';
+    }
+    const badNode = (os.nodes ?? []).find((n) => n.trim() && /\s/.test(n.trim()));
+    if (badNode) errors.osNodes = `"${badNode}" is not a valid node URL`;
   }
 
   if (config.ssl && config.tls) {
@@ -89,6 +121,9 @@ export function validateConnectionForm(input: ConnectionFormInput): FormErrors {
 
   return errors;
 }
+
+/** Hint shown under the Redis host field for the special endpoint forms. */
+export { REDIS_HOST_HINT, redisEndpointKind } from '@shared/connection-endpoint';
 
 export function hasErrors(errors: FormErrors): boolean {
   return Object.values(errors).some(Boolean);

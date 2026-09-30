@@ -31,9 +31,12 @@ export const eventChannels = [
   'plasma:redis:pubsub',
   'plasma:query:chunk',
   'plasma:pg:notice',
+  'plasma:import:progress',
+  'plasma:export:progress',
   'plasma:worker:reset',
   'plasma:conn:recovered',
   'plasma:ssh:hostKeyPrompt',
+  'plasma:admin:jobEvent',
 ] as const;
 
 export type EventChannel = (typeof eventChannels)[number];

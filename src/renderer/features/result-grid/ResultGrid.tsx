@@ -3,6 +3,7 @@ import { cn } from '@/lib/cn';
 import { commandDetail, commandTitle } from '@/lib/command-summary';
 import { cleanIpcError } from '@/lib/errors';
 import { formatDuration } from '@/lib/format';
+import { readableTypeName } from '@/lib/pg-types';
 import { type PendingEdit, useActiveTab, useSession } from '@/stores/session';
 import {
   type RowOverlay,
@@ -72,11 +73,28 @@ const FAILED_OUTLINE = 'outline outline-2 -outline-offset-2 outline-[var(--destr
  * row (aligned to the 24px rows under the 26px header) and the gutter
  * column stays the plain content colour, like TablePlus.
  */
+function stripedBackground(zebra: boolean): React.CSSProperties {
+  return zebra ? STRIPED_BACKGROUND : PLAIN_BACKGROUND;
+}
+
 const STRIPED_BACKGROUND: React.CSSProperties = {
   backgroundColor: 'var(--wb-content)',
   backgroundImage: [
     'linear-gradient(var(--wb-content), var(--wb-content))',
     `repeating-linear-gradient(to bottom, var(--grid-row-a) 0 ${ROW_HEIGHT_PX}px, var(--grid-row-b) ${ROW_HEIGHT_PX}px ${ROW_HEIGHT_PX * 2}px)`,
+  ].join(', '),
+  backgroundSize: `${GUTTER_WIDTH_PX}px 100%, 100% auto`,
+  backgroundRepeat: 'no-repeat, repeat',
+  backgroundPosition: `0 0, 0 ${HEADER_HEIGHT_PX}px`,
+  backgroundAttachment: 'scroll, local',
+};
+
+/** `gridAlternatingRows` off: every row (and the fill below) is stripe B. */
+const PLAIN_BACKGROUND: React.CSSProperties = {
+  backgroundColor: 'var(--wb-content)',
+  backgroundImage: [
+    'linear-gradient(var(--wb-content), var(--wb-content))',
+    `repeating-linear-gradient(to bottom, var(--grid-row-b) 0 ${ROW_HEIGHT_PX}px, var(--grid-row-b) ${ROW_HEIGHT_PX}px ${ROW_HEIGHT_PX * 2}px)`,
   ].join(', '),
   backgroundSize: `${GUTTER_WIDTH_PX}px 100%, 100% auto`,
   backgroundRepeat: 'no-repeat, repeat',
@@ -121,6 +139,7 @@ const MOD = isMac ? '⌘' : 'Ctrl+';
  */
 export function ResultGrid() {
   const tab = useActiveTab();
+  const zebraRows = useSession((s) => s.settings.gridAlternatingRows);
   const setSort = useSession((s) => s.setSort);
   const setSelectedCell = useSession((s) => s.setSelectedCell);
   const toggleRowSelected = useSession((s) => s.toggleRowSelected);
@@ -1289,7 +1308,7 @@ export function ResultGrid() {
     <div
       ref={containerRef}
       className="relative min-h-0 flex-1 overflow-auto"
-      style={STRIPED_BACKGROUND}
+      style={stripedBackground(zebraRows)}
       aria-busy={running || undefined}
     >
       {(editError || (pendingEditsError && pendingEdits.length > 0)) && (
@@ -1468,7 +1487,7 @@ export function ResultGrid() {
                     ...stickyStyle(stickySet, stickyLefts, origIdx, col.name, 20),
                     ...(isSticky ? { top: 0 } : {}),
                   }}
-                  title={`${col.name} — ${col.dataTypeName}${isSticky ? ' · pinned' : ''}`}
+                  title={`${col.name} — ${readableTypeName(col)}${isSticky ? ' · pinned' : ''}`}
                 >
                   <div className="flex items-center justify-center gap-1">
                     <span className="truncate">
@@ -1538,7 +1557,9 @@ export function ResultGrid() {
             // Row #1 (index 0) takes stripe A, matching the scroll-container
             // background that continues the stripes below the last row.
             const zebra =
-              visibleRow % 2 === 0 ? 'bg-[var(--grid-row-a)]' : 'bg-[var(--grid-row-b)]';
+              zebraRows && visibleRow % 2 === 0
+                ? 'bg-[var(--grid-row-a)]'
+                : 'bg-[var(--grid-row-b)]';
             const rowNumber = tab.page * tab.pageSize + visibleRow + 1;
             return (
               <tr

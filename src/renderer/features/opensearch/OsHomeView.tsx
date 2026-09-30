@@ -82,7 +82,7 @@ const ALIAS_COLUMNS: DataColumn<OsAlias>[] = [
     label: 'Write',
     width: 70,
     sans: true,
-    render: (r) => (r.isWriteIndex ? <Badge>write</Badge> : ''),
+    render: (r) => (r.isWriteIndex ? <Badge>Write</Badge> : ''),
   },
   {
     key: 'filter',

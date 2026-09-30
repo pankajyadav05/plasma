@@ -26,6 +26,7 @@ import {
 import { useEffect, useState } from 'react';
 import { ColumnsPopover } from './ColumnsPopover';
 import { ExportPopover } from './ExportMenu';
+import { ExportProgress } from './ExportProgress';
 import { InsertRowDialog } from './InsertRowDialog';
 import { useNoticeCount } from './ResultTabs';
 import { SortPopover } from './SortPopover';
@@ -139,6 +140,7 @@ export function ResultFooter() {
       className="@container flex h-9 min-w-0 shrink-0 items-center gap-1.5 overflow-hidden border-t border-[var(--wb-separator)] bg-[var(--wb-content)] px-2"
       data-testid="result-footer"
     >
+      <ExportProgress />
       {isTable ? (
         <Segmented<TableViewMode>
           ariaLabel="Table view"
@@ -168,7 +170,7 @@ export function ResultFooter() {
                     <span
                       className={cn(
                         'h-1.5 w-1.5 rounded-full',
-                        tab.queryError ? 'bg-destructive' : 'bg-amber-500',
+                        tab.queryError ? 'bg-destructive' : 'bg-[var(--status-warn)]',
                       )}
                     />
                   )}

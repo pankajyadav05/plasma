@@ -1,7 +1,9 @@
 import { Button } from '@/components/ui/button';
 import { useSession } from '@/stores/session';
 import type { ConnectionEngine, SavedConnection } from '@shared/protocol';
-import { Boxes, Cog, Database, Layers, Pencil, Plus } from 'lucide-react';
+import { Boxes, Cog, Copy, Database, Layers, Pencil, Plus } from 'lucide-react';
+import { Fragment } from 'react';
+import { groupConnections } from '../connection-manager/connection-groups';
 
 const ENGINE_META: Record<ConnectionEngine, { label: string; icon: typeof Database }> = {
   postgres: { label: 'Postgres', icon: Database },
@@ -36,6 +38,7 @@ export function DisconnectedHome() {
   const savedConnections = useSession((s) => s.savedConnections);
   const connectSaved = useSession((s) => s.connectSaved);
   const editConnection = useSession((s) => s.editConnection);
+  const duplicateSaved = useSession((s) => s.duplicateSaved);
   const openDialog = useSession((s) => s.openDialog);
   const connecting = useSession((s) => s.connectionState === 'connecting');
   const setCanvasMode = useSession((s) => s.setCanvasMode);
@@ -66,53 +69,74 @@ export function DisconnectedHome() {
           </div>
         ) : (
           <ul className="flex flex-col gap-1.5">
-            {savedConnections.map((c) => {
-              const engine = c.engine ?? 'postgres';
-              const meta = ENGINE_META[engine];
-              const Icon = meta.icon;
-              return (
-                <li
-                  key={c.id}
-                  className="group/conn flex items-stretch overflow-hidden rounded-[8px] bg-[var(--wb-sidebar)] shadow-[inset_0_0_0_1px_var(--wb-toolbar-group-edge)] transition-colors hover:bg-[var(--wb-control)]"
-                >
-                  <button
-                    type="button"
-                    disabled={connecting}
-                    onClick={() => void connectSaved(c.id)}
-                    className="flex min-w-0 flex-1 cursor-pointer items-center gap-3 rounded-[8px] px-3 py-2.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    <span className="grid h-8 w-8 shrink-0 place-items-center rounded-[7px] bg-[var(--wb-control)]">
-                      <Icon className="h-4 w-4 text-[var(--icon-db)]" />
-                    </span>
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2">
-                        <span className="truncate text-[13px] font-medium text-[var(--wb-text)]">
-                          {c.name}
+            {groupConnections(savedConnections).map((g) => (
+              <Fragment key={g.group ?? '__ungrouped'}>
+                {g.group && (
+                  <li className="px-1 pt-2 text-[11px] font-semibold text-[var(--wb-text-2)]">
+                    {g.group}
+                  </li>
+                )}
+                {g.items.map((c) => {
+                  const engine = c.engine ?? 'postgres';
+                  const meta = ENGINE_META[engine];
+                  const Icon = meta.icon;
+                  return (
+                    <li
+                      key={c.id}
+                      className="group/conn flex items-stretch overflow-hidden rounded-[8px] bg-[var(--wb-sidebar)] shadow-[inset_0_0_0_1px_var(--wb-toolbar-group-edge)] transition-colors hover:bg-[var(--wb-control)]"
+                    >
+                      <button
+                        type="button"
+                        disabled={connecting}
+                        onClick={() => void connectSaved(c.id)}
+                        className="flex min-w-0 flex-1 cursor-pointer items-center gap-3 rounded-[8px] px-3 py-2.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        <span className="grid h-8 w-8 shrink-0 place-items-center rounded-[7px] bg-[var(--wb-control)]">
+                          <Icon className="h-4 w-4 text-[var(--icon-db)]" />
                         </span>
-                        <span className="shrink-0 rounded-[4px] bg-[var(--wb-control)] px-1.5 py-px text-[11px] text-[var(--wb-text-2)]">
-                          {meta.label}
-                        </span>
-                      </div>
-                      <div className="truncate font-mono text-[12px] text-[var(--wb-text-2)]">
-                        {metaLine(c)}
-                      </div>
-                    </div>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      void editConnection(c.id);
-                    }}
-                    aria-label={`Edit ${c.name}`}
-                    title="Edit (delete inside)"
-                    className="grid w-10 shrink-0 cursor-pointer place-items-center text-[var(--wb-text-2)] opacity-0 transition-opacity duration-150 hover:text-[var(--wb-text)] focus-visible:opacity-100 group-hover/conn:opacity-100"
-                  >
-                    <Pencil className="h-3.5 w-3.5" />
-                  </button>
-                </li>
-              );
-            })}
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2">
+                            <span className="truncate text-[13px] font-medium text-[var(--wb-text)]">
+                              {c.name}
+                            </span>
+                            <span className="shrink-0 rounded-[4px] bg-[var(--wb-control)] px-1.5 py-px text-[11px] text-[var(--wb-text-2)]">
+                              {meta.label}
+                            </span>
+                          </div>
+                          <div className="truncate font-mono text-[12px] text-[var(--wb-text-2)]">
+                            {metaLine(c)}
+                          </div>
+                        </div>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          void editConnection(c.id);
+                        }}
+                        aria-label={`Edit ${c.name}`}
+                        title="Edit (delete inside)"
+                        className="grid w-10 shrink-0 cursor-pointer place-items-center text-[var(--wb-text-2)] opacity-0 transition-opacity duration-150 hover:text-[var(--wb-text)] focus-visible:opacity-100 group-hover/conn:opacity-100"
+                      >
+                        <Pencil className="h-3.5 w-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          void duplicateSaved(c.id);
+                        }}
+                        aria-label={`Duplicate ${c.name}`}
+                        title="Duplicate"
+                        className="grid w-10 shrink-0 cursor-pointer place-items-center text-[var(--wb-text-2)] opacity-0 transition-opacity duration-150 hover:text-[var(--wb-text)] focus-visible:opacity-100 group-hover/conn:opacity-100"
+                      >
+                        <Copy className="h-3.5 w-3.5" />
+                      </button>
+                    </li>
+                  );
+                })}
+              </Fragment>
+            ))}
             <li>
               <Button
                 variant="secondary"

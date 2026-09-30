@@ -10,6 +10,8 @@ import {
   copyResultToClipboard,
   pickRows,
 } from '@/lib/export';
+import { useExportJob } from '@/stores/export-job';
+import { useSession } from '@/stores/session';
 import type { QueryResult } from '@shared/protocol';
 import { Check, Copy, Download, FileJson, FileText, FileType2 } from 'lucide-react';
 import { useEffect, useState } from 'react';
@@ -95,7 +97,11 @@ export function ExportPopover({
               count={result.rows.length}
             />
             {full && (
-              <ScopeTab active={scope === 'full'} onClick={() => setScope('full')} label={full.label} />
+              <ScopeTab
+                active={scope === 'full'}
+                onClick={() => setScope('full')}
+                label={full.label}
+              />
             )}
           </div>
         )}
@@ -249,7 +255,10 @@ function ExportRow({
 
   const handleCopy = async () => {
     try {
-      await copyResultToClipboard(result, format, { targetTable });
+      await copyResultToClipboard(result, format, {
+        targetTable,
+        csv: useSession.getState().settings.csvExport,
+      });
       setCopied(true);
       setTimeout(() => setCopied(false), 1200);
     } catch {
@@ -258,10 +267,23 @@ function ExportRow({
   };
 
   const handleDownload = () => {
-    void window.plasma.export.save(
+    void useExportJob.getState().start(
       full
-        ? { format, defaultPath: filename, columns: result.columns, sql: full.sql, params: full.params, targetTable }
-        : { format, defaultPath: filename, columns: result.columns, rows: result.rows, targetTable },
+        ? {
+            format,
+            defaultPath: filename,
+            columns: result.columns,
+            sql: full.sql,
+            params: full.params,
+            targetTable,
+          }
+        : {
+            format,
+            defaultPath: filename,
+            columns: result.columns,
+            rows: result.rows,
+            targetTable,
+          },
     );
     onClose();
   };

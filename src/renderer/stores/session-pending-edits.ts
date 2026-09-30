@@ -21,6 +21,7 @@ import { ipc } from '@/lib/ipc';
 import { buildDeleteSql, buildUpdateSql, quoteIdent } from '@/lib/table-query';
 import type { ColumnMeta, SchemaInfo } from '@shared/protocol';
 import type { PendingEdit, QueryTab } from './session';
+import { evaluateGate } from './session-prod-gate';
 
 /**
  * Zustand set/get are typed loosely here so this module can compose into
@@ -550,10 +551,14 @@ export async function commitPendingEdits(
     );
   }
   const batch = buildEditBatch(edits);
-  // Prod-tagged connection: every grid write needs an explicit confirm.
-  const connId = state.activeConfig?.id as string | undefined;
-  const tag = connId ? state.settings?.connectionTags?.[connId] : undefined;
-  if (tag === 'prod' && !opts?.confirmed) {
+  // Prod tag / safe mode: every grid write needs an explicit confirm (or is
+  // refused outright on a read-only safe mode).
+  const decision = evaluateGate(get, '', true);
+  if (decision.kind === 'refuse') {
+    set({ pendingEditsError: decision.message });
+    return;
+  }
+  if (decision.kind === 'confirm' && !opts?.confirmed) {
     if (state.prodGate == null) {
       set({
         prodGate: {
@@ -561,6 +566,7 @@ export async function commitPendingEdits(
           tabId: edits[0]?.tabId ?? '',
           connectionGen: liveGen,
           kind: 'commitEdits',
+          reason: decision.reason,
           summary: summarizeEdits(edits),
         },
       });

@@ -1,4 +1,4 @@
-import { exportMime, formatResultString } from '@shared/export-format';
+import { type CsvOptions, exportMime, formatResultString } from '@shared/export-format';
 import type { QueryResult } from '@shared/protocol';
 import { isSingleSqlStatement, looksLikeWriteSql } from '@shared/sql-statements';
 import { type Filter, type TableSort, buildDataSql, quoteIdent } from './table-query';
@@ -16,6 +16,8 @@ export type ExportFormat = 'csv' | 'json' | 'sql';
 export interface ExportOptions {
   /** Quoted INSERT target for SQL (see `exportTargetTable`). */
   targetTable?: string;
+  /** CSV dialect from Settings → Data → CSV export. */
+  csv?: CsvOptions;
 }
 
 /** `"schema"."table"` for SQL INSERT export, or undefined if unknown. */
@@ -80,6 +82,7 @@ export function queryFullExport(result: QueryResult): FullExportSource | null {
 function formatResult(result: QueryResult, format: ExportFormat, opts?: ExportOptions): string {
   return formatResultString(result.columns, result.rows, format, {
     targetTable: opts?.targetTable,
+    csv: opts?.csv,
     bom: false,
   });
 }

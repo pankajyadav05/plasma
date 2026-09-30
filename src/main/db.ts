@@ -125,6 +125,14 @@ function migrate(d: Database.Database): void {
   // U25 owns schema v4 (open_tabs) — do not add it in U07.
   ensureReadOnlyColumn(d);
   ensureTlsColumn(d);
+  ensureExtraColumn(d);
+}
+
+/** C28 / O12: folder, bootstrap SQL and OpenSearch options as JSON (no secrets). */
+function ensureExtraColumn(d: Database.Database): void {
+  const cols = d.prepare('PRAGMA table_info(connections)').all() as Array<{ name: string }>;
+  if (cols.some((c) => c.name === 'extra_json')) return;
+  d.exec('ALTER TABLE connections ADD COLUMN extra_json TEXT');
 }
 
 /** C9: TLS mode + CA/cert/key file paths as JSON (additive, like read_only). */

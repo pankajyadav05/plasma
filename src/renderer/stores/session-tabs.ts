@@ -93,7 +93,7 @@ export interface PersistedTabs {
 
 const STORAGE_PREFIX = 'plasma.tabs.v1.';
 /** Keep one runaway buffer from filling localStorage. */
-const MAX_SQL_CHARS = 512 * 1024;
+export const MAX_SQL_CHARS = 512 * 1024;
 
 export function storageKey(connectionId: string): string {
   return `${STORAGE_PREFIX}${connectionId}`;

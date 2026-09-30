@@ -24,7 +24,7 @@ export function errMessage(err: unknown): string {
   return cleanIpcError(err instanceof Error ? err.message : String(err)).replace(/^Error:\s*/i, '');
 }
 
-/** Sentence-case badge (O23): the shared Badge is uppercase + tracked. */
+/** OpenSearch alias of the shared sentence-case Badge (O23). */
 export function OsBadge({
   children,
   tone,
@@ -35,7 +35,7 @@ export function OsBadge({
   className?: string;
 }) {
   return (
-    <Badge tone={tone} className={cn('font-sans normal-case tracking-normal', className)}>
+    <Badge tone={tone} className={className}>
       {children}
     </Badge>
   );

@@ -11,7 +11,7 @@ import { EmptyState } from '@/components/ui/view-parts';
 import { formatDuration } from '@/lib/format';
 import { useSession } from '@/stores/session';
 import type { HistoryDurationFacet, HistoryEntry, HistoryStatusFacet } from '@shared/protocol';
-import { BookmarkPlus, Search } from 'lucide-react';
+import { BookmarkPlus, Search, Trash2 } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 
 /** History list + server-side facets (U35), shown on the History canvas. */
@@ -27,6 +27,7 @@ export function HistoryBrowser({
   const loadHistory = useSession((s) => s.loadHistory);
   const setHistoryFilter = useSession((s) => s.setHistoryFilter);
   const saveHistoryAsSnippet = useSession((s) => s.saveHistoryAsSnippet);
+  const deleteHistoryEntry = useSession((s) => s.deleteHistoryEntry);
   const savedConnections = useSession((s) => s.savedConnections);
   const activeConfigId = useSession((s) => s.activeConfig?.id);
 
@@ -169,6 +170,7 @@ export function HistoryBrowser({
                   });
                 }}
                 onReuse={() => onReuse(entry.sql)}
+                onDelete={() => void deleteHistoryEntry(entry.id)}
               />
             ))}
           </ul>
@@ -194,6 +196,7 @@ function HistoryRow({
   onCancelSave,
   onConfirmSave,
   onReuse,
+  onDelete,
 }: {
   entry: HistoryEntry;
   previewLen: number;
@@ -205,6 +208,7 @@ function HistoryRow({
   onCancelSave: () => void;
   onConfirmSave: () => void;
   onReuse: () => void;
+  onDelete: () => void;
 }) {
   return (
     <li className="group/hist border-b border-[var(--wb-separator)] hover:bg-[color-mix(in_srgb,var(--wb-text)_4%,transparent)]">
@@ -250,6 +254,20 @@ function HistoryRow({
           }}
         >
           <BookmarkPlus />
+        </Button>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-24"
+          className="opacity-0 group-hover/hist:opacity-100 focus-visible:opacity-100"
+          title="Delete from history"
+          aria-label="Delete from history"
+          onClick={(e) => {
+            e.stopPropagation();
+            onDelete();
+          }}
+        >
+          <Trash2 />
         </Button>
       </div>
       {naming && (

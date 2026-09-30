@@ -238,7 +238,7 @@ function Body({
         label: 'type',
         width: 90,
         sans: true,
-        render: (s) => <Badge className="normal-case">{s.type}</Badge>,
+        render: (s) => <Badge>{s.type}</Badge>,
       },
       {
         key: 'size',

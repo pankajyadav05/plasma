@@ -4,6 +4,8 @@ import {
   rememberFileHandle,
   saveSqlFile,
 } from '@/features/editor/sql-files';
+import { isSplit, paneTabIds } from '@/stores/pane-state';
+import { usePanes } from '@/stores/panes';
 import { activeTab, useSession } from '@/stores/session';
 import { useWorkbench } from '@/stores/workbench';
 import type { KeyId } from '@shared/keymap';
@@ -21,7 +23,14 @@ export type CommandId =
   | 'newConnection'
   | 'disconnect'
   | 'monitor'
-  | 'exportJson';
+  | 'exportJson'
+  | 'backup'
+  | 'restore'
+  | 'roles'
+  | 'dbSearch'
+  | 'erDiagram'
+  | 'splitPane'
+  | 'closePane';
 
 const POSTGRES_ONLY: ReadonlySet<CommandId> = new Set<CommandId>([
   'runQuery',
@@ -36,6 +45,15 @@ const POSTGRES_ONLY: ReadonlySet<CommandId> = new Set<CommandId>([
   'notebook',
   'schemaDiff',
   'monitor',
+  'backup',
+  'restore',
+  'roles',
+  'dbSearch',
+  'erDiagram',
+  'splitPane',
+  'closePane',
+  'nextPane',
+  'prevPane',
   'exportCsv',
   'exportJson',
   'commitEdits',
@@ -81,7 +99,19 @@ function engineOf(): ConnectionEngine | null {
 /** Tabs the strip shows (Redis / OpenSearch hide extra SQL tabs). */
 export function visibleTabs() {
   const s = session();
-  if (engineOf() === 'postgres' || engineOf() === null) return s.tabs;
+  if (engineOf() === 'postgres' || engineOf() === null) {
+    // With a split, ⌘1…9 and next / previous tab work within the focused pane.
+    const panes = usePanes.getState();
+    if (!isSplit(panes)) return s.tabs;
+    const ids = new Set(
+      paneTabIds(
+        panes,
+        s.tabs.map((t) => t.id),
+        panes.focus,
+      ),
+    );
+    return s.tabs.filter((t) => ids.has(t.id));
+  }
   const overview = s.tabs.find((t) => t.kind === 'sql');
   return s.tabs.filter((t) => t.kind !== 'sql' || t.id === overview?.id);
 }
@@ -219,7 +249,38 @@ export function runCommand(id: CommandId): boolean {
     case 'codegen':
     case 'notebook':
     case 'schemaDiff':
+    case 'backup':
+    case 'restore':
+    case 'roles':
       wb.setOverlay(id);
+      return true;
+    case 'dbSearch':
+      wb.setOverlay(wb.overlay === 'dbSearch' ? null : 'dbSearch');
+      return true;
+    case 'erDiagram': {
+      // The schema of the active table tab, else the first user schema.
+      const tab = activeTab(s);
+      const schema =
+        (tab?.kind === 'table' ? tab.tableSchema : undefined) ??
+        s.activeTable?.schema ??
+        s.schema?.schemas.find((x) => x.name === 'public')?.name ??
+        s.schema?.schemas[0]?.name ??
+        'public';
+      s.setCanvasMode('database');
+      s.openErDiagram({ schema });
+      return true;
+    }
+    case 'splitPane':
+      usePanes.getState().splitRight();
+      return true;
+    case 'closePane':
+      if (!isSplit(usePanes.getState())) return false;
+      usePanes.getState().closePane();
+      return true;
+    case 'nextPane':
+    case 'prevPane':
+      if (!isSplit(usePanes.getState())) return false;
+      usePanes.getState().switchPane(id === 'nextPane' ? 1 : -1);
       return true;
     case 'commitEdits':
       if (s.pendingEdits.length > 0) {

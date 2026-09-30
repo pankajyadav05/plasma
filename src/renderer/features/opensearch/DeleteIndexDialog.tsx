@@ -79,10 +79,8 @@ function DeleteIndexConfirm() {
     <Dialog open={open} onOpenChange={(o) => !o && !submitting && requestDelete(null)}>
       <DialogContent className="max-w-[440px] gap-3 rounded-[10px] border-[var(--wb-separator)] bg-[var(--wb-content)] p-5 text-[13px] text-[var(--wb-text)]">
         <DialogHeader className="space-y-1">
-          <DialogTitle className="font-sans text-[15px] font-semibold not-italic leading-tight tracking-normal">
-            Delete index?
-          </DialogTitle>
-          <DialogDescription className="font-sans text-[13px] not-italic leading-snug text-[var(--wb-text-2)]">
+          <DialogTitle>Delete index?</DialogTitle>
+          <DialogDescription>
             All documents in <span className="font-mono text-[var(--wb-text)]">{name}</span> will be
             permanently removed. This cannot be undone.
           </DialogDescription>

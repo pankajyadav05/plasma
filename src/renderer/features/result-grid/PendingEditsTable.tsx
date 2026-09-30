@@ -43,7 +43,7 @@ export function PendingEditsTable({ edits }: { edits: PendingEdit[] }) {
                     kind === 'insert' && 'text-[var(--status-local)]',
                   )}
                 >
-                  {kind === 'update' ? e.column : kind === 'insert' ? 'insert' : 'delete'}
+                  {kind === 'update' ? e.column : kind === 'insert' ? 'Insert' : 'Delete'}
                 </td>
                 <td className="px-2 py-1.5 text-[var(--wb-text-2)]">
                   {e.schema}.{e.table}

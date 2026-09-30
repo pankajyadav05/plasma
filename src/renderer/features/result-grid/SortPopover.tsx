@@ -1,7 +1,8 @@
 import { Button } from '@/components/ui/button';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { IconButton } from '@/components/ui/workbench';
-import { useActiveTab, useSession } from '@/stores/session';
+import { readableTypeName } from '@/lib/pg-types';
+import { useActiveTabSelect, useSession } from '@/stores/session';
 import { ArrowDown, ArrowUp, ArrowUpDown, Trash2, X } from 'lucide-react';
 
 /**
@@ -18,7 +19,19 @@ import { ArrowDown, ArrowUp, ArrowUpDown, Trash2, X } from 'lucide-react';
  * query result (SQL tabs).
  */
 export function SortPopover() {
-  const tab = useActiveTab();
+  const tab = useActiveTabSelect((t) =>
+    t
+      ? {
+          id: t.id,
+          kind: t.kind,
+          tableSchema: t.tableSchema,
+          tableName: t.tableName,
+          tableSort: t.tableSort,
+          sortColumn: t.sortColumn,
+          columns: t.queryResult?.columns,
+        }
+      : undefined,
+  );
   const schema = useSession((s) => s.schema);
 
   if (!tab) return null;
@@ -32,9 +45,9 @@ export function SortPopover() {
           .sort((a, b) => a.ordinal - b.ordinal)
           .map((c) => ({ name: c.name, dataType: c.dataType })) ?? [])
       : []
-    : (tab.queryResult?.columns ?? []).map((c) => ({
+    : (tab.columns ?? []).map((c) => ({
         name: c.name,
-        dataType: c.dataTypeName,
+        dataType: readableTypeName(c),
       }));
 
   if (allColumns.length === 0) return null;
@@ -174,7 +187,7 @@ export function SortPopover() {
                 <Button
                   variant="ghost"
                   size="icon-xs"
-                  className="h-5 w-5 shrink-0 text-primary"
+                  className="h-5 w-5 shrink-0 text-[var(--wb-text)]"
                   onClick={() => flipDirectionTable(s.column)}
                   aria-label={`Flip sort direction (currently ${s.direction})`}
                   title={`Flip to ${s.direction === 'asc' ? 'desc' : 'asc'}`}
@@ -206,7 +219,7 @@ export function SortPopover() {
               <Button
                 variant="ghost"
                 size="icon-xs"
-                className="h-5 w-5 shrink-0 text-primary"
+                className="h-5 w-5 shrink-0 text-[var(--wb-text)]"
                 onClick={flipDirectionSql}
                 aria-label={`Flip sort direction (currently ${sqlSortDirection})`}
                 title={`Flip to ${sqlSortDirection === 'asc' ? 'desc' : 'asc'}`}
@@ -235,13 +248,13 @@ export function SortPopover() {
                 key={`${col.name}-${idx}`}
                 type="button"
                 onClick={() => (isTable ? cycleSortTable(col.name) : cycleSortSql(idx))}
-                className="flex w-full items-center gap-2 px-4 py-1.5 text-left text-xs text-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+                className="flex w-full items-center gap-2 px-4 py-1.5 text-left text-xs text-foreground transition-colors hover:bg-[var(--wb-control-hover)]"
               >
                 <span className="flex-1 truncate font-semibold">{col.name || '?column?'}</span>
                 <span className="shrink-0 text-xs text-muted-foreground">{col.dataType}</span>
                 <span className="w-3 shrink-0">
-                  {direction === 'asc' && <ArrowUp className="h-3 w-3 text-primary" />}
-                  {direction === 'desc' && <ArrowDown className="h-3 w-3 text-primary" />}
+                  {direction === 'asc' && <ArrowUp className="h-3 w-3 text-[var(--wb-text)]" />}
+                  {direction === 'desc' && <ArrowDown className="h-3 w-3 text-[var(--wb-text)]" />}
                 </span>
               </button>
             );

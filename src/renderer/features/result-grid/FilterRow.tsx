@@ -460,7 +460,7 @@ function ColumnCombobox({
           </div>
           <Command.List className="max-h-[280px] overflow-y-auto p-1">
             <Command.Empty className="px-3 py-3 text-[13px] text-[var(--wb-text-2)]">
-              no matching column
+              No matching column
             </Command.Empty>
             {columns.map((c) => {
               const active = c.name === value;
@@ -474,7 +474,7 @@ function ColumnCombobox({
                   }}
                   className={cn(
                     'flex cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 text-[13px] transition-colors',
-                    'data-[selected=true]:bg-accent data-[selected=true]:text-accent-foreground',
+                    'data-[selected=true]:bg-[var(--wb-selected)] data-[selected=true]:text-[var(--wb-text)]',
                     active && 'text-[var(--wb-text)]',
                   )}
                 >

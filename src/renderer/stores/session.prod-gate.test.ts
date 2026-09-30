@@ -99,6 +99,7 @@ describe('prod gate (U11)', () => {
     // Run Current resolves to the statement (terminator stripped), never
     // the raw buffer — the gate stashes exactly what would execute.
     expect(gate).toEqual({
+      reason: 'prod',
       sql: 'DELETE FROM users',
       tabId: 'tab-a',
       connectionGen: 0,
@@ -123,9 +124,7 @@ describe('prod gate (U11)', () => {
   it('confirm still runs the captured SQL even if the tab text changed', async () => {
     await useSession.getState().runQuery();
     useSession.setState((s) => ({
-      tabs: s.tabs.map((t) =>
-        t.id === 'tab-a' ? { ...t, sql: 'DELETE FROM other;' } : t,
-      ),
+      tabs: s.tabs.map((t) => (t.id === 'tab-a' ? { ...t, sql: 'DELETE FROM other;' } : t)),
     }));
     useSession.getState().confirmProdGate();
     await vi.waitFor(() => {
@@ -154,7 +153,9 @@ describe('prod gate outside the editor (A7/F8)', () => {
     useSession.getState().confirmProdGate();
     await expect(pending).resolves.toBe(true);
 
-    const forced = useSession.getState().confirmUserSql('INSERT INTO t VALUES (1)', { force: true });
+    const forced = useSession
+      .getState()
+      .confirmUserSql('INSERT INTO t VALUES (1)', { force: true });
     useSession.getState().cancelProdGate();
     await expect(forced).resolves.toBe(false);
     expect(queryRun).not.toHaveBeenCalled();
@@ -170,8 +171,26 @@ describe('prod gate outside the editor (A7/F8)', () => {
 
   it('does not gate non-prod connections', async () => {
     useSession.setState({
-      settings: { ...useSession.getState().settings, connectionTags: {} },
+      settings: { ...useSession.getState().settings, connectionTags: {}, safeModeDefault: 'off' },
     });
-    await expect(useSession.getState().confirmUserSql('DROP TABLE t', { force: true })).resolves.toBe(true);
+    await expect(
+      useSession.getState().confirmUserSql('DROP TABLE t', { force: true }),
+    ).resolves.toBe(true);
+  });
+
+  it('read-only safe mode refuses writes and confirm-all asks for reads', async () => {
+    const base = useSession.getState().settings;
+    useSession.setState({
+      settings: { ...base, connectionTags: {}, connectionSafeMode: { 'conn-prod': 'read-only' } },
+    });
+    await expect(useSession.getState().confirmUserSql('DELETE FROM t')).resolves.toBe(false);
+    expect(useSession.getState().prodGate).toBeNull();
+    useSession.setState({
+      settings: { ...base, connectionTags: {}, connectionSafeMode: { 'conn-prod': 'confirm-all' } },
+    });
+    const p = useSession.getState().confirmUserSql('SELECT 1');
+    expect(useSession.getState().prodGate?.reason).toBe('safe-mode');
+    useSession.getState().confirmProdGate();
+    await expect(p).resolves.toBe(true);
   });
 });

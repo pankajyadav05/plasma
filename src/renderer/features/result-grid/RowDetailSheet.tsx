@@ -7,6 +7,7 @@ import {
   SheetTitle,
 } from '@/components/ui/sheet';
 import { cn } from '@/lib/cn';
+import { readableTypeName } from '@/lib/pg-types';
 import type { ColumnMeta } from '@shared/protocol';
 import { Check, Copy } from 'lucide-react';
 import { useState } from 'react';
@@ -82,7 +83,7 @@ function FieldRow({ col, value }: { col: ColumnMeta; value: unknown }) {
       <div className="mb-1 flex items-baseline justify-between gap-2">
         <div className="flex min-w-0 items-baseline gap-2">
           <span className="truncate font-mono text-sm font-medium text-foreground">{col.name}</span>
-          <span className="shrink-0 text-xs text-muted-foreground">{col.dataTypeName}</span>
+          <span className="shrink-0 text-xs text-muted-foreground">{readableTypeName(col)}</span>
         </div>
         <Button
           variant="ghost"
@@ -92,15 +93,15 @@ function FieldRow({ col, value }: { col: ColumnMeta; value: unknown }) {
           aria-label={`Copy ${col.name}`}
           title="Copy value"
         >
-          {copied ? <Check className="text-primary" /> : <Copy />}
+          {copied ? <Check className="text-[var(--wb-text)]" /> : <Copy />}
         </Button>
       </div>
       {isNullish ? (
-        <div className="font-display text-sm italic text-muted-foreground">
+        <div className="font-mono text-[12px] text-[var(--grid-null)]">
           {value === null ? 'null' : 'undefined'}
         </div>
       ) : isEmpty ? (
-        <div className="font-display text-sm italic text-muted-foreground">(empty string)</div>
+        <div className="font-mono text-[12px] text-[var(--grid-null)]">(empty string)</div>
       ) : (
         <pre
           className={cn(

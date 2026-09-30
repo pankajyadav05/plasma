@@ -2,8 +2,8 @@
  * Cell value ⇄ Postgres text conversion for the result grid.
  *
  * node-postgres hands the renderer parsed JS values: json/jsonb become
- * objects, arrays become JS arrays, date/timestamp become `Date`s,
- * bytea a Uint8Array and interval a `{ days, hours, … }` object. Editing
+ * objects and arrays become JS arrays, bytea a Uint8Array and interval a
+ * `{ days, hours, … }` object (dates already arrive as Postgres text). Editing
  * those with `String(value)` produced `[object Object]`, `1,2` or
  * `Tue Sep 29 …` — garbage the server either rejects or, worse, stores.
  *
@@ -32,30 +32,6 @@ export function arrayElementType(typeName: string | undefined | null): string | 
 
 function isJsonType(t: string): boolean {
   return t === 'json' || t === 'jsonb';
-}
-
-function pad(n: number, width = 2): string {
-  return String(Math.abs(n)).padStart(width, '0');
-}
-
-/** Local calendar date — pg parses `date` as local midnight. */
-function formatLocalDate(d: Date): string {
-  return `${pad(d.getFullYear(), 4)}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-}
-
-/** Local wall-clock timestamp — pg parses `timestamp` (no tz) as local. */
-function formatLocalTimestamp(d: Date): string {
-  const ms = d.getMilliseconds();
-  const frac = ms ? `.${pad(ms, 3)}` : '';
-  return `${formatLocalDate(d)} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}${frac}`;
-}
-
-function formatDate(d: Date, t: string): string {
-  if (Number.isNaN(d.getTime())) return String(d);
-  if (t === 'date') return formatLocalDate(d);
-  if (t === 'timestamp' || t === 'timestamp without time zone') return formatLocalTimestamp(d);
-  // timestamptz (and unknown): an absolute instant — ISO/UTC is exact.
-  return d.toISOString();
 }
 
 function bytesToHex(bytes: ArrayLike<number>): string {
@@ -149,7 +125,6 @@ export function cellToText(value: unknown, typeName?: string | null): string | n
   if (typeof value === 'string') return value;
   if (typeof value === 'number' || typeof value === 'bigint') return String(value);
   if (typeof value === 'boolean') return value ? 'true' : 'false';
-  if (value instanceof Date) return formatDate(value, t);
   if (Array.isArray(value)) return toPgArrayLiteral(value, arrayElementType(typeName));
   if (value instanceof Uint8Array) return bytesToHex(value);
   if (typeof value === 'object') {

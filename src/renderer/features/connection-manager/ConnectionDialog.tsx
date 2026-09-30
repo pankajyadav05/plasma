@@ -21,6 +21,7 @@ import { Pill } from '@/components/ui/workbench';
 import { cn } from '@/lib/cn';
 import { describeConnectError } from '@/lib/errors';
 import { ipc } from '@/lib/ipc';
+import { SAFE_MODE_LABEL, SAFE_MODE_LEVELS, type SafeModeLevel } from '@/stores/safe-mode';
 import { useSession } from '@/stores/session';
 import { suggestReadOnlyForTag } from '@shared/connection-readonly';
 import { formatConnectionUrl, parseConnectionUrl } from '@shared/connection-url';
@@ -28,20 +29,36 @@ import type {
   ConnectionConfig,
   ConnectionEngine,
   ConnectionSshConfig,
+  OpenSearchOptions,
   TlsMode,
 } from '@shared/protocol';
-import { Boxes, Check, Copy, Database, Layers, Link2, Loader2, Play, Trash2 } from 'lucide-react';
+import {
+  Boxes,
+  Check,
+  ChevronRight,
+  Copy,
+  Database,
+  Layers,
+  Link2,
+  Loader2,
+  Play,
+  Save,
+  Trash2,
+} from 'lucide-react';
 import { useMemo, useState } from 'react';
 import {
   type FormErrors,
   type FormField,
+  REDIS_HOST_HINT,
   type SshFormState,
   TLS_MODE_LABEL,
   formTlsMode,
   hasErrors,
+  redisEndpointKind,
   validateConnectionForm,
   withTlsMode,
 } from './connection-form';
+import { existingGroups } from './connection-groups';
 
 type TestState =
   | { kind: 'idle' }
@@ -165,7 +182,20 @@ export function ConnectionDialog() {
     password: initialSsh?.password ?? '',
     privateKey: initialSsh?.privateKey ?? '',
     passphrase: initialSsh?.passphrase ?? '',
+    privateKeyPath: initialSsh?.privateKeyPath ?? '',
+    useAgent: initialSsh?.useAgent ?? false,
   });
+  const savedConnections = useSession((s) => s.savedConnections);
+  const saveConnectionOnly = useSession((s) => s.saveConnectionOnly);
+  const groupSuggestions = useMemo(() => existingGroups(savedConnections), [savedConnections]);
+  const allSafeMode = useSession((s) => s.settings.connectionSafeMode);
+  const defaultSafeMode = useSession((s) => s.settings.safeModeDefault);
+  const [safeMode, setSafeMode] = useState<SafeModeLevel | 'default'>(
+    () => (dialogPrefill ? allSafeMode?.[dialogPrefill.id] : undefined) ?? 'default',
+  );
+  const [advancedOpen, setAdvancedOpen] = useState(
+    () => safeMode !== 'default' || Boolean(dialogPrefill?.bootstrapSql),
+  );
   const showDisconnect = Boolean(
     activeConfig && isEditing && activeConfig.id === dialogPrefill?.id,
   );
@@ -196,6 +226,11 @@ export function ConnectionDialog() {
 
   const updateSsh = (key: keyof SshFormState, value: string, field: FormField) => {
     setSsh((s) => ({ ...s, [key]: value }));
+    touched([field]);
+  };
+
+  const updateOs = (patch: Partial<OpenSearchOptions>, field: FormField = 'osAuth') => {
+    setForm((prev) => ({ ...prev, opensearch: { ...(prev.opensearch ?? {}), ...patch } }));
     touched([field]);
   };
 
@@ -251,6 +286,8 @@ export function ConnectionDialog() {
           password: ssh.password,
           privateKey: ssh.privateKey,
           passphrase: ssh.passphrase,
+          privateKeyPath: (ssh.privateKeyPath ?? '').trim(),
+          useAgent: ssh.useAgent === true,
         }
       : null;
 
@@ -265,10 +302,8 @@ export function ConnectionDialog() {
     setTest(res.ok ? { kind: 'ok', message: res.message } : { kind: 'fail', message: res.message });
   };
 
-  const handleConnect = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setTest({ kind: 'idle' });
-    if (!validate()) return;
+  /** Tag, SSH tunnel and safe-mode level live in settings, keyed by connection id. */
+  const persistSideSettings = async () => {
     void setConnectionTag(form.id, tag);
     const nextSshMap = { ...(allSsh ?? {}) };
     // SSH tunnels make sense for postgres + redis (raw TCP). OpenSearch
@@ -277,9 +312,32 @@ export function ConnectionDialog() {
     const tunnel = sshPayload();
     if (tunnel) nextSshMap[form.id] = tunnel;
     else delete nextSshMap[form.id];
-    await updateSettings({ connectionSsh: nextSshMap });
+    const nextSafe = { ...(allSafeMode ?? {}) };
+    if (safeMode === 'default') delete nextSafe[form.id];
+    else nextSafe[form.id] = safeMode;
+    await updateSettings({ connectionSsh: nextSshMap, connectionSafeMode: nextSafe });
+  };
+
+  const handleConnect = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setTest({ kind: 'idle' });
+    if (!validate()) return;
+    await persistSideSettings();
     setShowConnectError(true);
     await connect(currentConfig());
+  };
+
+  /** C28: keep the connection without opening it. */
+  const handleSave = async () => {
+    setTest({ kind: 'idle' });
+    if (!validate()) return;
+    try {
+      await persistSideSettings();
+      await saveConnectionOnly(currentConfig());
+      closeDialog();
+    } catch (err) {
+      setTest({ kind: 'fail', message: err instanceof Error ? err.message : String(err) });
+    }
   };
 
   const applyUrl = () => {
@@ -321,6 +379,11 @@ export function ConnectionDialog() {
   const pickFile = async (key: 'caFile' | 'certFile' | 'keyFile', title: string) => {
     const path = await ipc.conn.pickFile(title);
     if (path) updateTls(key, path);
+  };
+
+  const pickSshKeyFile = async () => {
+    const path = await ipc.conn.pickFile('Choose an SSH private key');
+    if (path) updateSsh('privateKeyPath', path, 'sshAuth');
   };
 
   const connecting = connectionState === 'connecting';
@@ -427,15 +490,31 @@ export function ConnectionDialog() {
             )}
 
             <div className="grid gap-3 pt-4">
-              <Field label="Name" htmlFor="conn-name" error={errors.name}>
-                <Input
-                  id="conn-name"
-                  value={form.name}
-                  aria-invalid={errors.name ? true : undefined}
-                  onChange={(e) => update('name', e.target.value, 'name')}
-                  placeholder="My database"
-                />
-              </Field>
+              <div className="grid grid-cols-[1fr_170px] gap-3">
+                <Field label="Name" htmlFor="conn-name" error={errors.name}>
+                  <Input
+                    id="conn-name"
+                    value={form.name}
+                    aria-invalid={errors.name ? true : undefined}
+                    onChange={(e) => update('name', e.target.value, 'name')}
+                    placeholder="My database"
+                  />
+                </Field>
+                <Field label="Folder (optional)" htmlFor="conn-group">
+                  <Input
+                    id="conn-group"
+                    list="conn-group-options"
+                    value={form.group ?? ''}
+                    onChange={(e) => update('group', e.target.value || undefined)}
+                    placeholder="e.g. Work"
+                  />
+                  <datalist id="conn-group-options">
+                    {groupSuggestions.map((g) => (
+                      <option key={g} value={g} />
+                    ))}
+                  </datalist>
+                </Field>
+              </div>
 
               <div className="grid grid-cols-[1fr_120px] gap-3">
                 <Field label="Host" htmlFor="conn-host" error={errors.host}>
@@ -461,6 +540,25 @@ export function ConnectionDialog() {
                   />
                 </Field>
               </div>
+
+              {engine === 'redis' && redisEndpointKind(form.host) !== 'tcp' && (
+                <p className="-mt-1.5 text-[12px] text-[var(--wb-text-2)]">
+                  {
+                    REDIS_HOST_HINT[
+                      redisEndpointKind(form.host) as Exclude<
+                        ReturnType<typeof redisEndpointKind>,
+                        'tcp'
+                      >
+                    ]
+                  }
+                </p>
+              )}
+              {engine === 'redis' && redisEndpointKind(form.host) === 'tcp' && (
+                <p className="-mt-1.5 text-[12px] text-[var(--wb-text-3)]">
+                  Host also accepts a unix socket path, sentinel://h1:26379,h2:26379/master or
+                  cluster://h1:7000,h2:7001.
+                </p>
+              )}
 
               {/* Engine-specific data field */}
               {engine === 'postgres' && (
@@ -575,6 +673,16 @@ export function ConnectionDialog() {
                 )}
               </div>
 
+              {/* O12: OpenSearch auth, path prefix and extra nodes */}
+              {engine === 'opensearch' && (
+                <OpenSearchSection
+                  options={form.opensearch ?? {}}
+                  errors={errors}
+                  onChange={updateOs}
+                  isEditing={isEditing}
+                />
+              )}
+
               {/* SSH section: hidden for OpenSearch (HTTPS over public endpoints) */}
               {sshSupported && (
                 <div className={SECTION}>
@@ -594,6 +702,9 @@ export function ConnectionDialog() {
                       Connect over SSH tunnel
                     </label>
                   </div>
+                  {useSsh && errors.ssh && (
+                    <FieldError id="ssh-unsupported">{errors.ssh}</FieldError>
+                  )}
                   {useSsh && (
                     <div className="grid grid-cols-[1fr_120px] gap-3">
                       <Field label="SSH host" htmlFor="ssh-host" error={errors.sshHost}>
@@ -657,6 +768,31 @@ export function ConnectionDialog() {
                             }
                           />
                         </Field>
+                      </div>
+                      <div className="col-span-2">
+                        <FileField
+                          label="SSH key file"
+                          value={ssh.privateKeyPath ?? ''}
+                          placeholder="e.g. ~/.ssh/id_ed25519 (used when no key is pasted)"
+                          onChange={(v) => updateSsh('privateKeyPath', v, 'sshAuth')}
+                          onBrowse={() => void pickSshKeyFile()}
+                        />
+                      </div>
+                      <div className="col-span-2 flex items-center gap-2">
+                        <Checkbox
+                          id="ssh-agent"
+                          checked={ssh.useAgent === true}
+                          onCheckedChange={(v) => {
+                            setSsh((s) => ({ ...s, useAgent: Boolean(v) }));
+                            touched(['sshAuth']);
+                          }}
+                        />
+                        <label
+                          htmlFor="ssh-agent"
+                          className="cursor-pointer text-[13px] text-[var(--wb-text)]"
+                        >
+                          Use the ssh-agent (SSH_AUTH_SOCK)
+                        </label>
                       </div>
                       <Field label="Key passphrase" htmlFor="ssh-passphrase">
                         <Input
@@ -736,6 +872,73 @@ export function ConnectionDialog() {
                 </p>
               </Field>
 
+              {/* C28 / safe mode: per-connection guard rails + bootstrap SQL */}
+              <div className={SECTION}>
+                <button
+                  type="button"
+                  onClick={() => setAdvancedOpen((o) => !o)}
+                  aria-expanded={advancedOpen}
+                  className="flex cursor-pointer items-center gap-1.5 text-left text-[13px] font-medium text-[var(--wb-text)]"
+                >
+                  <ChevronRight
+                    className={cn('h-3.5 w-3.5 transition-transform', advancedOpen && 'rotate-90')}
+                  />
+                  Advanced
+                </button>
+                {advancedOpen && (
+                  <div className="grid gap-3">
+                    <Field label="Safe mode" htmlFor="conn-safe-mode">
+                      <Select
+                        value={safeMode}
+                        onValueChange={(v) => {
+                          setSafeMode(v as SafeModeLevel | 'default');
+                          touched();
+                        }}
+                      >
+                        <SelectTrigger
+                          id="conn-safe-mode"
+                          aria-label="Safe mode"
+                          className="h-[26px] text-[13px]"
+                        >
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="default" className="text-[13px]">
+                            Default ({SAFE_MODE_LABEL[defaultSafeMode].label})
+                          </SelectItem>
+                          {SAFE_MODE_LEVELS.map((level) => (
+                            <SelectItem key={level} value={level} className="text-[13px]">
+                              {SAFE_MODE_LABEL[level].label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <p className="text-[12px] text-[var(--wb-text-2)]">
+                        {SAFE_MODE_LABEL[safeMode === 'default' ? defaultSafeMode : safeMode].hint}{' '}
+                        A Prod tag still confirms destructive statements.
+                      </p>
+                    </Field>
+                    {engine === 'postgres' && (
+                      <Field label="Run after connecting (SQL)" htmlFor="conn-bootstrap">
+                        <textarea
+                          id="conn-bootstrap"
+                          value={form.bootstrapSql ?? ''}
+                          onChange={(e) => update('bootstrapSql', e.target.value || undefined)}
+                          rows={3}
+                          spellCheck={false}
+                          placeholder={"SET search_path TO app, public;\nSET TIME ZONE 'UTC';"}
+                          className="rounded-[7px] bg-[var(--wb-field)] px-2 py-1.5 font-mono text-[12px] text-[var(--wb-text)] shadow-[inset_0_0_0_1px_var(--wb-toolbar-group-edge)] outline-none placeholder:text-[var(--wb-text-3)] focus-visible:shadow-[inset_0_0_0_1px_var(--ring)]"
+                        />
+                        <p className="text-[12px] text-[var(--wb-text-2)]">
+                          Runs on your query session each time it connects; a failing statement
+                          stops the connect.
+                        </p>
+                      </Field>
+                    )}
+                  </div>
+                )}
+              </div>
+
               <div aria-live="polite" className="flex flex-col gap-2">
                 {test.kind === 'ok' && (
                   <Notice tone="ok" testId="conn-test-result">
@@ -780,6 +983,18 @@ export function ConnectionDialog() {
             )}
             <Button type="button" variant="secondary" size="sm" onClick={closeDialog}>
               Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              data-testid="conn-save"
+              onClick={() => void handleSave()}
+              disabled={connecting}
+              title="Save without connecting"
+            >
+              <Save />
+              Save
             </Button>
             <Button
               type="button"
@@ -894,6 +1109,147 @@ function Notice({
     >
       {tone === 'ok' ? '✓ ' : '✗ '}
       {children}
+    </div>
+  );
+}
+
+const OS_AUTH_LABEL: Record<NonNullable<OpenSearchOptions['auth']>, string> = {
+  basic: 'Username and password',
+  apiKey: 'API key',
+  sigv4: 'AWS SigV4 (Amazon OpenSearch)',
+};
+
+/** O12: how to authenticate, plus path prefix and extra nodes. */
+function OpenSearchSection({
+  options,
+  errors,
+  onChange,
+  isEditing,
+}: {
+  options: OpenSearchOptions;
+  errors: FormErrors;
+  onChange: (patch: Partial<OpenSearchOptions>, field?: FormField) => void;
+  isEditing: boolean;
+}) {
+  const auth = options.auth ?? 'basic';
+  const keep = (saved: boolean | undefined) =>
+    isEditing && saved ? 'Saved — leave blank to keep' : undefined;
+  return (
+    <div className={SECTION}>
+      <Field label="Authentication" htmlFor="os-auth" error={errors.osAuth}>
+        <Select value={auth} onValueChange={(v) => onChange({ auth: v as typeof auth })}>
+          <SelectTrigger id="os-auth" aria-label="Authentication" className="h-[26px] text-[13px]">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {(Object.keys(OS_AUTH_LABEL) as Array<keyof typeof OS_AUTH_LABEL>).map((m) => (
+              <SelectItem key={m} value={m} className="text-[13px]">
+                {OS_AUTH_LABEL[m]}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </Field>
+      {auth === 'basic' && (
+        <p className="text-[12px] text-[var(--wb-text-2)]">
+          Uses the User and Password fields above; leave both empty for an open cluster.
+        </p>
+      )}
+      {auth === 'apiKey' && (
+        <Field label="API key" htmlFor="os-api-key">
+          <Input
+            id="os-api-key"
+            type="password"
+            value={options.apiKey ?? ''}
+            onChange={(e) => onChange({ apiKey: e.target.value })}
+            placeholder={keep(options.hasApiKey) ?? 'id:key or base64-encoded key'}
+            spellCheck={false}
+          />
+        </Field>
+      )}
+      {auth === 'sigv4' && (
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="AWS region" htmlFor="os-aws-region">
+            <Input
+              id="os-aws-region"
+              value={options.awsRegion ?? ''}
+              onChange={(e) => onChange({ awsRegion: e.target.value })}
+              placeholder="eu-west-1"
+            />
+          </Field>
+          <Field label="Service" htmlFor="os-aws-service">
+            <Select
+              value={options.awsService ?? 'es'}
+              onValueChange={(v) => onChange({ awsService: v as 'es' | 'aoss' })}
+            >
+              <SelectTrigger
+                id="os-aws-service"
+                aria-label="Service"
+                className="h-[26px] text-[13px]"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="es" className="text-[13px]">
+                  Managed domain (es)
+                </SelectItem>
+                <SelectItem value="aoss" className="text-[13px]">
+                  Serverless (aoss)
+                </SelectItem>
+              </SelectContent>
+            </Select>
+          </Field>
+          <Field label="Access key id" htmlFor="os-aws-key-id">
+            <Input
+              id="os-aws-key-id"
+              value={options.awsAccessKeyId ?? ''}
+              onChange={(e) => onChange({ awsAccessKeyId: e.target.value })}
+              spellCheck={false}
+            />
+          </Field>
+          <Field label="Secret access key" htmlFor="os-aws-secret">
+            <Input
+              id="os-aws-secret"
+              type="password"
+              value={options.awsSecretAccessKey ?? ''}
+              onChange={(e) => onChange({ awsSecretAccessKey: e.target.value })}
+              placeholder={keep(options.hasAwsSecretAccessKey)}
+            />
+          </Field>
+          <div className="col-span-2">
+            <Field label="Session token (optional)" htmlFor="os-aws-token">
+              <Input
+                id="os-aws-token"
+                type="password"
+                value={options.awsSessionToken ?? ''}
+                onChange={(e) => onChange({ awsSessionToken: e.target.value })}
+                placeholder={keep(options.hasAwsSessionToken)}
+              />
+            </Field>
+          </div>
+        </div>
+      )}
+      <Field label="Path prefix (optional)" htmlFor="os-path-prefix">
+        <Input
+          id="os-path-prefix"
+          value={options.pathPrefix ?? ''}
+          onChange={(e) => onChange({ pathPrefix: e.target.value })}
+          placeholder="/search — when the cluster sits behind a reverse proxy"
+          spellCheck={false}
+        />
+      </Field>
+      <Field label="Additional nodes (optional)" htmlFor="os-nodes" error={errors.osNodes}>
+        <textarea
+          id="os-nodes"
+          value={(options.nodes ?? []).join('\n')}
+          onChange={(e) => onChange({ nodes: e.target.value.split('\n') }, 'osNodes')}
+          rows={2}
+          spellCheck={false}
+          aria-invalid={errors.osNodes ? true : undefined}
+          placeholder={'One per line: node2.example.com:9200 or https://node3:9200'}
+          className="rounded-[7px] bg-[var(--wb-field)] px-2 py-1.5 font-mono text-[12px] text-[var(--wb-text)] shadow-[inset_0_0_0_1px_var(--wb-toolbar-group-edge)] outline-none placeholder:text-[var(--wb-text-3)] focus-visible:shadow-[inset_0_0_0_1px_var(--ring)] aria-[invalid=true]:shadow-[inset_0_0_0_1px_var(--destructive)]"
+        />
+      </Field>
     </div>
   );
 }

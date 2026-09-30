@@ -297,15 +297,15 @@ function CodeBlock({
   const isSql = !lang || /^sql$|^postgres/i.test(lang);
   return (
     <div className="overflow-hidden rounded-[6px] bg-[var(--wb-content)] shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--wb-text)_8%,transparent)]">
-      <div className="flex h-7 items-center gap-1 border-b border-[color-mix(in_srgb,var(--wb-text)_8%,transparent)] pl-2 pr-1 font-mono text-[10px] uppercase text-[var(--wb-text-3)]">
+      <div className="flex h-7 items-center gap-1 border-b border-[color-mix(in_srgb,var(--wb-text)_8%,transparent)] pl-2 pr-1 font-mono text-[11px] text-[var(--wb-text-3)]">
         <span>{lang || 'sql'}</span>
         <div className="flex-1" />
         {isSql && (
           <>
-            <Pill className="h-5 px-1.5 text-[11px] normal-case" onClick={onInsert}>
+            <Pill className="h-5 px-1.5 text-[11px]" onClick={onInsert}>
               Insert
             </Pill>
-            <Pill className="h-5 px-1.5 text-[11px] normal-case" onClick={onRun}>
+            <Pill className="h-5 px-1.5 text-[11px]" onClick={onRun}>
               Run
             </Pill>
           </>

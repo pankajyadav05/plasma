@@ -15,6 +15,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { EmptyState } from '@/components/ui/view-parts';
+import { readableTypeName } from '@/lib/pg-types';
 import { useActiveTab, useSession } from '@/stores/session';
 import type { QueryResult } from '@shared/protocol';
 import { Brain, Check, Copy, Sigma } from 'lucide-react';
@@ -154,7 +155,7 @@ export function PgVectorDialog({
                       className="border-b border-[var(--wb-separator)] font-mono text-[var(--wb-text)] last:border-b-0 even:bg-[var(--grid-row-a)]"
                     >
                       <td className="px-2 py-1.5">{c.name}</td>
-                      <td className="px-2 py-1.5 text-[var(--wb-text-2)]">{c.dataTypeName}</td>
+                      <td className="px-2 py-1.5 text-[var(--wb-text-2)]">{readableTypeName(c)}</td>
                       <td className="px-2 py-1.5">
                         <span className="inline-flex items-center gap-1">
                           <Sigma className="h-3 w-3 text-[var(--wb-text-3)]" />

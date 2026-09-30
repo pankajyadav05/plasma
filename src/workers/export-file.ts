@@ -1,8 +1,16 @@
 import { createWriteStream } from 'node:fs';
 import { rename, rm } from 'node:fs/promises';
 import { finished } from 'node:stream/promises';
-import { type ExportFormat, createExportStreamer } from '@shared/export-format';
+import { type CsvOptions, type ExportFormat, createExportStreamer } from '@shared/export-format';
 import type { ColumnMeta } from '@shared/protocol';
+
+/** Thrown when an export is cancelled; main maps it to a quiet "cancelled" result. */
+export class ExportCancelledError extends Error {
+  override readonly name = 'ExportCancelledError';
+  constructor() {
+    super('export cancelled');
+  }
+}
 
 async function writeChunk(
   stream: ReturnType<typeof createWriteStream>,
@@ -31,6 +39,11 @@ export async function writeExportFile(opts: {
   batches: AsyncIterable<readonly unknown[][]>;
   /** Quoted `schema.table` INSERT target for SQL export. */
   targetTable?: string;
+  csv?: CsvOptions;
+  /** Checked between batches; true aborts and removes the partial file (C30). */
+  isCancelled?: () => boolean;
+  /** Called after every batch is written. */
+  onProgress?: (p: { rowCount: number; bytesWritten: number }) => void;
 }): Promise<{ rowCount: number; bytesWritten: number }> {
   const tempPath = `${opts.filePath}.${process.pid}-${Date.now()}.partial`;
   const stream = createWriteStream(tempPath, { encoding: 'utf8' });
@@ -45,15 +58,18 @@ export async function writeExportFile(opts: {
 
   const streamer = createExportStreamer(opts.format, opts.columns, sink, {
     targetTable: opts.targetTable,
+    csv: opts.csv,
   });
   try {
     streamer.begin();
     await pending;
 
     for await (const batch of opts.batches) {
+      if (opts.isCancelled?.()) throw new ExportCancelledError();
       streamer.writeRows(batch as unknown[][]);
       rowCount += batch.length;
       await pending;
+      opts.onProgress?.({ rowCount, bytesWritten });
     }
 
     streamer.end();
@@ -78,6 +94,9 @@ export async function writeExportRows(opts: {
   rows: readonly unknown[][];
   batchSize?: number;
   targetTable?: string;
+  csv?: CsvOptions;
+  isCancelled?: () => boolean;
+  onProgress?: (p: { rowCount: number; bytesWritten: number }) => void;
 }): Promise<{ rowCount: number; bytesWritten: number }> {
   const batchSize = opts.batchSize ?? 500;
   async function* batches() {
@@ -91,5 +110,8 @@ export async function writeExportRows(opts: {
     columns: opts.columns,
     batches: batches(),
     targetTable: opts.targetTable,
+    csv: opts.csv,
+    isCancelled: opts.isCancelled,
+    onProgress: opts.onProgress,
   });
 }

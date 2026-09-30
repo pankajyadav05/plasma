@@ -1,4 +1,5 @@
 import { Client } from '@opensearch-project/opensearch';
+import { AwsSigv4Signer } from '@opensearch-project/opensearch/aws';
 import { OS_READ_ONLY_MESSAGE, isOsReadRequest, isReadOnlyOsSql } from '@shared/os-write-policy';
 import type {
   ConnectionConfig,
@@ -21,6 +22,7 @@ import {
   mergeMappingTrees,
   normalisePath,
   parseTotal,
+  planOpenSearchConnection,
   prepareSearchBody,
   readMsearchFieldStat,
   resolveAggField,
@@ -63,20 +65,24 @@ export class OpenSearchDriver {
 
   async connect(config: ConnectionConfig, timeoutMs?: number): Promise<string> {
     await this.disconnect();
-    const protocol = config.ssl ? 'https' : 'http';
-    const auth =
-      config.user || config.password
-        ? { username: config.user || '', password: config.password || '' }
-        : undefined;
-    const node = `${protocol}://${config.host}:${config.port}`;
+    const plan = planOpenSearchConnection(config);
     const ssl = buildNodeTlsOptions(config);
     if (resolveTls(config)?.mode === 'insecure') {
       console.warn(insecureTlsWarning(config.host));
     }
     this.defaultTimeoutMs = timeoutMs && timeoutMs > 0 ? timeoutMs : DEFAULT_TIMEOUT_MS;
+    const signer = plan.sigv4
+      ? AwsSigv4Signer({
+          region: plan.sigv4.region,
+          service: plan.sigv4.service,
+          getCredentials: async () => plan.sigv4!.credentials,
+        })
+      : null;
     const client = new Client({
-      node,
-      auth,
+      ...(signer ?? {}),
+      ...(plan.nodes.length === 1 ? { node: plan.nodes[0] } : { nodes: plan.nodes }),
+      ...(plan.basic ? { auth: plan.basic } : {}),
+      ...(Object.keys(plan.headers).length > 0 ? { headers: plan.headers } : {}),
       ssl,
       requestTimeout: this.defaultTimeoutMs,
     });

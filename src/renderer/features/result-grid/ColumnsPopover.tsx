@@ -2,12 +2,24 @@ import { Button } from '@/components/ui/button';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { IconButton } from '@/components/ui/workbench';
 import { cn } from '@/lib/cn';
-import { useActiveTab, useSession } from '@/stores/session';
+import { readableTypeName } from '@/lib/pg-types';
+import { useActiveTabSelect, useSession } from '@/stores/session';
 import { Command } from 'cmdk';
 import { Columns3, Eye, EyeOff, Pin, PinOff, Search } from 'lucide-react';
 
 export function ColumnsPopover() {
-  const tab = useActiveTab();
+  const tab = useActiveTabSelect((t) =>
+    t
+      ? {
+          kind: t.kind,
+          tableSchema: t.tableSchema,
+          tableName: t.tableName,
+          hiddenColumns: t.hiddenColumns,
+          stickyColumns: t.stickyColumns,
+          columns: t.queryResult?.columns,
+        }
+      : undefined,
+  );
   const schema = useSession((s) => s.schema);
   const toggleColumnHidden = useSession((s) => s.toggleColumnHidden);
   const showAllColumns = useSession((s) => s.showAllColumns);
@@ -30,9 +42,9 @@ export function ColumnsPopover() {
           .sort((a, b) => a.ordinal - b.ordinal)
           .map((c) => ({ name: c.name, dataType: c.dataType })) ?? [])
       : []
-    : (tab.queryResult?.columns ?? []).map((c) => ({
+    : (tab.columns ?? []).map((c) => ({
         name: c.name,
-        dataType: c.dataTypeName,
+        dataType: readableTypeName(c),
       }));
 
   if (allColumns.length === 0) return null;
@@ -115,8 +127,8 @@ export function ColumnsPopover() {
             </div>
           )}
           <Command.List className="max-h-[400px] overflow-y-auto py-1">
-            <Command.Empty className="px-3 py-3 font-display text-xs italic text-muted-foreground">
-              no matching column
+            <Command.Empty className="px-3 py-3 text-[12px] text-[var(--wb-text-3)]">
+              No matching column
             </Command.Empty>
             {allColumns.map((col) => {
               const hidden = tab.hiddenColumns.has(col.name);
@@ -128,7 +140,7 @@ export function ColumnsPopover() {
                   key={col.name}
                   value={`${col.name} ${col.dataType}`}
                   onSelect={() => void toggleColumnHidden(col.name)}
-                  className="group/row flex w-full cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 text-sm transition-colors data-[selected=true]:bg-accent data-[selected=true]:text-accent-foreground"
+                  className="group/row flex w-full cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 text-sm transition-colors data-[selected=true]:bg-[var(--wb-selected)] data-[selected=true]:text-[var(--wb-text)]"
                 >
                   <span
                     className="flex min-w-0 flex-1 items-center gap-2.5 text-left"
@@ -160,7 +172,9 @@ export function ColumnsPopover() {
                     }}
                     className={cn(
                       'ml-1 grid h-6 w-6 shrink-0 place-items-center rounded-sm transition-colors',
-                      sticky ? 'text-primary' : 'text-muted-foreground hover:text-foreground',
+                      sticky
+                        ? 'text-[var(--icon-pin)]'
+                        : 'text-muted-foreground hover:text-foreground',
                     )}
                     title={sticky ? 'Unpin column' : 'Pin column (sticky left)'}
                     aria-label={sticky ? 'Unpin column' : 'Pin column'}

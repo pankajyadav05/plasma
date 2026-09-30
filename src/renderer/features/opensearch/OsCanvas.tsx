@@ -1,5 +1,5 @@
 import { TabStrip } from '@/features/editor/TabStrip';
-import { useActiveTab, useSession } from '@/stores/session';
+import { useActiveTabSelect, useSession } from '@/stores/session';
 import { useEffect } from 'react';
 import { OsConsoleView } from './OsConsoleView';
 import { OsHomeView } from './OsHomeView';
@@ -20,8 +20,7 @@ const OS_TAB_KINDS = new Set(['os-index', 'os-search', 'os-sql', 'os-console']);
  *   - other      → OsHomeView (cluster overview, nodes, shards, tasks…)
  */
 export function OsCanvas() {
-  const tab = useActiveTab();
-  const hasTabs = tab ? OS_TAB_KINDS.has(tab.kind) : false;
+  const hasTabs = useActiveTabSelect((t) => (t ? OS_TAB_KINDS.has(t.kind) : false));
   useDropClosedTabState();
   return (
     <main className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-[var(--wb-content)] text-[var(--wb-text)]">
@@ -48,7 +47,9 @@ function useDropClosedTabState() {
 }
 
 function OsBody() {
-  const tab = useActiveTab();
+  const tab = useActiveTabSelect((t) =>
+    t ? { id: t.id, kind: t.kind, osIndex: t.osIndex } : undefined,
+  );
   if (!tab) return <OsHomeView />;
   if (tab.kind === 'os-index' && tab.osIndex) {
     return <OsIndexView key={tab.id} tabId={tab.id} indexName={tab.osIndex} />;

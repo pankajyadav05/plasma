@@ -14,6 +14,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { EmptyState } from '@/components/ui/view-parts';
+import { readableTypeName } from '@/lib/pg-types';
 import type { QueryResult } from '@shared/protocol';
 import { Map as MapIcon } from 'lucide-react';
 import { useMemo, useState } from 'react';
@@ -93,7 +94,8 @@ export function PostGisDialog({
             <SelectContent>
               {result?.columns.map((c) => (
                 <SelectItem key={c.name} value={c.name}>
-                  {c.name} <span className="ml-1 text-[var(--wb-text-2)]">({c.dataTypeName})</span>
+                  {c.name}{' '}
+                  <span className="ml-1 text-[var(--wb-text-2)]">({readableTypeName(c)})</span>
                 </SelectItem>
               ))}
             </SelectContent>

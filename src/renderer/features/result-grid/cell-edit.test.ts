@@ -36,15 +36,9 @@ describe('cellToText', () => {
     expect(cellToText([1, 2], 'oid:1007')).toBe('{1,2}');
   });
 
-  it('formats date / timestamp in local time and timestamptz as ISO', () => {
-    const d = new Date(2026, 0, 1); // local midnight, as pg parses `date`
-    expect(cellToText(d, 'date')).toBe('2026-01-01');
-    const ts = new Date(2026, 8, 29, 13, 5, 9, 120);
-    expect(cellToText(ts, 'timestamp')).toBe('2026-09-29 13:05:09.120');
-    const tz = new Date(Date.UTC(2026, 8, 29, 7, 30, 0));
-    expect(cellToText(tz, 'timestamptz')).toBe('2026-09-29T07:30:00.000Z');
-    // Raw strings from the worker pass through untouched.
+  it('passes date / timestamp text from the worker through untouched', () => {
     expect(cellToText('2026-09-29', 'date')).toBe('2026-09-29');
+    expect(cellToText('2026-09-29 13:05:09.120', 'timestamp')).toBe('2026-09-29 13:05:09.120');
   });
 
   it('formats booleans, numbers, bytea and interval', () => {

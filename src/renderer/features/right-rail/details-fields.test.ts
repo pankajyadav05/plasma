@@ -54,7 +54,8 @@ describe('displayText', () => {
     expect(displayText('hello', 'text')).toBe('hello');
     expect(displayText(42, 'int4')).toBe('42');
     expect(displayText(true, 'bool')).toBe('true');
-    const d = new Date(2024, 0, 2, 3, 4, 5);
+    // The worker hands dates over as Postgres text.
+    const d = '2024-01-02 03:04:05';
     expect(displayText(d, 'timestamp')).not.toMatch(/^"/);
     expect(displayText(d, 'timestamp')).toContain('2024-01-02');
   });

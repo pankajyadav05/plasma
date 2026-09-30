@@ -71,6 +71,8 @@ export function redactSettingsWithPresence(
       password: '',
       privateKey: '',
       passphrase: '',
+      privateKeyPath: ssh.privateKeyPath ?? '',
+      useAgent: ssh.useAgent ?? false,
       hasPassword: present(`ssh:${id}:password`),
       hasPrivateKey: present(`ssh:${id}:privateKey`),
       hasPassphrase: present(`ssh:${id}:passphrase`),
@@ -128,4 +130,39 @@ export function canReuseStoredPassword(saved: PasswordTarget, incoming: Password
     saved.port === incoming.port &&
     (saved.user ?? '') === (incoming.user ?? '')
   );
+}
+
+type SshTarget = { host: string; port: number; user: string };
+
+/**
+ * Test-connection twin of `canReuseStoredPassword` for SSH: a blank
+ * secret in the dialog means "the saved one", but only while the tunnel
+ * still points at the same bastion and login. Otherwise a changed host
+ * would be sent the stored password / key.
+ */
+export function canReuseStoredSshSecrets(saved: SshTarget, incoming: SshTarget): boolean {
+  return (
+    saved.host.trim().toLowerCase() === incoming.host.trim().toLowerCase() &&
+    saved.port === incoming.port &&
+    saved.user === incoming.user
+  );
+}
+
+/**
+ * Fill blank SSH secrets from the saved ones when the target is unchanged
+ * (see `canReuseStoredSshSecrets`); otherwise use only what the form holds.
+ */
+export function mergeSshSecretsForTest<
+  T extends SshTarget & { password: string; privateKey: string; passphrase: string },
+>(
+  form: T,
+  saved: (SshTarget & { password: string; privateKey: string; passphrase: string }) | null,
+): T {
+  if (!saved || !canReuseStoredSshSecrets(saved, form)) return form;
+  return {
+    ...form,
+    password: form.password || saved.password,
+    privateKey: form.privateKey || saved.privateKey,
+    passphrase: form.passphrase || saved.passphrase,
+  };
 }

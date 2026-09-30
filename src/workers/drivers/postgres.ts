@@ -1,19 +1,26 @@
 import { ConnectionLostError } from '@shared/connection-loss';
-import type { ConnectionConfig, IntrospectOpts, PgNotice, QueryResult, SchemaInfo, TxnState } from '@shared/protocol';
-import { introspectPostgres } from './postgres-introspect';
+import { pgTypeName } from '@shared/pg-type-oids';
+import type {
+  ConnectionConfig,
+  IntrospectOpts,
+  PgNotice,
+  QueryResult,
+  SchemaInfo,
+  TxnState,
+} from '@shared/protocol';
+import type {
+  DdlApplyRequest,
+  DdlApplyResult,
+  ImportJobSpec,
+  ImportResult,
+} from '@shared/protocol';
 import {
   MAX_RESULT_ROWS,
   RESULT_CURSOR_CHUNK,
   appendBoundedRows,
   emptyBoundState,
 } from '@shared/result-bounds';
-import pg from 'pg';
-import Cursor from 'pg-cursor';
-import { formatStatementTimeoutSql } from '@shared/worker-policy';
 import { isSingleSqlStatement, isTxnExemptSql } from '@shared/sql-statements';
-import { pgTypeName } from '@shared/pg-type-oids';
-import { plasmaPgTypes } from './pg-type-parsers';
-import { type EditUpdate, type TxnStatus, runEditBatch, runExplain, txnStateFromStatus } from './pg-txn';
 import {
   type PlasmaTlsOptions,
   buildNodeTlsOptions,
@@ -21,13 +28,44 @@ import {
   isUnverifiedTlsMode,
   resolveTls,
 } from '@shared/tls';
+import { formatStatementTimeoutSql } from '@shared/worker-policy';
+import pg from 'pg';
+import Cursor from 'pg-cursor';
+import { runBootstrapSql } from './pg-bootstrap';
+import { type ImportHooks, applyDdl, runImport } from './pg-import';
+import {
+  type EditUpdate,
+  type TxnStatus,
+  runEditBatch,
+  runExplain,
+  txnStateFromStatus,
+} from './pg-txn';
+import { plasmaPgTypes } from './pg-type-parsers';
+import { introspectPostgres } from './postgres-introspect';
 
 const errorMessage = (err: unknown): string => (err instanceof Error ? err.message : String(err));
 
 const { Client } = pg;
 type ClientT = InstanceType<typeof Client>;
-interface PgNoticeRaw { message?: string; severity?: string; name?: string; code?: string; detail?: string; hint?: string; where?: string; }
-function toPgNotice(n: PgNoticeRaw): PgNotice { return { message: n.message ?? '', severity: n.severity || n.name || undefined, code: n.code || undefined, detail: n.detail || undefined, hint: n.hint || undefined, where: n.where || undefined }; }
+interface PgNoticeRaw {
+  message?: string;
+  severity?: string;
+  name?: string;
+  code?: string;
+  detail?: string;
+  hint?: string;
+  where?: string;
+}
+function toPgNotice(n: PgNoticeRaw): PgNotice {
+  return {
+    message: n.message ?? '',
+    severity: n.severity || n.name || undefined,
+    code: n.code || undefined,
+    detail: n.detail || undefined,
+    hint: n.hint || undefined,
+    where: n.where || undefined,
+  };
+}
 
 /**
  * U27 — a socket killed by a VPN drop / sleep / Wi-Fi switch is usually
@@ -84,7 +122,7 @@ function readCursorBatch(
         rows: (rows ?? []) as unknown[][],
         fields: result?.fields ?? [],
         command: result?.command,
-        rowCount: result?.rowCount ?? (rows?.length ?? 0),
+        rowCount: result?.rowCount ?? rows?.length ?? 0,
       });
     });
   });
@@ -114,6 +152,7 @@ export class PostgresDriver {
   private control: ClientT | null = null;
   private aux: ClientT | null = null;
   private primaryBackendPid: number | null = null;
+  private auxBackendPid: number | null = null;
   private txnState: TxnState = 'none';
   private statementTimeoutMs = 0;
   private connectionGen = 0;
@@ -229,6 +268,7 @@ export class PostgresDriver {
     this.lostInTxn = this.txnState === 'active';
     this.txnState = 'none';
     this.primaryBackendPid = null;
+    this.auxBackendPid = null;
     this.pendingNotices = [];
     this.primary = null;
     this.control = null;
@@ -348,6 +388,9 @@ export class PostgresDriver {
         }
       }
 
+      // C28: per-connection bootstrap SQL (search_path, time zone, role…).
+      await runBootstrapSql(primary, config.bootstrapSql);
+
       // U26: capture RAISE NOTICE / server notices for the messages strip
       // and stream them to the worker's broadcast channel.
       primary.on('notice', this.handleNotice);
@@ -359,6 +402,8 @@ export class PostgresDriver {
       this.control = control;
       this.aux = aux;
       this.primaryBackendPid = pidRes.rows[0]?.pid ?? null;
+      this.auxBackendPid =
+        (await aux.query<{ pid: number }>('SELECT pg_backend_pid() AS pid')).rows[0]?.pid ?? null;
 
       await this.applyStatementTimeout();
 
@@ -594,6 +639,19 @@ export class PostgresDriver {
     }
   }
 
+  /**
+   * C30: cancel the statement running on the aux connection (an AI tool
+   * query, a monitor lookup). The control connection issues it, so it never
+   * queues behind the work it is stopping.
+   */
+  async cancelAux(): Promise<void> {
+    if (!this.control || this.auxBackendPid === null) return;
+    try {
+      await this.control.query('SELECT pg_cancel_backend($1)', [this.auxBackendPid]);
+    } catch (err) {
+      console.error('[plasma] pg_cancel_backend (aux) failed:', err);
+    }
+  }
 
   /**
    * Unbounded cursor stream for worker-backed export (U16).
@@ -603,10 +661,10 @@ export class PostgresDriver {
   async *streamQueryForExport(
     sql: string,
     params?: unknown[],
-  ): AsyncGenerator<{ columns: QueryResult["columns"]; rows: unknown[][] }, void, void> {
+  ): AsyncGenerator<{ columns: QueryResult['columns']; rows: unknown[][] }, void, void> {
     const client = await this.requireClient('primary');
-    const cursor = client.query(new Cursor(sql, params ?? [], { rowMode: "array" }));
-    let columns: QueryResult["columns"] = [];
+    const cursor = client.query(new Cursor(sql, params ?? [], { rowMode: 'array' }));
+    let columns: QueryResult['columns'] = [];
     let first = true;
     try {
       while (true) {
@@ -653,7 +711,9 @@ export class PostgresDriver {
     return this.txnState;
   }
 
-  setConnectionGen(gen: number): void { this.connectionGen = gen; }
+  setConnectionGen(gen: number): void {
+    this.connectionGen = gen;
+  }
 
   /**
    * Apply a grid edit batch atomically (C7/F4/F5). See runEditBatch: every
@@ -665,14 +725,42 @@ export class PostgresDriver {
     updates: EditUpdate[],
   ): Promise<{ state: TxnState; applied: number }> {
     const client = await this.requireClient('primary');
-    if (expectedGen !== this.connectionGen) throw new Error(`connection generation mismatch: edit batch is for generation ${expectedGen}, current is ${this.connectionGen}`);
+    if (expectedGen !== this.connectionGen)
+      throw new Error(
+        `connection generation mismatch: edit batch is for generation ${expectedGen}, current is ${this.connectionGen}`,
+      );
     const applied = await runEditBatch(client, this.txnStatus(), updates);
     this.lastActivityAt = Date.now();
     return { state: this.txnState, applied };
   }
 
+  /** Structure editor Apply (see pg-import.ts). */
+  async applyDdl(req: DdlApplyRequest): Promise<DdlApplyResult> {
+    const client = await this.requireClient('primary');
+    if (req.connectionGen !== this.connectionGen)
+      throw new Error(
+        `connection generation mismatch: structure change is for generation ${req.connectionGen}, current is ${this.connectionGen}`,
+      );
+    const res = await applyDdl(client, this.txnStatus(), req);
+    this.lastActivityAt = Date.now();
+    return res;
+  }
+
+  /** Import a file into a table in one transaction (see pg-import.ts). */
+  async runImport(job: ImportJobSpec, hooks: ImportHooks): Promise<ImportResult> {
+    const client = await this.requireClient('primary');
+    if (job.connectionGen !== this.connectionGen)
+      throw new Error(
+        `connection generation mismatch: import is for generation ${job.connectionGen}, current is ${this.connectionGen}`,
+      );
+    const res = await runImport(client, this.txnStatus(), job, hooks);
+    this.lastActivityAt = Date.now();
+    return res;
+  }
+
   async aiQuery(sql: string, params?: unknown[]): Promise<QueryResult> {
-    if (!isSingleSqlStatement(sql)) throw new Error("rejected: AI queries must be a single SQL statement");
+    if (!isSingleSqlStatement(sql))
+      throw new Error('rejected: AI queries must be a single SQL statement');
     // F12: serialised with other aux work so a sideband lookup can't land
     // inside this read-only transaction (or vice versa).
     return this.withAux((client) => this.runAiQuery(client, sql, params));
@@ -682,21 +770,35 @@ export class PostgresDriver {
     const start = Date.now();
     try {
       // F19: one statement, so nothing can land between BEGIN and READ ONLY.
-      await client.query("BEGIN READ ONLY");
+      await client.query('BEGIN READ ONLY');
       // C18: a model-written query must not hold the aux session forever.
-      await client.query("SET LOCAL statement_timeout = 30000");
+      await client.query('SET LOCAL statement_timeout = 30000');
       const result = await this.runBounded(client, sql, params);
-      await client.query("COMMIT");
+      await client.query('COMMIT');
       return { ...result, durationMs: Date.now() - start };
     } catch (err) {
-      try { await client.query("ROLLBACK"); } catch {}
+      try {
+        await client.query('ROLLBACK');
+      } catch {}
       throw err;
     }
   }
 
   async introspect(opts?: IntrospectOpts): Promise<SchemaInfo> {
-    const client = await this.requireClient('primary');
-    const info = await introspectPostgres(client, opts);
+    // Runs on the aux connection, not the primary: a refresh must not queue
+    // behind a long user query (or fail inside an aborted user transaction),
+    // and the sidebar's own catalog reads shouldn't disturb the primary's
+    // transaction state.
+    //
+    // A `SET ROLE` (Session role panel) is issued on the primary only, so aux
+    // keeps the login role. That is deliberate: the introspection queries
+    // read pg_catalog / information_schema-style catalogs that every role can
+    // SELECT, and none of them call has_*_privilege() or current_user, so the
+    // object list is the same whichever role is set. Listing what the login
+    // role sees also keeps the sidebar stable when a restricted role is
+    // selected for testing. (If introspection ever starts filtering by
+    // privilege, switch back to the primary when a role is set.)
+    const info = await this.withAux((client) => introspectPostgres(client, opts));
     this.lastActivityAt = Date.now();
     return info;
   }

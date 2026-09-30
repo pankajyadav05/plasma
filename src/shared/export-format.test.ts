@@ -47,3 +47,36 @@ describe('export-format (F7)', () => {
     expect(csvEscape(new Date('2024-01-01T00:00:00Z'))).toBe('2024-01-01T00:00:00.000Z');
   });
 });
+
+describe('CSV options (Settings → Data)', () => {
+  const columns = [
+    { name: 'a', dataTypeId: 25, dataTypeName: 'text' },
+    { name: 'b', dataTypeId: 25, dataTypeName: 'text' },
+  ] as never;
+  it('applies delimiter, quote, NULL literal and line ending', () => {
+    const out = formatResultString(
+      columns,
+      [
+        ['x;y', null],
+        ["it's", 'z'],
+      ],
+      'csv',
+      {
+        bom: false,
+        csv: { delimiter: ';', header: true, quote: "'", nullAs: 'NULL', lineEnding: 'lf' },
+      },
+    );
+    expect(out).toBe("a;b\n'x;y';NULL\n'it''s';z\n");
+  });
+  it('can omit the header row', () => {
+    const out = formatResultString(columns, [['1', '2']], 'csv', {
+      bom: false,
+      csv: { delimiter: '|', header: false, quote: '"', nullAs: 'empty', lineEnding: 'crlf' },
+    });
+    expect(out).toBe('1|2\r\n');
+  });
+  it('default dialect is unchanged', () => {
+    expect(csvEscape('a,b')).toBe('"a,b"');
+    expect(csvEscape(null)).toBe('');
+  });
+});

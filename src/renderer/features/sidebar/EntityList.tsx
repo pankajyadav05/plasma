@@ -2,12 +2,14 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { IconButton, Pill } from '@/components/ui/workbench';
 import { computeRowWindow } from '@/features/result-grid/windowed-rows';
+import { useStructureDialogs } from '@/features/structure/structure-dialogs-store';
 import { cn } from '@/lib/cn';
 import { ipc } from '@/lib/ipc';
 import { type EntityKind, useSession } from '@/stores/session';
 import { defaultSchemaName } from '@/stores/session-schema';
 import type { SchemaInfo } from '@shared/protocol';
 import {
+  Network,
   Blocks,
   Braces,
   ChevronRight,
@@ -16,12 +18,14 @@ import {
   Eraser,
   Eye,
   FileCode2,
+  FileUp,
   Folder,
   FunctionSquare,
   GitBranch,
   Globe,
   Hash,
   Layers,
+  Plus,
   RefreshCw,
   SlidersHorizontal,
   SquareArrowOutUpRight,
@@ -53,6 +57,39 @@ import {
 import { SidebarSearch, SidebarSearchRow, sidebarRowClass } from './sidebar-parts';
 
 type Table = SchemaInfo['tables'][number];
+
+/** "New table…", "New view…" and "Import…" entries for a schema (blank-area menu and the + button). */
+function creationEntries(schemaName: string): MenuEntry[] {
+  const dialogs = useStructureDialogs.getState;
+  const readOnly = Boolean(useSession.getState().activeConfig?.readOnly);
+  const hint = readOnly ? 'read-only' : undefined;
+  return [
+    {
+      type: 'item',
+      label: 'New table…',
+      icon: <Table2 />,
+      disabled: readOnly,
+      hint,
+      onSelect: () => dialogs().openCreateTable(schemaName),
+    },
+    {
+      type: 'item',
+      label: 'New view…',
+      icon: <Eye />,
+      disabled: readOnly,
+      hint,
+      onSelect: () => dialogs().openCreateView(schemaName),
+    },
+    {
+      type: 'item',
+      label: 'Import…',
+      icon: <FileUp />,
+      disabled: readOnly,
+      hint,
+      onSelect: () => dialogs().openImport(schemaName, null),
+    },
+  ];
+}
 
 const ROW_PX = 24;
 /** Vertical padding above/below the rows inside the scroller (py-1). */
@@ -314,6 +351,22 @@ export function EntityList() {
           onKeyDown={onSearchKeyDown}
           inputRef={searchRef}
         />
+        <IconButton
+          label="New table, view or import"
+          disabled={Boolean(activeConfig?.readOnly)}
+          title={activeConfig?.readOnly ? 'Read-only connection' : 'New table, view or import'}
+          data-testid="sidebar-new-object"
+          onClick={(e) => {
+            const r = e.currentTarget.getBoundingClientRect();
+            setMenu({
+              x: r.left,
+              y: r.bottom + 4,
+              entries: creationEntries(effectiveSchema ?? 'public'),
+            });
+          }}
+        >
+          <Plus />
+        </IconButton>
         <EntityFilterMenu entityFilter={entityFilter} toggle={toggleEntityFilter} />
       </SidebarSearchRow>
 
@@ -333,13 +386,21 @@ export function EntityList() {
         }}
         onBlur={() => setTreeFocused(false)}
         onContextMenu={(e) => {
-          // Blank area: offer a refresh.
+          // Blank area (the schema): new table / view / import, refresh.
           if (e.target !== e.currentTarget) return;
           e.preventDefault();
           setMenu({
             x: e.clientX,
             y: e.clientY,
             entries: [
+              ...creationEntries(effectiveSchema ?? 'public'),
+              { type: 'separator' },
+              {
+                type: 'item',
+                label: 'Show diagram',
+                icon: <Network />,
+                onSelect: () => useSession.getState().openErDiagram({ schema: effectiveSchema ?? 'public' }),
+              },
               {
                 type: 'item',
                 label: 'Refresh',
@@ -575,6 +636,20 @@ function useEntityActions({
           },
           {
             type: 'item',
+            label: 'Show diagram',
+            icon: <Network />,
+            onSelect: () => {
+              // This table plus the tables it references / is referenced by.
+              const ids = new Set([`${t.schema}.${t.name}`]);
+              for (const fk of session().schema?.foreignKeys ?? []) {
+                if (fk.schema === t.schema && fk.table === t.name) ids.add(`${fk.refSchema}.${fk.refTable}`);
+                if (fk.refSchema === t.schema && fk.refTable === t.name) ids.add(`${fk.schema}.${fk.table}`);
+              }
+              useSession.getState().openErDiagram({ schema: t.schema, tables: [...ids] });
+            },
+          },
+          {
+            type: 'item',
             label: ctx.favorite ? 'Remove from favourites' : 'Add to favourites',
             icon: <Star />,
             onSelect: () => toggleFavorite(t),
@@ -655,6 +730,18 @@ function useEntityActions({
               ),
           },
           { type: 'separator' },
+          ...(!isView
+            ? ([
+                {
+                  type: 'item',
+                  label: 'Import…',
+                  icon: <FileUp />,
+                  disabled: readOnly,
+                  hint: writeHint,
+                  onSelect: () => useStructureDialogs.getState().openImport(t.schema, t.name),
+                },
+              ] as MenuEntry[])
+            : []),
           {
             type: 'item',
             label: 'Export as CSV…',
@@ -988,7 +1075,7 @@ function TreeRowView({
               className={cn(
                 'absolute inset-0 m-auto h-3.5 w-3.5 transition-opacity duration-150',
                 favorite
-                  ? 'fill-[#d9b44a] text-[#d9b44a] opacity-100'
+                  ? 'fill-[var(--icon-star)] text-[var(--icon-star)] opacity-100'
                   : 'text-[var(--wb-text-2)] opacity-0 group-hover/row:opacity-100 group-focus-visible/star:opacity-100',
               )}
             />

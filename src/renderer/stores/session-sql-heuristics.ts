@@ -33,3 +33,16 @@ export function looksLikeDdl(sql: string): boolean {
     leadingKeyword(sql),
   );
 }
+
+/**
+ * Settings → `estimatedCountThreshold`: show `pg_class.reltuples` instead
+ * of running `count(*)` once the estimate reaches the threshold.
+ * 0 means "always count exactly"; an unknown estimate always counts.
+ */
+export function shouldUseEstimatedCount(
+  threshold: number,
+  estimate: number | null | undefined,
+): boolean {
+  if (!(threshold > 0)) return false;
+  return typeof estimate === 'number' && estimate >= threshold;
+}

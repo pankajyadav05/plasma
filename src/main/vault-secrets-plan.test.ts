@@ -91,6 +91,8 @@ describe('redactSettingsWithPresence (U07)', () => {
         password: 'SHOULD_NOT_LEAK',
         privateKey: 'SHOULD_NOT_LEAK',
         passphrase: 'SHOULD_NOT_LEAK',
+        privateKeyPath: '/home/u/.ssh/id_ed25519',
+        useAgent: true,
       },
     },
     schemaSnapshots: [],
@@ -123,6 +125,8 @@ describe('redactSettingsWithPresence (U07)', () => {
       hasPassword: true,
       hasPrivateKey: false,
       hasPassphrase: true,
+      privateKeyPath: '/home/u/.ssh/id_ed25519',
+      useAgent: true,
     });
   });
 });
@@ -159,5 +163,37 @@ describe('C3/C17/C27 vault helpers', () => {
     expect(canReuseStoredPassword(saved, { ...saved, port: 6543 })).toBe(false);
     expect(canReuseStoredPassword(saved, { ...saved, user: 'root' })).toBe(false);
     expect(canReuseStoredPassword(saved, { ...saved, id: 'other' })).toBe(false);
+  });
+
+  it('mergeSshSecretsForTest reuses saved SSH secrets only for the same bastion + login', async () => {
+    const { mergeSshSecretsForTest } = await import('./vault-secrets-plan');
+    const saved = {
+      host: 'bastion',
+      port: 22,
+      user: 'ops',
+      password: 'pw',
+      privateKey: 'KEY',
+      passphrase: 'pp',
+    };
+    const blank = {
+      host: 'bastion',
+      port: 22,
+      user: 'ops',
+      password: '',
+      privateKey: '',
+      passphrase: '',
+    };
+    expect(mergeSshSecretsForTest(blank, saved)).toMatchObject({
+      password: 'pw',
+      privateKey: 'KEY',
+      passphrase: 'pp',
+    });
+    expect(mergeSshSecretsForTest({ ...blank, host: 'BASTION ' }, saved).password).toBe('pw');
+    expect(mergeSshSecretsForTest({ ...blank, password: 'new' }, saved).password).toBe('new');
+    for (const changed of [{ host: 'evil' }, { port: 2222 }, { user: 'root' }]) {
+      const out = mergeSshSecretsForTest({ ...blank, ...changed }, saved);
+      expect(out).toMatchObject({ password: '', privateKey: '', passphrase: '' });
+    }
+    expect(mergeSshSecretsForTest(blank, null)).toEqual(blank);
   });
 });

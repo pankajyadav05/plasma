@@ -56,6 +56,8 @@ interface Props {
   wordWrap?: boolean;
   /** Changing this focuses the editor (history / new tab / ⌘J). */
   focusNonce?: number;
+  /** Hide the overview ruler in the scrollbar (narrow panes, VF27). */
+  hideOverviewRuler?: boolean;
 }
 
 /** Editor-scoped chords dispatched through the shared command table. */
@@ -93,6 +95,7 @@ export function MonacoEditor({
   highlightCurrentStatement = false,
   wordWrap = true,
   focusNonce,
+  hideOverviewRuler = false,
 }: Props) {
   const monacoRef = useRef<typeof MonacoType | null>(null);
   const editorRef = useRef<MonacoType.editor.IStandaloneCodeEditor | null>(null);
@@ -403,6 +406,9 @@ export function MonacoEditor({
           lineHeight: Math.round((fontSize * 20) / 13),
           fontLigatures: false,
           minimap: { enabled: false },
+          ...(hideOverviewRuler
+            ? { overviewRulerLanes: 0, overviewRulerBorder: false, hideCursorInOverviewRuler: true }
+            : {}),
           scrollBeyondLastLine: false,
           lineNumbers: 'on',
           glyphMargin: false,

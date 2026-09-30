@@ -43,8 +43,30 @@ export type ExportStreamer = {
 /** UTF-8 BOM so Excel opens CSV correctly. */
 export const CSV_BOM = '\uFEFF';
 
-export function csvEscape(value: unknown): string {
-  if (value === null || value === undefined) return '';
+/** CSV dialect (Settings → Data → CSV export). */
+export type CsvOptions = {
+  delimiter: ',' | ';' | '\t' | '|';
+  header: boolean;
+  quote: '"' | "'";
+  /** How SQL NULL is written: an empty field or the literal `NULL`. */
+  nullAs: 'empty' | 'NULL';
+  lineEnding: 'lf' | 'crlf';
+};
+
+export const DEFAULT_CSV_OPTIONS: CsvOptions = {
+  delimiter: ',',
+  header: true,
+  quote: '"',
+  nullAs: 'empty',
+  lineEnding: 'crlf',
+};
+
+function eol(opts: CsvOptions): string {
+  return opts.lineEnding === 'lf' ? '\n' : '\r\n';
+}
+
+export function csvEscape(value: unknown, opts: CsvOptions = DEFAULT_CSV_OPTIONS): string {
+  if (value === null || value === undefined) return opts.nullAs === 'NULL' ? 'NULL' : '';
   let str: string;
   if (value instanceof Date) {
     str = value.toISOString();
@@ -57,18 +79,25 @@ export function csvEscape(value: unknown): string {
   } else {
     str = String(value);
   }
-  if (/[",\r\n]/.test(str)) {
-    return `"${str.replace(/"/g, '""')}"`;
+  const q = opts.quote;
+  if (str.includes(opts.delimiter) || str.includes(q) || /[\r\n]/.test(str)) {
+    return `${q}${str.split(q).join(q + q)}${q}`;
   }
   return str;
 }
 
-export function formatCsvHeader(columns: readonly ColumnMeta[]): string {
-  return columns.map((c) => csvEscape(c.name)).join(',');
+export function formatCsvHeader(
+  columns: readonly ColumnMeta[],
+  opts: CsvOptions = DEFAULT_CSV_OPTIONS,
+): string {
+  return columns.map((c) => csvEscape(c.name, { ...opts, nullAs: 'empty' })).join(opts.delimiter);
 }
 
-export function formatCsvRow(row: readonly unknown[]): string {
-  return row.map(csvEscape).join(',');
+export function formatCsvRow(
+  row: readonly unknown[],
+  opts: CsvOptions = DEFAULT_CSV_OPTIONS,
+): string {
+  return row.map((v) => csvEscape(v, opts)).join(opts.delimiter);
 }
 
 export function rowToObject(
@@ -137,8 +166,9 @@ export function createExportStreamer(
   format: ExportFormat,
   columns: readonly ColumnMeta[],
   sink: ExportSink,
-  opts?: { targetTable?: string },
+  opts?: { targetTable?: string; csv?: CsvOptions },
 ): ExportStreamer {
+  const csv = opts?.csv ?? DEFAULT_CSV_OPTIONS;
   const targetTable = opts?.targetTable || DEFAULT_EXPORT_TABLE;
   let rowIndex = 0;
 
@@ -146,12 +176,12 @@ export function createExportStreamer(
     return {
       begin() {
         void sink(CSV_BOM);
-        void sink(`${formatCsvHeader(columns)}\r\n`);
+        if (csv.header) void sink(`${formatCsvHeader(columns, csv)}${eol(csv)}`);
       },
       writeRows(rows) {
         if (rows.length === 0) return;
-        const body = rows.map((row) => formatCsvRow(row)).join('\r\n');
-        void sink(`${body}\r\n`);
+        const body = rows.map((row) => formatCsvRow(row, csv)).join(eol(csv));
+        void sink(`${body}${eol(csv)}`);
         rowIndex += rows.length;
       },
       end() {
@@ -198,7 +228,7 @@ export function formatResultString(
   columns: readonly ColumnMeta[],
   rows: readonly unknown[][],
   format: ExportFormat,
-  opts?: { targetTable?: string; bom?: boolean },
+  opts?: { targetTable?: string; bom?: boolean; csv?: CsvOptions },
 ): string {
   const parts: string[] = [];
   const streamer = createExportStreamer(

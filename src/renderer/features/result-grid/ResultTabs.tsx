@@ -100,7 +100,7 @@ export function ResultTabs() {
                 {result.command ?? 'OK'} {result.rowCount.toLocaleString()}
               </span>
               {notices.length > 0 && (
-                <MessageSquareWarning className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400" />
+                <MessageSquareWarning className="h-3.5 w-3.5 text-[var(--status-warn)]" />
               )}
             </button>
           );
@@ -199,7 +199,7 @@ export function useNoticeCount(): number {
 function NoticeLine({ notice }: { notice: PgNotice }) {
   const severity = (notice.severity ?? 'NOTICE').toUpperCase();
   return (
-    <div className="flex items-start gap-1.5 pl-5 font-mono text-[12px] text-amber-700 dark:text-amber-400">
+    <div className="flex items-start gap-1.5 pl-5 font-mono text-[12px] text-[var(--status-warn)]">
       <MessageSquareWarning className="mt-0.5 h-3 w-3 shrink-0" />
       <span>
         <span className="font-semibold">{severity}</span>

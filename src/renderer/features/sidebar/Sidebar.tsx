@@ -5,7 +5,8 @@ import { RedisSidebar } from '@/features/redis/RedisSidebar';
 import { cn } from '@/lib/cn';
 import { useSession } from '@/stores/session';
 import { type SidebarMode, useWorkbench } from '@/stores/workbench';
-import { Circle, Pencil, Plus } from 'lucide-react';
+import { Circle, Copy, Pencil, Plus } from 'lucide-react';
+import { groupConnections } from '../connection-manager/connection-groups';
 import { EntityList } from './EntityList';
 import { HistoryList } from './HistoryList';
 import { SavedQueriesList } from './SavedQueriesList';
@@ -80,6 +81,7 @@ function SavedConnectionsList() {
   const connectionState = useSession((s) => s.connectionState);
   const connectSaved = useSession((s) => s.connectSaved);
   const editConnection = useSession((s) => s.editConnection);
+  const duplicateSaved = useSession((s) => s.duplicateSaved);
   const openDialog = useSession((s) => s.openDialog);
 
   const connecting = connectionState === 'connecting';
@@ -94,51 +96,77 @@ function SavedConnectionsList() {
         {savedConnections.length === 0 ? (
           <div className="px-4 py-3 text-[13px] text-[var(--wb-text-2)]">none yet</div>
         ) : (
-          savedConnections.map((c) => {
-            const engine = c.engine ?? 'postgres';
-            const engineLabel =
-              engine === 'redis' ? 'redis' : engine === 'opensearch' ? 'os' : 'pg';
-            return (
-              <div
-                key={c.id}
-                className="group/row relative mx-2 flex h-6 items-stretch rounded-[5px] transition-colors hover:bg-[color-mix(in_srgb,var(--wb-text)_6%,transparent)]"
-              >
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (!connecting) void connectSaved(c.id);
-                  }}
-                  disabled={connecting}
-                  title={`Connect to ${c.host}:${c.port}${engine === 'postgres' ? `/${c.database}` : ''}`}
-                  className={cn(
-                    'flex min-w-0 flex-1 items-center gap-2 px-2 text-left text-[13px] transition-colors',
-                    connecting
-                      ? 'cursor-not-allowed text-[var(--wb-text-2)] opacity-60'
-                      : 'cursor-pointer text-[var(--wb-text)]',
-                  )}
-                >
-                  <Circle className="h-2 w-2 shrink-0 text-[var(--wb-text-2)]" />
-                  <span className="truncate">{c.name}</span>
-                  <span className="ml-auto shrink-0 rounded-[4px] bg-[var(--wb-control)] px-1 py-0 font-mono text-[9px] uppercase tracking-wider text-[var(--wb-text-2)]">
-                    {engineLabel}
-                  </span>
-                </button>
-                <Button
-                  variant="ghost"
-                  size="icon-xs"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    void editConnection(c.id);
-                  }}
-                  aria-label={`Edit ${c.name}`}
-                  title="Edit (delete inside)"
-                  className="mr-0.5 h-5 w-5 self-center text-[var(--wb-text-2)] opacity-0 transition-opacity duration-150 group-hover/row:opacity-100 focus-visible:opacity-100"
-                >
-                  <Pencil />
-                </Button>
-              </div>
-            );
-          })
+          groupConnections(savedConnections).map((g) => (
+            <div key={g.group ?? '__ungrouped'}>
+              {g.group && (
+                <div className="px-4 pb-0.5 pt-2 text-[11px] font-semibold text-[var(--wb-text-2)]">
+                  {g.group}
+                </div>
+              )}
+              {g.items.map((c) => {
+                const engine = c.engine ?? 'postgres';
+                const engineLabel =
+                  engine === 'redis'
+                    ? 'Redis'
+                    : engine === 'opensearch'
+                      ? 'OpenSearch'
+                      : 'Postgres';
+                return (
+                  <div
+                    key={c.id}
+                    className="group/row relative mx-2 flex h-6 items-stretch rounded-[5px] transition-colors hover:bg-[color-mix(in_srgb,var(--wb-text)_6%,transparent)]"
+                  >
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (!connecting) void connectSaved(c.id);
+                      }}
+                      disabled={connecting}
+                      title={`Connect to ${c.host}:${c.port}${engine === 'postgres' ? `/${c.database}` : ''}`}
+                      className={cn(
+                        'flex min-w-0 flex-1 items-center gap-2 px-2 text-left text-[13px] transition-colors',
+                        connecting
+                          ? 'cursor-not-allowed text-[var(--wb-text-2)] opacity-60'
+                          : 'cursor-pointer text-[var(--wb-text)]',
+                      )}
+                    >
+                      <Circle className="h-2 w-2 shrink-0 text-[var(--wb-text-2)]" />
+                      <span className="truncate">{c.name}</span>
+                      <span className="ml-auto shrink-0 text-[11px] text-[var(--wb-text-3)]">
+                        {engineLabel}
+                      </span>
+                    </button>
+                    <Button
+                      variant="ghost"
+                      size="icon-xs"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        void editConnection(c.id);
+                      }}
+                      aria-label={`Edit ${c.name}`}
+                      title="Edit (delete inside)"
+                      className="mr-0.5 h-5 w-5 self-center text-[var(--wb-text-2)] opacity-0 transition-opacity duration-150 group-hover/row:opacity-100 focus-visible:opacity-100"
+                    >
+                      <Pencil />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon-xs"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        void duplicateSaved(c.id);
+                      }}
+                      aria-label={`Duplicate ${c.name}`}
+                      title="Duplicate"
+                      className="mr-0.5 h-5 w-5 self-center text-[var(--wb-text-2)] opacity-0 transition-opacity duration-150 group-hover/row:opacity-100 focus-visible:opacity-100"
+                    >
+                      <Copy />
+                    </Button>
+                  </div>
+                );
+              })}
+            </div>
+          ))
         )}
       </div>
 

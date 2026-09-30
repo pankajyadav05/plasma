@@ -1,5 +1,6 @@
 import { Dialog, DialogOverlay, DialogPortal } from '@/components/ui/dialog';
 import { type CommandId, commandAvailable, runCommand } from '@/features/keymap/commands';
+import { useStructureDialogs } from '@/features/structure/structure-dialogs-store';
 import { shortcut } from '@/lib/platform';
 import { useSession } from '@/stores/session';
 import * as DialogPrimitive from '@radix-ui/react-dialog';
@@ -16,7 +17,7 @@ import {
   Search,
   Table2,
 } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { rankItems } from './palette-rank';
 
 interface PaletteEntry {
@@ -54,6 +55,23 @@ const ACTIONS: ReadonlyArray<{ id: CommandId; label: string; keywords?: string[]
   { id: 'codegen', label: 'Generate code…', keywords: ['codegen', 'typescript', 'types'] },
   { id: 'notebook', label: 'Notebook…' },
   { id: 'schemaDiff', label: 'Schema diff…', keywords: ['compare', 'migration'] },
+  { id: 'backup', label: 'Back up database…', keywords: ['dump', 'pg_dump', 'export'] },
+  { id: 'restore', label: 'Restore database…', keywords: ['pg_restore', 'import', 'backup'] },
+  {
+    id: 'roles',
+    label: 'Roles and privileges…',
+    keywords: ['users', 'grant', 'revoke', 'permissions'],
+  },
+  { id: 'dbSearch', label: 'Search in database…', keywords: ['find', 'grep', 'text', 'value'] },
+  {
+    id: 'erDiagram',
+    label: 'Show diagram',
+    keywords: ['er', 'erd', 'relationships', 'schema', 'foreign keys'],
+  },
+  { id: 'splitPane', label: 'Split pane right', keywords: ['editor', 'side by side'] },
+  { id: 'closePane', label: 'Close split pane', keywords: ['editor'] },
+  { id: 'nextPane', label: 'Focus next pane', keywords: ['editor', 'split'] },
+  { id: 'prevPane', label: 'Focus previous pane', keywords: ['editor', 'split'] },
   { id: 'toggleEditor', label: 'Toggle query editor' },
   { id: 'toggleSidebar', label: 'Toggle sidebar' },
   { id: 'toggleRightSidebar', label: 'Toggle right sidebar', keywords: ['details'] },
@@ -93,14 +111,16 @@ export function CommandPalette() {
   const open = useSession((s) => s.paletteOpen);
   const setOpen = useSession((s) => s.setPaletteOpen);
   const [query, setQuery] = useState('');
+  // Every close path (Escape, click-away, running a command) starts the next
+  // open with an empty search.
+  useEffect(() => {
+    if (!open) setQuery('');
+  }, [open]);
 
   return (
     <Dialog
       open={open}
-      onOpenChange={(o) => {
-        if (!o) setQuery('');
-        setOpen(o);
-      }}
+      onOpenChange={setOpen}
     >
       <DialogPortal>
         <DialogOverlay />
@@ -217,6 +237,43 @@ function usePaletteEntries(close: () => void): PaletteEntry[] {
       });
     }
 
+    if (connected && engine === 'postgres' && !useSession.getState().activeConfig?.readOnly) {
+      const schemaName = () =>
+        useSession.getState().currentSchema ??
+        useSession.getState().schema?.schemas[0]?.name ??
+        'public';
+      for (const [id, label, keywords, open] of [
+        [
+          'newTable',
+          'New table…',
+          ['create', 'create table', 'structure'],
+          () => useStructureDialogs.getState().openCreateTable(schemaName()),
+        ],
+        [
+          'newView',
+          'New view…',
+          ['create', 'create view', 'materialized'],
+          () => useStructureDialogs.getState().openCreateView(schemaName()),
+        ],
+        [
+          'importData',
+          'Import into table…',
+          ['csv', 'tsv', 'json', 'ndjson', 'sql', 'load', 'file'],
+          () => useStructureDialogs.getState().openImport(schemaName(), null),
+        ],
+      ] as const) {
+        out.push({
+          id: `action:${id}`,
+          group: 'Actions',
+          label,
+          keywords: [...keywords],
+          icon: <CommandIcon className="h-3.5 w-3.5" />,
+          boost: 2,
+          run: act(open),
+        });
+      }
+    }
+
     if (connected) {
       const overview = engine !== 'postgres' ? tabs.find((t) => t.kind === 'sql')?.id : undefined;
       tabs.forEach((t, i) => {
@@ -327,7 +384,7 @@ function PaletteItem({ entry, showGroup }: { entry: PaletteEntry; showGroup: boo
     <Command.Item
       value={entry.id}
       onSelect={entry.run}
-      className="flex cursor-pointer items-center gap-2 rounded-md px-3 py-2 text-sm text-foreground transition-colors aria-selected:bg-accent aria-selected:text-accent-foreground data-[selected=true]:bg-accent data-[selected=true]:text-accent-foreground"
+      className="flex cursor-pointer items-center gap-2 rounded-md px-3 py-2 text-sm text-foreground transition-colors aria-selected:bg-[var(--wb-selected)] data-[selected=true]:bg-[var(--wb-selected)]"
     >
       <span className="shrink-0 text-muted-foreground">{entry.icon}</span>
       <span className="min-w-0 flex-1 truncate">{entry.label}</span>

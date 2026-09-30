@@ -12,6 +12,7 @@ export function ProdGateDialog() {
   const confirmProdGate = useSession((s) => s.confirmProdGate);
   const cancelProdGate = useSession((s) => s.cancelProdGate);
   const isCommit = gate?.kind === 'commitEdits';
+  const safeMode = gate?.reason === 'safe-mode';
 
   return (
     <ConfirmDialog
@@ -19,9 +20,25 @@ export function ProdGateDialog() {
       onOpenChange={(o) => {
         if (!o) cancelProdGate();
       }}
-      title={isCommit ? 'Commit changes to production?' : 'Run destructive query on production?'}
+      title={
+        safeMode
+          ? isCommit
+            ? 'Commit changes?'
+            : 'Run this statement?'
+          : isCommit
+            ? 'Commit changes to production?'
+            : 'Run destructive query on production?'
+      }
       description={
-        isCommit ? (
+        safeMode ? (
+          <span>
+            Safe mode is asking before this runs on{' '}
+            <span className="font-mono font-semibold">
+              {activeConfig?.name ?? 'this connection'}
+            </span>
+            . You can change the level in the connection's Advanced settings.
+          </span>
+        ) : isCommit ? (
           <span>
             You're about to write {gate?.summary ?? 'pending changes'} to{' '}
             <span className="font-mono font-semibold text-destructive">
@@ -40,9 +57,9 @@ export function ProdGateDialog() {
           </span>
         )
       }
-      confirmLabel={isCommit ? 'Commit' : 'Run anyway'}
+      confirmLabel={isCommit ? 'Commit' : safeMode ? 'Run' : 'Run anyway'}
       cancelLabel="Cancel"
-      variant="destructive"
+      variant={safeMode ? 'primary' : 'destructive'}
       onConfirm={confirmProdGate}
     />
   );

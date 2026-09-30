@@ -2,6 +2,8 @@ import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from '@/compon
 import { MenuItem } from '@/components/ui/workbench';
 import { cn } from '@/lib/cn';
 import { shortcut } from '@/lib/platform';
+import { type PaneId, activeIn, isSplit, paneOf, paneTabIds } from '@/stores/pane-state';
+import { usePanes } from '@/stores/panes';
 import { useSession } from '@/stores/session';
 import type { TabKind } from '@/stores/session';
 import { isPreviewTab, isTabDirty } from '@/stores/session-tabs';
@@ -10,10 +12,12 @@ import {
   Boxes,
   ChevronDown,
   Clock,
+  Columns2,
   Copy,
   FileCode,
   KeyRound,
   LayoutDashboard,
+  Network,
   Pencil,
   Pin,
   Plus,
@@ -42,7 +46,11 @@ const TAB_ICON: Record<TabKind, LucideIcon> = {
   'os-index': Boxes,
   'os-sql': SquareTerminal,
   'os-console': Terminal,
+  'er-diagram': Network,
 };
+
+/** Drag payload for moving a tab between panes. */
+const TAB_DRAG_MIME = 'application/x-plasma-tab';
 
 /** What the strip renders per tab — primitives only, so typing SQL doesn't re-render it (F13). */
 interface TabView {
@@ -101,9 +109,27 @@ function useTabViews(): TabView[] {
  * Close Others / Close to the Right / Close All / Duplicate / Rename;
  * middle-click closes. Tabs with unsaved SQL show a dot.
  */
-export function TabStrip() {
-  const tabs = useTabViews();
-  const activeTabId = useSession((s) => s.activeTabId);
+export function TabStrip({ pane }: { pane?: PaneId } = {}) {
+  const allTabs = useTabViews();
+  const paneState = usePanes();
+  const split = isSplit(paneState);
+  const allIds = useMemo(() => allTabs.map((t) => t.id), [allTabs]);
+  // With a split, each strip lists only its own pane's tabs and highlights
+  // its own active tab; unsplit, this is the plain single strip.
+  const tabs = useMemo(() => {
+    if (!pane || !split) return allTabs;
+    const ids = new Set(paneTabIds(paneState, allIds, pane));
+    const scoped = allTabs.filter((t) => ids.has(t.id));
+    return pane === 'secondary'
+      ? (paneState.secondary ?? []).flatMap((id) => scoped.filter((t) => t.id === id))
+      : scoped;
+  }, [allTabs, allIds, pane, paneState, split]);
+  const sessionActiveId = useSession((s) => s.activeTabId);
+  const activeTabId =
+    pane && split ? (activeIn(paneState, allIds, pane) ?? sessionActiveId) : sessionActiveId;
+  const moveToPane = usePanes((s) => s.moveTab);
+  const splitRight = usePanes((s) => s.splitRight);
+  const closePane = usePanes((s) => s.closePane);
   const setActiveTab = useSession((s) => s.setActiveTab);
   const requestCloseTabs = useSession((s) => s.requestCloseTabs);
   const closeOtherTabs = useSession((s) => s.closeOtherTabs);
@@ -168,7 +194,20 @@ export function TabStrip() {
   };
 
   return (
-    <div className="flex h-[34px] shrink-0 items-stretch border-b border-[var(--wb-separator)] bg-[var(--wb-tabbar)]">
+    <div
+      className="flex h-[34px] shrink-0 items-stretch border-b border-[var(--wb-separator)] bg-[var(--wb-tabbar)]"
+      onDragOver={(e) => {
+        if (pane && split && e.dataTransfer.types.includes(TAB_DRAG_MIME)) e.preventDefault();
+      }}
+      onDrop={(e) => {
+        // Dropped on empty strip space: append to this pane.
+        const from = e.dataTransfer.getData(TAB_DRAG_MIME);
+        if (!pane || !split || !from) return;
+        e.preventDefault();
+        dragId.current = null;
+        moveToPane(from, pane);
+      }}
+    >
       <div
         ref={listRef}
         className="scrollbar-none flex min-w-0 flex-1 items-stretch gap-1 overflow-x-auto p-1"
@@ -192,19 +231,27 @@ export function TabStrip() {
               onDragStart={(e) => {
                 dragId.current = t.id;
                 e.dataTransfer.effectAllowed = 'move';
+                e.dataTransfer.setData(TAB_DRAG_MIME, t.id);
               }}
               onDragOver={(e) => {
-                if (dragId.current && dragId.current !== t.id) e.preventDefault();
+                if (
+                  e.dataTransfer.types.includes(TAB_DRAG_MIME) ||
+                  (dragId.current && dragId.current !== t.id)
+                ) {
+                  e.preventDefault();
+                }
               }}
               onDrop={(e) => {
-                e.preventDefault();
-                const from = dragId.current;
+                const from = e.dataTransfer.getData(TAB_DRAG_MIME) || dragId.current;
                 dragId.current = null;
-                if (from && from !== t.id) {
-                  moveTab(
-                    from,
-                    tabs.findIndex((x) => x.id === t.id),
-                  );
+                if (!from || from === t.id) return;
+                e.preventDefault();
+                e.stopPropagation();
+                const idx = tabs.findIndex((x) => x.id === t.id);
+                if (pane && split && (pane === 'secondary' || paneOf(paneState, from) !== pane)) {
+                  moveToPane(from, pane, idx);
+                } else {
+                  moveTab(from, allIds.indexOf(t.id));
                 }
               }}
               onClick={() => setActiveTab(t.id)}
@@ -338,6 +385,18 @@ export function TabStrip() {
         </Popover>
       )}
 
+      {pane === 'secondary' && (
+        <button
+          type="button"
+          aria-label="Close pane"
+          title="Close pane"
+          onClick={closePane}
+          className="my-1 grid w-[26px] shrink-0 place-items-center rounded-[7px] text-[var(--wb-text-2)] transition-colors hover:bg-[var(--wb-control-hover)] hover:text-[var(--wb-text)]"
+        >
+          <X className="h-4 w-4" />
+        </button>
+      )}
+
       {engine === 'postgres' && (
         <button
           type="button"
@@ -405,6 +464,22 @@ export function TabStrip() {
                 }}
               />
               <div className="my-1 h-px bg-[var(--wb-separator)]" />
+              {engine === 'postgres' && (
+                <MenuItem
+                  icon={<Columns2 />}
+                  label={split ? 'Move to Other Pane' : 'Split Pane Right'}
+                  disabled={!split && allTabs.length < 1}
+                  onClick={() => {
+                    setMenu(null);
+                    if (split)
+                      moveToPane(
+                        menuTab.id,
+                        paneOf(paneState, menuTab.id) === 'primary' ? 'secondary' : 'primary',
+                      );
+                    else splitRight(menuTab.id);
+                  }}
+                />
+              )}
               <MenuItem
                 icon={<Copy />}
                 label="Duplicate"

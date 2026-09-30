@@ -665,7 +665,7 @@ function TreeNode({
                 {formatTtlShort(meta.ttlMs)}
               </span>
             )}
-            {meta && <Badge className="px-1 text-[9px] normal-case">{TYPE_LABEL[meta.type]}</Badge>}
+            {meta && <Badge className="px-1 text-[10px]">{TYPE_LABEL[meta.type]}</Badge>}
             {hasChildren && (
               <span
                 className="shrink-0 font-mono text-[11px] tabular-nums text-[var(--wb-text-3)]"

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { readPublisherName, updatePolicy } from './update-policy';
+import { readPublisherName, resolveWindow, updatePolicy } from './update-policy';
 
 describe('updatePolicy (C20)', () => {
   it('installs silently only when Windows verifies a publisher', () => {
@@ -24,5 +24,22 @@ describe('readPublisherName', () => {
   });
   it('returns null when absent', () => {
     expect(readPublisherName('provider: generic\nurl: https://x\n')).toBeNull();
+  });
+});
+
+describe('resolveWindow (C33)', () => {
+  it('reads a getter on every call so a reopened window is followed', () => {
+    let current: { id: number } | null = { id: 1 };
+    const get = resolveWindow(() => current);
+    expect(get()).toEqual({ id: 1 });
+    current = null;
+    expect(get()).toBeNull();
+    current = { id: 2 };
+    expect(get()).toEqual({ id: 2 });
+  });
+  it('wraps a fixed window', () => {
+    const w = { id: 3 };
+    expect(resolveWindow(w)()).toBe(w);
+    expect(resolveWindow<{ id: number }>(null)()).toBeNull();
   });
 });

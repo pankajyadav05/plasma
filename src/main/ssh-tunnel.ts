@@ -1,9 +1,11 @@
+import { readFileSync } from 'node:fs';
 import { type Server, type Socket, createServer } from 'node:net';
 import { pipeline } from 'node:stream';
 import { type Settings, SettingsShape } from '@shared/protocol';
 import { Client as SshClient } from 'ssh2';
 import { logger } from './logger';
 import { getAllSettings, setSetting } from './settings';
+import { buildSshAuthOptions } from './ssh-auth';
 import {
   type KnownHostsStore,
   evaluateHostKey,
@@ -53,7 +55,11 @@ const opening = new Map<TunnelKey, Promise<{ host: string; port: number }>>();
 /** Ids closed while their open was still in flight. */
 const cancelled = new Set<TunnelKey>();
 
-export type SshConfig = NonNullable<Settings['connectionSsh']>[string];
+type SavedSsh = NonNullable<Settings['connectionSsh']>[string];
+export type SshConfig = Omit<SavedSsh, 'privateKeyPath' | 'useAgent'> & {
+  privateKeyPath?: string;
+  useAgent?: boolean;
+};
 
 export interface TunnelTarget {
   /** Cache key — the connection id, or a throwaway key for tests. */
@@ -194,11 +200,18 @@ async function connectSsh(target: TunnelTarget): Promise<SshClient> {
         keepaliveCountMax: SSH_KEEPALIVE_COUNT_MAX,
       };
       attachHostVerifier(opts, target.ssh.host, target.ssh.port);
-      if (target.ssh.privateKey) {
-        opts.privateKey = target.ssh.privateKey;
-        if (target.ssh.passphrase) opts.passphrase = target.ssh.passphrase;
-      } else if (target.ssh.password) {
-        opts.password = target.ssh.password;
+      try {
+        Object.assign(
+          opts,
+          buildSshAuthOptions(target.ssh, {
+            readFile: (path) => readFileSync(path),
+            env: process.env,
+            platform: process.platform,
+          }),
+        );
+      } catch (err) {
+        reject(err);
+        return;
       }
       ssh.connect(opts);
     });

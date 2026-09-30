@@ -1,5 +1,5 @@
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { cn } from '@/lib/cn';
+import { MenuItem } from '@/components/ui/workbench';
 import { defaultOperatorFor } from '@/lib/pg-types';
 import type { Filter, FilterOp } from '@/lib/table-query';
 import { useSession } from '@/stores/session';
@@ -79,7 +79,7 @@ export function ColumnHeaderMenu({
             setOpen(true);
           }}
           aria-label={`Options for ${column.name}`}
-          className="grid h-5 w-5 shrink-0 place-items-center rounded-sm text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground group-hover/header:opacity-100 data-[state=open]:opacity-100"
+          className="grid h-5 w-5 shrink-0 place-items-center rounded-[4px] text-[var(--wb-text-2)] opacity-0 transition-opacity hover:bg-[var(--wb-control-hover)] hover:text-[var(--wb-text)] focus-visible:opacity-100 focus-visible:outline-none focus-visible:shadow-[0_0_0_2px_color-mix(in_srgb,var(--wb-accent)_55%,transparent)] group-hover/header:opacity-100 data-[state=open]:opacity-100"
         >
           <ChevronDown className="h-3 w-3" />
         </button>
@@ -88,12 +88,14 @@ export function ColumnHeaderMenu({
         align="start"
         sideOffset={2}
         className="w-[220px] p-1"
+        role="menu"
+        aria-label={`${column.name} options`}
         onClick={(e) => e.stopPropagation()}
       >
         <MenuItem
           icon={<ArrowUpAZ className="h-3.5 w-3.5" />}
           label="Sort ascending"
-          active={sortDir === 'asc'}
+          checked={sortDir === 'asc'}
           onClick={() => {
             onSortAsc();
             close();
@@ -102,7 +104,7 @@ export function ColumnHeaderMenu({
         <MenuItem
           icon={<ArrowDownAZ className="h-3.5 w-3.5" />}
           label="Sort descending"
-          active={sortDir === 'desc'}
+          checked={sortDir === 'desc'}
           onClick={() => {
             onSortDesc();
             close();
@@ -153,34 +155,6 @@ export function ColumnHeaderMenu({
   );
 }
 
-function MenuItem({
-  icon,
-  label,
-  active,
-  onClick,
-}: {
-  icon: React.ReactNode;
-  label: string;
-  active?: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={cn(
-        'flex w-full cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 text-left text-xs transition-colors',
-        active
-          ? 'bg-accent text-accent-foreground'
-          : 'text-foreground hover:bg-accent hover:text-accent-foreground',
-      )}
-    >
-      <span className={cn('text-muted-foreground', active && 'text-primary')}>{icon}</span>
-      <span className="flex-1">{label}</span>
-    </button>
-  );
-}
-
 function Separator() {
-  return <div className="my-1 h-px bg-border" aria-hidden />;
+  return <div className="my-1 h-px bg-[var(--wb-separator)]" aria-hidden />;
 }

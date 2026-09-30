@@ -1103,13 +1103,6 @@
   contain-intrinsic-size: auto 24px;
 }
 
-/* Display text used to be italic serif. With a sans display face the
-   italic reads as emphasis noise, so it is neutralised app-wide.
-   Unlayered, so it wins over the `italic` utility. */
-.font-display.italic {
-  font-style: normal;
-}
-
 /* ─── Monaco editor overrides ─── */
 
 .monaco-editor,

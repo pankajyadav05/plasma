@@ -4,7 +4,7 @@ import { PendingEditsTable } from '@/features/result-grid/PendingEditsTable';
 import { cn } from '@/lib/cn';
 import { kbd } from '@/lib/platform';
 import { useReconnect } from '@/stores/reconnect';
-import { useActiveTab, useSession } from '@/stores/session';
+import { useActiveTabSelect, useSession } from '@/stores/session';
 import { summarizeEdits } from '@/stores/session-pending-edits';
 import type { ConnectionEngine, SavedConnection } from '@shared/protocol';
 import {
@@ -311,7 +311,7 @@ function RightClusters({ connected }: { connected: boolean }) {
   const rightPanelMode = useSession((s) => s.rightPanelMode);
   const setRightPanelMode = useSession((s) => s.setRightPanelMode);
   const engine = useSession((s) => s.activeConfig?.engine ?? 'postgres');
-  const tab = useActiveTab();
+  const activeKind = useActiveTabSelect((t) => t?.kind);
   const postgres = engine === 'postgres';
 
   return (
@@ -323,7 +323,7 @@ function RightClusters({ connected }: { connected: boolean }) {
             disabled={schemaLoading}
             onClick={() => {
               void refreshSchema();
-              if (tab?.kind === 'table') void refreshTable();
+              if (activeKind === 'table') void refreshTable();
             }}
           >
             <RefreshCw className={schemaLoading ? 'animate-spin' : ''} />
@@ -372,7 +372,11 @@ function StatusCapsule() {
   const viaSsh = useSession((s) =>
     Boolean(activeConfig?.id && s.settings.connectionSsh?.[activeConfig.id]),
   );
-  const tab = useActiveTab();
+  const tab = useActiveTabSelect((t) =>
+    t
+      ? { kind: t.kind, tableName: t.tableName, title: t.title, queryRunState: t.queryRunState }
+      : undefined,
+  );
   const canvasMode = useSession((s) => s.canvasMode);
 
   const engine = activeConfig?.engine ?? 'postgres';

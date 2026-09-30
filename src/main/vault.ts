@@ -7,6 +7,14 @@ import type {
 import { ConnectionTls } from '@shared/protocol';
 import type Database from 'better-sqlite3';
 import { dialog, safeStorage } from 'electron';
+import {
+  type OsSecretField,
+  extrasFromJson,
+  extrasToJson,
+  osSecretKey,
+  osSecretsToStore,
+  withOpenSearchSecrets,
+} from './connection-extras';
 import { getDb } from './db';
 import { logger } from './logger';
 import {
@@ -19,6 +27,8 @@ import {
 
 export {
   canReuseStoredPassword,
+  canReuseStoredSshSecrets,
+  mergeSshSecretsForTest,
   hasPlaintextSecrets,
   isWeakSecretBackend,
   planSecretsMigration,
@@ -150,6 +160,8 @@ interface ConnectionRow {
   read_only: number;
   /** C9: TLS mode + file paths (never PEM contents). Null for older rows. */
   tls_json: string | null;
+  /** Folder, bootstrap SQL, OpenSearch options (no secrets). Null for older rows. */
+  extra_json: string | null;
   password_ciphertext: Buffer;
   created_at: number;
   updated_at: number;
@@ -230,6 +242,12 @@ export function getApiKey(d: Database.Database = getDb()): string {
   return getSecret('setting:openrouterApiKey', d) || getSecret('setting:claudeApiKey', d) || '';
 }
 
+/** Remove every stored AI API key (the OpenRouter key and the legacy slot). */
+export function clearApiKeys(d: Database.Database = getDb()): void {
+  deleteSecret('setting:openrouterApiKey', d);
+  deleteSecret('setting:claudeApiKey', d);
+}
+
 export type SshTunnelConfig = {
   host: string;
   port: number;
@@ -237,6 +255,10 @@ export type SshTunnelConfig = {
   password: string;
   privateKey: string;
   passphrase: string;
+  /** Key file to read at connect time (used when no key text is stored). */
+  privateKeyPath?: string;
+  /** Also offer the running ssh-agent. */
+  useAgent?: boolean;
 };
 
 /**
@@ -257,6 +279,8 @@ export function getFullSshConfig(
     password: getSecret(`ssh:${connectionId}:password`, d) ?? '',
     privateKey: getSecret(`ssh:${connectionId}:privateKey`, d) ?? '',
     passphrase: getSecret(`ssh:${connectionId}:passphrase`, d) ?? '',
+    privateKeyPath: meta.privateKeyPath ?? '',
+    useAgent: meta.useAgent ?? false,
   };
 }
 
@@ -366,7 +390,13 @@ export function listConnections(): SavedConnection[] {
     ssl: Boolean(r.ssl),
     readOnly: Boolean(r.read_only),
     ...tlsFromRow(r),
+    ...listExtras(r),
   }));
+}
+
+/** Extras for the saved list: no secrets, OpenSearch shows only its non-secret options. */
+function listExtras(row: ConnectionRow): ReturnType<typeof extrasFromJson> {
+  return extrasFromJson(row.extra_json);
 }
 
 /** C9: persist the TLS mode and file paths; key/cert contents stay on disk. */
@@ -404,7 +434,7 @@ export function saveConnection(config: ConnectionConfig): void {
         `UPDATE connections
             SET name = @name, engine = @engine, host = @host, port = @port, database = @database,
                 user = @user, ssl = @ssl, password_ciphertext = @password_ciphertext,
-                read_only = @read_only, tls_json = @tls_json,
+                read_only = @read_only, tls_json = @tls_json, extra_json = @extra_json,
                 updated_at = @updated_at
           WHERE id = @id`,
       )
@@ -419,6 +449,7 @@ export function saveConnection(config: ConnectionConfig): void {
         ssl: config.ssl ? 1 : 0,
         read_only: config.readOnly ? 1 : 0,
         tls_json: tlsToJson(config),
+        extra_json: extrasToJson(config),
         password_ciphertext: ciphertext,
         updated_at: now,
       });
@@ -426,9 +457,9 @@ export function saveConnection(config: ConnectionConfig): void {
     getDb()
       .prepare(
         `INSERT INTO connections
-           (id, name, engine, host, port, database, user, ssl, read_only, tls_json, password_ciphertext, created_at, updated_at)
+           (id, name, engine, host, port, database, user, ssl, read_only, tls_json, extra_json, password_ciphertext, created_at, updated_at)
            VALUES
-           (@id, @name, @engine, @host, @port, @database, @user, @ssl, @read_only, @tls_json, @password_ciphertext, @created_at, @updated_at)`,
+           (@id, @name, @engine, @host, @port, @database, @user, @ssl, @read_only, @tls_json, @extra_json, @password_ciphertext, @created_at, @updated_at)`,
       )
       .run({
         id: config.id,
@@ -441,10 +472,15 @@ export function saveConnection(config: ConnectionConfig): void {
         ssl: config.ssl ? 1 : 0,
         read_only: config.readOnly ? 1 : 0,
         tls_json: tlsToJson(config),
+        extra_json: extrasToJson(config),
         password_ciphertext: ciphertext,
         created_at: now,
         updated_at: now,
       });
+  }
+  // O12: OpenSearch credentials go to the vault; blank keeps the stored one.
+  for (const [field, value] of Object.entries(osSecretsToStore(config))) {
+    putSecret(osSecretKey(config.id, field as OsSecretField), value);
   }
   logger.info('[plasma] vault: saved connection', config.id, engine);
 }
@@ -452,6 +488,7 @@ export function saveConnection(config: ConnectionConfig): void {
 export function deleteConnection(id: string): void {
   const info = getDb().prepare('DELETE FROM connections WHERE id = ?').run(id);
   deleteSshSecrets(id);
+  getDb().prepare('DELETE FROM secrets WHERE key LIKE ?').run(`os:${id}:%`);
   logger.info('[plasma] vault: deleted connection', id, 'changes=', info.changes);
 }
 
@@ -463,7 +500,11 @@ export function deleteConnection(id: string): void {
 export function getFullConnection(id: string): ConnectionConfig | null {
   const row = readConnectionRow(id);
   if (!row) return null;
-  return rowToConfig(row, decryptString(row.password_ciphertext));
+  return withOpenSearchSecrets(
+    rowToConfig(row, decryptString(row.password_ciphertext)),
+    (f) => getSecret(osSecretKey(row.id, f)),
+    'fill',
+  );
 }
 
 function readConnectionRow(id: string): ConnectionRow | undefined {
@@ -482,14 +523,40 @@ function rowToConfig(row: ConnectionRow, password: string): ConnectionConfig {
     ssl: Boolean(row.ssl),
     readOnly: Boolean(row.read_only),
     ...tlsFromRow(row),
+    ...extrasFromJson(row.extra_json),
     password,
   };
+}
+
+/** A connection safe to hand the renderer: no password, OpenSearch secrets as `has*` flags. */
+export function redactConnectionForRenderer(config: ConnectionConfig): SavedConnection {
+  const { password: _pwd, ...rest } = withOpenSearchSecrets(
+    config,
+    (f) => getSecret(osSecretKey(config.id, f)),
+    'flags',
+  );
+  return rest;
+}
+
+/**
+ * Copy a saved connection under a fresh id (C28): the vault row, its
+ * password and OpenSearch secrets. Settings-side data (tag, SSH, safe mode)
+ * is copied by the caller.
+ */
+export function duplicateConnection(id: string, newId: string): SavedConnection | null {
+  const source = getFullConnection(id);
+  if (!source) return null;
+  const copy: ConnectionConfig = { ...source, id: newId, name: `${source.name} copy` };
+  saveConnection(copy);
+  return redactConnectionForRenderer(copy);
 }
 
 /** Saved config for the renderer's Edit form — password always blank (C17). */
 export function getConnectionForEdit(id: string): ConnectionConfig | null {
   const row = readConnectionRow(id);
-  return row ? rowToConfig(row, '') : null;
+  return row
+    ? withOpenSearchSecrets(rowToConfig(row, ''), (f) => getSecret(osSecretKey(row.id, f)), 'flags')
+    : null;
 }
 
 /**
@@ -498,7 +565,7 @@ export function getConnectionForEdit(id: string): ConnectionConfig | null {
  * and login; otherwise return the config unchanged.
  */
 export function withStoredPassword<T extends ConnectionConfig>(config: T): T {
-  if (config.password) return config;
+  if (config.password && config.engine !== 'opensearch') return config;
   let saved: ConnectionConfig | null = null;
   try {
     saved = getFullConnection(config.id);
@@ -507,5 +574,14 @@ export function withStoredPassword<T extends ConnectionConfig>(config: T): T {
     return config;
   }
   if (!saved || !canReuseStoredPassword(saved, config)) return config;
-  return { ...config, password: saved.password };
+  const password = config.password || saved.password;
+  if (config.engine === 'opensearch') {
+    // O12: blank API key / AWS secrets mean "the saved ones" (same server + login only).
+    return withOpenSearchSecrets(
+      { ...config, password },
+      (f) => saved.opensearch?.[f] ?? null,
+      'fill',
+    ) as T;
+  }
+  return { ...config, password };
 }

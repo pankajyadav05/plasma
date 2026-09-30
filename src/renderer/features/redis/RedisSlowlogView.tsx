@@ -4,7 +4,7 @@ import { EmptyState, ViewFooter, ViewTitle, ViewToolbar } from '@/components/ui/
 import { IconButton, Pill } from '@/components/ui/workbench';
 import { cleanIpcError } from '@/lib/errors';
 import { ipc } from '@/lib/ipc';
-import { useActiveTab } from '@/stores/session';
+import { useSession } from '@/stores/session';
 import { useWorkbench } from '@/stores/workbench';
 import type { RedisSlowlogEntry } from '@shared/protocol';
 import { Loader2, RefreshCw } from 'lucide-react';
@@ -21,7 +21,7 @@ const SLOWLOG_LIMIT = 128;
 export function RedisSlowlogView() {
   // S1: SLOWLOG RESET is a write — only with edit mode on a writable connection.
   const { canWrite } = useRedisWriteGate();
-  const tabId = useActiveTab()?.id ?? null;
+  const tabId = useSession((s) => s.activeTabId);
   const [entries, setEntries] = useState<RedisSlowlogEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);

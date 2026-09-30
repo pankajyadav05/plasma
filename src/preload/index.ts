@@ -30,6 +30,8 @@ const api: PlasmaAPI = {
     delete: (id) => ipcRenderer.invoke(IpcChannel.VaultDelete, id),
     connectById: (id) => ipcRenderer.invoke(IpcChannel.VaultConnectById, id),
     getConfig: (id) => ipcRenderer.invoke(IpcChannel.VaultGetConfig, id),
+    save: (config) => ipcRenderer.invoke(IpcChannel.VaultSave, config),
+    duplicate: (id) => ipcRenderer.invoke(IpcChannel.VaultDuplicate, id),
   },
   query: {
     run: (sql, params, opts) =>
@@ -43,14 +45,32 @@ const api: PlasmaAPI = {
         : ipcRenderer.invoke(IpcChannel.QueryRun, sql),
     commitEditBatch: (req) => ipcRenderer.invoke(IpcChannel.QueryCommitEditBatch, req),
     cancel: () => ipcRenderer.invoke(IpcChannel.QueryCancel),
+    cancelAux: () => ipcRenderer.invoke(IpcChannel.QueryCancelAux),
     explain: (req) => ipcRenderer.invoke(IpcChannel.QueryExplain, req),
     sideband: (sql, params, opts) =>
       params || opts
         ? ipcRenderer.invoke(IpcChannel.QuerySideband, { sql, params, timeoutMs: opts?.timeoutMs })
         : ipcRenderer.invoke(IpcChannel.QuerySideband, sql),
   },
+  admin: {
+    tools: (binDir) => ipcRenderer.invoke(IpcChannel.AdminTools, binDir),
+    backup: (req) => ipcRenderer.invoke(IpcChannel.AdminBackup, req),
+    restore: (req) => ipcRenderer.invoke(IpcChannel.AdminRestore, req),
+    cancel: (jobId) => ipcRenderer.invoke(IpcChannel.AdminCancel, jobId),
+    pickPath: (req) => ipcRenderer.invoke(IpcChannel.AdminPickPath, req),
+  },
   export: {
     save: (req) => ipcRenderer.invoke(IpcChannel.ExportSave, req),
+    cancel: (jobId) => ipcRenderer.invoke(IpcChannel.ExportCancel, jobId),
+  },
+  structure: {
+    apply: (req) => ipcRenderer.invoke(IpcChannel.StructureApply, req),
+  },
+  dataImport: {
+    pickFile: () => ipcRenderer.invoke(IpcChannel.ImportPickFile),
+    preview: (req) => ipcRenderer.invoke(IpcChannel.ImportPreview, req),
+    run: (job) => ipcRenderer.invoke(IpcChannel.ImportRun, job),
+    cancel: (jobId) => ipcRenderer.invoke(IpcChannel.ImportCancel, jobId),
   },
   redis: {
     overview: () => ipcRenderer.invoke(IpcChannel.RedisOverview),
@@ -75,8 +95,7 @@ const api: PlasmaAPI = {
     overview: () => ipcRenderer.invoke(IpcChannel.OsOverview),
     mapping: (index) => ipcRenderer.invoke(IpcChannel.OsMapping, index),
     search: (opts) => ipcRenderer.invoke(IpcChannel.OsSearch, opts),
-    sql: (query, opts) =>
-      ipcRenderer.invoke(IpcChannel.OsSql, opts ? { query, ...opts } : query),
+    sql: (query, opts) => ipcRenderer.invoke(IpcChannel.OsSql, opts ? { query, ...opts } : query),
     request: (opts) => ipcRenderer.invoke(IpcChannel.OsRequest, opts),
     cancel: (requestId) => ipcRenderer.invoke(IpcChannel.OsCancel, requestId),
     aliases: () => ipcRenderer.invoke(IpcChannel.OsAliases),
@@ -96,10 +115,12 @@ const api: PlasmaAPI = {
     list: (opts) => ipcRenderer.invoke(IpcChannel.HistoryList, opts ?? {}),
     latest: (opts) => ipcRenderer.invoke(IpcChannel.HistoryLatest, opts ?? {}),
     clear: () => ipcRenderer.invoke(IpcChannel.HistoryClear),
+    delete: (id) => ipcRenderer.invoke(IpcChannel.HistoryDelete, id),
   },
   settings: {
     get: () => ipcRenderer.invoke(IpcChannel.SettingsGet),
     set: (patch) => ipcRenderer.invoke(IpcChannel.SettingsSet, patch),
+    clearApiKey: () => ipcRenderer.invoke(IpcChannel.SettingsClearApiKey),
   },
   txn: {
     begin: () => ipcRenderer.invoke(IpcChannel.TxnBegin),

@@ -1,5 +1,6 @@
 import { ipc } from '@/lib/ipc';
 import { type RunMode, resolveRunTarget, splitSqlStatements } from '@/lib/sql-split';
+import { unsupportedStatementReason } from '@/lib/sql-split';
 import {
   type Filter,
   type TableSort,
@@ -30,38 +31,11 @@ import type {
   Settings,
   TxnState,
 } from '@shared/protocol';
+import { useContext } from 'react';
 import { create } from 'zustand';
 import { useShallow } from 'zustand/react/shallow';
-import { unsupportedStatementReason } from '@/lib/sql-split';
-import {
-  duplicateTitle,
-  installTabPersistence,
-  isPreviewTab,
-  isTabDirty,
-  loadPersistedTabs,
-  nextSqlTabTitle,
-  restoreTabs,
-} from './session-tabs';
-import { useWorkbench } from './workbench';
+import { PaneTabContext } from './pane-context';
 import { errorText, freshSessionPatch, setRoleSql } from './session-connection';
-import { looksDestructive, looksLikeDdl } from './session-sql-heuristics';
-import { REDIS_INITIAL_STATE, createRedisActions, redisConnectReset } from './session-redis';
-import {
-  cancelProdGate as cancelProdGateAction,
-  requestProdConfirm,
-  settleExternalProdGate,
-} from './session-prod-gate';
-import {
-  ensureAllSchemaColumns as ensureAllSchemaColumnsAction,
-  ensureSchemaColumns as ensureSchemaColumnsAction,
-  refreshSchemaCoalesced,
-} from './session-schema';
-import {
-  type SavedQueryPatch,
-  patchSavedQuery,
-  replaceSavedQuery,
-  savedQueryFromTab,
-} from './session-saved-queries';
 import {
   type PendingEditsError,
   commitPendingEdits as commitPendingEditsAction,
@@ -74,6 +48,35 @@ import {
   tablePkNames,
   updatePendingInsert as updatePendingInsertAction,
 } from './session-pending-edits';
+import {
+  cancelProdGate as cancelProdGateAction,
+  evaluateGate,
+  requestProdConfirm,
+  settleExternalProdGate,
+} from './session-prod-gate';
+import { REDIS_INITIAL_STATE, createRedisActions, redisConnectReset } from './session-redis';
+import {
+  type SavedQueryPatch,
+  patchSavedQuery,
+  replaceSavedQuery,
+  savedQueryFromTab,
+} from './session-saved-queries';
+import {
+  ensureAllSchemaColumns as ensureAllSchemaColumnsAction,
+  ensureSchemaColumns as ensureSchemaColumnsAction,
+  refreshSchemaCoalesced,
+} from './session-schema';
+import { looksLikeDdl, shouldUseEstimatedCount } from './session-sql-heuristics';
+import {
+  duplicateTitle,
+  installTabPersistence,
+  isPreviewTab,
+  isTabDirty,
+  loadPersistedTabs,
+  nextSqlTabTitle,
+  restoreTabs,
+} from './session-tabs';
+import { useWorkbench } from './workbench';
 
 /**
  * When a table is unfiltered AND the introspected estimate is above this
@@ -81,7 +84,7 @@ import {
  * tables COUNT(*) is cheap and accurate; for huge tables it can take
  * minutes.
  */
-const ESTIMATED_COUNT_THRESHOLD = 1_000_000;
+const DEFAULT_ESTIMATED_COUNT_THRESHOLD = 100_000;
 
 /** F11: streamed notices kept per tab run (the worker adds a "+N more" note). */
 const MAX_TAB_NOTICES = 2_000;
@@ -107,7 +110,6 @@ const LOOKUP_TIMEOUT_MS = 15_000;
  *     which the worker reads from the server after every statement (F4/F9).
  */
 
-
 export type ConnectionState = 'idle' | 'connecting' | 'connected' | 'error';
 export type QueryRunState = 'idle' | 'running';
 /**
@@ -122,6 +124,7 @@ export type QueryRunState = 'idle' | 'running';
  *  - os-index      → OpenSearch index detail (mapping + stats)
  *  - os-sql        → OpenSearch SQL plugin canvas
  *  - os-console    → OpenSearch Dev Tools console (raw REST, O14)
+ *  - er-diagram    → entity-relationship diagram of a schema / table selection
  */
 export type TabKind =
   | 'sql'
@@ -135,7 +138,8 @@ export type TabKind =
   | 'os-search'
   | 'os-index'
   | 'os-sql'
-  | 'os-console';
+  | 'os-console'
+  | 'er-diagram';
 export type TableViewMode = 'data' | 'structure' | 'definition';
 export type EntityKind =
   | 'table'
@@ -297,15 +301,19 @@ const FONT_SANS_STACKS: Record<string, string> = {
   geist: "'Geist Variable', 'Geist', ui-sans-serif, system-ui, -apple-system, sans-serif",
   inter: "'Inter Variable', 'Inter', ui-sans-serif, system-ui, -apple-system, sans-serif",
   outfit: "'Outfit Variable', 'Outfit', ui-sans-serif, system-ui, -apple-system, sans-serif",
-  'plus-jakarta': "'Plus Jakarta Sans Variable', 'Plus Jakarta Sans', ui-sans-serif, system-ui, -apple-system, sans-serif",
-  'ibm-plex': "'IBM Plex Sans Variable', 'IBM Plex Sans', ui-sans-serif, system-ui, -apple-system, sans-serif",
+  'plus-jakarta':
+    "'Plus Jakarta Sans Variable', 'Plus Jakarta Sans', ui-sans-serif, system-ui, -apple-system, sans-serif",
+  'ibm-plex':
+    "'IBM Plex Sans Variable', 'IBM Plex Sans', ui-sans-serif, system-ui, -apple-system, sans-serif",
   system:
     "ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif",
 };
 
 const FONT_MONO_STACKS: Record<string, string> = {
-  'jetbrains-mono': "'JetBrains Mono Variable', 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
-  'geist-mono': "'Geist Mono Variable', 'Geist Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+  'jetbrains-mono':
+    "'JetBrains Mono Variable', 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+  'geist-mono':
+    "'Geist Mono Variable', 'Geist Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
   'ibm-plex-mono': "'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
   system: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
 };
@@ -360,6 +368,7 @@ const DEFAULT_SETTINGS: Settings = {
   openrouterModel: 'anthropic/claude-sonnet-4.5',
   claudeApiKey: '',
   transactionMode: false,
+  pgBinDir: '',
   autoConnectOnLaunch: true,
   autoReconnect: true,
   lastConnectionId: null,
@@ -613,6 +622,8 @@ interface SessionState {
      * 'external' = Notebook / Mock data / Explain waiting on `confirmUserSql`.
      */
     kind?: 'commitEdits' | 'external';
+    /** Why it's asking: the PROD tag, or the connection's safe-mode level. */
+    reason?: 'prod' | 'safe-mode';
     summary?: string;
   } | null;
 
@@ -625,6 +636,10 @@ interface SessionState {
   setSettingsOpen(open: boolean): void;
   setHistoryOpen(open: boolean): void;
   requestDeleteConnection(id: string | null): void;
+  /** Save a connection without connecting (C28). */
+  saveConnectionOnly(config: ConnectionConfig): Promise<void>;
+  /** Copy a saved connection under a new id and refresh the list (C28). */
+  duplicateSaved(id: string): Promise<SavedConnection>;
 
   /** `ssh`: the dialog's tunnel settings (null = no tunnel, omitted = the saved ones). */
   testConnection(
@@ -711,6 +726,8 @@ interface SessionState {
    * that the next preview open replaces; `preview: false` pins it.
    */
   openTable(schema: string, table: string, opts?: { newTab?: boolean; preview?: boolean }): void;
+  /** Open (or focus) an ER diagram tab for a schema or a set of `schema.table` ids. */
+  openErDiagram(scope: { schema?: string; tables?: string[] }): void;
   /**
    * `also` adds equality filters for the other columns of a composite
    * foreign key (F7); values there are Postgres text.
@@ -774,7 +791,10 @@ interface SessionState {
   pinTab(id: string): void;
   moveTab(id: string, toIndex: number): void;
   /** New SQL tab holding `sql` (history, snippets, files, DDL) — never clobbers. */
-  openSqlInNewTab(sql: string, opts?: { title?: string; fileName?: string; clean?: boolean }): string;
+  openSqlInNewTab(
+    sql: string,
+    opts?: { title?: string; fileName?: string; clean?: boolean },
+  ): string;
   /** Mark a SQL tab's buffer as saved (file / snippet). */
   markTabClean(id: string, patch?: { title?: string; fileName?: string }): void;
   /** Close tabs immediately, no dirty check. */
@@ -817,6 +837,8 @@ interface SessionState {
   // Settings
   loadSettings(): Promise<void>;
   updateSettings(patch: Partial<Settings>): Promise<void>;
+  /** Settings → AI: delete the saved API key from the vault. */
+  clearAiApiKey(): Promise<void>;
   toggleSidebar(): Promise<void>;
   toggleTheme(): Promise<void>;
   toggleFavoriteSchema(connectionId: string, schemaName: string): Promise<void>;
@@ -831,6 +853,8 @@ interface SessionState {
   loadHistory(opts?: HistoryListOpts): Promise<void>;
   setHistoryFilter(patch: Partial<HistoryListOpts>): void;
   clearHistory(): Promise<void>;
+  /** Remove one history entry (store + local db). */
+  deleteHistoryEntry(id: number): Promise<void>;
   reuseHistoryQuery(sql: string): void;
   /** Pin a history SQL string into saved queries (snippet). */
   saveHistoryAsSnippet(sql: string, name: string, connectionId?: string | null): Promise<void>;
@@ -1003,7 +1027,10 @@ export const useSession = create<SessionState>((set, get) => ({
   },
 
   async connect(config) {
-    if (get().pendingEdits.length > 0) { set({ connectionActionGate: { kind: 'connect', config } }); return; }
+    if (get().pendingEdits.length > 0) {
+      set({ connectionActionGate: { kind: 'connect', config } });
+      return;
+    }
     // C12: one connect at a time — a second click or the reconnect timer
     // must not race the attempt already in flight.
     if (get().connectionState === 'connecting') return;
@@ -1057,7 +1084,10 @@ export const useSession = create<SessionState>((set, get) => ({
   },
 
   async connectSaved(id) {
-    if (get().pendingEdits.length > 0) { set({ connectionActionGate: { kind: 'connectSaved', id } }); return; }
+    if (get().pendingEdits.length > 0) {
+      set({ connectionActionGate: { kind: 'connectSaved', id } });
+      return;
+    }
     if (get().connectionState === 'connecting') return; // C12
     set({ connectionState: 'connecting', connectionError: null });
     try {
@@ -1103,7 +1133,10 @@ export const useSession = create<SessionState>((set, get) => ({
   },
 
   async disconnect() {
-    if (get().pendingEdits.length > 0) { set({ connectionActionGate: { kind: 'disconnect' } }); return; }
+    if (get().pendingEdits.length > 0) {
+      set({ connectionActionGate: { kind: 'disconnect' } });
+      return;
+    }
     // A deliberate disconnect must not be undone by auto-connect on relaunch.
     if (get().settings.lastConnectionId) void get().updateSettings({ lastConnectionId: null });
     try {
@@ -1394,14 +1427,26 @@ export const useSession = create<SessionState>((set, get) => ({
     // confirmation. The user resumes via `confirmProdGate()` with `{ sql }`,
     // which skips this check so the approved payload executes once.
     if (opts?.sql == null) {
-      const connId = state.activeConfig?.id;
-      const tag = connId ? state.settings.connectionTags?.[connId] : undefined;
-      if (tag === 'prod' && state.prodGate === null) {
-        const stmts = splitSqlStatements(script);
-        if (stmts.some((s) => looksDestructive(s.text))) {
-          set({ prodGate: { sql: script, tabId: tab.id, connectionGen: state.connectionGen ?? 0 } });
-          return;
-        }
+      const decision = evaluateGate(get, script);
+      if (decision.kind === 'refuse') {
+        patchTabById(set, tab.id, {
+          queryRunState: 'idle',
+          queryError: decision.message,
+          queryErrorSql: script,
+          queryErrorRange: null,
+        });
+        return;
+      }
+      if (decision.kind === 'confirm' && state.prodGate === null) {
+        set({
+          prodGate: {
+            sql: script,
+            tabId: tab.id,
+            connectionGen: state.connectionGen ?? 0,
+            reason: decision.reason,
+          },
+        });
+        return;
       }
     }
 
@@ -1427,7 +1472,13 @@ export const useSession = create<SessionState>((set, get) => ({
     const publishOrigin = (patch: Partial<QueryTab>) => {
       const current = get().tabs.find((t) => t.id === originTabId);
       if (!current || current.queryGeneration !== generation) return;
-      if ((get().connectionGen ?? 0) !== originConnGen) { patchTabById(set, originTabId, { queryRunState: 'idle', queryError: 'connection changed while query was running — result discarded' }); return; }
+      if ((get().connectionGen ?? 0) !== originConnGen) {
+        patchTabById(set, originTabId, {
+          queryRunState: 'idle',
+          queryError: 'connection changed while query was running — result discarded',
+        });
+        return;
+      }
       patchTabById(set, originTabId, patch);
     };
 
@@ -1461,7 +1512,9 @@ export const useSession = create<SessionState>((set, get) => ({
           // Attach any streamed notices that arrived for this statement
           // index (driver also returns notices; merge uniquely by message).
           const current = get().tabs.find((t) => t.id === originTabId);
-          const streamed = ((current?.queryNotices ?? []) as Array<{ statementIndex: number; notice: PgNotice }>)
+          const streamed = (
+            (current?.queryNotices ?? []) as Array<{ statementIndex: number; notice: PgNotice }>
+          )
             .filter((n) => n.statementIndex === i)
             .map((n) => n.notice);
           const merged = mergeNotices(result.notices, streamed);
@@ -1560,8 +1613,7 @@ export const useSession = create<SessionState>((set, get) => ({
     // notices on the origin (U03 + U26).
     const state = get();
     const running =
-      state.tabs.find((t) => t.queryRunState === 'running' && t.kind === 'sql') ??
-      activeTab(state);
+      state.tabs.find((t) => t.queryRunState === 'running' && t.kind === 'sql') ?? activeTab(state);
     if (!running || running.kind !== 'sql') return;
     // F11: the worker caps notices per statement too; this bounds the
     // renderer's copy-on-append so a NOTICE flood can't freeze the UI.
@@ -1626,6 +1678,28 @@ export const useSession = create<SessionState>((set, get) => ({
     void runRlsCountForTab(set, get, tab.id);
   },
 
+  openErDiagram(scope) {
+    const state = get();
+    const key = scope.tables?.length
+      ? [...scope.tables].sort().join(',')
+      : (scope.schema ?? 'public');
+    const existing = state.tabs.find((t) => t.kind === 'er-diagram' && t.erScopeKey === key);
+    if (existing) {
+      get().setActiveTab(existing.id);
+      return;
+    }
+    const title = scope.tables?.length
+      ? `Diagram · ${scope.tables.length} tables`
+      : `Diagram · ${scope.schema ?? 'public'}`;
+    const tab: QueryTab = {
+      ...createEmptyTab(state.settings.defaultPageSize, title),
+      kind: 'er-diagram',
+      erScope: { schema: scope.schema, tables: scope.tables },
+      erScopeKey: key,
+    };
+    set({ tabs: [...state.tabs, tab], activeTabId: tab.id });
+  },
+
   openForeignRow(refSchema, refTable, refColumn, value, also) {
     // FK click-through: open the referenced table as a fresh table tab
     // with an equality filter on the referenced column pre-applied. We
@@ -1642,7 +1716,12 @@ export const useSession = create<SessionState>((set, get) => ({
       op: '=',
       value: value instanceof Date ? value.toISOString() : String(value),
     };
-    const extra: Filter[] = (also ?? []).map((p) => ({ id: fkId(), column: p.column, op: '=', value: p.value }));
+    const extra: Filter[] = (also ?? []).map((p) => ({
+      id: fkId(),
+      column: p.column,
+      op: '=',
+      value: p.value,
+    }));
     const tab: QueryTab = { ...baseTab, ...persistedPatch, filters: [filter, ...extra] };
     set({
       tabs: [...state.tabs, tab],
@@ -1895,7 +1974,8 @@ export const useSession = create<SessionState>((set, get) => ({
   duplicateRow(rowIndex) {
     const state = get();
     const tab = activeTab(state);
-    if (!tab || tab.kind !== 'table' || !tab.tableSchema || !tab.tableName || !tab.queryResult) return;
+    if (!tab || tab.kind !== 'table' || !tab.tableSchema || !tab.tableName || !tab.queryResult)
+      return;
     const row = tab.queryResult.rows[rowIndex];
     if (!row) return;
     const cols = columnMetaFor(state.schema, tab.tableSchema, tab.tableName);
@@ -1932,7 +2012,9 @@ export const useSession = create<SessionState>((set, get) => ({
     if (drop.size === 0) return;
     // A closed tab's in-flight user query is cancelled; its result would be
     // dropped by the origin-tab guard anyway (U03).
-    if (state.tabs.some((t) => drop.has(t.id) && t.kind === 'sql' && t.queryRunState === 'running')) {
+    if (
+      state.tabs.some((t) => drop.has(t.id) && t.kind === 'sql' && t.queryRunState === 'running')
+    ) {
       try {
         void ipc.query.cancel().catch(() => undefined);
       } catch {
@@ -1978,7 +2060,11 @@ export const useSession = create<SessionState>((set, get) => ({
   },
 
   closeOtherTabs(id) {
-    get().requestCloseTabs(get().tabs.filter((t) => t.id !== id).map((t) => t.id));
+    get().requestCloseTabs(
+      get()
+        .tabs.filter((t) => t.id !== id)
+        .map((t) => t.id),
+    );
   },
 
   closeTabsToRight(id) {
@@ -2253,7 +2339,9 @@ export const useSession = create<SessionState>((set, get) => ({
     const nextMap = { ...current, [connId]: replaceSavedQuery(list, entry) };
     set({
       settings: { ...state.settings, savedQueries: nextMap },
-      tabs: get().tabs.map((t) => (t.id === tab.id ? { ...t, savedQueryId: id, cleanSql: t.sql } : t)),
+      tabs: get().tabs.map((t) =>
+        t.id === tab.id ? { ...t, savedQueryId: id, cleanSql: t.sql } : t,
+      ),
     });
     try {
       await ipc.settings.set({ savedQueries: nextMap });
@@ -2381,6 +2469,19 @@ export const useSession = create<SessionState>((set, get) => ({
     }
   },
 
+  async saveConnectionOnly(config) {
+    await ipc.vault.save(config);
+    await get().loadSavedConnections();
+  },
+
+  async duplicateSaved(id) {
+    const copy = await ipc.vault.duplicate(id);
+    await get().loadSavedConnections();
+    // Settings-side copies (tag, SSH, safe mode) were made in main.
+    await get().loadSettings();
+    return copy;
+  },
+
   async deleteSaved(id) {
     try {
       await ipc.vault.delete(id);
@@ -2416,6 +2517,14 @@ export const useSession = create<SessionState>((set, get) => ({
       applyFonts(next.fontSans, next.fontMono);
     } catch (err) {
       console.error('[plasma] settings.set failed', err);
+    }
+  },
+
+  async clearAiApiKey() {
+    try {
+      set({ settings: withDefaults(await ipc.settings.clearApiKey()) });
+    } catch (err) {
+      console.error('[plasma] settings.clearApiKey failed', err);
     }
   },
 
@@ -2543,6 +2652,11 @@ export const useSession = create<SessionState>((set, get) => ({
   async clearHistory() {
     await ipc.history.clear();
     set({ history: [] });
+  },
+
+  async deleteHistoryEntry(id) {
+    await ipc.history.delete(id);
+    set({ history: get().history.filter((h) => h.id !== id) });
   },
 
   reuseHistoryQuery(sql) {
@@ -2795,7 +2909,8 @@ export const useSession = create<SessionState>((set, get) => ({
   async resolveConnectionAction(choice: 'commit' | 'discard'): Promise<void> {
     const gate = get().connectionActionGate;
     if (!gate) return;
-    if (choice === 'commit') await get().commitPendingEdits(); else set({ pendingEdits: [], pendingEditsError: null });
+    if (choice === 'commit') await get().commitPendingEdits();
+    else set({ pendingEdits: [], pendingEditsError: null });
     set({ connectionActionGate: null });
     // Prod-tagged: the commit waits on its own confirmation — stop here and
     // let the user retry the connection action once the tray is empty.
@@ -2804,8 +2919,9 @@ export const useSession = create<SessionState>((set, get) => ({
     else if (gate.kind === 'connect') await get().connect(gate.config);
     else await get().connectSaved(gate.id);
   },
-  cancelConnectionAction() { set({ connectionActionGate: null }); },
-
+  cancelConnectionAction() {
+    set({ connectionActionGate: null });
+  },
 
   confirmProdGate() {
     const gate = get().prodGate;
@@ -2821,7 +2937,9 @@ export const useSession = create<SessionState>((set, get) => ({
     if (gate.kind === 'commitEdits') {
       // The grid's pending-changes tray: resume the confirmed commit.
       // Failures land in `pendingEditsError` for the grid to show.
-      void get().commitPendingEdits({ confirmed: true }).catch(() => undefined);
+      void get()
+        .commitPendingEdits({ confirmed: true })
+        .catch(() => undefined);
       return;
     }
     // Re-enter runQuery with the captured payload so a selection/statement
@@ -2960,7 +3078,6 @@ function loadTableColumnStateInto(
   };
 }
 
-
 /** Prefer the last result that has columns (a SELECT); else the last result. */
 function defaultActiveResultIndex(results: QueryResult[]): number {
   if (results.length === 0) return 0;
@@ -2987,10 +3104,7 @@ function resultPatch(
   };
 }
 
-function mergeNotices(
-  a: PgNotice[] | undefined,
-  b: PgNotice[] | undefined,
-): PgNotice[] {
+function mergeNotices(a: PgNotice[] | undefined, b: PgNotice[] | undefined): PgNotice[] {
   const out: PgNotice[] = [];
   const seen = new Set<string>();
   for (const n of [...(a ?? []), ...(b ?? [])]) {
@@ -3127,14 +3241,20 @@ async function runTableCountQuery(
   const useEstimate =
     tab.filters.length === 0 &&
     (tableMeta?.kind === 'table' || tableMeta?.kind === 'matview') &&
-    typeof tableMeta.rowCountEstimate === 'number' &&
-    tableMeta.rowCountEstimate >= ESTIMATED_COUNT_THRESHOLD;
+    shouldUseEstimatedCount(
+      state.settings.estimatedCountThreshold ?? DEFAULT_ESTIMATED_COUNT_THRESHOLD,
+      tableMeta.rowCountEstimate,
+    );
 
   // F8: COUNT(*) on a view or foreign table re-runs the whole view / a
   // remote scan on every page change. Skip it — the footer pages on
   // "full page ⇒ maybe more" instead.
   if (tableMeta?.kind === 'view' || tableMeta?.kind === 'foreign') {
-    patchTabById(set, tabId, { totalRowCount: null, totalRowCountIsEstimate: false, countLoading: false });
+    patchTabById(set, tabId, {
+      totalRowCount: null,
+      totalRowCountIsEstimate: false,
+      countLoading: false,
+    });
     return;
   }
 
@@ -3209,15 +3329,13 @@ function buildEngineContext(state: SessionState): string | undefined {
 
   if (engine === 'redis' && state.redisOverview) {
     const o = state.redisOverview;
-    const lines: string[] = [
-      `version: ${o.redisVersion}`,
-      `role: ${o.role}`,
-      `mode: ${o.mode}`,
-    ];
+    const lines: string[] = [`version: ${o.redisVersion}`, `role: ${o.role}`, `mode: ${o.mode}`];
     const total = o.keyspace.reduce((acc, k) => acc + k.keys, 0);
     if (total > 0) lines.push(`total keys: ${total.toLocaleString()}`);
     for (const k of o.keyspace.slice(0, 4)) {
-      lines.push(`db${k.db}: ${k.keys.toLocaleString()} keys (${k.expires.toLocaleString()} with TTL)`);
+      lines.push(
+        `db${k.db}: ${k.keys.toLocaleString()} keys (${k.expires.toLocaleString()} with TTL)`,
+      );
     }
     if (state.redisKeys && state.redisKeys.keys.length > 0) {
       const sample = state.redisKeys.keys
@@ -3239,12 +3357,8 @@ function buildEngineContext(state: SessionState): string | undefined {
     ];
     if (o.indices.length > 0) {
       lines.push('top indices:');
-      for (const idx of [...o.indices]
-        .sort((a, b) => b.docsCount - a.docsCount)
-        .slice(0, 12)) {
-        lines.push(
-          `  ${idx.index} — ${idx.docsCount.toLocaleString()} docs, ${idx.health}`,
-        );
+      for (const idx of [...o.indices].sort((a, b) => b.docsCount - a.docsCount).slice(0, 12)) {
+        lines.push(`  ${idx.index} — ${idx.docsCount.toLocaleString()} docs, ${idx.health}`);
       }
     }
     return lines.join('\n');
@@ -3285,7 +3399,9 @@ async function loadEngineOverview(
 
 /** React hook helper: selects the currently active tab with proper memoization. */
 export function useActiveTab(): QueryTab | undefined {
-  return useSession((s) => s.tabs.find((t) => t.id === s.activeTabId));
+  // Inside a split pane the context names that pane's tab (see pane-context).
+  const paneTab = useContext(PaneTabContext);
+  return useSession((s) => s.tabs.find((t) => t.id === (paneTab ?? s.activeTabId)));
 }
 
 /**
@@ -3298,7 +3414,10 @@ export function useActiveTab(): QueryTab | undefined {
  * Objects / arrays are compared shallowly.
  */
 export function useActiveTabSelect<T>(pick: (tab: QueryTab | undefined) => T): T {
-  return useSession(useShallow((s) => pick(s.tabs.find((t) => t.id === s.activeTabId))));
+  const paneTab = useContext(PaneTabContext);
+  return useSession(
+    useShallow((s) => pick(s.tabs.find((t) => t.id === (paneTab ?? s.activeTabId)))),
+  );
 }
 
 /**

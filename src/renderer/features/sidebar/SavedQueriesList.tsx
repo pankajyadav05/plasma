@@ -423,7 +423,7 @@ function Section({
           )}
         />
         {favourite ? (
-          <Star className="h-4 w-4 shrink-0 fill-[#d9b44a] text-[#d9b44a]" />
+          <Star className="h-4 w-4 shrink-0 fill-[var(--icon-star)] text-[var(--icon-star)]" />
         ) : (
           <Folder className="h-4 w-4 shrink-0 fill-[var(--icon-folder)] text-[var(--icon-folder)]" />
         )}

@@ -1,5 +1,6 @@
 import { ROW_HEIGHT_PX, computeRowWindow } from '@/features/result-grid/windowed-rows';
 import { cn } from '@/lib/cn';
+import { useSession } from '@/stores/session';
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
 
 /** Header height (26px) — rows start below it. */
@@ -65,6 +66,7 @@ export function DataTable<T>({
   stripeFill?: boolean;
   ariaLabel: string;
 }) {
+  const zebra = useSession((s) => s.settings.gridAlternatingRows !== false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const idBase = useId();
   const [scrollTop, setScrollTop] = useState(0);
@@ -154,7 +156,7 @@ export function DataTable<T>({
         className,
       )}
       style={
-        stripeFill
+        stripeFill && zebra
           ? {
               // Stripes continue under the last row; aligned below the 26px header.
               backgroundImage:
@@ -215,8 +217,8 @@ export function DataTable<T>({
                 className={cn(
                   onSelect && 'cursor-default',
                   selected
-                    ? 'bg-[color-mix(in_srgb,var(--wb-accent)_18%,var(--grid-row-b))]'
-                    : i % 2 === 0
+                    ? 'bg-[color-mix(in_srgb,var(--wb-accent)_18%,transparent)]'
+                    : zebra && i % 2 === 0
                       ? 'bg-[var(--grid-row-a)]'
                       : 'bg-[var(--grid-row-b)]',
                 )}

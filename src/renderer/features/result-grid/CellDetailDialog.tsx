@@ -1,6 +1,7 @@
 import { Button } from '@/components/ui/button';
 import { Popover, PopoverAnchor, PopoverContent } from '@/components/ui/popover';
 import { cn } from '@/lib/cn';
+import { readableTypeName } from '@/lib/pg-types';
 import { useActiveTab, useSession } from '@/stores/session';
 import { ChevronRight, Copy, GitBranch, Search } from 'lucide-react';
 import { useMemo, useState } from 'react';
@@ -103,7 +104,9 @@ export function CellDetailDialog({
             <div className="truncate font-mono text-sm font-semibold text-foreground">
               {detail?.columnName}
             </div>
-            <div className="text-xs text-muted-foreground">{detail?.dataTypeName}</div>
+            <div className="text-xs text-muted-foreground">
+              {detail ? readableTypeName({ dataTypeName: detail.dataTypeName }) : null}
+            </div>
           </div>
           <Button
             variant="ghost"
@@ -112,19 +115,17 @@ export function CellDetailDialog({
             aria-label="Copy value"
             title={copied ? 'Copied!' : 'Copy'}
           >
-            <Copy className={cn(copied && 'text-primary')} />
+            <Copy className={cn(copied && 'text-[var(--wb-text)]')} />
           </Button>
         </div>
 
         <div className="max-h-[420px] overflow-auto bg-muted/40 p-3">
           {value === null || value === undefined ? (
-            <span className="font-display text-sm italic text-muted-foreground">
+            <span className="font-mono text-[12px] text-[var(--grid-null)]">
               {value === null ? 'null' : 'undefined'}
             </span>
           ) : value === '' ? (
-            <span className="font-display text-sm italic text-muted-foreground">
-              (empty string)
-            </span>
+            <span className="font-mono text-[12px] text-[var(--grid-null)]">(empty string)</span>
           ) : isObject ? (
             <JsonTree value={value} />
           ) : (
@@ -142,9 +143,9 @@ export function CellDetailDialog({
 
         {inboundFks.length > 0 && (
           <div className="border-t border-border bg-background px-3 py-2">
-            <div className="mb-1 flex items-center gap-1.5 font-display text-[10px] uppercase tracking-wider text-muted-foreground">
+            <div className="mb-1 flex items-center gap-1.5 text-[11px] font-medium text-[var(--wb-text-2)]">
               <GitBranch className="h-3 w-3" />
-              referenced by
+              Referenced by
             </div>
             <div className="flex flex-col gap-0.5">
               {inboundFks.map((fk) => (
@@ -158,7 +159,7 @@ export function CellDetailDialog({
                     // `fk.column = cellValue`.
                     openForeignRow(fk.schema, fk.table, fk.column, cellValue);
                   }}
-                  className="flex items-center gap-1.5 rounded-sm px-1.5 py-1 text-left text-xs transition-colors hover:bg-accent"
+                  className="flex items-center gap-1.5 rounded-sm px-1.5 py-1 text-left text-xs transition-colors hover:bg-[var(--wb-control-hover)]"
                 >
                   <Search className="h-3 w-3 text-muted-foreground" />
                   <span className="font-mono">
@@ -251,7 +252,7 @@ function Node({
 }) {
   const [open, setOpen] = useState(depth < 2);
   if (matches && !matches.has(path) && depth > 0) return null;
-  if (value === null) return <Leaf className="text-muted-foreground italic">null</Leaf>;
+  if (value === null) return <Leaf className="text-[var(--grid-null)]">null</Leaf>;
   if (typeof value !== 'object') return <Leaf>{formatLeaf(value)}</Leaf>;
 
   const isArray = Array.isArray(value);
@@ -279,7 +280,7 @@ function Node({
             const childPath = isArray ? `${path}[${k}]` : path ? `${path}.${k}` : k;
             return (
               <li key={k} className="flex items-baseline gap-1.5 py-0.5">
-                <span className="text-primary">{k}</span>
+                <span className="text-[var(--wb-text-2)]">{k}</span>
                 <span className="text-muted-foreground">:</span>
                 <Node value={v} path={childPath} depth={depth + 1} matches={matches} />
               </li>

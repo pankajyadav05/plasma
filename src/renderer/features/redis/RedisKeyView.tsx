@@ -467,7 +467,7 @@ export function RedisKeyView({ keyName, db }: { keyName: string; db: number }) {
         <h1 className="min-w-0 truncate font-mono text-[13px] font-semibold" title={keyName}>
           {keyName}
         </h1>
-        {data && <Badge className="normal-case">{data.typeName ?? TYPE_LABEL[data.type]}</Badge>}
+        {data && <Badge>{data.typeName ?? TYPE_LABEL[data.type]}</Badge>}
         <span className="shrink-0 font-mono text-[11px] text-[var(--wb-text-3)]">db{db}</span>
         {sizeText && (
           <span className="shrink-0 text-[12px] tabular-nums text-[var(--wb-text-2)]">
@@ -1433,7 +1433,7 @@ function TextEditDialog({
       <Dialog open={open} onOpenChange={(o) => !busy && setOpen(o)}>
         <DialogContent className="max-w-[680px] gap-3 bg-[var(--wb-sidebar)] p-5">
           <DialogHeader>
-            <DialogTitle className="text-[15px]">{title}</DialogTitle>
+            <DialogTitle>{title}</DialogTitle>
             <DialogDescription className="text-[12px] text-[var(--wb-text-2)]">
               {description}
             </DialogDescription>
@@ -1590,9 +1590,7 @@ function ElementEditDialog({
     <Dialog open onOpenChange={(o) => !o && !busy && onClose()}>
       <DialogContent className="max-w-[560px] gap-3 bg-[var(--wb-sidebar)] p-5">
         <DialogHeader>
-          <DialogTitle className="text-[15px]">
-            Edit {type === 'list' ? 'element' : la.toLowerCase()}
-          </DialogTitle>
+          <DialogTitle>Edit {type === 'list' ? 'element' : la.toLowerCase()}</DialogTitle>
           <DialogDescription className="text-[12px] text-[var(--wb-text-2)]">
             {hints[type]}
           </DialogDescription>

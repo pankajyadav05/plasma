@@ -96,3 +96,91 @@ describe('TLS mode helpers', () => {
     expect(withTlsMode(on, 'disable').ssl).toBe(false);
   });
 });
+
+describe('C28 / O12 validation', () => {
+  const ssh = {
+    host: 'bastion',
+    port: '22',
+    user: 'ops',
+    password: '',
+    privateKey: '',
+    passphrase: '',
+    privateKeyPath: '',
+    useAgent: false,
+  };
+  const redis = (host: string) => ({
+    id: 'r',
+    name: 'r',
+    engine: 'redis' as const,
+    host,
+    port: 6379,
+    database: '0',
+    user: '',
+    password: '',
+    ssl: false,
+  });
+
+  it('accepts sentinel:// / cluster:// / unix socket hosts for Redis', () => {
+    for (const host of ['sentinel://a:26379/main', 'cluster://a:7000', '/var/run/redis.sock']) {
+      const errors = validateConnectionForm({
+        config: redis(host),
+        portText: '6379',
+        useSsh: false,
+        ssh,
+      });
+      expect(errors.host).toBeUndefined();
+    }
+  });
+  it('refuses an SSH tunnel for those endpoints', () => {
+    const errors = validateConnectionForm({
+      config: redis('cluster://a:7000'),
+      portText: '6379',
+      useSsh: true,
+      ssh: { ...ssh, useAgent: true },
+    });
+    expect(errors.ssh).toMatch(/cluster:\/\//);
+    const ok = validateConnectionForm({
+      config: redis('cache.internal'),
+      portText: '6379',
+      useSsh: true,
+      ssh: { ...ssh, useAgent: true },
+    });
+    expect(ok.ssh).toBeUndefined();
+    expect(ok.sshAuth).toBeUndefined();
+  });
+  it('a key file or the agent satisfies SSH auth', () => {
+    const base = { config: redis('h'), portText: '1', useSsh: true };
+    expect(validateConnectionForm({ ...base, ssh }).sshAuth).toBeDefined();
+    expect(
+      validateConnectionForm({ ...base, ssh: { ...ssh, privateKeyPath: '/k' } }).sshAuth,
+    ).toBeUndefined();
+  });
+  it('validates OpenSearch auth modes', () => {
+    const os = (opensearch: object) => ({
+      config: {
+        id: 'o',
+        name: 'o',
+        engine: 'opensearch' as const,
+        host: 'h',
+        port: 9200,
+        database: '',
+        user: '',
+        password: '',
+        ssl: true,
+        opensearch,
+      },
+      portText: '9200',
+      useSsh: false,
+      ssh,
+    });
+    expect(validateConnectionForm(os({ auth: 'apiKey' })).osAuth).toBeDefined();
+    expect(validateConnectionForm(os({ auth: 'apiKey', hasApiKey: true })).osAuth).toBeUndefined();
+    expect(validateConnectionForm(os({ auth: 'sigv4' })).osAuth).toMatch(/region/);
+    expect(
+      validateConnectionForm(
+        os({ auth: 'sigv4', awsRegion: 'us-east-1', awsAccessKeyId: 'A', awsSecretAccessKey: 'S' }),
+      ).osAuth,
+    ).toBeUndefined();
+    expect(validateConnectionForm(os({ nodes: ['a b'] })).osNodes).toBeDefined();
+  });
+});

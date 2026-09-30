@@ -1,21 +1,30 @@
 import { randomUUID } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { sshUnsupportedReason } from '@shared/connection-endpoint';
 import { CONNECTION_LOST, ConnectionLostError } from '@shared/connection-loss';
+import {
+  type AdminJobEvent,
+  BackupRequest,
+  type PgEndpoint,
+  PickPathRequest,
+  RestoreRequest,
+  buildPgDumpInvocation,
+  buildPgRestoreInvocation,
+} from '@shared/pg-backup';
 import {
   AiChatRequest,
   type AppMeta,
   AppUnsavedState,
-  ConnectionSshConfig,
-  type SshHostKeyPrompt,
   CommitEditBatchRequest,
-  ExplainRequest,
   ConnectionConfig,
   type ConnectionConfig as ConnectionConfigType,
   type ConnectionInfo,
   type ConnectionRecovered,
+  ConnectionSshConfig,
   type ConnectionTestResult,
+  ExplainRequest,
   ExportSaveRequest,
   type ExportSaveResult,
   type HistoryEntry,
@@ -29,13 +38,14 @@ import {
   type SchemaInfo,
   type Settings,
   SettingsShape,
+  type SshHostKeyPrompt,
   type TxnState,
   type WorkerRequest,
   type WorkerResponse,
 } from '@shared/protocol';
 import { MAX_RESULT_ROWS } from '@shared/result-bounds';
-import { assertTlsAllowedForTag, resolveTls, withTunnelServername } from '@shared/tls';
 import { isSingleSqlStatement, looksLikeWriteSql } from '@shared/sql-statements';
+import { assertTlsAllowedForTag, resolveTls, withTunnelServername } from '@shared/tls';
 import { BrowserWindow, app, dialog, ipcMain, nativeImage } from 'electron';
 import {
   cancelAiChat,
@@ -53,15 +63,25 @@ import {
   type RetainedSession,
 } from './connection-recovery';
 import { closeDb, getDb } from './db';
-import { clearHistory, latestHistory, listHistory, recordHistory } from './history';
+import { registerE2EHooks } from './e2e-hooks';
+import {
+  clearHistory,
+  deleteHistoryEntry,
+  latestHistory,
+  listHistory,
+  recordHistory,
+} from './history';
+import { registerImportIpc } from './import-ipc';
 import { initLogger, logger } from './logger';
+import { buildAppMenu } from './menu';
 import {
   assertOsWritable,
   parseOsRequestArgs,
   parseOsSearchArgs,
   parseOsSqlArgs,
 } from './opensearch-ipc';
-import { buildAppMenu } from './menu';
+import { cancelAllJobs, cancelJob, detectTools, startJob } from './pg-admin';
+import { assertAllowedOnReadOnly } from './read-only-guard';
 import {
   assertRedisCommandAllowed,
   assertRedisWritable,
@@ -78,23 +98,25 @@ import {
 import { applySettingsPatch, getAllSettings, getPublicSettings } from './settings';
 import { formatSql } from './sql-format';
 import { closeAllTunnels, closeTunnel, openTunnel, setHostKeyPrompt } from './ssh-tunnel';
-import { assertAllowedOnReadOnly } from './read-only-guard';
-import { registerE2EHooks } from './e2e-hooks';
 import { disposeUpdater, initUpdater } from './updater';
 import {
-  deleteConnection as vaultDelete,
+  clearApiKeys,
+  confirmWeakSecretStorage,
+  duplicateConnection,
   getApiKey,
   getConnectionForEdit,
-  getFullConnection as vaultGetFull,
   getFullSshConfig,
-  listConnections as vaultList,
-  confirmWeakSecretStorage,
+  mergeSshSecretsForTest,
   migrateLingeringPlaintextSecrets,
+  redactConnectionForRenderer,
+  deleteConnection as vaultDelete,
+  getFullConnection as vaultGetFull,
+  listConnections as vaultList,
   saveConnection as vaultSave,
   withStoredPassword,
 } from './vault';
-import { applyThemeToWindow, createMainWindow, rendererEntry, resolveIconPath } from './window';
 import { guardIpcSenders, installWebSecurity } from './web-security';
+import { applyThemeToWindow, createMainWindow, rendererEntry, resolveIconPath } from './window';
 import { WorkerSupervisor } from './worker-supervisor';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -156,214 +178,222 @@ if (!hasInstanceLock) {
   });
 }
 
-app.whenReady().then(async () => {
-  if (!hasInstanceLock) return;
-  initLogger();
-  // C19/C34: navigation + window.open + permission guards, and IPC only
-  // from the app's own page. Before any window or handler exists.
-  installWebSecurity(rendererEntry());
-  guardIpcSenders(rendererEntry());
-  registerE2EHooks(() => workerSupervisor);
-  logger.info('[plasma] app ready, version', app.getVersion());
+app
+  .whenReady()
+  .then(async () => {
+    if (!hasInstanceLock) return;
+    initLogger();
+    // C19/C34: navigation + window.open + permission guards, and IPC only
+    // from the app's own page. Before any window or handler exists.
+    installWebSecurity(rendererEntry());
+    guardIpcSenders(rendererEntry());
+    registerE2EHooks(() => workerSupervisor);
+    logger.info('[plasma] app ready, version', app.getVersion());
 
-  // On macOS, set the dock icon explicitly. BrowserWindow `icon` alone
-  // doesn't touch the dock — that's handled separately by app.dock.
-  // On Windows/Linux the taskbar picks up BrowserWindow.icon directly.
-  if (process.platform === 'darwin') {
-    const iconPath = resolveIconPath();
-    if (iconPath) {
-      try {
-        const image = nativeImage.createFromPath(iconPath);
-        app.dock?.setIcon(image);
-        logger.info('[plasma] dock icon set from', iconPath);
-      } catch (err) {
-        logger.error('[plasma] dock icon failed:', err);
+    // On macOS, set the dock icon explicitly. BrowserWindow `icon` alone
+    // doesn't touch the dock — that's handled separately by app.dock.
+    // On Windows/Linux the taskbar picks up BrowserWindow.icon directly.
+    if (process.platform === 'darwin') {
+      const iconPath = resolveIconPath();
+      if (iconPath) {
+        try {
+          const image = nativeImage.createFromPath(iconPath);
+          app.dock?.setIcon(image);
+          logger.info('[plasma] dock icon set from', iconPath);
+        } catch (err) {
+          logger.error('[plasma] dock icon failed:', err);
+        }
+      } else {
+        logger.warn(
+          '[plasma] dock icon not set — resources/icon.png missing. Run `pnpm build:icons`.',
+        );
       }
-    } else {
-      logger.warn(
-        '[plasma] dock icon not set — resources/icon.png missing. Run `pnpm build:icons`.',
-      );
     }
-  }
 
-  // Touch the DB early so migrations run before any IPC handlers can read it
-  getDb();
-  // C27: warn (and let the user refuse) when Linux has no keyring.
-  await confirmWeakSecretStorage().catch((err) => {
-    logger.error('[plasma] vault: keyring check failed:', err);
+    // Touch the DB early so migrations run before any IPC handlers can read it
+    getDb();
+    // C27: warn (and let the user refuse) when Linux has no keyring.
+    await confirmWeakSecretStorage().catch((err) => {
+      logger.error('[plasma] vault: keyring check failed:', err);
+    });
+    // C3: installs already at schema v3 may still hold plaintext secrets that
+    // older builds wrote into settings — move them into the vault.
+    try {
+      migrateLingeringPlaintextSecrets();
+    } catch (err) {
+      logger.error('[plasma] vault: re-migration of plaintext secrets failed:', err);
+    }
+
+    await workerSupervisor.start(join(__dirname, 'workers/index.js'));
+
+    // Forward worker broadcasts (Redis pub/sub, Postgres NOTICE) to the
+    // renderer over dedicated event channels.
+    workerSupervisor.setBroadcastHandler((evt) => {
+      if (evt.kind === 'redisPubsub') {
+        mainWindow?.webContents.send('plasma:redis:pubsub', evt.message);
+      } else if (evt.kind === 'queryChunk') {
+        mainWindow?.webContents.send('plasma:query:chunk', evt);
+      } else if (evt.kind === 'pgNotice') {
+        mainWindow?.webContents.send('plasma:pg:notice', evt.notice);
+      } else if (evt.kind === 'importProgress') {
+        mainWindow?.webContents.send('plasma:import:progress', evt.progress);
+      } else if (evt.kind === 'exportProgress') {
+        mainWindow?.webContents.send('plasma:export:progress', evt.progress);
+      }
+    });
+
+    // Worker crash after readiness invalidates the live connection — the
+    // respawned worker has no DB session (U20). Nothing to recover here:
+    // the process that held the session is gone, so drop the retained
+    // session too and let the renderer fall back to the connect screen.
+    workerSupervisor.setCrashHandler(() => {
+      const id = activeConnectionId;
+      activeConnectionId = null;
+      activeEngine = null;
+      retainedSession = null;
+      if (id) closeTunnel(id);
+      mainWindow?.webContents.send(IpcChannel.WorkerResetEvent);
+    });
+
+    // AI tools dispatch by the active engine. Postgres uses the worker
+    // aux connection so tool queries don't queue behind a long primary
+    // query and never block cancel (U19); Redis routes through the
+    // read-only command list; OpenSearch hits search / SQL plugin.
+    setAiToolExecutor(async (name, args) => {
+      if (name === 'query_database') {
+        if (activeEngine !== 'postgres') {
+          return JSON.stringify({ error: 'no postgres connection' });
+        }
+        const sql = typeof args.sql === 'string' ? args.sql : '';
+        if (!sql) return JSON.stringify({ error: 'missing sql arg' });
+        if (!isReadOnlySql(sql)) {
+          return JSON.stringify({
+            error: 'rejected: only SELECT / EXPLAIN / SHOW / WITH / VALUES / TABLE allowed',
+          });
+        }
+        try {
+          // aiQuery runs on the aux client inside BEGIN … READ ONLY and
+          // rejects multi-statement SQL (C18) — the regex above is only a
+          // pre-filter.
+          const res = await callWorker({ kind: 'aiQuery', sql }, 'queryResult');
+          return serializeAiToolRows({
+            columns: res.result.columns.map((c) => c.name),
+            rows: res.result.rows,
+            rowCount: res.result.rowCount,
+          });
+        } catch (err) {
+          return JSON.stringify({
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+
+      if (name === 'redis_command') {
+        if (activeEngine !== 'redis') {
+          return JSON.stringify({ error: 'no redis connection' });
+        }
+        const partsRaw = args.parts;
+        const parts = Array.isArray(partsRaw) ? partsRaw.map((p) => String(p)) : [];
+        if (parts.length === 0) return JSON.stringify({ error: 'parts required' });
+        if (!isReadOnlyRedisCommand(parts)) {
+          return JSON.stringify({
+            error: `rejected: ${parts[0]}${parts[1] ? ' ' + parts[1] : ''} is not in the read-only allow-list`,
+          });
+        }
+        try {
+          const res = await callWorker({ kind: 'redisCommand', parts }, 'redisCommand');
+          return capAiToolJson({
+            command: res.result.command,
+            args: res.result.args,
+            reply: res.result.reply,
+            durationMs: res.result.durationMs,
+          });
+        } catch (err) {
+          return JSON.stringify({
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+
+      if (name === 'os_search') {
+        if (activeEngine !== 'opensearch') {
+          return JSON.stringify({ error: 'no opensearch connection' });
+        }
+        const index = typeof args.index === 'string' ? args.index : '';
+        const body = typeof args.body === 'string' ? args.body : '';
+        if (!index || !body) return JSON.stringify({ error: 'index + body required' });
+        try {
+          const res = await callWorker({ kind: 'osSearch', index, body, size: 50 }, 'osSearch');
+          return capAiToolJson({
+            total: res.result.total,
+            took: res.result.took,
+            hits: res.result.hits.slice(0, 50),
+            fields: res.result.fields,
+          });
+        } catch (err) {
+          return JSON.stringify({
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+
+      if (name === 'os_sql') {
+        if (activeEngine !== 'opensearch') {
+          return JSON.stringify({ error: 'no opensearch connection' });
+        }
+        const query = typeof args.query === 'string' ? args.query : '';
+        if (!query) return JSON.stringify({ error: 'query required' });
+        // Only allow SELECT — the SQL plugin can technically issue
+        // CREATE / DELETE on some distributions, but the AI's job is
+        // observation only.
+        if (!/^\s*select\b/i.test(query)) {
+          return JSON.stringify({ error: 'only SELECT allowed' });
+        }
+        try {
+          const res = await callWorker({ kind: 'osSql', query }, 'osSql');
+          const rowsObj = res.result.rows
+            .slice(0, 50)
+            .map((row) => Object.fromEntries(res.result.columns.map((c, i) => [c.name, row[i]])));
+          return capAiToolJson({
+            rowCount: res.result.rows.length,
+            columns: res.result.columns,
+            rows: rowsObj,
+            durationMs: res.result.durationMs,
+            truncated: res.result.rows.length > 50,
+          });
+        } catch (err) {
+          return JSON.stringify({
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+
+      return JSON.stringify({ error: `unknown tool ${name}` });
+    });
+
+    mainWindow = createMainWindow();
+    attachWindowGuards(mainWindow);
+    buildAppMenu();
+    registerIpcHandlers();
+    // C33: the updater follows whichever window is current (macOS reopen).
+    initUpdater(() => mainWindow);
+
+    app.on('activate', () => {
+      if (BrowserWindow.getAllWindows().length === 0) {
+        mainWindow = createMainWindow();
+        attachWindowGuards(mainWindow);
+      }
+    });
+  })
+  .catch((err) => {
+    // Anything thrown during boot (native module ABI mismatch, DB migration,
+    // worker ready timeout) used to surface only as an unhandled rejection:
+    // the process stayed alive with no window and no cause anywhere. Log it
+    // to main.log + stderr and exit non-zero so launchers fail fast.
+    logger.error('[plasma] boot failed — no window created', err);
+    console.error('[plasma] boot failed:', err instanceof Error ? err.stack || err.message : err);
+    app.exit(1);
   });
-  // C3: installs already at schema v3 may still hold plaintext secrets that
-  // older builds wrote into settings — move them into the vault.
-  try {
-    migrateLingeringPlaintextSecrets();
-  } catch (err) {
-    logger.error('[plasma] vault: re-migration of plaintext secrets failed:', err);
-  }
-
-  await workerSupervisor.start(join(__dirname, 'workers/index.js'));
-
-  // Forward worker broadcasts (Redis pub/sub, Postgres NOTICE) to the
-  // renderer over dedicated event channels.
-  workerSupervisor.setBroadcastHandler((evt) => {
-    if (evt.kind === 'redisPubsub') {
-      mainWindow?.webContents.send('plasma:redis:pubsub', evt.message);
-    } else if (evt.kind === 'queryChunk') {
-      mainWindow?.webContents.send('plasma:query:chunk', evt);
-    } else if (evt.kind === 'pgNotice') {
-      mainWindow?.webContents.send('plasma:pg:notice', evt.notice);
-    }
-  });
-
-  // Worker crash after readiness invalidates the live connection — the
-  // respawned worker has no DB session (U20). Nothing to recover here:
-  // the process that held the session is gone, so drop the retained
-  // session too and let the renderer fall back to the connect screen.
-  workerSupervisor.setCrashHandler(() => {
-    const id = activeConnectionId;
-    activeConnectionId = null;
-    activeEngine = null;
-    retainedSession = null;
-    if (id) closeTunnel(id);
-    mainWindow?.webContents.send(IpcChannel.WorkerResetEvent);
-  });
-
-  // AI tools dispatch by the active engine. Postgres uses the worker
-  // aux connection so tool queries don't queue behind a long primary
-  // query and never block cancel (U19); Redis routes through the
-  // read-only command list; OpenSearch hits search / SQL plugin.
-  setAiToolExecutor(async (name, args) => {
-    if (name === 'query_database') {
-      if (activeEngine !== 'postgres') {
-        return JSON.stringify({ error: 'no postgres connection' });
-      }
-      const sql = typeof args.sql === 'string' ? args.sql : '';
-      if (!sql) return JSON.stringify({ error: 'missing sql arg' });
-      if (!isReadOnlySql(sql)) {
-        return JSON.stringify({
-          error: 'rejected: only SELECT / EXPLAIN / SHOW / WITH / VALUES / TABLE allowed',
-        });
-      }
-      try {
-        // aiQuery runs on the aux client inside BEGIN … READ ONLY and
-        // rejects multi-statement SQL (C18) — the regex above is only a
-        // pre-filter.
-        const res = await callWorker({ kind: 'aiQuery', sql }, 'queryResult');
-        return serializeAiToolRows({
-          columns: res.result.columns.map((c) => c.name),
-          rows: res.result.rows,
-          rowCount: res.result.rowCount,
-        });
-      } catch (err) {
-        return JSON.stringify({
-          error: err instanceof Error ? err.message : String(err),
-        });
-      }
-    }
-
-    if (name === 'redis_command') {
-      if (activeEngine !== 'redis') {
-        return JSON.stringify({ error: 'no redis connection' });
-      }
-      const partsRaw = args.parts;
-      const parts = Array.isArray(partsRaw) ? partsRaw.map((p) => String(p)) : [];
-      if (parts.length === 0) return JSON.stringify({ error: 'parts required' });
-      if (!isReadOnlyRedisCommand(parts)) {
-        return JSON.stringify({
-          error: `rejected: ${parts[0]}${parts[1] ? ' ' + parts[1] : ''} is not in the read-only allow-list`,
-        });
-      }
-      try {
-        const res = await callWorker({ kind: 'redisCommand', parts }, 'redisCommand');
-        return capAiToolJson({
-          command: res.result.command,
-          args: res.result.args,
-          reply: res.result.reply,
-          durationMs: res.result.durationMs,
-        });
-      } catch (err) {
-        return JSON.stringify({
-          error: err instanceof Error ? err.message : String(err),
-        });
-      }
-    }
-
-    if (name === 'os_search') {
-      if (activeEngine !== 'opensearch') {
-        return JSON.stringify({ error: 'no opensearch connection' });
-      }
-      const index = typeof args.index === 'string' ? args.index : '';
-      const body = typeof args.body === 'string' ? args.body : '';
-      if (!index || !body) return JSON.stringify({ error: 'index + body required' });
-      try {
-        const res = await callWorker({ kind: 'osSearch', index, body, size: 50 }, 'osSearch');
-        return capAiToolJson({
-          total: res.result.total,
-          took: res.result.took,
-          hits: res.result.hits.slice(0, 50),
-          fields: res.result.fields,
-        });
-      } catch (err) {
-        return JSON.stringify({
-          error: err instanceof Error ? err.message : String(err),
-        });
-      }
-    }
-
-    if (name === 'os_sql') {
-      if (activeEngine !== 'opensearch') {
-        return JSON.stringify({ error: 'no opensearch connection' });
-      }
-      const query = typeof args.query === 'string' ? args.query : '';
-      if (!query) return JSON.stringify({ error: 'query required' });
-      // Only allow SELECT — the SQL plugin can technically issue
-      // CREATE / DELETE on some distributions, but the AI's job is
-      // observation only.
-      if (!/^\s*select\b/i.test(query)) {
-        return JSON.stringify({ error: 'only SELECT allowed' });
-      }
-      try {
-        const res = await callWorker({ kind: 'osSql', query }, 'osSql');
-        const rowsObj = res.result.rows
-          .slice(0, 50)
-          .map((row) => Object.fromEntries(res.result.columns.map((c, i) => [c.name, row[i]])));
-        return capAiToolJson({
-          rowCount: res.result.rows.length,
-          columns: res.result.columns,
-          rows: rowsObj,
-          durationMs: res.result.durationMs,
-          truncated: res.result.rows.length > 50,
-        });
-      } catch (err) {
-        return JSON.stringify({
-          error: err instanceof Error ? err.message : String(err),
-        });
-      }
-    }
-
-    return JSON.stringify({ error: `unknown tool ${name}` });
-  });
-
-  mainWindow = createMainWindow();
-  attachWindowGuards(mainWindow);
-  buildAppMenu();
-  registerIpcHandlers();
-  initUpdater(mainWindow);
-
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
-      mainWindow = createMainWindow();
-      attachWindowGuards(mainWindow);
-    }
-  });
-}).catch((err) => {
-  // Anything thrown during boot (native module ABI mismatch, DB migration,
-  // worker ready timeout) used to surface only as an unhandled rejection:
-  // the process stayed alive with no window and no cause anywhere. Log it
-  // to main.log + stderr and exit non-zero so launchers fail fast.
-  logger.error('[plasma] boot failed — no window created', err);
-  console.error('[plasma] boot failed:', err instanceof Error ? err.stack || err.message : err);
-  app.exit(1);
-});
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
@@ -378,6 +408,7 @@ app.on('window-all-closed', () => {
 // C32: 'will-quit', not 'before-quit' — a window can still cancel the
 // quit from its close guard, and the worker must survive that.
 app.on('will-quit', () => {
+  cancelAllJobs();
   closeAllTunnels();
   workerSupervisor.stop();
   closeDb();
@@ -530,7 +561,9 @@ async function withTlsFiles(config: ConnectionConfigType): Promise<ConnectionCon
     try {
       return await readFile(path, 'utf8');
     } catch (err) {
-      throw new Error(`Could not read the TLS ${what} file ${path}: ${err instanceof Error ? err.message : String(err)}`);
+      throw new Error(
+        `Could not read the TLS ${what} file ${path}: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
   };
   const [ca, cert, key] = await Promise.all([
@@ -558,12 +591,8 @@ function testSshConfig(id: string, rawSsh: unknown): SshTarget | null {
   if (rawSsh === null) return null;
   const form = ConnectionSshConfig.parse(rawSsh);
   if (!form.host || !form.user) return null;
-  return {
-    ...form,
-    password: form.password || saved?.password || '',
-    privateKey: form.privateKey || saved?.privateKey || '',
-    passphrase: form.passphrase || saved?.passphrase || '',
-  };
+  // Blank secrets mean "the saved ones" — only for the same bastion + login.
+  return mergeSshSecretsForTest(form, saved);
 }
 
 /** Drop main's idea of the live session (and its tunnel). */
@@ -597,6 +626,8 @@ async function establishSession(config: ConnectionConfigType) {
   let effective: ConnectionConfigType = { ...withFiles, readOnly: config.readOnly ?? false };
   try {
     if (ssh) {
+      const refusal = sshUnsupportedReason(config);
+      if (refusal) throw new Error(refusal);
       const local = await openTunnel({
         id: config.id,
         ssh,
@@ -604,7 +635,11 @@ async function establishSession(config: ConnectionConfigType) {
         pgPort: config.port,
       });
       // C10: the certificate names the real host, not 127.0.0.1.
-      effective = { ...withTunnelServername(effective, config.host), host: local.host, port: local.port };
+      effective = {
+        ...withTunnelServername(effective, config.host),
+        host: local.host,
+        port: local.port,
+      };
     }
     const res = await callWorker(
       {
@@ -741,20 +776,22 @@ function registerIpcHandlers() {
       }),
   );
 
-  ipcMain.handle(IpcChannel.ConnectionDisconnect, (): Promise<void> =>
-    serializeSessionChange(async () => {
-      sessionEpoch++;
-      const id = activeConnectionId;
-      activeConnectionId = null;
-      activeEngine = null;
-      retainedSession = null;
-      // C22: the tunnel goes even when the worker call fails or times out.
-      try {
-        await callWorker({ kind: 'disconnect' }, 'disconnected');
-      } finally {
-        if (id) closeTunnel(id);
-      }
-    }),
+  ipcMain.handle(
+    IpcChannel.ConnectionDisconnect,
+    (): Promise<void> =>
+      serializeSessionChange(async () => {
+        sessionEpoch++;
+        const id = activeConnectionId;
+        activeConnectionId = null;
+        activeEngine = null;
+        retainedSession = null;
+        // C22: the tunnel goes even when the worker call fails or times out.
+        try {
+          await callWorker({ kind: 'disconnect' }, 'disconnected');
+        } finally {
+          if (id) closeTunnel(id);
+        }
+      }),
   );
 
   ipcMain.handle(
@@ -769,6 +806,8 @@ function registerIpcHandlers() {
         const ssh = testSshConfig(config.id, rawSsh);
         let effective: ConnectionConfigType = config;
         if (ssh) {
+          const refusal = sshUnsupportedReason(config);
+          if (refusal) throw new Error(refusal);
           const local = await openTunnel({
             id: tunnelKey,
             ssh,
@@ -798,15 +837,20 @@ function registerIpcHandlers() {
     },
   );
 
-  ipcMain.handle(IpcChannel.ConnectionPickFile, async (e, title: unknown): Promise<string | null> => {
-    const win = BrowserWindow.fromWebContents(e.sender);
-    const opts = {
-      title: typeof title === 'string' && title ? title : 'Choose a file',
-      properties: ['openFile' as const, 'showHiddenFiles' as const],
-    };
-    const picked = win ? await dialog.showOpenDialog(win, opts) : await dialog.showOpenDialog(opts);
-    return picked.canceled ? null : (picked.filePaths[0] ?? null);
-  });
+  ipcMain.handle(
+    IpcChannel.ConnectionPickFile,
+    async (e, title: unknown): Promise<string | null> => {
+      const win = BrowserWindow.fromWebContents(e.sender);
+      const opts = {
+        title: typeof title === 'string' && title ? title : 'Choose a file',
+        properties: ['openFile' as const, 'showHiddenFiles' as const],
+      };
+      const picked = win
+        ? await dialog.showOpenDialog(win, opts)
+        : await dialog.showOpenDialog(opts);
+      return picked.canceled ? null : (picked.filePaths[0] ?? null);
+    },
+  );
 
   ipcMain.handle(IpcChannel.SshHostKeyRespond, (_e, raw: unknown): void => {
     const p = (raw ?? {}) as { requestId?: unknown; accept?: unknown };
@@ -822,11 +866,14 @@ function registerIpcHandlers() {
 
   // Postgres-only schema introspect. For redis/opensearch the renderer
   // calls the engine-specific overview channels directly.
-  ipcMain.handle(IpcChannel.ConnectionIntrospect, async (_e, opts: unknown): Promise<SchemaInfo> => {
-    const parsed = opts === undefined || opts === null ? undefined : IntrospectOpts.parse(opts);
-    const res = await callWorker({ kind: 'introspect', opts: parsed }, 'schemaInfo');
-    return res.info;
-  });
+  ipcMain.handle(
+    IpcChannel.ConnectionIntrospect,
+    async (_e, opts: unknown): Promise<SchemaInfo> => {
+      const parsed = opts === undefined || opts === null ? undefined : IntrospectOpts.parse(opts);
+      const res = await callWorker({ kind: 'introspect', opts: parsed }, 'schemaInfo');
+      return res.info;
+    },
+  );
 
   // ── Vault ──
 
@@ -845,7 +892,7 @@ function registerIpcHandlers() {
         const config = vaultGetFull(id);
         if (!config) throw new Error(`no saved connection with id ${id}`);
         const res = await establishSession(config);
-        const { password: _pwd, ...safeConfig } = config;
+        const safeConfig = redactConnectionForRenderer(config);
         return {
           info: {
             serverVersion: res.serverVersion,
@@ -856,6 +903,31 @@ function registerIpcHandlers() {
         };
       }),
   );
+
+  ipcMain.handle(IpcChannel.VaultSave, (_e, rawConfig: unknown): SavedConnection => {
+    // Blank password / OpenSearch secrets = keep the saved ones (C17).
+    const config = withStoredPassword(parseConnectionConfig(rawConfig));
+    vaultSave(config);
+    return redactConnectionForRenderer(config);
+  });
+
+  ipcMain.handle(IpcChannel.VaultDuplicate, (_e, id: unknown): SavedConnection => {
+    if (typeof id !== 'string') throw new Error('id must be a string');
+    const newId = randomUUID();
+    const copy = duplicateConnection(id, newId);
+    if (!copy) throw new Error(`no saved connection with id ${id}`);
+    // Tag, SSH tunnel (with its secrets) and safe-mode level follow the copy.
+    const settings = SettingsShape.parse(getAllSettings());
+    const patch: Record<string, unknown> = {};
+    const tag = settings.connectionTags?.[id];
+    if (tag) patch.connectionTags = { ...settings.connectionTags, [newId]: tag };
+    const level = settings.connectionSafeMode?.[id];
+    if (level) patch.connectionSafeMode = { ...settings.connectionSafeMode, [newId]: level };
+    const ssh = getFullSshConfig(id, settings.connectionSsh);
+    if (ssh) patch.connectionSsh = { ...settings.connectionSsh, [newId]: ssh };
+    if (Object.keys(patch).length > 0) applySettingsPatch(patch);
+    return copy;
+  });
 
   ipcMain.handle(IpcChannel.VaultGetConfig, (_e, id: unknown): ConnectionConfigType | null => {
     if (typeof id !== 'string') throw new Error('id must be a string');
@@ -953,7 +1025,10 @@ function registerIpcHandlers() {
     } else {
       throw new Error('invalid sideband payload');
     }
-    const res = await callWorker({ kind: 'sidebandQuery', sql, params, timeoutMs, revision: ++queryRequestRevision }, 'queryResult');
+    const res = await callWorker(
+      { kind: 'sidebandQuery', sql, params, timeoutMs, revision: ++queryRequestRevision },
+      'queryResult',
+    );
     return res.result;
   });
 
@@ -975,6 +1050,13 @@ function registerIpcHandlers() {
     },
   );
 
+  // Structure editing, create table and import (see import-ipc.ts).
+  registerImportIpc({
+    window: () => mainWindow,
+    isReadOnly: () => retainedSession?.config.readOnly === true,
+    callWorker,
+  });
+
   // F2: EXPLAIN never runs through query.run. Plain EXPLAIN doesn't
   // execute; ANALYZE executes inside a transaction the worker rolls back.
   ipcMain.handle(IpcChannel.QueryExplain, async (_e, raw: unknown): Promise<QueryResult> => {
@@ -994,7 +1076,9 @@ function registerIpcHandlers() {
   ipcMain.handle(IpcChannel.ExportSave, async (_e, raw: unknown): Promise<ExportSaveResult> => {
     const req = ExportSaveRequest.parse(raw);
     const extension = req.format;
-    const defaultPath = req.defaultPath.toLowerCase().endsWith("." .concat(extension)) ? req.defaultPath : req.defaultPath .concat(".", extension);
+    const defaultPath = req.defaultPath.toLowerCase().endsWith('.'.concat(extension))
+      ? req.defaultPath
+      : req.defaultPath.concat('.', extension);
     if (!req.rows) {
       // F7: full-result export re-runs SQL on the primary — only ever a
       // single read-only statement, never the user's DML again.
@@ -1002,10 +1086,158 @@ function registerIpcHandlers() {
         throw new Error('Full export needs a single read-only query.');
       }
     }
-    const picked = await dialog.showSaveDialog({ defaultPath, filters: [{ name: extension.toUpperCase(), extensions: [extension] }] });
+    const picked = await dialog.showSaveDialog({
+      defaultPath,
+      filters: [{ name: extension.toUpperCase(), extensions: [extension] }],
+    });
     if (picked.canceled || !picked.filePath) return { ok: false, canceled: true };
-    const res = await callWorker(req.rows ? { kind: "exportRows", format: req.format, filePath: picked.filePath, columns: req.columns, rows: req.rows, targetTable: req.targetTable } : { kind: "exportQuery", format: req.format, filePath: picked.filePath, sql: req.sql!, params: req.params, targetTable: req.targetTable }, "exportDone");
-    return { ok: true, filePath: res.filePath, rowCount: res.rowCount, bytesWritten: res.bytesWritten };
+    // Settings → Data → CSV export decides the dialect of every CSV file.
+    const csv = req.format === 'csv' ? getPublicSettings().csvExport : undefined;
+    try {
+      const res = await callWorker(
+        req.rows
+          ? {
+              kind: 'exportRows',
+              format: req.format,
+              filePath: picked.filePath,
+              columns: req.columns,
+              rows: req.rows,
+              targetTable: req.targetTable,
+              csv,
+              jobId: req.jobId,
+            }
+          : {
+              kind: 'exportQuery',
+              format: req.format,
+              filePath: picked.filePath,
+              sql: req.sql!,
+              params: req.params,
+              targetTable: req.targetTable,
+              csv,
+              jobId: req.jobId,
+            },
+        'exportDone',
+      );
+      return {
+        ok: true,
+        filePath: res.filePath,
+        rowCount: res.rowCount,
+        bytesWritten: res.bytesWritten,
+      };
+    } catch (err) {
+      // C30: a user cancel is not an error.
+      if (err instanceof Error && err.message === 'export cancelled')
+        return { ok: false, canceled: true };
+      throw err;
+    }
+  });
+
+  ipcMain.handle(IpcChannel.ExportCancel, async (_e, jobId: unknown): Promise<void> => {
+    if (typeof jobId !== 'string' || !jobId) return;
+    await callWorker({ kind: 'exportCancel', jobId }, 'cancelled');
+  });
+
+  ipcMain.handle(IpcChannel.QueryCancelAux, async (): Promise<void> => {
+    await callWorker({ kind: 'cancelAux' }, 'cancelled');
+  });
+
+  // ── Backup / restore (pg_dump, pg_restore, psql) ──
+
+  const adminEndpoint = async (): Promise<PgEndpoint> => {
+    const session = retainedSession;
+    if (!session || activeEngine !== 'postgres')
+      throw new Error('Connect to a Postgres database first.');
+    let { host, port } = session.config;
+    if (session.tunnelled) {
+      // Same tunnel the worker uses (identical target -> cached local port).
+      const ssh = getFullSshConfig(session.id, SettingsShape.parse(getAllSettings()).connectionSsh);
+      if (!ssh) throw new Error('The SSH tunnel for this connection is gone — reconnect first.');
+      const local = await openTunnel({ id: session.id, ssh, pgHost: host, pgPort: port });
+      host = local.host;
+      port = local.port;
+    }
+    return {
+      host,
+      port,
+      user: session.config.user,
+      password: session.config.password,
+      ssl: session.config.ssl === true,
+    };
+  };
+  const adminBinDir = (): string => SettingsShape.parse(getAllSettings()).pgBinDir;
+  const emitAdminEvent = (ev: AdminJobEvent) => {
+    if (mainWindow && !mainWindow.isDestroyed())
+      mainWindow.webContents.send(IpcChannel.AdminJobEvent, ev);
+  };
+
+  // Backup/restore only touch paths the user picked in a native dialog, so a
+  // compromised renderer can't make pg_dump overwrite or psql read any file.
+  const adminPickedPaths = new Set<string>();
+  const assertAdminPicked = (path: string) => {
+    if (!adminPickedPaths.has(path)) throw new Error('Choose the file with the file picker first.');
+  };
+
+  ipcMain.handle(IpcChannel.AdminTools, (_e, binDir: unknown) =>
+    detectTools(typeof binDir === 'string' && binDir.trim() ? binDir : adminBinDir()),
+  );
+
+  ipcMain.handle(IpcChannel.AdminBackup, async (_e, raw: unknown) => {
+    const req = BackupRequest.parse(raw);
+    assertAdminPicked(req.outputPath);
+    const invocation = buildPgDumpInvocation(req, await adminEndpoint());
+    const jobId = await startJob({
+      invocation,
+      binDir: adminBinDir(),
+      emit: emitAdminEvent,
+      outputPath: req.outputPath,
+    });
+    return { jobId, command: invocation.display };
+  });
+
+  ipcMain.handle(IpcChannel.AdminRestore, async (_e, raw: unknown) => {
+    const req = RestoreRequest.parse(raw);
+    assertAdminPicked(req.filePath);
+    // A restore rewrites the target database: never on a read-only connection.
+    if (retainedSession?.config.readOnly === true)
+      assertAllowedOnReadOnly({ kind: 'adminRestore' });
+    const st = await stat(req.filePath);
+    if (req.kind === 'plain' && st.isDirectory())
+      throw new Error('Choose a file, not a folder, for a plain SQL restore.');
+    const invocation = buildPgRestoreInvocation(req, await adminEndpoint());
+    const jobId = await startJob({
+      invocation,
+      binDir: adminBinDir(),
+      emit: emitAdminEvent,
+      ...(req.kind === 'plain'
+        ? { stdinFile: { path: req.filePath, gunzip: /\.gz$/i.test(req.filePath) } }
+        : {}),
+    });
+    return { jobId, command: invocation.display };
+  });
+
+  ipcMain.handle(IpcChannel.AdminCancel, (_e, jobId: unknown): void => {
+    if (typeof jobId === 'string') cancelJob(jobId);
+  });
+
+  ipcMain.handle(IpcChannel.AdminPickPath, async (e, raw: unknown): Promise<string | null> => {
+    const req = PickPathRequest.parse(raw);
+    const win = BrowserWindow.fromWebContents(e.sender);
+    const opts = { title: req.title, defaultPath: req.defaultPath, filters: req.filters };
+    if (req.mode === 'save') {
+      const r = win ? await dialog.showSaveDialog(win, opts) : await dialog.showSaveDialog(opts);
+      if (r.canceled || !r.filePath) return null;
+      adminPickedPaths.add(r.filePath);
+      return r.filePath;
+    }
+    const properties: ('openFile' | 'openDirectory' | 'createDirectory')[] =
+      req.mode === 'directory' ? ['openDirectory', 'createDirectory'] : ['openFile'];
+    const r = win
+      ? await dialog.showOpenDialog(win, { ...opts, properties })
+      : await dialog.showOpenDialog({ ...opts, properties });
+    const picked = r.canceled ? undefined : r.filePaths[0];
+    if (!picked) return null;
+    adminPickedPaths.add(picked);
+    return picked;
   });
 
   // ── AI (OpenRouter) ──
@@ -1036,6 +1268,8 @@ function registerIpcHandlers() {
   ipcMain.handle(IpcChannel.AiCancel, async (_e, requestId: unknown): Promise<void> => {
     if (typeof requestId !== 'string') return;
     cancelAiChat(requestId);
+    // Tool queries the model started run on the aux connection (C30).
+    void callWorker({ kind: 'cancelAux' }, 'cancelled').catch(() => undefined);
   });
 
   ipcMain.handle(IpcChannel.FormatSql, (_e, sql: unknown): string => {
@@ -1064,6 +1298,11 @@ function registerIpcHandlers() {
     clearHistory();
   });
 
+  ipcMain.handle(IpcChannel.HistoryDelete, async (_e, id: unknown): Promise<void> => {
+    if (typeof id !== 'number') throw new Error('history id must be a number');
+    deleteHistoryEntry(id);
+  });
+
   // ── Settings ──
 
   // Secrets never cross IPC in either direction's response: API keys and
@@ -1084,6 +1323,11 @@ function registerIpcHandlers() {
       void applyStatementTimeout(merged.queryTimeoutMs);
     }
     return merged;
+  });
+
+  ipcMain.handle(IpcChannel.SettingsClearApiKey, (): Settings => {
+    clearApiKeys();
+    return getPublicSettings();
   });
 
   // ── Transactions ──
