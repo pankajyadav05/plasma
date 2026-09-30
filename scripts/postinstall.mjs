@@ -13,6 +13,37 @@
  */
 
 import { spawnSync } from 'node:child_process'
+import { existsSync, readFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
+import { dirname, join } from 'node:path'
+
+/**
+ * pnpm doesn't always run electron's own install script (e.g. after the
+ * version in the lockfile changes), leaving node_modules/electron without its
+ * binary — `pnpm dev` then fails with "Electron uninstall". Download it here
+ * when it's missing.
+ */
+function ensureElectronBinary() {
+  let dir
+  try {
+    dir = dirname(createRequire(import.meta.url).resolve('electron/package.json'))
+  } catch {
+    return
+  }
+  const pathTxt = join(dir, 'path.txt')
+  const binary = existsSync(pathTxt)
+    ? join(dir, 'dist', readFileSync(pathTxt, 'utf8').trim())
+    : null
+  if (binary && existsSync(binary)) return
+  console.log('[postinstall] Electron binary missing, downloading it')
+  const r = spawnSync(process.execPath, [join(dir, 'install.js')], { stdio: 'inherit', cwd: dir })
+  if (r.status !== 0) {
+    console.error('[postinstall] Electron download failed; run `node node_modules/electron/install.js`')
+    process.exit(r.status ?? 1)
+  }
+}
+
+ensureElectronBinary()
 
 if (process.env.CI) {
   console.log('[postinstall] CI detected, skipping electron-rebuild (CI runs `electron-builder install-app-deps` instead)')
