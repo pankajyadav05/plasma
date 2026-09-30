@@ -11,6 +11,7 @@ import {
 import { EmptyState, ViewTitle, ViewToolbar } from '@/components/ui/view-parts';
 import { IconButton } from '@/components/ui/workbench';
 import { cn } from '@/lib/cn';
+import { cleanIpcError } from '@/lib/errors';
 import { ipc } from '@/lib/ipc';
 import { useSession } from '@/stores/session';
 import type { ActivityRow } from '@shared/protocol';
@@ -110,7 +111,7 @@ export function MonitorCanvas() {
       setError(null);
       setLastPoll(Date.now());
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(cleanIpcError(err instanceof Error ? err.message : String(err)));
     } finally {
       pollGuard.current = false;
     }
@@ -160,7 +161,7 @@ export function MonitorCanvas() {
         );
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(cleanIpcError(err instanceof Error ? err.message : String(err)));
     } finally {
       setBusy(false);
       setTerminating(null);

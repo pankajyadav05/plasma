@@ -44,6 +44,17 @@ suite('postgres driver (live): txn state, edits, explain, types', () => {
     await driver.disconnect();
   });
 
+  it('reports the affected row count for INSERT / UPDATE / DELETE', async () => {
+    let r = await driver.query("INSERT INTO plasma_live_t VALUES (10, 'x'), (11, 'y'), (12, 'z')");
+    expect([r.command, r.rowCount]).toEqual(['INSERT', 3]);
+    r = await driver.query("UPDATE plasma_live_t SET v = 'q' WHERE id >= 10");
+    expect([r.command, r.rowCount]).toEqual(['UPDATE', 3]);
+    r = await driver.query('DELETE FROM plasma_live_t WHERE id >= 11');
+    expect([r.command, r.rowCount]).toEqual(['DELETE', 2]);
+    r = await driver.query('DELETE FROM plasma_live_t WHERE id = 10');
+    expect(r.rowCount).toBe(1);
+  });
+
   it('tracks a comment-prefixed BEGIN, END and aborted transactions from the server', async () => {
     let r = await driver.query('-- note\nBEGIN');
     expect(r.txnState).toBe('active');

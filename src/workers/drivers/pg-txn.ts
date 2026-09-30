@@ -40,7 +40,8 @@ function pgErrorText(err: unknown): string {
   const e = err as Error & { detail?: string; code?: string };
   const parts = [e.message];
   if (e.detail) parts.push(e.detail);
-  return parts.join(' — ');
+  // Callers append their own full stop.
+  return parts.join(' — ').replace(/[.\s]+$/, '');
 }
 
 function describeEdit(updates: readonly EditUpdate[], i: number): string {

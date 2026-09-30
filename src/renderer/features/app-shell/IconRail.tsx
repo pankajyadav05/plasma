@@ -21,7 +21,11 @@ export function IconRail() {
   const setCanvasMode = useSession((s) => s.setCanvasMode);
   const activeConfig = useSession((s) => s.activeConfig);
   const engine = activeConfig?.engine ?? 'postgres';
-  const dbLabel = activeConfig?.database || activeConfig?.name || 'Database';
+  const redisDb = useSession((s) => s.redisDb);
+  const dbLabel =
+    (engine === 'redis' ? String(redisDb ?? 0) : activeConfig?.database) ||
+    activeConfig?.name ||
+    'Database';
 
   const top: RailItem[] = [
     {

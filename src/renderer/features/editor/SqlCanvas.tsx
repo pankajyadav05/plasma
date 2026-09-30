@@ -220,7 +220,7 @@ function EditorActionBar({
 
   return (
     <div
-      className="flex h-9 min-w-0 shrink-0 items-center gap-1.5 overflow-hidden whitespace-nowrap border-t border-[var(--wb-separator)] bg-[var(--wb-content)] px-2.5"
+      className="@container flex h-9 min-w-0 shrink-0 items-center gap-1.5 overflow-hidden whitespace-nowrap border-t border-[var(--wb-separator)] bg-[var(--wb-content)] px-2.5"
       data-testid="editor-action-bar"
     >
       <SlidersHorizontal
@@ -288,7 +288,9 @@ function EditorActionBar({
           <SplitPill>
             <Pill onClick={() => void formatActiveSql()} disabled={!hasSql} title="Beautify SQL">
               Beautify
-              <span className="font-mono text-[12px] opacity-70">{shortcut('formatSql')}</span>
+              <span className="font-mono text-[12px] opacity-70 @max-[520px]:hidden">
+                {shortcut('formatSql')}
+              </span>
             </Pill>
             <Popover open={beautifyMenu} onOpenChange={setBeautifyMenu}>
               <PopoverTrigger asChild>
@@ -393,7 +395,9 @@ function EditorActionBar({
             }
           >
             {primaryLabel}
-            <span className="font-mono text-[12px] opacity-70">{shortcut('runQuery')}</span>
+            <span className="font-mono text-[12px] opacity-70 @max-[520px]:hidden">
+              {shortcut('runQuery')}
+            </span>
           </Pill>
           {!isTable && (
             <Popover open={runMenu} onOpenChange={setRunMenu}>

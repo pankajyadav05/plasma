@@ -584,29 +584,31 @@ export function ConnectionDialog() {
                 </Field>
               )}
 
-              {/* User + password */}
-              <div className="grid grid-cols-2 gap-3">
-                <Field
-                  label={engine === 'redis' ? 'ACL user (optional)' : 'User'}
-                  htmlFor="conn-user"
-                >
-                  <Input
-                    id="conn-user"
-                    value={form.user}
-                    onChange={(e) => update('user', e.target.value)}
-                    placeholder={engine === 'redis' ? '(leave empty for default)' : 'admin'}
-                  />
-                </Field>
-                <Field label="Password" htmlFor="conn-password">
-                  <Input
-                    id="conn-password"
-                    type="password"
-                    value={form.password}
-                    onChange={(e) => update('password', e.target.value)}
-                    placeholder={isEditing ? 'Saved — leave blank to keep' : '•••••••'}
-                  />
-                </Field>
-              </div>
+              {/* User + password (OpenSearch API-key / SigV4 auth doesn't use them) */}
+              {(engine !== 'opensearch' || (form.opensearch?.auth ?? 'basic') === 'basic') && (
+                <div className="grid grid-cols-2 gap-3">
+                  <Field
+                    label={engine === 'redis' ? 'ACL user (optional)' : 'User'}
+                    htmlFor="conn-user"
+                  >
+                    <Input
+                      id="conn-user"
+                      value={form.user}
+                      onChange={(e) => update('user', e.target.value)}
+                      placeholder={engine === 'redis' ? '(leave empty for default)' : 'admin'}
+                    />
+                  </Field>
+                  <Field label="Password" htmlFor="conn-password">
+                    <Input
+                      id="conn-password"
+                      type="password"
+                      value={form.password}
+                      onChange={(e) => update('password', e.target.value)}
+                      placeholder={isEditing ? 'Saved — leave blank to keep' : '•••••••'}
+                    />
+                  </Field>
+                </div>
+              )}
 
               {/* C4/C9: TLS mode + CA / client certificate files */}
               <div className={SECTION}>
@@ -741,10 +743,11 @@ export function ConnectionDialog() {
                           type="password"
                           value={ssh.password}
                           onChange={(e) => updateSsh('password', e.target.value, 'sshAuth')}
-                          placeholder={
+                          placeholder={initialSsh?.hasPassword ? 'Saved' : 'Optional'}
+                          title={
                             initialSsh?.hasPassword
-                              ? 'Saved — leave blank to keep'
-                              : '(or use private key)'
+                              ? 'A password is saved — leave blank to keep it'
+                              : 'Optional: use a private key or the ssh-agent instead'
                           }
                         />
                       </Field>

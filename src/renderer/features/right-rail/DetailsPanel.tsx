@@ -3,6 +3,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { IconButton, MenuItem } from '@/components/ui/workbench';
 import { SidebarSearch } from '@/features/sidebar/sidebar-parts';
 import { cn } from '@/lib/cn';
+import { cleanIpcError } from '@/lib/errors';
 import { ipc } from '@/lib/ipc';
 import { readableTypeName } from '@/lib/pg-types';
 import { quoteIdent } from '@/lib/table-query';
@@ -335,7 +336,7 @@ function FieldEditor({
       await onSave(next);
       onDone();
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(cleanIpcError(err instanceof Error ? err.message : String(err)));
     }
   };
 

@@ -143,8 +143,9 @@ useSession.subscribe((state) => {
   const next = {
     openTransaction: state.txnState !== 'none',
     pendingEdits: state.pendingEdits.length,
+    runningQuery: (state.tabs ?? []).some((t) => t.queryRunState === 'running'),
   };
-  const key = `${next.openTransaction}:${next.pendingEdits}`;
+  const key = `${next.openTransaction}:${next.pendingEdits}:${next.runningQuery}`;
   if (key === lastUnsaved) return;
   lastUnsaved = key;
   try {

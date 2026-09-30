@@ -1,5 +1,6 @@
 import { Checkbox } from '@/components/ui/checkbox';
 import { cn } from '@/lib/cn';
+import { cleanIpcError } from '@/lib/errors';
 import type { AdminJobEvent } from '@shared/pg-backup';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
@@ -125,7 +126,7 @@ export function useAdminJob() {
       setState((s) => ({ ...s, command }));
     } catch (err) {
       activeRef.current = false;
-      setState({ ...IDLE, error: err instanceof Error ? err.message : String(err) });
+      setState({ ...IDLE, error: cleanIpcError(err instanceof Error ? err.message : String(err)) });
     }
   }, []);
 

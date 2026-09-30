@@ -198,7 +198,7 @@ export function TableStructureView() {
     >
       <PgTypeDatalist />
       <div className="flex h-9 shrink-0 items-center gap-2 border-b border-[var(--wb-separator)] px-2">
-        <div className="relative w-64">
+        <div className="relative w-48 shrink-0">
           <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--wb-text-2)]" />
           <input
             type="text"
@@ -210,9 +210,10 @@ export function TableStructureView() {
           />
         </div>
         {structure && (
-          <span className="font-mono text-[12px] text-[var(--wb-text-2)]">
-            {structure.columns.length} columns · {structure.constraints.length} constraints ·{' '}
-            {structure.indexes.length} indexes
+          <span className="min-w-0 truncate whitespace-nowrap font-mono text-[12px] text-[var(--wb-text-2)]">
+            {plural(structure.columns.length, 'column')} ·{' '}
+            {plural(structure.constraints.length, 'constraint')} ·{' '}
+            {plural(structure.indexes.length, 'index', 'indexes')}
           </span>
         )}
         <div className="flex-1" />
@@ -837,6 +838,10 @@ export function TableStructureView() {
       addedColumns: m.addedColumns.map((c, j) => (j === i ? { ...c, ...patch } : c)),
     }));
   }
+}
+
+function plural(n: number, one: string, many = `${one}s`): string {
+  return `${n} ${n === 1 ? one : many}`;
 }
 
 function describeConstraint(c: EditModel['addedConstraints'][number]): string {

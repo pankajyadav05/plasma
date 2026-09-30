@@ -98,3 +98,10 @@ export function commandDetail(command: string | undefined, rowCount: number): st
   }
   return 'Query executed successfully';
 }
+
+/** Compact label for a result tab: "INSERT 3", "SELECT 20", "CREATE TABLE". */
+export function commandBadge(command: string | undefined, rowCount: number, sql?: string): string {
+  const tag = (command ?? '').trim().toUpperCase();
+  if (ROW_COUNT_COMMANDS.has(tag)) return `${tag} ${rowCount.toLocaleString()}`;
+  return commandTitle(command, sql);
+}

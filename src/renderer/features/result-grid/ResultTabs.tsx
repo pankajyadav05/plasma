@@ -1,4 +1,5 @@
 import { cn } from '@/lib/cn';
+import { commandBadge, commandDetail, commandTitle } from '@/lib/command-summary';
 import { cleanIpcError } from '@/lib/errors';
 import { formatDuration } from '@/lib/format';
 import { useActiveTab, useSession } from '@/stores/session';
@@ -97,7 +98,7 @@ export function ResultTabs() {
             >
               <span>Result {index + 1}</span>
               <span className="font-mono text-[12px] opacity-60">
-                {result.command ?? 'OK'} {result.rowCount.toLocaleString()}
+                {commandBadge(result.command, result.rowCount, result.sql)}
               </span>
               {notices.length > 0 && (
                 <MessageSquareWarning className="h-3.5 w-3.5 text-[var(--status-warn)]" />
@@ -165,10 +166,11 @@ export function ResultMessagesPanel() {
             <CheckCircle2 className="h-3.5 w-3.5 text-[var(--wb-accent)]" />
             <span className="font-semibold text-[var(--wb-text)]">Result {index + 1}</span>
             <span className="font-mono text-[12px] text-[var(--wb-text-2)]">
-              {result.command ?? 'OK'}
+              {commandTitle(result.command, result.sql)}
             </span>
             <span className="text-[var(--wb-text-2)]">
-              · {result.rowCount.toLocaleString()} rows · {formatDuration(result.durationMs)}
+              · {commandDetail(result.command, result.rowCount)} ·{' '}
+              {formatDuration(result.durationMs)}
               {result.columns.length > 0 &&
                 ` · ${result.columns.length} col${result.columns.length === 1 ? '' : 's'}`}
               {result.truncated && ' · limited'}

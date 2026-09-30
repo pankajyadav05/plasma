@@ -561,6 +561,7 @@ export class PostgresDriver {
     const state = emptyBoundState();
     let columns: QueryResult['columns'] = [];
     let command: string | undefined;
+    let commandRowCount: number | undefined;
     let chunkIndex = 0;
 
     try {
@@ -576,7 +577,11 @@ export class PostgresDriver {
             dataTypeName: pgTypeName(f.dataTypeID),
           }));
         }
-        if (batch.command) command = batch.command;
+        if (batch.command) {
+          command = batch.command;
+          // INSERT / UPDATE / DELETE return no rows; the tag carries the count.
+          commandRowCount = batch.rowCount;
+        }
 
         const before = state.rows.length;
         const stop = appendBoundedRows(
@@ -618,7 +623,8 @@ export class PostgresDriver {
     return {
       columns,
       rows: state.rows,
-      rowCount: state.rows.length,
+      rowCount:
+        columns.length === 0 && commandRowCount !== undefined ? commandRowCount : state.rows.length,
       command,
       truncated: state.truncated,
     };

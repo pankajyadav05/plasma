@@ -1,5 +1,6 @@
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { IconButton, MenuItem, Pill } from '@/components/ui/workbench';
+import { cleanIpcError } from '@/lib/errors';
 import { formatDuration } from '@/lib/format';
 import { ipc } from '@/lib/ipc';
 import { useSession } from '@/stores/session';
@@ -63,7 +64,7 @@ export function HistoryList() {
         if (seq !== requestSeq.current) return;
         console.error('[plasma] sidebar history load failed', err);
         // PC8: a failure is an error, not an empty history.
-        setLoadError(err instanceof Error ? err.message : String(err));
+        setLoadError(cleanIpcError(err instanceof Error ? err.message : String(err)));
       }
     },
     [connId],
@@ -93,7 +94,7 @@ export function HistoryList() {
       await navigator.clipboard.writeText(sql);
       setNotice('Copied SQL');
     } catch (err) {
-      setNotice(err instanceof Error ? err.message : String(err));
+      setNotice(cleanIpcError(err instanceof Error ? err.message : String(err)));
     }
   };
 
@@ -213,7 +214,9 @@ export function HistoryList() {
                           onSelect: () => {
                             setEntries((cur) => cur?.filter((x) => x.id !== e.id) ?? cur);
                             void deleteHistoryEntry(e.id).catch((err) =>
-                              setNotice(err instanceof Error ? err.message : String(err)),
+                              setNotice(
+                                cleanIpcError(err instanceof Error ? err.message : String(err)),
+                              ),
                             );
                           },
                         },

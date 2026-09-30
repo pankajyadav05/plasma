@@ -17,6 +17,7 @@ import {
 import { Badge } from '@/components/ui/view-parts';
 import { CheckLine } from '@/features/backup/admin-parts';
 import { cn } from '@/lib/cn';
+import { cleanIpcError } from '@/lib/errors';
 import { ipc } from '@/lib/ipc';
 import { useSession } from '@/stores/session';
 import {
@@ -166,7 +167,7 @@ export function DbSearchDialog({
             ]);
           }
         } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
+          const message = cleanIpcError(err instanceof Error ? err.message : String(err));
           setHits((h) => [
             ...h,
             {
@@ -188,7 +189,7 @@ export function DbSearchDialog({
       else setNote(`Searched ${plan.length} table${plan.length === 1 ? '' : 's'}.`);
     } catch (err) {
       setProgress(null);
-      setNote(err instanceof Error ? err.message : String(err));
+      setNote(cleanIpcError(err instanceof Error ? err.message : String(err)));
     }
   };
 

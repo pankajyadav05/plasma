@@ -39,7 +39,7 @@ import { usePanes } from '@/stores/panes';
 import { useActiveTabSelect, useSession } from '@/stores/session';
 import { type Overlay, useWorkbench } from '@/stores/workbench';
 import { type KeyId, matchGlobalBinding, selectTabIndex } from '@shared/keymap';
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { DisconnectedHome } from './DisconnectedHome';
 import { IconRail } from './IconRail';
 import { SidebarResizer } from './SidebarResizer';
@@ -271,9 +271,21 @@ function PaneSlot({
   focused,
 }: { pane: PaneId; tabId: string | null; focused: boolean }) {
   const focusPane = usePanes((s) => s.focusPane);
+  const slotRef = useRef<HTMLDivElement>(null);
+  const wasFocused = useRef(focused);
+  // ⌥⌘]/⌥⌘[ change the focused pane from the keyboard: move DOM focus into
+  // it too, otherwise typing keeps going to the pane you just left.
+  useEffect(() => {
+    const el = slotRef.current;
+    if (focused && !wasFocused.current && el && !el.contains(document.activeElement)) {
+      el.querySelector<HTMLElement>('.monaco-editor textarea, [role="grid"]')?.focus();
+    }
+    wasFocused.current = focused;
+  }, [focused]);
   return (
     <PaneTabContext.Provider value={tabId}>
       <div
+        ref={slotRef}
         className={
           pane === 'secondary'
             ? 'flex min-h-0 min-w-0 flex-1 basis-0 border-l border-[var(--wb-separator)]'

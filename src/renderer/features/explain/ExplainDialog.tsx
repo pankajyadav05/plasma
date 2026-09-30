@@ -1,6 +1,7 @@
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Pill } from '@/components/ui/workbench';
 import { cn } from '@/lib/cn';
+import { cleanIpcError } from '@/lib/errors';
 import { ipc } from '@/lib/ipc';
 import { useSession } from '@/stores/session';
 import { looksLikeWrite } from '@/stores/session-sql-heuristics';
@@ -72,7 +73,8 @@ export function ExplainDialog({
         setPlanMs(typeof root['Planning Time'] === 'number' ? root['Planning Time'] : null);
         setExecMs(typeof root['Execution Time'] === 'number' ? root['Execution Time'] : null);
       } catch (err) {
-        if (id === runId.current) setError(err instanceof Error ? err.message : String(err));
+        if (id === runId.current)
+          setError(cleanIpcError(err instanceof Error ? err.message : String(err)));
       } finally {
         if (id === runId.current) {
           setLoading(false);

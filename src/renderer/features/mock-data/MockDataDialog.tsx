@@ -16,6 +16,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { cleanIpcError } from '@/lib/errors';
 import { ipc } from '@/lib/ipc';
 import { quoteIdent } from '@/lib/table-query';
 import { useActiveTab, useSession } from '@/stores/session';
@@ -140,7 +141,7 @@ export function MockDataDialog({
       onOpenChange(false);
       void refreshTable();
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(cleanIpcError(err instanceof Error ? err.message : String(err)));
     } finally {
       setBusy(false);
     }

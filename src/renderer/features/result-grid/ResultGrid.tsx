@@ -1323,7 +1323,7 @@ export function ResultGrid() {
                 <span className="font-semibold text-destructive">
                   Commit failed — nothing was saved.{' '}
                 </span>
-                {pendingEditsError?.message}
+                {pendingEditsError?.message.replace(/\s*Nothing was saved\.?\s*$/i, '')}
               </>
             )}
           </span>

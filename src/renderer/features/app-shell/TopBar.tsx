@@ -380,6 +380,9 @@ function StatusCapsule() {
   const canvasMode = useSession((s) => s.canvasMode);
 
   const engine = activeConfig?.engine ?? 'postgres';
+  const redisDb = useSession((s) => s.redisDb);
+  // Redis can switch logical db at runtime; the config only holds the initial one.
+  const dbLabel = engine === 'redis' ? String(redisDb ?? 0) : activeConfig?.database;
   const connected = connectionState === 'connected';
   // Connected = a neutral surface faintly tinted with the theme accent, text
   // --wb-text; the env tag shows as a coloured chip. Only PROD fills the
@@ -424,15 +427,7 @@ function StatusCapsule() {
         : null;
 
   const { outerRef, innerRef, drop } = useCapsuleFit(
-    [
-      serverVersion,
-      transport,
-      activeConfig?.name,
-      activeConfig?.database,
-      object,
-      tag,
-      connected,
-    ].join('\u0000'),
+    [serverVersion, transport, activeConfig?.name, dbLabel, object, tag, connected].join('\u0000'),
   );
 
   return (
@@ -481,10 +476,10 @@ function StatusCapsule() {
               </CapsuleButton>
             }
           />
-          {activeConfig.database && (
+          {dbLabel && (
             <>
               <Sep />
-              <Seg>{activeConfig.database}</Seg>
+              <Seg>{dbLabel}</Seg>
             </>
           )}
           {engine === 'postgres' && drop < 3 && <SchemaSwitcher />}

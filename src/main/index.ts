@@ -704,6 +704,7 @@ function describeUnsaved(state: AppUnsavedState): string | null {
   if (state.pendingEdits > 0) {
     parts.push(`${state.pendingEdits} unsaved grid edit${state.pendingEdits === 1 ? '' : 's'}`);
   }
+  if (state.runningQuery) parts.push('a query that is still running (it will be cancelled)');
   return parts.length > 0 ? `You have ${parts.join(' and ')}.` : null;
 }
 

@@ -27,3 +27,12 @@ describe('commandDetail', () => {
     expect(commandDetail('SELECT', 1200)).toBe('1,200 rows');
   });
 });
+
+describe('commandBadge', () => {
+  it('shows the row count only for row-count commands', async () => {
+    const { commandBadge } = await import('./command-summary');
+    expect(commandBadge('INSERT', 3)).toBe('INSERT 3');
+    expect(commandBadge('SELECT', 1200)).toBe('SELECT 1,200');
+    expect(commandBadge('CREATE', 0, 'create table t(a int)')).toBe('CREATE TABLE');
+  });
+});

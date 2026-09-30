@@ -8,6 +8,7 @@ import {
 } from '@/components/ui/dialog';
 import { IconButton } from '@/components/ui/workbench';
 import { cn } from '@/lib/cn';
+import { cleanIpcError } from '@/lib/errors';
 import { ipc } from '@/lib/ipc';
 import { useSession } from '@/stores/session';
 import type { QueryResult } from '@shared/protocol';
@@ -148,7 +149,7 @@ export function NotebookDialog({
     } catch (err) {
       updateCell(id, {
         running: false,
-        error: err instanceof Error ? err.message : String(err),
+        error: cleanIpcError(err instanceof Error ? err.message : String(err)),
       });
     }
   };

@@ -169,7 +169,11 @@ export function RunningState({ label }: { label: string }) {
 
 /** Raw JSON body for the footer's "JSON" view. */
 export function JsonBody({ value }: { value: unknown }) {
-  const text = useMemo(() => JSON.stringify(value, null, 2), [value]);
+  // Text responses (_cat, plain-text APIs) come back as strings; show them verbatim.
+  const text = useMemo(
+    () => (typeof value === 'string' ? value : JSON.stringify(value, null, 2)),
+    [value],
+  );
   return (
     <div className="min-h-0 min-w-0 flex-1 overflow-auto bg-[var(--wb-content)]">
       <pre className="p-3 font-mono text-[12px] leading-5 text-[var(--wb-text)]">{text}</pre>

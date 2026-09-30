@@ -4,6 +4,7 @@ import { IconButton, Pill } from '@/components/ui/workbench';
 import { computeRowWindow } from '@/features/result-grid/windowed-rows';
 import { useStructureDialogs } from '@/features/structure/structure-dialogs-store';
 import { cn } from '@/lib/cn';
+import { cleanIpcError } from '@/lib/errors';
 import { ipc } from '@/lib/ipc';
 import { type EntityKind, useSession } from '@/stores/session';
 import { defaultSchemaName } from '@/stores/session-schema';
@@ -501,7 +502,10 @@ function useEntityActions({
   return useMemo(() => {
     const session = () => useSession.getState();
     const fail = (err: unknown) =>
-      setStatus({ text: err instanceof Error ? err.message : String(err), error: true });
+      setStatus({
+        text: cleanIpcError(err instanceof Error ? err.message : String(err)),
+        error: true,
+      });
 
     const copy = async (text: string, what: string) => {
       try {

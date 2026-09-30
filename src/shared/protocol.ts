@@ -192,6 +192,8 @@ export interface SshHostKeyPrompt {
 export const AppUnsavedState = z.object({
   openTransaction: z.boolean(),
   pendingEdits: z.number().int().nonnegative(),
+  /** A query is still executing in some tab. */
+  runningQuery: z.boolean().optional(),
 });
 export type AppUnsavedState = z.infer<typeof AppUnsavedState>;
 

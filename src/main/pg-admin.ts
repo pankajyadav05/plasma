@@ -1,7 +1,7 @@
 import { type ChildProcess, execFile, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { constants, createReadStream } from 'node:fs';
-import { access, stat } from 'node:fs/promises';
+import { access, stat, unlink } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { createGunzip } from 'node:zlib';
 import {
@@ -132,6 +132,7 @@ export async function startJob(opts: RunJobOptions): Promise<string> {
     windowsHide: true,
     stdio: [opts.stdinFile ? 'pipe' : 'ignore', 'pipe', 'pipe'],
   });
+  const startedAt = Date.now();
   const job: Job = { child, canceled: false };
   jobs.set(jobId, job);
 
@@ -167,6 +168,16 @@ export async function startJob(opts: RunJobOptions): Promise<string> {
         bytes = st.isDirectory() ? undefined : st.size;
       } catch {
         /* output not readable */
+      }
+    }
+    if (code !== 0 && opts.outputPath) {
+      // A cancelled or failed dump leaves a truncated file that looks like a real backup.
+      try {
+        const st = await stat(opts.outputPath);
+        // Only a file this job wrote; an untouched older file stays.
+        if (st.isFile() && st.mtimeMs >= startedAt - 1000) await unlink(opts.outputPath);
+      } catch {
+        /* nothing was written */
       }
     }
     finish({

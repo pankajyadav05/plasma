@@ -105,7 +105,7 @@ export function RedisAnalyzeView({ tabId }: { tabId: string }) {
             if (!running) void onRun();
           }}
         >
-          <div className="relative w-56">
+          <div className="relative w-40 shrink-0">
             <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--wb-text-3)]" />
             <input
               value={match}

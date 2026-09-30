@@ -19,6 +19,7 @@ import { Badge } from '@/components/ui/view-parts';
 import { Segmented } from '@/components/ui/workbench';
 import { CheckLine, FormRow } from '@/features/backup/admin-parts';
 import { cn } from '@/lib/cn';
+import { cleanIpcError } from '@/lib/errors';
 import { ipc } from '@/lib/ipc';
 import { useSession } from '@/stores/session';
 import {
@@ -106,7 +107,7 @@ export function RolesDialog({
       setRoles(parseRoleRows(res.columns, res.rows));
       setLoadError(null);
     } catch (err) {
-      setLoadError(err instanceof Error ? err.message : String(err));
+      setLoadError(cleanIpcError(err instanceof Error ? err.message : String(err)));
     }
   }, []);
 
@@ -164,7 +165,10 @@ export function RolesDialog({
           { timeoutMs: 15000 },
         )
         .then((res) => alive && setPrivRows(parsePrivilegeRows(res.rows)))
-        .catch((err) => alive && setPrivError(err instanceof Error ? err.message : String(err)))
+        .catch(
+          (err) =>
+            alive && setPrivError(cleanIpcError(err instanceof Error ? err.message : String(err))),
+        )
         .finally(() => alive && setPrivLoading(false));
     }, 200);
     return () => {
@@ -200,6 +204,7 @@ export function RolesDialog({
   const apply = async () => {
     if (statements.length === 0 || readOnly) return;
     setApplyError(null);
+    setApplied(null);
     const script = statements.map((s) => `${s.display};`).join('\n');
     const ok = await confirmUserSql(script, {
       force: true,
@@ -230,8 +235,9 @@ export function RolesDialog({
       setPreviewOpen(false);
       setPrivRows([]);
     } catch (err) {
+      setApplied(null);
       setApplyError(
-        `${err instanceof Error ? err.message : String(err)}${done > 0 ? ` (${done} of ${statements.length} statements were applied before the error)` : ''}`,
+        `${cleanIpcError(err instanceof Error ? err.message : String(err))}${done > 0 ? ` (${done} of ${statements.length} statements were applied before the error)` : ''}`,
       );
       await loadRoles();
     } finally {
