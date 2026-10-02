@@ -113,6 +113,9 @@
     ],
     "ignoredOptionalDependencies": [
       "cpu-features"
-    ]
+    ],
+    "overrides": {
+      "node-abi@^4": "^4.35.0"
+    }
   }
 }
