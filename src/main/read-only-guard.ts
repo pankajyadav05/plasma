@@ -40,6 +40,7 @@ const WRITE_KINDS = new Set<string>([
   'osCreateIndex',
   'osDeleteIndex',
   'adminRestore',
+  'safeRunStart', // holds an open write transaction
 ]);
 
 /** Reads (or session plumbing) whose names would trip the fallback pattern. */
@@ -52,6 +53,7 @@ const READ_KINDS = new Set<string>([
   'beginTxn',
   'commitTxn', // ends a (read-only) transaction
   'rollbackTxn',
+  'safeRunFinish', // ends a Safe Run (which a read-only session can never start)
   'redisCancel',
   'osCancel',
   'redisSubscribe',
@@ -137,6 +139,8 @@ function describeKind(kind: string): string {
       return 'deleting an index';
     case 'adminRestore':
       return 'restoring a backup';
+    case 'safeRunStart':
+      return 'Safe Run of a write';
     default:
       return kind;
   }

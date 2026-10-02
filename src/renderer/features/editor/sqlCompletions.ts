@@ -1,5 +1,6 @@
 import { useSession } from '@/stores/session';
 import type { SchemaInfo } from '@shared/protocol';
+import { mergeSnippets, previewBody } from '@shared/snippets';
 import type * as MonacoType from 'monaco-editor';
 
 /**
@@ -70,6 +71,7 @@ let registered = false;
 export function registerSqlCompletions(monaco: typeof MonacoType): void {
   if (registered) return;
   registered = true;
+  registerSnippetCompletions(monaco);
 
   monaco.languages.registerCompletionItemProvider('sql', {
     // Only '.' — a ' ' trigger rebuilt every suggestion on each space (F14);
@@ -193,6 +195,52 @@ export function registerSqlCompletions(monaco: typeof MonacoType): void {
 
       return {
         suggestions: [...tableSuggestions, ...columnSuggestions, ...keywordSuggestions],
+      };
+    },
+  });
+}
+
+/**
+ * Snippets (built-in + the user's) as completions: the prefix is what you
+ * type, the name and description show beside it, and accepting one starts
+ * a tab-stop session. Re-reads the user's list on every request, so edits
+ * in the Snippets panel apply immediately.
+ */
+function registerSnippetCompletions(monaco: typeof MonacoType): void {
+  monaco.languages.registerCompletionItemProvider('sql', {
+    provideCompletionItems: (model, position) => {
+      const word = model.getWordUntilPosition(position);
+      // `alias.col` / `schema.table` positions are the schema provider's.
+      if (word.startColumn > 1) {
+        const before = model.getValueInRange({
+          startLineNumber: position.lineNumber,
+          startColumn: word.startColumn - 1,
+          endLineNumber: position.lineNumber,
+          endColumn: word.startColumn,
+        });
+        if (before === '.') return { suggestions: [] };
+      }
+      const range: MonacoType.IRange = {
+        startLineNumber: position.lineNumber,
+        endLineNumber: position.lineNumber,
+        startColumn: word.startColumn,
+        endColumn: word.endColumn,
+      };
+      const user = useSession.getState().settings.snippets ?? [];
+      return {
+        suggestions: mergeSnippets(user).map((sn) => ({
+          label: { label: sn.prefix, description: sn.name },
+          kind: monaco.languages.CompletionItemKind.Snippet,
+          insertText: sn.body,
+          insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+          detail: `${sn.source === 'user' ? 'your snippet' : 'snippet'} · ${sn.name}`,
+          documentation: {
+            value: `${sn.description ? `${sn.description}\n\n` : ''}\`\`\`sql\n${previewBody(sn.body)}\n\`\`\``,
+          },
+          filterText: sn.prefix,
+          sortText: `0_${sn.prefix}`,
+          range,
+        })),
       };
     },
   });

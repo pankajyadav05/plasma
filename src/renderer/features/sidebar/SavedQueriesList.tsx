@@ -1,11 +1,7 @@
 import { Button } from '@/components/ui/button';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { IconButton, MenuItem, Pill } from '@/components/ui/workbench';
-import {
-  SnippetVarsDialog,
-  applySnippetVars,
-  extractSnippetVars,
-} from '@/features/right-rail/SnippetVarsDialog';
+import { SnippetsPanel } from '@/features/snippets/SnippetsPanel';
 import { cn } from '@/lib/cn';
 import { useActiveTab, useSession } from '@/stores/session';
 import { savedQueryFolders } from '@/stores/session-saved-queries';
@@ -53,15 +49,10 @@ export function SavedQueriesList() {
   const updateSavedQuery = useSession((s) => s.updateSavedQuery);
   const updateSavedQueryFromTab = useSession((s) => s.updateSavedQueryFromTab);
   const addTab = useSession((s) => s.addTab);
-  const setSql = useSession((s) => s.setSql);
-  const renameActiveTab = useSession((s) => s.renameActiveTab);
 
   const [naming, setNaming] = useState(false);
   const [draft, setDraft] = useState('');
   const [filter, setFilter] = useState('');
-  const [varPrompt, setVarPrompt] = useState<{ sql: string; vars: string[]; name: string } | null>(
-    null,
-  );
   const [menu, setMenu] = useState<ContextMenuState | null>(null);
   const [editing, setEditing] = useState<Editing>(null);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
@@ -108,17 +99,9 @@ export function SavedQueriesList() {
     setDraft('');
   };
 
-  // PC7: with or without :vars, opening only opens — never runs.
-  const open = (s: SavedQuery) => {
-    if (s.kind === 'sql') {
-      const vars = extractSnippetVars(s.sql);
-      if (vars.length > 0) {
-        setVarPrompt({ sql: s.sql, vars, name: s.name });
-        return;
-      }
-    }
-    openSavedQuery(s.id);
-  };
+  // PC7: opening only opens — never runs. `:name` variables are filled in
+  // the Variables bar on the first run (saved values come back as defaults).
+  const open = (s: SavedQuery) => openSavedQuery(s.id);
 
   const commitEdit = () => {
     if (!editing) return;
@@ -300,6 +283,8 @@ export function SavedQueriesList() {
         )}
       </div>
 
+      <SnippetsPanel filter={filter} />
+
       <div className="flex h-9 shrink-0 items-center gap-0.5 border-t border-[var(--wb-separator)] px-2">
         <IconButton
           variant="plain"
@@ -327,22 +312,6 @@ export function SavedQueriesList() {
       </div>
 
       <SidebarContextMenu state={menu} onClose={() => setMenu(null)} />
-
-      <SnippetVarsDialog
-        open={Boolean(varPrompt)}
-        varNames={varPrompt?.vars ?? []}
-        onCancel={() => setVarPrompt(null)}
-        onConfirm={(values) => {
-          if (!varPrompt) return;
-          const filled = applySnippetVars(varPrompt.sql, values);
-          // Open as a fresh SQL tab (not run — same as snippets without
-          // vars); the saved snippet stays parametric for next time.
-          addTab();
-          setSql(filled);
-          renameActiveTab(varPrompt.name);
-          setVarPrompt(null);
-        }}
-      />
     </div>
   );
 }

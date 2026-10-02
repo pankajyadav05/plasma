@@ -36,6 +36,7 @@ export type CommandId =
 const POSTGRES_ONLY: ReadonlySet<CommandId> = new Set<CommandId>([
   'runQuery',
   'runQueryAll',
+  'safeRun',
   'cancelQuery',
   'history',
   'newTab',
@@ -201,6 +202,9 @@ export function runCommand(id: CommandId): boolean {
       return true;
     case 'runQueryAll':
       void s.runQuery({ all: true });
+      return true;
+    case 'safeRun':
+      void s.runSafeRun();
       return true;
     case 'cancelQuery':
       void s.cancelQuery();

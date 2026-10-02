@@ -1,4 +1,6 @@
 import { runCommand, selectTabAt } from '@/features/keymap/commands';
+import { forgetEditor, rememberEditor } from '@/features/snippets/editor-registry';
+import { useSnippetEditor } from '@/features/snippets/snippet-editor-store';
 import { statementPosition } from '@/lib/sql-split';
 import { useSession } from '@/stores/session';
 import type { EditorCursor, TabCaret } from '@/stores/workbench';
@@ -11,6 +13,7 @@ import {
   monacoKeybinding,
   selectTabIndex,
 } from '@shared/keymap';
+import { snippetBodyFromSelection, suggestPrefix } from '@shared/snippets';
 import type * as MonacoType from 'monaco-editor';
 import { Suspense, lazy, useCallback, useEffect, useRef, useState } from 'react';
 import { PLASMA_THEME_ID, applyMonacoTheme } from './paperTheme';
@@ -195,6 +198,11 @@ export function MonacoEditor({
         publishCaret(editor);
         onRunAllRef.current();
       });
+      editor.addCommand(monacoKeybinding(monaco, binding('safeRun').chord), () => {
+        hideWidgets();
+        publishCaret(editor);
+        runCommand('safeRun');
+      });
       const format = binding('formatSql');
       for (const chord of [format.chord, ...(format.altChords ?? [])]) {
         editor.addCommand(monacoKeybinding(monaco, chord), () => {
@@ -239,8 +247,35 @@ export function MonacoEditor({
         }
       });
 
+      // Snippets: remember the focused editor for the Snippets panel, and
+      // offer the selection as a new snippet from the context menu.
+      const saveAsSnippet = editor.addAction({
+        id: 'plasma.saveSelectionAsSnippet',
+        label: 'Save Selection as Snippet…',
+        contextMenuGroupId: '9_cutcopypaste',
+        contextMenuOrder: 9,
+        precondition: 'editorHasSelection',
+        run: (ed) => {
+          const model = ed.getModel();
+          const sel = ed.getSelection();
+          const text = model && sel && !sel.isEmpty() ? model.getValueInRange(sel) : '';
+          if (!text.trim()) return;
+          const name = text.trim().split(/\s+/).slice(0, 4).join(' ').slice(0, 40);
+          useSnippetEditor.getState().open({
+            name,
+            prefix: suggestPrefix(name),
+            description: '',
+            body: snippetBodyFromSelection(text),
+          });
+        },
+      });
+      rememberEditor(editor);
+      const focusDisposable = editor.onDidFocusEditorText(() => rememberEditor(editor));
+
       publishCaret(editor);
       const disposables = [
+        saveAsSnippet,
+        focusDisposable,
         editor.onDidChangeCursorPosition(() => publishCaret(editor)),
         editor.onDidChangeCursorSelection(() => publishCaret(editor)),
         // Tab switch swaps the model (per-tab `path`); the restored
@@ -251,6 +286,7 @@ export function MonacoEditor({
       ];
       editor.onDidDispose(() => {
         for (const d of disposables) d.dispose();
+        forgetEditor(editor);
         if (editorRef.current === editor) editorRef.current = null;
       });
     },

@@ -1,6 +1,7 @@
 import { Button } from '@/components/ui/button';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { IconButton, MenuItem } from '@/components/ui/workbench';
+import { ReferencedBy } from '@/features/result-grid/ReferencedBy';
 import { SidebarSearch } from '@/features/sidebar/sidebar-parts';
 import { cn } from '@/lib/cn';
 import { cleanIpcError } from '@/lib/errors';
@@ -109,22 +110,32 @@ export function DetailsPanel() {
 
       <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
         {current ? (
-          fields.length === 0 ? (
-            <div className="px-4 py-3 text-[13px] text-[var(--wb-text-2)]">
-              no field matches "{query}"
-            </div>
-          ) : (
-            fields.map(({ col, value, index }) => (
-              <FieldRow
-                key={`${col.name}-${index}`}
-                col={col}
-                value={value}
-                columnIndex={index}
-                selected={index === current.columnIndex}
-                editing={editable}
+          <>
+            {fields.length === 0 ? (
+              <div className="px-4 py-3 text-[13px] text-[var(--wb-text-2)]">
+                no field matches "{query}"
+              </div>
+            ) : (
+              fields.map(({ col, value, index }) => (
+                <FieldRow
+                  key={`${col.name}-${index}`}
+                  col={col}
+                  value={value}
+                  columnIndex={index}
+                  selected={index === current.columnIndex}
+                  editing={editable}
+                />
+              ))
+            )}
+            {tab?.kind === 'table' && tab.tableSchema && tab.tableName && (
+              <ReferencedBy
+                schemaName={tab.tableSchema}
+                tableName={tab.tableName}
+                columns={current.columns}
+                row={current.row}
               />
-            ))
-          )
+            )}
+          </>
         ) : (
           <>
             <div className="flex min-h-[120px] flex-1 flex-col items-center justify-center gap-1.5 px-6 text-center">

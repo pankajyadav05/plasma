@@ -11,6 +11,7 @@ import {
   Copy,
   EyeOff,
   Filter as FilterIcon,
+  MoveHorizontal,
   Pin,
   PinOff,
   X,
@@ -30,6 +31,12 @@ interface Props {
   onClearSort: () => void;
   onTogglePin: () => void;
   onHide: () => void;
+  /** Fit the column width to its header and content. */
+  onAutoFit?: () => void;
+  /** Pin every column from the left edge up to this one. */
+  onFreezeUpTo?: () => void;
+  /** Unpin all columns (offered while any column is pinned). */
+  onUnfreezeAll?: () => void;
 }
 
 function freshId(): string {
@@ -46,6 +53,9 @@ export function ColumnHeaderMenu({
   onClearSort,
   onTogglePin,
   onHide,
+  onAutoFit,
+  onFreezeUpTo,
+  onUnfreezeAll,
 }: Props) {
   const [open, setOpen] = useState(false);
   const addFilter = useSession((s) => s.addFilter);
@@ -136,6 +146,37 @@ export function ColumnHeaderMenu({
             close();
           }}
         />
+        {onFreezeUpTo && (
+          <MenuItem
+            icon={<Pin className="h-3.5 w-3.5" />}
+            label="Freeze columns up to here"
+            onClick={() => {
+              onFreezeUpTo();
+              close();
+            }}
+          />
+        )}
+        {onUnfreezeAll && (
+          <MenuItem
+            icon={<PinOff className="h-3.5 w-3.5" />}
+            label="Unfreeze all columns"
+            onClick={() => {
+              onUnfreezeAll();
+              close();
+            }}
+          />
+        )}
+        {onAutoFit && (
+          <MenuItem
+            icon={<MoveHorizontal className="h-3.5 w-3.5" />}
+            label="Auto-fit width"
+            hint="Double-click edge"
+            onClick={() => {
+              onAutoFit();
+              close();
+            }}
+          />
+        )}
         <MenuItem
           icon={<EyeOff className="h-3.5 w-3.5" />}
           label="Hide column"

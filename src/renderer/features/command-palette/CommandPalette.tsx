@@ -38,6 +38,11 @@ interface PaletteEntry {
 const ACTIONS: ReadonlyArray<{ id: CommandId; label: string; keywords?: string[] }> = [
   { id: 'runQuery', label: 'Run query', keywords: ['execute'] },
   { id: 'runQueryAll', label: 'Run all statements', keywords: ['execute', 'script'] },
+  {
+    id: 'safeRun',
+    label: 'Safe Run (dry run a write)',
+    keywords: ['dry run', 'preview', 'rollback', 'update', 'delete', 'transaction'],
+  },
   { id: 'cancelQuery', label: 'Cancel running query', keywords: ['stop', 'abort'] },
   { id: 'newTab', label: 'New query tab', keywords: ['sql', 'editor'] },
   { id: 'closeTab', label: 'Close tab' },

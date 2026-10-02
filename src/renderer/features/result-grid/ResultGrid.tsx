@@ -1,4 +1,5 @@
 import { Button } from '@/components/ui/button';
+import { FixWithAi } from '@/features/ai/FixWithAi';
 import { cn } from '@/lib/cn';
 import { commandDetail, commandTitle } from '@/lib/command-summary';
 import { cleanIpcError } from '@/lib/errors';
@@ -17,36 +18,80 @@ import { useWorkbench } from '@/stores/workbench';
 import type { ColumnMeta } from '@shared/protocol';
 import {
   AlertCircle,
+  ArrowDownToLine,
   ArrowUpRight,
   ChevronDown,
   ChevronUp,
   Copy,
   CopyPlus,
   Eraser,
+  Eye,
   Filter as FilterIcon,
+  Info,
   Loader2,
+  PenLine,
   Pencil,
+  Replace,
   Search,
   Trash2,
   Undo2,
   X,
 } from 'lucide-react';
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { FindReplaceDialog, PasteOverflowDialog, SetValueDialog } from './BulkEditDialogs';
 import { type CellDetail, CellDetailDialog } from './CellDetailDialog';
 import { ColumnHeaderMenu } from './ColumnHeaderMenu';
+import { FkPeek, type PeekTarget } from './FkPeek';
 import { GridContextMenu, type GridMenuEntry } from './GridContextMenu';
 import { type RowDetail, RowDetailSheet } from './RowDetailSheet';
+import { type EditorMove, SmartCellEditor } from './SmartCellEditor';
 import { TableDefinitionView } from './TableDefinitionView';
+import { autoFitWidth, columnsToFreeze } from './autofit';
 import { cellToText } from './cell-edit';
-import { COPY_FORMATS, type CopyFormat, formatRows, parseClipboardBlock } from './clipboard-format';
+import { enumLabelsFor, smartEditorKind } from './cell-values';
+import {
+  COPY_FORMATS,
+  type CopyFormat,
+  copyTarget,
+  formatRows,
+  parseClipboardBlock,
+} from './clipboard-format';
+import { computeColumnStats } from './column-stats';
 import {
   type IndexedRow,
   slicePageSorted,
   slicePageUnsorted,
   sortRowsWithIndex,
 } from './display-rows';
+import {
+  type FkGroup,
+  describeIncoming,
+  formatIncomingCount,
+  incomingFks,
+  incomingRequestsForRow,
+  lookupForRow,
+  openArgs,
+  outgoingFks,
+} from './fk-nav';
+import { useIncomingCounts } from './fk-nav-client';
 import { shouldRefocusGrid } from './grid-focus';
 import { nextCell, prevCell } from './grid-nav';
+import {
+  type CellWrite,
+  type FindCell,
+  type FindReplaceOptions,
+  type FindReplacePlan,
+  type PastePlan,
+  describeBulkResult,
+  describePasteNotes,
+  isTextLikeType,
+  loadedRowsNote,
+  planFillDown,
+  planFindReplace,
+  planPaste,
+  planSetValue,
+  rangeColumns,
+} from './range-ops';
 import { isErrorTabActive } from './result-view';
 import { ROW_HEIGHT_PX, computeRowWindow } from './windowed-rows';
 
@@ -154,6 +199,11 @@ export function ResultGrid() {
   const deleteRows = useSession((s) => s.deleteRows);
   const duplicateRow = useSession((s) => s.duplicateRow);
   const updatePendingInsert = useSession((s) => s.updatePendingInsert);
+  const updateCells = useSession((s) => s.updateCells);
+  const insertRows = useSession((s) => s.insertRows);
+  const updatePendingInserts = useSession((s) => s.updatePendingInserts);
+  const clearStickyColumns = useSession((s) => s.clearStickyColumns);
+  const setSelectionStats = useWorkbench((s) => s.setSelectionStats);
   const discardPendingEdit = useSession((s) => s.discardPendingEdit);
   const schema = useSession((s) => s.schema);
   const openForeignRow = useSession((s) => s.openForeignRow);
@@ -217,6 +267,19 @@ export function ResultGrid() {
 
   // Right-click menu.
   const [menu, setMenu] = useState<{ x: number; y: number; cell: Cell } | null>(null);
+
+  // Bulk edits: "Set value…", find & replace, pasted block taller than the grid.
+  const [setValueOpen, setSetValueOpen] = useState(false);
+  const [findOpen, setFindOpen] = useState(false);
+  const [pasteOverflow, setPasteOverflow] = useState<PastePlan | null>(null);
+  const [gridNote, setGridNote] = useState<string | null>(null);
+
+  // FK peek popover (hover the FK arrow, ⌥-click an FK cell, or the menu).
+  const [peek, setPeek] = useState<PeekTarget | null>(null);
+  const peekTimers = useRef<{
+    open?: ReturnType<typeof setTimeout>;
+    close?: ReturnType<typeof setTimeout>;
+  }>({});
 
   // In-grid search — Ctrl+F / ⌘F toggles the floating bar. Matches are
   // computed from displayRows (case-insensitive substring). Enter /
@@ -401,7 +464,16 @@ export function ResultGrid() {
     setRangeEnd(null);
     setEditingCell(null);
     setMenu(null);
+    setPeek(null);
+    setPasteOverflow(null);
   }, [tab?.id, tab?.queryResult]);
+
+  // Bulk-edit notes fade on their own.
+  useEffect(() => {
+    if (!gridNote) return;
+    const t = setTimeout(() => setGridNote(null), 10_000);
+    return () => clearTimeout(t);
+  }, [gridNote]);
 
   const rowWindow = useMemo(
     () => computeRowWindow(displayRows.length, scrollTop, viewportHeight),
@@ -412,41 +484,54 @@ export function ResultGrid() {
     [displayRows, rowWindow.start, rowWindow.end],
   );
 
-  // Foreign-key lookup for the current table tab, keyed by column name.
-  // Composite FKs (several columns to the same referenced table) navigate
-  // with every column of the key (F7). SQL tabs can't map projections
-  // back to source columns without a parser — skip entirely.
+  // Foreign keys of the current table tab. Grouped by constraint, so two FKs
+  // to the same table (created_by / updated_by) stay separate and composite
+  // keys navigate with every column of the key (F7). SQL tabs can't map
+  // projections back to source columns without a parser — skip entirely.
+  const outgoing = useMemo(
+    () =>
+      tab?.kind === 'table' && tab.tableSchema && tab.tableName
+        ? outgoingFks(schema?.foreignKeys, tab.tableSchema, tab.tableName)
+        : [],
+    [tab?.kind, tab?.tableSchema, tab?.tableName, schema?.foreignKeys],
+  );
   const fkByColumn = useMemo(() => {
-    type Fk = {
-      refSchema: string;
-      refTable: string;
-      pairs: Array<{ column: string; refColumn: string }>;
-    };
-    const groups = new Map<string, Fk>();
-    const m = new Map<string, { fk: Fk; refColumn: string }>();
-    if (tab?.kind === 'table' && tab.tableSchema && tab.tableName && schema?.foreignKeys) {
-      for (const fk of schema.foreignKeys) {
-        if (fk.schema !== tab.tableSchema || fk.table !== tab.tableName) continue;
-        const key = `${fk.refSchema}.${fk.refTable}`;
-        let g = groups.get(key);
-        if (!g) {
-          g = { refSchema: fk.refSchema, refTable: fk.refTable, pairs: [] };
-          groups.set(key, g);
-        }
-        g.pairs.push({ column: fk.column, refColumn: fk.refColumn });
-        m.set(fk.column, { fk: g, refColumn: fk.refColumn });
-      }
+    const m = new Map<string, { fk: FkGroup; refColumn: string }>();
+    for (const g of outgoing) {
+      for (const p of g.pairs)
+        if (!m.has(p.column)) m.set(p.column, { fk: g, refColumn: p.refColumn });
     }
     return m;
-  }, [tab?.kind, tab?.tableSchema, tab?.tableName, schema?.foreignKeys]);
+  }, [outgoing]);
 
   /** Foreign keys in other tables that point at this table (reverse navigation). */
-  const referencedBy = useMemo(() => {
-    if (tab?.kind !== 'table' || !schema?.foreignKeys) return [];
-    return schema.foreignKeys.filter(
-      (fk) => fk.refSchema === tab.tableSchema && fk.refTable === tab.tableName,
-    );
-  }, [tab?.kind, tab?.tableSchema, tab?.tableName, schema?.foreignKeys]);
+  const incoming = useMemo(
+    () =>
+      tab?.kind === 'table' && tab.tableSchema && tab.tableName
+        ? incomingFks(schema?.foreignKeys, tab.tableSchema, tab.tableName)
+        : [],
+    [tab?.kind, tab?.tableSchema, tab?.tableName, schema?.foreignKeys],
+  );
+
+  // Row counts for the context menu's "Referenced by" entries — fetched only
+  // while the menu is open, from the row's SERVER values.
+  const menuRequests = useMemo(() => {
+    if (!menu || incoming.length === 0 || tab?.kind !== 'table' || !tab.queryResult) return [];
+    const entry = displayRows[menu.cell.row];
+    const server =
+      entry && entry.originalIndex >= 0 ? tab.queryResult.rows[entry.originalIndex] : undefined;
+    return server ? incomingRequestsForRow(incoming, tab.queryResult.columns, server) : [];
+  }, [menu, incoming, tab?.kind, tab?.queryResult, displayRows]);
+  const menuCounts = useIncomingCounts(menuRequests);
+
+  // Which smart editor (if any) each result column gets.
+  const smartKinds = useMemo(
+    () =>
+      (columns ?? []).map((c) =>
+        smartEditorKind(c.dataTypeName, enumLabelsFor(schema, c.dataTypeName)),
+      ),
+    [columns, schema],
+  );
 
   // Compute search matches — visible-row / original-col indices. Keyed
   // off displayRows (already page-sliced) so matches always line up
@@ -559,6 +644,8 @@ export function ResultGrid() {
     visibleColumns.forEach((c, pos) => m.set(c.originalIndex, pos));
     return m;
   }, [visibleColumns]);
+  /** Original column index at each visible position. */
+  const visibleColIdx = useMemo(() => visibleColumns.map((c) => c.originalIndex), [visibleColumns]);
 
   const anchor = tab?.selectedCell ?? null;
   const range = useMemo(() => {
@@ -579,6 +666,53 @@ export function ResultGrid() {
     const p = colPos.get(col);
     return p !== undefined && row >= range.r0 && row <= range.r1 && p >= range.p0 && p <= range.p1;
   };
+
+  // Quick stats of the selected range → result footer (debounced while dragging).
+  useEffect(() => {
+    if (!tabId || !range || !columns) {
+      setSelectionStats(null);
+      return;
+    }
+    const timer = setTimeout(() => {
+      const last = Math.min(range.r1, displayRows.length - 1);
+      const cols = rangeColumns(range, visibleColIdx).flatMap((col) => {
+        const meta = columns[col];
+        return meta ? [{ col, name: meta.name, typeName: meta.dataTypeName }] : [];
+      });
+      setSelectionStats({
+        tabId,
+        rows: last - range.r0 + 1,
+        cells: (last - range.r0 + 1) * cols.length,
+        stats: computeColumnStats(cols, range.r0, last, (r, c) => cellText(displayRows[r], c)),
+      });
+    }, 120);
+    return () => clearTimeout(timer);
+  }, [tabId, range, columns, visibleColIdx, displayRows, cellText, setSelectionStats]);
+  useEffect(() => () => setSelectionStats(null), [setSelectionStats]);
+
+  /** Columns "all text columns" searches: visible ones with a text-like type. */
+  const textColumnIdx = useMemo(
+    () => visibleColIdx.filter((c) => isTextLikeType(columns?.[c]?.dataTypeName)),
+    [visibleColIdx, columns],
+  );
+  const findColumn = anchor ? (columns?.[anchor.col]?.name ?? null) : null;
+  const buildFindPlan = useCallback(
+    (opts: FindReplaceOptions, scope: 'column' | 'text-columns'): FindReplacePlan => {
+      const cols =
+        scope === 'column'
+          ? anchor && smartKinds[anchor.col] !== 'bytea'
+            ? [anchor.col]
+            : []
+          : textColumnIdx;
+      const cells: FindCell[] = [];
+      displayRows.forEach((entry, row) => {
+        if (entry.status === 'deleted') return;
+        for (const col of cols) cells.push({ row, col, text: cellText(entry, col) });
+      });
+      return planFindReplace(cells, opts);
+    },
+    [anchor, smartKinds, textColumnIdx, displayRows, cellText],
+  );
 
   // F2: keep the active cell in view after keyboard moves / find jumps.
   const focusCell = rangeEnd ?? anchor;
@@ -669,7 +803,10 @@ export function ResultGrid() {
     const entry = displayRows[cell.row];
     if (!canEditEntry(entry)) return false;
     const text = cellText(entry, cell.col);
-    setEditingCell({ row: cell.row, col: cell.col, value: initial ?? text ?? null });
+    // Structured types open their popover editor on the current value; a
+    // typed character only seeds the plain inline editor.
+    const seed = smartKinds[cell.col] === 'text' ? initial : undefined;
+    setEditingCell({ row: cell.row, col: cell.col, value: seed ?? text ?? null });
     setEditError(null);
     return true;
   };
@@ -701,6 +838,30 @@ export function ResultGrid() {
       setEditError(cleanIpcError(err instanceof Error ? err.message : String(err)));
       return false;
     }
+  };
+
+  /** Commit the open editor, then optionally step to the next cell / refocus the grid. */
+  const finishEdit = (
+    visibleRow: number,
+    pos: number,
+    opts?: { value?: string | null; move?: EditorMove; refocus?: boolean },
+  ) => {
+    void (async () => {
+      const ok = await commitEdit(opts?.value !== undefined ? { value: opts.value } : undefined);
+      if (!ok) return;
+      if (opts?.move) {
+        const target =
+          opts.move === 'prev'
+            ? prevCell({ row: visibleRow, col: pos }, displayRows.length, visibleColumns.length)
+            : opts.move === 'next'
+              ? nextCell({ row: visibleRow, col: pos }, displayRows.length, visibleColumns.length)
+              : { row: Math.min(displayRows.length - 1, visibleRow + 1), col: pos };
+        if (target) {
+          select({ row: target.row, col: visibleColumns[target.col]!.originalIndex });
+        }
+      }
+      if (opts?.refocus) refocusGrid();
+    })();
   };
 
   /** Cells covered by the range, or just the anchor. */
@@ -785,43 +946,243 @@ export function ResultGrid() {
     copyText(formatRows('tsv', columns, rows, cols));
   };
 
+  /** "Copy as…": checked rows, else the selected range (only its columns), else the row. */
   const copyRows = (format: CopyFormat) => {
     if (!columns || !tab) return;
-    const rows = targetRows().map((e) => e.row);
-    const cols = visibleColumns.map((c) => c.originalIndex);
+    const target = copyTarget({
+      checkedRows: tab.selectedRows.size > 0,
+      range,
+      anchorRow: anchor?.row ?? null,
+      visibleCols: visibleColIdx,
+    });
+    if (!target) return;
+    const rows =
+      target.rows === 'checked'
+        ? targetRows().map((e) => e.row)
+        : displayRows.slice(target.rows.r0, target.rows.r1 + 1).map((e) => e.row);
     const table =
       tab.kind === 'table' && tab.tableName
         ? { schema: tab.tableSchema, name: tab.tableName }
         : undefined;
-    copyText(formatRows(format, columns, rows, cols, table));
+    copyText(formatRows(format, columns, rows, target.cols, table));
   };
 
-  /** ⌘V: paste a TSV block at the anchor (a single value fills the range). */
-  const pasteBlock = async (text: string) => {
+  // ── Bulk edits (all staged as ordinary pending edits) ──
+
+  const errorText = (err: unknown) =>
+    cleanIpcError(err instanceof Error ? err.message : String(err));
+
+  /** Where the loaded rows end, for the "only N of M rows" note. */
+  const loadedNote = () =>
+    tab?.kind === 'table'
+      ? loadedRowsNote(tab.queryResult?.rows.length ?? 0, tab.totalRowCount)
+      : null;
+
+  /**
+   * Stage cell writes: edits to loaded rows go through the pending-edits
+   * store (read-only / safe mode / PK checks happen there), writes onto
+   * not-yet-inserted rows update those inserts. Reports what happened.
+   */
+  const stageWrites = (
+    writes: CellWrite[],
+    verb: string,
+    opts?: { skipped?: number; alwaysNoteLoaded?: boolean },
+  ) => {
+    setEditError(null);
+    try {
+      const updates: Array<{ rowIndex: number; columnIndex: number; value: string | null }> = [];
+      const insertPatches: Array<{ id: string; column: string; value: string | null }> = [];
+      let skipped = opts?.skipped ?? 0;
+      for (const w of writes) {
+        const entry = displayRows[w.row];
+        const colMeta = columns?.[w.col];
+        if (!entry || !colMeta || entry.status === 'deleted') {
+          skipped++;
+          continue;
+        }
+        if (entry.status === 'inserted' && entry.insert) {
+          insertPatches.push({ id: entry.insert.id, column: colMeta.name, value: w.value });
+        } else {
+          updates.push({ rowIndex: entry.originalIndex, columnIndex: w.col, value: w.value });
+        }
+      }
+      const res = updateCells(updates);
+      updatePendingInserts(insertPatches);
+      setGridNote(
+        describeBulkResult({
+          verb,
+          staged: res.queued + insertPatches.length,
+          unchanged: res.unchanged,
+          skipped: skipped + res.skipped,
+          // Only worth saying when the edit could have reached past what is loaded.
+          loadedNote:
+            opts?.alwaysNoteLoaded ||
+            new Set(writes.map((w) => w.row)).size >=
+              displayRows.filter((r) => r.originalIndex >= 0).length
+              ? loadedNote()
+              : null,
+        }),
+      );
+    } catch (err) {
+      setEditError(errorText(err));
+    }
+  };
+
+  const applySetValue = (value: string | null) => {
+    stageWrites(planSetValue(selectedCells(), value), 'Set value');
+  };
+
+  /** ⌘D on two or more rows: copy the first row of the range down, per column. */
+  const fillDown = () => {
+    if (!range) {
+      setGridNote('Select two or more rows to fill down.');
+      return;
+    }
+    const plan = planFillDown(range, visibleColIdx, (r, c) => cellText(displayRows[r], c));
+    if (plan.note) {
+      setGridNote(plan.note);
+      return;
+    }
+    stageWrites(plan.writes, 'Filled down');
+  };
+
+  const queuePastedRows = (plan: PastePlan): number => {
+    const rows = plan.overflow.map((extra) => {
+      const values: Record<string, string | null> = {};
+      for (const [col, v] of Object.entries(extra)) {
+        const name = columns?.[Number(col)]?.name;
+        if (name) values[name] = v;
+      }
+      return values;
+    });
+    return insertRows(rows);
+  };
+
+  /** ⌘V: paste a spreadsheet block at the anchor (a single value fills the range). */
+  const pasteBlock = (text: string) => {
     if (!writable || !anchor) return;
     const block = parseClipboardBlock(text);
     if (block.length === 0) return;
     setEditError(null);
-    try {
-      const single = block.length === 1 && block[0]?.length === 1;
-      if (single && range) {
-        for (const cell of selectedCells()) await writeCell(cell, block[0]![0] ?? null);
-        return;
-      }
-      const startPos = colPos.get(anchor.col) ?? 0;
-      for (let r = 0; r < block.length; r++) {
-        const rowIdx = anchor.row + r;
-        if (rowIdx >= displayRows.length) break;
-        const values = block[r] ?? [];
-        for (let c = 0; c < values.length; c++) {
-          const colMeta = visibleColumns[startPos + c];
-          if (!colMeta) break;
-          await writeCell({ row: rowIdx, col: colMeta.originalIndex }, values[c] ?? null);
-        }
-      }
-    } catch (err) {
-      setEditError(cleanIpcError(err instanceof Error ? err.message : String(err)));
+    const plan = planPaste({
+      block,
+      anchor: { row: anchor.row, pos: colPos.get(anchor.col) ?? 0 },
+      range,
+      visibleCols: visibleColIdx,
+      rowCount: displayRows.length,
+      typeOf: (c) => columns?.[c]?.dataTypeName,
+    });
+    if (plan.overflow.length > 0) {
+      // Taller than the grid: ask before turning the extra rows into inserts.
+      setPasteOverflow(plan);
+      return;
     }
+    stageWrites(plan.writes, 'Pasted');
+    const notes = describePasteNotes(plan, false);
+    if (notes) setGridNote((n) => `${n ?? ''} ${notes}`.trim());
+  };
+
+  const applyPasteOverflow = (plan: PastePlan, addRows: boolean) => {
+    stageWrites(plan.writes, 'Pasted');
+    if (addRows) {
+      try {
+        const n = queuePastedRows(plan);
+        setGridNote((prev) =>
+          `${prev ?? ''} ${n} new row${n === 1 ? '' : 's'} staged as inserts.`.trim(),
+        );
+      } catch (err) {
+        setEditError(errorText(err));
+      }
+    }
+    const notes = describePasteNotes(plan, addRows);
+    if (notes) setGridNote((n) => `${n ?? ''} ${notes}`.trim());
+  };
+
+  // ── FK peek ──
+
+  const clearPeekTimers = () => {
+    if (peekTimers.current.open) clearTimeout(peekTimers.current.open);
+    if (peekTimers.current.close) clearTimeout(peekTimers.current.close);
+    peekTimers.current = {};
+  };
+  // biome-ignore lint/correctness/useExhaustiveDependencies: unmount cleanup only
+  useEffect(() => clearPeekTimers, []);
+
+  /** Open the peek for the FK cell at (display row, column), anchored to its element. */
+  const openPeek = (row: number, col: number, anchorEl: Element | null, pinned: boolean) => {
+    const entry = displayRows[row];
+    const colName = columns?.[col]?.name;
+    const hit = colName ? fkByColumn.get(colName) : undefined;
+    if (!entry || !hit || !columns) return;
+    const lookup = lookupForRow(hit.fk, 'outgoing', (name) => {
+      const i = columns.findIndex((c) => c.name === name);
+      const v = i < 0 ? undefined : cellText(entry, i);
+      return v;
+    });
+    if (!lookup) return;
+    const td = anchorEl ?? containerRef.current?.querySelector(`td[data-cell="${row}:${col}"]`);
+    setPeek({
+      anchorRect: td?.getBoundingClientRect() ?? new DOMRect(100, 100, 0, 0),
+      refSchema: hit.fk.refSchema,
+      refTable: hit.fk.refTable,
+      lookup,
+      pinned,
+    });
+  };
+  const scheduleHoverPeek = (row: number, col: number, el: Element) => {
+    clearPeekTimers();
+    peekTimers.current.open = setTimeout(() => openPeek(row, col, el.closest('td'), false), 450);
+  };
+  const scheduleHoverClose = () => {
+    if (peekTimers.current.open) clearTimeout(peekTimers.current.open);
+    if (peekTimers.current.close) clearTimeout(peekTimers.current.close);
+    peekTimers.current.close = setTimeout(() => {
+      setPeek((p) => (p && !p.pinned ? null : p));
+    }, 250);
+  };
+
+  // ── Column layout ──
+
+  /** Fit a column to its header and the widest loaded values (double-click the header edge). */
+  const autoFitColumn = (origIdx: number) => {
+    const col = columns?.[origIdx];
+    const grid = gridRef.current;
+    if (!col || !grid) return;
+    const ctx = document.createElement('canvas').getContext('2d');
+    if (!ctx) return;
+    const cellFont = getComputedStyle(grid).font;
+    const headerFont = headerRefs.current[origIdx]
+      ? getComputedStyle(headerRefs.current[origIdx]!).font
+      : cellFont;
+    const measureWith = (font: string) => (text: string) => {
+      ctx.font = font;
+      return ctx.measureText(text).width;
+    };
+    const texts = displayRows.map((entry) => {
+      const t = cellText(entry, origIdx);
+      return t === null
+        ? 'NULL'
+        : t === undefined
+          ? 'DEFAULT'
+          : t === ''
+            ? "''"
+            : t.slice(0, MAX_CELL_CHARS);
+    });
+    const hasFk = fkByColumn.has(col.name);
+    const width = autoFitWidth(col.name, texts, measureWith(cellFont), {
+      padding: 14 + (hasFk ? 28 : 0),
+      measureHeader: measureWith(headerFont),
+    });
+    setColumnWidth(origIdx, width);
+  };
+
+  const freezeUpTo = (colName: string) => {
+    const names = columnsToFreeze(
+      visibleColumns.map((c) => c.col.name),
+      colName,
+      stickySet,
+    );
+    for (const n of names) toggleStickyColumn(n);
   };
 
   const openCellDetail = (cell: Cell) => {
@@ -897,7 +1258,14 @@ export function ResultGrid() {
       return;
     }
     if (writable && mod && !e.shiftKey && key.toLowerCase() === 'd') {
-      duplicateTarget();
+      // Two or more rows selected: fill down (spreadsheet ⌘D). One row: duplicate it.
+      if (range && range.r1 > range.r0) fillDown();
+      else duplicateTarget();
+      e.preventDefault();
+      return;
+    }
+    if (writable && mod && e.shiftKey && key.toLowerCase() === 'h') {
+      setFindOpen(true);
       e.preventDefault();
       return;
     }
@@ -931,6 +1299,12 @@ export function ResultGrid() {
     }
     if (key === 'Enter' && !mod && !e.shiftKey && !e.altKey) {
       openRowDetail(anchor.row);
+      e.preventDefault();
+      return;
+    }
+    if (key === 'Enter' && e.altKey && !mod && !e.shiftKey) {
+      // ⌥↵: peek the row an FK cell points at.
+      openPeek(anchor.row, anchor.col, null, true);
       e.preventDefault();
       return;
     }
@@ -1052,6 +1426,9 @@ export function ResultGrid() {
               )}
             </div>
           </div>
+          {tab.kind === 'sql' && tab.queryErrorSql && tab.queryError && (
+            <FixWithAi tabId={tab.id} sql={tab.queryErrorSql} error={tab.queryError} />
+          )}
           {tab.queryErrorSql && (
             <>
               <div className="mb-1.5 mt-4 text-[12px] font-medium text-[var(--wb-text-2)]">
@@ -1180,7 +1557,10 @@ export function ResultGrid() {
         icon: <Copy />,
         onSelect: copySelection,
       },
-      { kind: 'heading', label: `Copy ${rowsLabel} as` },
+      {
+        kind: 'heading',
+        label: range && tab.selectedRows.size === 0 ? 'Copy selection as' : `Copy ${rowsLabel} as`,
+      },
       ...COPY_FORMATS.map(
         (f): GridMenuEntry => ({ kind: 'item', label: f.label, onSelect: () => copyRows(f.value) }),
       ),
@@ -1222,7 +1602,29 @@ export function ResultGrid() {
           icon: <Eraser />,
           onSelect: () => void setNullOnSelection(),
         },
+        {
+          kind: 'item',
+          label: range ? 'Set selection to value…' : 'Set value…',
+          icon: <PenLine />,
+          onSelect: () => setSetValueOpen(true),
+        },
       );
+      if (range && range.r1 > range.r0) {
+        out.push({
+          kind: 'item',
+          label: 'Fill down',
+          hint: `${MOD}D`,
+          icon: <ArrowDownToLine />,
+          onSelect: fillDown,
+        });
+      }
+      out.push({
+        kind: 'item',
+        label: 'Find & replace…',
+        hint: isMac ? '⇧⌘H' : 'Ctrl+Shift+H',
+        icon: <Replace />,
+        onSelect: () => setFindOpen(true),
+      });
       const editId = entry.editIdByCol.get(cell.col);
       if (editId) {
         out.push({
@@ -1283,24 +1685,46 @@ export function ResultGrid() {
       );
       const fk = fkByColumn.get(colMeta.name);
       if (fk && text !== null && text !== undefined) {
-        out.push({
-          kind: 'item',
-          label: `Open ${fk.fk.refTable} row`,
-          icon: <ArrowUpRight />,
-          onSelect: () => openFk(entry, colMeta.name),
-        });
+        out.push(
+          {
+            kind: 'item',
+            label: `Open ${fk.fk.refTable} row`,
+            icon: <ArrowUpRight />,
+            onSelect: () => openFk(entry, colMeta.name),
+          },
+          {
+            kind: 'item',
+            label: `Peek ${fk.fk.refTable} row`,
+            hint: isMac ? '⌥↵' : 'Alt+Enter',
+            icon: <Eye />,
+            onSelect: () => openPeek(cell.row, cell.col, null, true),
+          },
+        );
       }
-      const server = tab.queryResult?.rows[entry.originalIndex];
-      for (const ref of referencedBy.slice(0, 8)) {
-        const idx = allColumns.findIndex((c) => c.name === ref.refColumn);
-        if (idx < 0 || !server) continue;
-        const v = cellToText(server[idx], allColumns[idx]?.dataTypeName);
-        if (v === null) continue;
-        out.push({
-          kind: 'item',
-          label: `Rows in ${ref.table}.${ref.column}`,
-          onSelect: () => openForeignRow(ref.schema, ref.table, ref.column, v),
-        });
+      if (menuRequests.length > 0) {
+        out.push({ kind: 'separator' }, { kind: 'heading', label: 'Referenced by' });
+        for (const { group, lookup } of menuRequests.slice(0, 12)) {
+          const c = menuCounts.get(group.key);
+          const label = `${describeIncoming(group)} → ${
+            menuCounts.has(group.key) ? (c ? formatIncomingCount(c) : 'n/a') : '…'
+          }`;
+          out.push({
+            kind: 'item',
+            label,
+            disabled: menuCounts.has(group.key) && c?.count === 0,
+            onSelect: () => {
+              const a = openArgs(group.schema, group.table, lookup);
+              openForeignRow(a.schema, a.table, a.column, a.value, a.also);
+            },
+          });
+        }
+        if (menuRequests.length > 12) {
+          out.push({
+            kind: 'item',
+            label: `+ ${menuRequests.length - 12} more in the Details panel`,
+            onSelect: () => useSession.getState().setRightPanelMode('details'),
+          });
+        }
       }
     }
     return out;
@@ -1366,6 +1790,20 @@ export function ResultGrid() {
           </button>
         </div>
       )}
+      {gridNote && !editError && !(pendingEditsError && pendingEdits.length > 0) && (
+        <output className="sticky left-0 top-0 z-40 flex items-start gap-2 border-b border-[var(--wb-separator)] bg-[color-mix(in_srgb,var(--wb-accent)_10%,var(--wb-content))] px-3 py-1.5 text-[12px] text-[var(--wb-text)]">
+          <Info className="mt-px h-3.5 w-3.5 shrink-0 text-[var(--wb-text-2)]" />
+          <span className="min-w-0 flex-1 whitespace-pre-wrap break-words">{gridNote}</span>
+          <button
+            type="button"
+            aria-label="Dismiss"
+            onClick={() => setGridNote(null)}
+            className="grid h-4 w-4 shrink-0 place-items-center rounded-[4px] text-[var(--wb-text-2)] hover:bg-[var(--wb-control-hover)]"
+          >
+            <X className="h-3 w-3" />
+          </button>
+        </output>
+      )}
       {searchOpen && (
         // Zero-height sticky host so the floating find bar never shifts
         // the table (keeps the striped background aligned to the rows).
@@ -1421,6 +1859,17 @@ export function ResultGrid() {
               >
                 <ChevronDown className="h-3 w-3" />
               </button>
+              {writable && (
+                <button
+                  type="button"
+                  onClick={() => setFindOpen(true)}
+                  className="grid h-5 w-5 place-items-center rounded-[4px] text-[var(--wb-text-2)] hover:bg-[var(--wb-control-hover)] hover:text-[var(--wb-text)]"
+                  aria-label="Find and replace"
+                  title="Find & replace… (⇧⌘H)"
+                >
+                  <Replace className="h-3 w-3" />
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => {
@@ -1539,6 +1988,9 @@ export function ResultGrid() {
                         }}
                         onTogglePin={() => toggleStickyColumn(col.name)}
                         onHide={() => void toggleColumnHidden(col.name)}
+                        onAutoFit={() => autoFitColumn(origIdx)}
+                        onFreezeUpTo={() => freezeUpTo(col.name)}
+                        onUnfreezeAll={stickySet.size > 0 ? clearStickyColumns : undefined}
                       />
                     </div>
                   </div>
@@ -1549,6 +2001,11 @@ export function ResultGrid() {
                     aria-label={`Resize ${col.name}`}
                     onPointerDown={(e) => handleResizeStart(e, origIdx)}
                     onClick={(e) => e.stopPropagation()}
+                    onDoubleClick={(e) => {
+                      e.stopPropagation();
+                      autoFitColumn(origIdx);
+                    }}
+                    title="Drag to resize · double-click to fit"
                     className="group/resize absolute right-0 top-0 z-10 flex h-full w-2 cursor-col-resize items-stretch justify-center"
                   >
                     <div className="h-full w-px bg-transparent transition-colors group-hover/resize:bg-[var(--wb-accent)] group-active/resize:bg-[var(--wb-accent)]" />
@@ -1668,6 +2125,13 @@ export function ResultGrid() {
                       data-pending={edited ? 'edited' : undefined}
                       onMouseDown={(e) => {
                         if (e.button !== 0 || isEditing) return;
+                        if (e.altKey && hasFk) {
+                          // ⌥-click an FK cell: peek the row it points at.
+                          e.preventDefault();
+                          select({ row: visibleRow, col: origIdx });
+                          openPeek(visibleRow, origIdx, e.currentTarget, true);
+                          return;
+                        }
                         if (e.shiftKey && anchor) {
                           setRangeEnd({ row: visibleRow, col: origIdx });
                           e.preventDefault();
@@ -1723,7 +2187,11 @@ export function ResultGrid() {
                           !isEditing &&
                           'outline outline-2 -outline-offset-2 outline-[var(--wb-accent)]',
                         isEditing &&
-                          'bg-[var(--wb-content)] p-0 outline outline-2 -outline-offset-2 outline-[var(--wb-accent)]',
+                          cn(
+                            'bg-[var(--wb-content)] outline outline-2 -outline-offset-2 outline-[var(--wb-accent)]',
+                            // The popover editors sit beside the value, not in the cell.
+                            smartKinds[origIdx] === 'text' && 'p-0',
+                          ),
                         cellFailed && FAILED_OUTLINE,
                         // Make room for the FK arrow so long values don't
                         // slide underneath the button.
@@ -1745,8 +2213,13 @@ export function ResultGrid() {
                           type="button"
                           tabIndex={-1}
                           onMouseDown={(e) => e.stopPropagation()}
+                          onMouseEnter={(e) =>
+                            scheduleHoverPeek(visibleRow, origIdx, e.currentTarget)
+                          }
+                          onMouseLeave={scheduleHoverClose}
                           onClick={(e) => {
                             e.stopPropagation();
+                            clearPeekTimers();
                             openFk(entry, colName);
                           }}
                           className="absolute right-1 top-1/2 grid h-[18px] w-[18px] -translate-y-1/2 cursor-pointer place-items-center rounded-[4px] bg-[var(--wb-control)] text-[var(--wb-text-2)] opacity-0 transition-all duration-150 hover:bg-[var(--wb-control-hover)] hover:text-[var(--wb-text)] focus-visible:opacity-100 group-hover/cell:opacity-100"
@@ -1756,45 +2229,34 @@ export function ResultGrid() {
                           <ArrowUpRight className="h-3 w-3" />
                         </button>
                       )}
-                      {isEditing ? (
+                      {isEditing && smartKinds[origIdx] !== 'text' ? (
+                        <>
+                          {formatCell(text, inserted)}
+                          <SmartCellEditor
+                            kind={
+                              smartKinds[origIdx] as Exclude<(typeof smartKinds)[number], 'text'>
+                            }
+                            columnName={colName}
+                            typeName={col.dataTypeName}
+                            enumValues={enumLabelsFor(schema, col.dataTypeName)}
+                            initial={editingCell.value}
+                            onCommit={(value, move) =>
+                              finishEdit(visibleRow, pos, { value, move, refocus: true })
+                            }
+                            onCancel={() => {
+                              setEditingCell(null);
+                              setEditError(null);
+                              refocusGrid();
+                            }}
+                          />
+                        </>
+                      ) : isEditing ? (
                         <InlineEditor
                           value={editingCell.value}
                           onChange={(value) =>
                             setEditingCell({ row: visibleRow, col: origIdx, value })
                           }
-                          onCommit={(opts) => {
-                            void (async () => {
-                              const ok = await commitEdit(
-                                opts?.value !== undefined ? { value: opts.value } : undefined,
-                              );
-                              if (!ok) return;
-                              if (opts?.move) {
-                                const target =
-                                  opts.move === 'prev'
-                                    ? prevCell(
-                                        { row: visibleRow, col: pos },
-                                        displayRows.length,
-                                        visibleColumns.length,
-                                      )
-                                    : opts.move === 'next'
-                                      ? nextCell(
-                                          { row: visibleRow, col: pos },
-                                          displayRows.length,
-                                          visibleColumns.length,
-                                        )
-                                      : {
-                                          row: Math.min(displayRows.length - 1, visibleRow + 1),
-                                          col: pos,
-                                        };
-                                if (target)
-                                  select({
-                                    row: target.row,
-                                    col: visibleColumns[target.col]!.originalIndex,
-                                  });
-                              }
-                              if (opts?.refocus) refocusGrid();
-                            })();
-                          }}
+                          onCommit={(opts) => finishEdit(visibleRow, pos, opts)}
                           onCancel={() => {
                             setEditingCell(null);
                             setEditError(null);
@@ -1840,6 +2302,56 @@ export function ResultGrid() {
       />
       <CellDetailDialog detail={cellDetail} onOpenChange={(o) => !o && setCellDetail(null)} />
       <RowDetailSheet detail={rowDetail} onOpenChange={(o) => !o && setRowDetail(null)} />
+      <FkPeek
+        target={peek}
+        onClose={() => {
+          clearPeekTimers();
+          setPeek(null);
+        }}
+        onOpen={(a) => openForeignRow(a.schema, a.table, a.column, a.value, a.also)}
+        onPointerEnter={() => {
+          if (peekTimers.current.close) clearTimeout(peekTimers.current.close);
+        }}
+        onPointerLeave={scheduleHoverClose}
+      />
+      <SetValueDialog
+        open={setValueOpen}
+        onOpenChange={(o) => {
+          setSetValueOpen(o);
+          if (!o) refocusGrid();
+        }}
+        cellCount={setValueOpen ? selectedCells().length : 0}
+        columnLabel={
+          range
+            ? `${rangeColumns(range, visibleColIdx).length} column${range.p1 > range.p0 ? 's' : ''}`
+            : (columns?.[anchor?.col ?? -1]?.name ?? 'the selection')
+        }
+        nullable
+        onApply={applySetValue}
+      />
+      <FindReplaceDialog
+        open={findOpen}
+        onOpenChange={(o) => {
+          setFindOpen(o);
+          if (!o) refocusGrid();
+        }}
+        columnName={findColumn}
+        textColumnCount={textColumnIdx.length}
+        loadedNote={loadedNote()}
+        plan={buildFindPlan}
+        onApply={(plan) => stageWrites(plan.writes, 'Replaced', { alwaysNoteLoaded: true })}
+      />
+      <PasteOverflowDialog
+        open={pasteOverflow !== null}
+        onOpenChange={(o) => {
+          if (!o) setPasteOverflow(null);
+        }}
+        extraRows={pasteOverflow?.overflow.length ?? 0}
+        fittingCells={pasteOverflow?.writes.length ?? 0}
+        note={pasteOverflow ? describePasteNotes({ ...pasteOverflow, overflow: [] }, true) : null}
+        onAddRows={() => pasteOverflow && applyPasteOverflow(pasteOverflow, true)}
+        onExistingOnly={() => pasteOverflow && applyPasteOverflow(pasteOverflow, false)}
+      />
     </div>
   );
 }

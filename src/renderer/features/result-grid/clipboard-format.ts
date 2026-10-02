@@ -9,10 +9,11 @@
 import type { ColumnMeta } from '@shared/protocol';
 import { cellToText } from './cell-edit';
 
-export type CopyFormat = 'tsv' | 'csv' | 'csv-header' | 'json' | 'markdown' | 'sql';
+export type CopyFormat = 'tsv' | 'tsv-header' | 'csv' | 'csv-header' | 'json' | 'markdown' | 'sql';
 
 export const COPY_FORMATS: Array<{ value: CopyFormat; label: string }> = [
   { value: 'tsv', label: 'Tab-separated' },
+  { value: 'tsv-header', label: 'Tab-separated with header' },
   { value: 'csv', label: 'CSV' },
   { value: 'csv-header', label: 'CSV with header' },
   { value: 'json', label: 'JSON' },
@@ -71,6 +72,11 @@ export function formatRows(
   switch (format) {
     case 'tsv':
       return rows.map((r) => text(r).map(tsvField).join('\t')).join('\n');
+    case 'tsv-header':
+      return [
+        cols.map((c) => tsvField(c.name)).join('\t'),
+        ...rows.map((r) => text(r).map(tsvField).join('\t')),
+      ].join('\n');
     case 'csv':
       return rows.map((r) => text(r).map(csvField).join(',')).join('\n');
     case 'csv-header':
@@ -158,4 +164,28 @@ export function parseClipboardBlock(text: string): Array<Array<string | null>> {
   pushField();
   rows.push(row);
   return rows;
+}
+
+/**
+ * What a "Copy as…" copies: with checked rows, those rows × every visible
+ * column; otherwise the selected range (rows × only the range's columns);
+ * otherwise the anchor's row. Returns display-row bounds and column indices,
+ * or null when nothing is selected.
+ */
+export function copyTarget(input: {
+  checkedRows: boolean;
+  range: { r0: number; r1: number; p0: number; p1: number } | null;
+  anchorRow: number | null;
+  visibleCols: readonly number[];
+}): { rows: 'checked' | { r0: number; r1: number }; cols: number[] } | null {
+  const { checkedRows, range, anchorRow, visibleCols } = input;
+  if (checkedRows) return { rows: 'checked', cols: [...visibleCols] };
+  if (range) {
+    return {
+      rows: { r0: range.r0, r1: range.r1 },
+      cols: visibleCols.slice(range.p0, range.p1 + 1),
+    };
+  }
+  if (anchorRow === null) return null;
+  return { rows: { r0: anchorRow, r1: anchorRow }, cols: [...visibleCols] };
 }

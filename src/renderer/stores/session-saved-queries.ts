@@ -4,7 +4,9 @@
  * session actions stay thin and the rules are unit-testable.
  */
 import { ipc } from '@/lib/ipc';
+import { listVariables, pruneVariableValues } from '@/lib/query-variables';
 import type { SavedQuery } from '@shared/protocol';
+import type { VariableValue } from '@shared/sql-variables';
 import {
   activeTab,
   createEmptyTab,
@@ -29,6 +31,8 @@ export interface SavableTab {
   tableSort: Array<{ column: string; direction: 'asc' | 'desc' }>;
   hiddenColumns: Set<string>;
   stickyColumns: Set<string>;
+  /** Query variable values (`:name`, `$name`) of a SQL tab. */
+  queryVars?: Record<string, VariableValue>;
 }
 
 /** Snapshot `tab` as a saved query. Keeps id / createdAt / folder / favourite of `base`. */
@@ -61,7 +65,15 @@ export function savedQueryFromTab(
       pageSize: tab.pageSize,
     };
   }
-  return { ...common, kind: 'sql', sql: tab.sql, pageSize: tab.pageSize };
+  // Variable values are kept for the placeholders the SQL still uses.
+  const variables = pruneVariableValues(tab.queryVars ?? {}, listVariables(tab.sql));
+  return {
+    ...common,
+    kind: 'sql',
+    sql: tab.sql,
+    ...(Object.keys(variables).length > 0 ? { variables } : {}),
+    pageSize: tab.pageSize,
+  };
 }
 
 export type SavedQueryPatch = { name?: string; folder?: string | null; favorite?: boolean };
@@ -268,6 +280,9 @@ export const createSavedQueriesSlice: SliceCreator<SavedQueriesSlice> = (set, ge
       tab.sql = entry.sql;
       tab.cleanSql = entry.sql;
       tab.savedQueryId = entry.id;
+      // Saved variable values come back as defaults; the first run still
+      // shows the Variables bar so they are confirmed, not silently reused.
+      if (entry.variables) tab.queryVars = { ...entry.variables };
       // E1: open in the editor without closing the right sidebar.
       set({
         tabs: [...state.tabs, tab],

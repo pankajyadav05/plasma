@@ -19,6 +19,8 @@ describe('laneFor', () => {
     expect(laneFor('disconnect')).toBe('lifecycle');
     expect(laneFor('query')).toBe('primary');
     expect(laneFor('commitEditBatch')).toBe('primary');
+    expect(laneFor('safeRunStart')).toBe('primary');
+    expect(laneFor('safeRunFinish')).toBe('primary');
     expect(laneFor('aiQuery')).toBe('aux');
     expect(laneFor('cancel')).toBe('free');
     expect(laneFor('redisScan')).toBe('free');

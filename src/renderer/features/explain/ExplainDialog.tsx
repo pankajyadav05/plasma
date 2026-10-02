@@ -1,13 +1,16 @@
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Pill } from '@/components/ui/workbench';
+import { ExplainPlanAi } from '@/features/ai/ExplainPlanAi';
 import { cn } from '@/lib/cn';
 import { cleanIpcError } from '@/lib/errors';
 import { ipc } from '@/lib/ipc';
+import { inlineVariables, runBound } from '@/lib/query-variables';
 import { useSession } from '@/stores/session';
 import { looksLikeWrite } from '@/stores/session-sql-heuristics';
 import type { ExplainNode } from '@shared/protocol';
-import { Check, ChevronDown, ChevronRight, Copy, Loader2 } from 'lucide-react';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import type { VariableValues } from '@shared/sql-variables';
+import { Check, ChevronDown, ChevronRight, Copy, Loader2, Sparkles } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 /**
  * Query plan viewer (F2 / A4 / E7 / VF29).
@@ -23,10 +26,13 @@ export function ExplainDialog({
   sql,
   open,
   onOpenChange,
+  variables,
 }: {
   sql: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** Query variable values; `:name` placeholders in `sql` are bound from these. */
+  variables?: VariableValues;
 }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -36,11 +42,15 @@ export function ExplainDialog({
   const [planMs, setPlanMs] = useState<number | null>(null);
   const [execMs, setExecMs] = useState<number | null>(null);
   const [copied, setCopied] = useState(false);
+  const [aiOpen, setAiOpen] = useState(false);
   const runId = useRef(0);
   const analyzing = useRef(false);
   const readOnly = useSession((s) => Boolean(s.activeConfig?.readOnly));
   const confirmUserSql = useSession((s) => s.confirmUserSqlDetailed);
-  const writes = looksLikeWrite(sql);
+  const values = useMemo(() => variables ?? {}, [variables]);
+  // What would really run (raw values pasted in) decides write detection and the gate.
+  const effectiveSql = inlineVariables(sql, values);
+  const writes = looksLikeWrite(effectiveSql);
 
   const run = useCallback(
     async (analyze: boolean) => {
@@ -51,7 +61,7 @@ export function ExplainDialog({
           setError('This connection is read-only, so ANALYZE is off for data-changing statements.');
           return;
         }
-        const outcome = await confirmUserSql(sql, {
+        const outcome = await confirmUserSql(effectiveSql, {
           force: true,
           summary: 'EXPLAIN ANALYZE (rolled back)',
         });
@@ -64,7 +74,9 @@ export function ExplainDialog({
       setLoading(true);
       analyzing.current = analyze;
       try {
-        const res = await ipc.query.explain({ sql, analyze });
+        const res = await runBound(sql, values, (text, params) =>
+          ipc.query.explain({ sql: text, analyze, params }),
+        );
         if (id !== runId.current) return;
         // FORMAT JSON comes back as one json cell (parsed) or its text.
         const raw = res.rows[0]?.[0];
@@ -86,7 +98,7 @@ export function ExplainDialog({
         }
       }
     },
-    [sql, writes, readOnly, confirmUserSql],
+    [sql, values, effectiveSql, writes, readOnly, confirmUserSql],
   );
 
   // Plain EXPLAIN on open — safe, nothing executes.
@@ -97,6 +109,7 @@ export function ExplainDialog({
     setAnalyzed(false);
     setPlanMs(null);
     setExecMs(null);
+    setAiOpen(false);
     void run(false);
     return () => {
       runId.current++;
@@ -155,6 +168,15 @@ export function ExplainDialog({
                 </div>
               )}
               <PlanNode node={plan} depth={0} totalActualMs={totalActualMs} />
+              {aiOpen && (
+                <ExplainPlanAi
+                  key={analyzed ? 'analyzed' : 'estimated'}
+                  sql={sql}
+                  plan={rawPlan}
+                  analyzed={analyzed}
+                  onOpened={() => onOpenChange(false)}
+                />
+              )}
             </>
           )}
         </div>
@@ -163,6 +185,14 @@ export function ExplainDialog({
           <Pill onClick={() => void onCopy()} disabled={!rawPlan} title="Copy the plan as JSON">
             {copied ? <Check /> : <Copy />}
             Copy JSON
+          </Pill>
+          <Pill
+            onClick={() => setAiOpen(true)}
+            disabled={!rawPlan || aiOpen}
+            title="Plain-English walk-through of this plan, with index suggestions"
+          >
+            <Sparkles />
+            Explain with AI
           </Pill>
           <div className="flex-1" />
           {!analyzed && (

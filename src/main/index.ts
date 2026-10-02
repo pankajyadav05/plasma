@@ -35,6 +35,10 @@ import {
   type PingRequest,
   type PingResponse,
   type QueryResult,
+  SafeRunFinishRequest,
+  type SafeRunOutcome,
+  type SafeRunReport,
+  SafeRunStartRequest,
   type SavedConnection,
   type SchemaInfo,
   type Settings,
@@ -46,6 +50,7 @@ import {
 } from '@shared/protocol';
 import { MAX_RESULT_ROWS } from '@shared/result-bounds';
 import { isSingleSqlStatement, looksLikeWriteSql } from '@shared/sql-statements';
+import { isUninferableParamError } from '@shared/sql-variables';
 import { assertTlsAllowedForTag, resolveTls, withTunnelServername } from '@shared/tls';
 import { BrowserWindow, app, dialog, ipcMain, nativeImage } from 'electron';
 import {
@@ -964,6 +969,10 @@ function registerIpcHandlers() {
     if (tag) patch.connectionTags = { ...settings.connectionTags, [newId]: tag };
     const level = settings.connectionSafeMode?.[id];
     if (level) patch.connectionSafeMode = { ...settings.connectionSafeMode, [newId]: level };
+    const safeRun = settings.connectionAlwaysSafeRun?.[id];
+    if (safeRun !== undefined) {
+      patch.connectionAlwaysSafeRun = { ...settings.connectionAlwaysSafeRun, [newId]: safeRun };
+    }
     const ssh = getFullSshConfig(id, settings.connectionSsh);
     if (ssh) patch.connectionSsh = { ...settings.connectionSsh, [newId]: ssh };
     if (Object.keys(patch).length > 0) applySettingsPatch(patch);
@@ -1027,7 +1036,9 @@ function registerIpcHandlers() {
       return res.result;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      if (!internal) {
+      // A bound query variable whose type Postgres could not infer is retried
+      // with a literal by the renderer; the first attempt is not a user error.
+      if (!internal && !(params && isUninferableParamError(message))) {
         try {
           recordHistory({
             connectionId: activeConnectionId,
@@ -1108,11 +1119,69 @@ function registerIpcHandlers() {
       );
     }
     const res = await callWorker(
-      { kind: 'explain', sql: req.sql, analyze: req.analyze },
+      { kind: 'explain', sql: req.sql, analyze: req.analyze, params: req.params },
       'queryResult',
     );
     return res.result;
   });
+
+  // Safe Run: a write held open in a transaction until the user decides.
+  // Read-only connections refuse it here and again in callWorker's guard;
+  // the worker refuses anything else on the primary while one is pending.
+  let pendingSafeRun: { runId: string; sql: string; executedAt: number; affected: number } | null =
+    null;
+  ipcMain.handle(IpcChannel.QuerySafeRun, async (_e, raw: unknown): Promise<SafeRunReport> => {
+    const req = SafeRunStartRequest.parse(raw);
+    if (retainedSession?.config.readOnly === true) {
+      throw new Error('This connection is read-only — Safe Run is not available.');
+    }
+    const executedAt = Date.now();
+    const res = await callWorker(
+      {
+        kind: 'safeRunStart',
+        sql: req.sql,
+        connectionGen: req.connectionGen,
+        timeoutSec: req.timeoutSec,
+        explain: req.explain,
+      },
+      'safeRunReport',
+    );
+    pendingSafeRun = {
+      runId: res.report.runId,
+      sql: req.sql,
+      executedAt,
+      affected: res.report.affected,
+    };
+    return res.report;
+  });
+
+  ipcMain.handle(
+    IpcChannel.QuerySafeRunFinish,
+    async (_e, raw: unknown): Promise<SafeRunOutcome> => {
+      const req = SafeRunFinishRequest.parse(raw);
+      const res = await callWorker(
+        { kind: 'safeRunFinish', runId: req.runId, action: req.action },
+        'safeRunDone',
+      );
+      const ran = pendingSafeRun?.runId === req.runId ? pendingSafeRun : null;
+      if (ran) pendingSafeRun = null;
+      if (ran && res.outcome.outcome === 'committed') {
+        try {
+          recordHistory({
+            connectionId: activeConnectionId,
+            sql: ran.sql,
+            rowCount: ran.affected,
+            durationMs: null,
+            error: null,
+            executedAt: ran.executedAt,
+          });
+        } catch (err) {
+          logger.error('[plasma] history write failed (non-fatal):', err);
+        }
+      }
+      return res.outcome;
+    },
+  );
 
   ipcMain.handle(IpcChannel.ExportSave, async (_e, raw: unknown): Promise<ExportSaveResult> => {
     const req = ExportSaveRequest.parse(raw);

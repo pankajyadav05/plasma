@@ -189,3 +189,80 @@ describe('isAiSchemaAllowed (SC-20)', () => {
     expect(isAiSchemaAllowed('a', { connectionTags: { a: 'dev' } })).toBe(true);
   });
 });
+
+describe('one-shot AI tasks', () => {
+  const executor = vi.fn(async () => '{"ok":true}');
+  beforeEach(() => {
+    executor.mockClear();
+    setAiToolExecutor(executor);
+  });
+
+  const taskReq = (id: string): AiChatRequest =>
+    ({
+      requestId: id,
+      task: 'fix-sql',
+      messages: [{ role: 'user', content: 'This statement failed.' }],
+      engine: 'postgres',
+      schema: {
+        tables: [{ schema: 'public', name: 'secret_table', kind: 'table' }],
+        columns: [],
+        foreignKeys: [],
+        indexes: [
+          {
+            schema: 'public',
+            table: 'secret_table',
+            name: 'i',
+            definition: 'CREATE INDEX i ON secret_table (a)',
+          },
+        ],
+      },
+    }) as never;
+
+  async function bodyOf(request: AiChatRequest, allowSchema: boolean) {
+    const { win, events } = fakeWindow();
+    const bodies: string[] = [];
+    const fetchImpl = vi.fn(async (_url: unknown, init?: { body?: string }) => {
+      bodies.push(String(init?.body));
+      return finalTurn();
+    });
+    await startAiChat(win, request, 'k', 'm', {
+      allowRowData: true,
+      allowSchema,
+      fetchImpl: fetchImpl as never,
+    });
+    await settle(events);
+    return {
+      body: JSON.parse(bodies[0]!) as {
+        messages: Array<{ role: string; content: string }>;
+        tools?: unknown;
+        max_tokens?: number;
+      },
+      events,
+    };
+  }
+
+  it('uses the task prompt, never offers tools and caps output tokens', async () => {
+    const { body, events } = await bodyOf(taskReq('t1'), true);
+    expect(body.messages[0]?.role).toBe('system');
+    expect(body.messages[0]?.content).toContain('repair assistant');
+    expect(body.messages[0]?.content).toContain('secret_table');
+    expect(body.messages.at(-1)?.content).toBe('This statement failed.');
+    expect(body.tools).toBeUndefined();
+    expect(body.max_tokens).toBe(1200);
+    expect(events.at(-1)?.kind).toBe('done');
+  });
+
+  it('withholds the schema when the policy denies it', async () => {
+    const { body } = await bodyOf(taskReq('t2'), false);
+    expect(body.messages[0]?.content).not.toContain('secret_table');
+    expect(body.messages[0]?.content).toContain('repair assistant');
+  });
+
+  it('includes index definitions only for explain-plan', async () => {
+    const plan = { ...taskReq('t3'), task: 'explain-plan' } as AiChatRequest;
+    const { body } = await bodyOf(plan, true);
+    expect(body.messages[0]?.content).toContain('INDEX: CREATE INDEX i ON secret_table (a)');
+    const fix = await bodyOf(taskReq('t4'), true);
+    expect(fix.body.messages[0]?.content).not.toContain('INDEX:');
+  });
+});

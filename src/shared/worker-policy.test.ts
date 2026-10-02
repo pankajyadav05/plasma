@@ -69,6 +69,7 @@ describe('long-job deadlines (SC-06)', () => {
       'applyDdl',
       'explain',
       'commitEditBatch',
+      'safeRunStart',
       'redisBulkDelete',
       'redisDeleteByPattern',
       'redisAnalyze',

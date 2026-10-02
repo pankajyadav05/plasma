@@ -1061,8 +1061,89 @@ export const CommitEditBatchRequest = z.object({
 export type CommitEditBatchRequest = z.infer<typeof CommitEditBatchRequest>;
 
 /** Renderer → main payload for `query.explain` (F2). */
-export const ExplainRequest = z.object({ sql: z.string().min(1), analyze: z.boolean() });
+export const ExplainRequest = z.object({
+  sql: z.string().min(1),
+  analyze: z.boolean(),
+  /** Bind parameters for `$n` placeholders (query variables). */
+  params: z.array(z.unknown()).optional(),
+});
 export type ExplainRequest = z.infer<typeof ExplainRequest>;
+
+// ─── Safe Run (dry run for writes) ───────────────────────────────────
+
+/** Default review window before a pending Safe Run rolls itself back. */
+export const SAFE_RUN_DEFAULT_TIMEOUT_SEC = 300;
+/** Default row count above which Safe Run warns and Commit turns destructive. */
+export const SAFE_RUN_DEFAULT_ROW_THRESHOLD = 1000;
+/** Rows kept per side (before / after) in a Safe Run report. */
+export const SAFE_RUN_ROW_CAP = 500;
+
+/** Renderer → main payload for `query.safeRun`. */
+export const SafeRunStartRequest = z.object({
+  sql: z.string().min(1),
+  connectionGen: z.number().int().nonnegative(),
+  /** Seconds the transaction may stay open awaiting Commit / Roll back. */
+  timeoutSec: z.number().int().min(5).max(3600).optional(),
+  /** Ask the planner for a row estimate first (plain EXPLAIN, never ANALYZE). */
+  explain: z.boolean().optional(),
+});
+export type SafeRunStartRequest = z.infer<typeof SafeRunStartRequest>;
+
+export const SafeRunFinishRequest = z.object({
+  runId: z.string().min(1),
+  action: z.enum(['commit', 'rollback']),
+});
+export type SafeRunFinishRequest = z.infer<typeof SafeRunFinishRequest>;
+
+/** How BEFORE rows are matched to AFTER rows. */
+export const SafeRunKeyKind = z.enum(['pk', 'unique', 'ctid', 'none']);
+export type SafeRunKeyKind = z.infer<typeof SafeRunKeyKind>;
+
+/** What a Safe Run changed, held open in a transaction awaiting a decision. */
+export const SafeRunReport = z.object({
+  runId: z.string(),
+  kind: z.enum(['insert', 'update', 'delete', 'merge', 'cte']),
+  statement: z.string(),
+  /** Savepoint inside the user's own transaction rather than a new BEGIN. */
+  nested: z.boolean(),
+  /** Rows the statement reported affecting. */
+  affected: z.number().int().nonnegative(),
+  /** False when the statement returned more rows than were counted. */
+  affectedExact: z.boolean(),
+  /** Planner row estimate for the statement, when asked for and available. */
+  estimateRows: z.number().nullable(),
+  /** `diff` pairs BEFORE with AFTER; `after-only` shows what the statement returned. */
+  mode: z.enum(['diff', 'after-only']),
+  /** Why only AFTER rows are shown, or other caveats worth surfacing. */
+  note: z.string().nullable(),
+  keyKind: SafeRunKeyKind,
+  keyColumns: z.array(z.string()),
+  /** Table columns of the BEFORE rows. */
+  beforeColumns: z.array(ColumnMeta),
+  before: z.array(z.array(z.unknown())).nullable(),
+  /** Physical row ids aligned with `before` (only for `keyKind: 'ctid'`). */
+  beforeCtids: z.array(z.string()).nullable(),
+  beforeTotal: z.number().int().nonnegative(),
+  afterColumns: z.array(ColumnMeta),
+  after: z.array(z.array(z.unknown())),
+  afterCtids: z.array(z.string()).nullable(),
+  afterTotal: z.number().int().nonnegative(),
+  durationMs: z.number(),
+  /** Epoch ms at which the worker rolls the transaction back by itself. */
+  expiresAt: z.number(),
+  timeoutSec: z.number().int(),
+  txnState: z.enum(['none', 'active', 'error']),
+});
+export type SafeRunReport = z.infer<typeof SafeRunReport>;
+
+export const SafeRunOutcome = z.object({
+  runId: z.string(),
+  outcome: z.enum(['committed', 'rolledBack']),
+  /** Why a roll back happened without the user asking (timeout, disconnect). */
+  reason: z.enum(['user', 'timeout', 'disconnect']).optional(),
+  txnState: z.enum(['none', 'active', 'error']),
+});
+export type SafeRunOutcome = z.infer<typeof SafeRunOutcome>;
 
 // ─── Worker messages (main ↔ utilityProcess) ────────────────────────
 
@@ -1102,11 +1183,31 @@ export const WorkerRequest = z.discriminatedUnion('kind', [
     id: z.string(),
     sql: z.string().min(1),
     analyze: z.boolean(),
+    params: z.array(z.unknown()).optional(),
   }),
   z.object({ kind: z.literal('introspect'), id: z.string(), opts: IntrospectOpts.optional() }),
   z.object({ kind: z.literal('beginTxn'), id: z.string() }),
   z.object({ kind: z.literal('commitTxn'), id: z.string() }),
   z.object({ kind: z.literal('rollbackTxn'), id: z.string() }),
+  /**
+   * Safe Run: run one INSERT / UPDATE / DELETE / MERGE inside a held-open
+   * transaction (or savepoint) and report what it changed. A write kind;
+   * never replayed after a reconnect.
+   */
+  z.object({
+    kind: z.literal('safeRunStart'),
+    id: z.string(),
+    sql: z.string().min(1),
+    connectionGen: z.number().int().nonnegative(),
+    timeoutSec: z.number().int().min(5).max(3600).optional(),
+    explain: z.boolean().optional(),
+  }),
+  z.object({
+    kind: z.literal('safeRunFinish'),
+    id: z.string(),
+    runId: z.string().min(1),
+    action: z.enum(['commit', 'rollback']),
+  }),
   /**
    * Grid edit batch (C7). Each update must affect exactly one row; any
    * other rowCount (or a Postgres error) rolls the whole batch back.
@@ -1386,6 +1487,8 @@ export const WorkerResponse = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('statementTimeoutSet'), id: z.string() }),
   z.object({ kind: z.literal('schemaInfo'), id: z.string(), info: SchemaInfo }),
   z.object({ kind: z.literal('txnState'), id: z.string(), state: TxnState }),
+  z.object({ kind: z.literal('safeRunReport'), id: z.string(), report: SafeRunReport }),
+  z.object({ kind: z.literal('safeRunDone'), id: z.string(), outcome: SafeRunOutcome }),
   z.object({
     kind: z.literal('editBatchResult'),
     id: z.string(),
@@ -1474,6 +1577,26 @@ export type WorkerResponse = z.infer<typeof WorkerResponse>;
 
 // ─── Settings (keyed values in SQLite) ───────────────────────────────
 
+/** A typed query-variable value (see `@shared/sql-variables`). */
+export const SavedVariableValue = z.object({
+  mode: z.enum(['text', 'number', 'date', 'boolean', 'null', 'raw']),
+  value: z.string().max(10_000),
+});
+export type SavedVariableValue = z.infer<typeof SavedVariableValue>;
+
+/** A user-written editor snippet. `body` uses Monaco snippet syntax (`$1`, `${2:name}`). */
+export const UserSnippetShape = z.object({
+  id: z.string(),
+  name: z.string().min(1).max(120),
+  /** Typed in the editor to trigger the completion. */
+  prefix: z.string().min(1).max(40),
+  description: z.string().max(300).default(''),
+  body: z.string().max(50_000),
+  createdAt: z.number(),
+  updatedAt: z.number(),
+});
+export type UserSnippet = z.infer<typeof UserSnippetShape>;
+
 export const SettingsShape = z.object({
   theme: z
     .preprocess(
@@ -1544,6 +1667,16 @@ export const SettingsShape = z.object({
     )
     .catch({})
     .default({}),
+  /**
+   * Per-connection "Always Safe Run writes": a normal Run of INSERT /
+   * UPDATE / DELETE / MERGE goes through Safe Run. Absent = on for
+   * connections tagged Prod, off otherwise.
+   */
+  connectionAlwaysSafeRun: z.record(z.string(), z.boolean()).catch({}).default({}),
+  /** Safe Run warns, and Commit turns destructive, above this many rows. */
+  safeRunRowThreshold: z.number().int().positive().catch(1000).default(1000),
+  /** Seconds a Safe Run may wait for Commit / Roll back before it rolls itself back. */
+  safeRunTimeoutSec: z.number().int().min(5).max(3600).catch(300).default(300),
   /** Defaults for CSV export (the export dialog starts from these). */
   csvExport: CsvExportOptions.catch({
     delimiter: ',',
@@ -1708,6 +1841,8 @@ export const SettingsShape = z.object({
             createdAt: z.number(),
             updatedAt: z.number(),
             sql: z.string(),
+            /** Last-used query variable values (`:name`, `$name`), restored on open. */
+            variables: z.record(z.string(), SavedVariableValue).optional(),
             pageSize: z.number().int().positive().default(50),
           }),
           z.object({
@@ -1757,6 +1892,10 @@ export const SettingsShape = z.object({
       ),
     )
     .default({}),
+  /** User snippets (Monaco snippet syntax); shown in completions by prefix. */
+  snippets: z.array(UserSnippetShape).default([]),
+  /** Per-variable recent values for the Variables bar, newest first. */
+  variableHistory: z.record(z.string(), z.array(z.string())).default({}),
   windowBounds: z
     .object({
       x: z.number().optional(),
@@ -1808,6 +1947,12 @@ export const AiChatRequest = z.object({
   model: z.string().optional(),
   /** Hard cap on output tokens. Default = unset (use OpenRouter default). */
   maxTokens: z.number().int().positive().optional(),
+  /**
+   * One-shot assistant task (Fix with AI, Explain plan, NL filter). Main
+   * swaps in the task's system prompt (see `@shared/ai-tasks`) and never
+   * offers row-data tools; the schema is still gated by `aiSendSchema`.
+   */
+  task: z.enum(['fix-sql', 'explain-plan', 'nl-filter']).optional(),
 });
 export type AiChatRequest = z.infer<typeof AiChatRequest>;
 
@@ -1934,6 +2079,8 @@ export const IpcChannel = {
   QueryChunkEvent: 'plasma:query:chunk',
   QueryCommitEditBatch: 'plasma:query:commitEditBatch',
   QueryExplain: 'plasma:query:explain',
+  QuerySafeRun: 'plasma:query:safeRun',
+  QuerySafeRunFinish: 'plasma:query:safeRunFinish',
   PgNoticeEvent: 'plasma:pg:notice',
   StructureApply: 'plasma:structure:apply',
   ImportPickFile: 'plasma:import:pickFile',
@@ -2105,7 +2252,15 @@ export interface PlasmaAPI {
       updates: Array<{ sql: string; params?: unknown[]; label?: string }>;
     }): Promise<{ state: TxnState; applied: number }>;
     /** EXPLAIN (FORMAT JSON) one statement; ANALYZE runs it inside a rolled-back transaction. */
-    explain(req: { sql: string; analyze: boolean }): Promise<QueryResult>;
+    explain(req: { sql: string; analyze: boolean; params?: unknown[] }): Promise<QueryResult>;
+    /**
+     * Safe Run: execute one write inside a held-open transaction (a
+     * savepoint if the user has one) and return what it changed. Nothing
+     * else runs on the primary until `safeRunFinish` (or the timeout).
+     */
+    safeRun(req: SafeRunStartRequest): Promise<SafeRunReport>;
+    /** Commit or roll back the pending Safe Run. Idempotent after a timeout. */
+    safeRunFinish(req: SafeRunFinishRequest): Promise<SafeRunOutcome>;
     cancel(): Promise<void>;
     /** Cancel whatever runs on the aux connection (AI tool query, lookups). */
     cancelAux(): Promise<void>;

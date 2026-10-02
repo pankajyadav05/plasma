@@ -53,6 +53,8 @@ function resetStore() {
     settings: {
       ...useSession.getState().settings,
       connectionTags: { 'conn-prod': 'prod' },
+      // Prod defaults to Safe Run; these tests are about the plain run path.
+      connectionAlwaysSafeRun: { 'conn-prod': false },
     },
     prodGate: null,
     tabs: [

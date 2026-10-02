@@ -2,6 +2,7 @@ import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { AppShell } from '@/features/app-shell/AppShell';
 import { HostKeyDialog } from '@/features/connection-manager/HostKeyDialog';
 import { type CommandId, runCommand } from '@/features/keymap/commands';
+import { routeAiTaskEvent } from '@/lib/ai-task';
 import { useReconnect } from '@/stores/reconnect';
 import { useSession } from '@/stores/session';
 import { ConnectionRecovered } from '@shared/protocol';
@@ -72,6 +73,8 @@ export function App() {
         const evt = args[0] as Parameters<
           ReturnType<typeof useSession.getState>['aiApplyEvent']
         >[0];
+        // One-shot tasks (Fix with AI, Explain plan, NL filter) own their streams.
+        if (routeAiTaskEvent(evt)) return;
         session().aiApplyEvent(evt);
       }),
       // U26: stream Postgres NOTICE / RAISE NOTICE into the origin tab.

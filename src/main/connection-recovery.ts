@@ -107,6 +107,10 @@ const POLICY_BY_KIND: Partial<Record<WorkerRequest['kind'], RecoveryPolicy>> = {
   beginTxn: 'reconnect-only',
   commitTxn: 'reconnect-only',
   rollbackTxn: 'reconnect-only',
+  // Safe Run holds a transaction open on one session; a fresh session has
+  // nothing to commit and must not re-execute the write.
+  safeRunStart: 'reconnect-only',
+  safeRunFinish: 'reconnect-only',
   // Cancels a backend pid that no longer exists on the new session.
   cancel: 'reconnect-only',
   // Side effects: replaying rewrites files / repeats mutations.

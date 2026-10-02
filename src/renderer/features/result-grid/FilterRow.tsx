@@ -10,6 +10,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { AskFilter } from '@/features/ai/AskFilter';
 import { cn } from '@/lib/cn';
 import { ipc } from '@/lib/ipc';
 import { defaultOperatorFor, operatorLabel, operatorsFor } from '@/lib/pg-types';
@@ -79,6 +80,7 @@ export function FilterRow() {
         ))}
         {hasFilters && <AddMoreFilters hasAny />}
       </div>
+      <AskFilter />
       {hasFilters && <SqlPreview sql={tab.sql} />}
     </div>
   );

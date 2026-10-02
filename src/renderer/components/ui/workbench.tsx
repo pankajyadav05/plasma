@@ -328,7 +328,8 @@ export function MenuItem({
       <span className="grid w-3.5 shrink-0 place-items-center">
         {checked ? <span className="text-[12px]">✓</span> : icon}
       </span>
-      <span className="flex-1 truncate">{label}</span>
+      {/* leading > 1 so truncate's overflow clip keeps descenders and "_" */}
+      <span className="flex-1 truncate leading-[16px]">{label}</span>
       {hint && (
         <span className="text-[12px] text-[var(--wb-text-2)] group-hover/menu:text-white/85 group-focus-visible/menu:text-white/85">
           {hint}

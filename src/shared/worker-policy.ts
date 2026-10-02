@@ -34,6 +34,7 @@ export function ipcDeadlineMs(kind: WorkerRequest['kind'], req?: WorkerRequest):
     case 'applyDdl':
     case 'explain':
     case 'commitEditBatch':
+    case 'safeRunStart':
     case 'redisBulkDelete':
     case 'redisDeleteByPattern':
     case 'redisAnalyze':
@@ -77,6 +78,7 @@ export function cancelRequestFor(req: WorkerRequest, id: string): WorkerRequest 
     case 'commitEditBatch':
     case 'applyDdl':
     case 'explain':
+    case 'safeRunStart':
     case 'query':
       return { kind: 'cancel', id };
     case 'introspect':

@@ -1,3 +1,4 @@
+import { taskMaxTokens, taskSystemPrompt } from '@shared/ai-tasks';
 import type {
   AiChatEvent,
   AiChatRequest,
@@ -260,15 +261,20 @@ async function pump(
 
   const engine = req.engine ?? 'postgres';
   const allowSchema = options.allowSchema === true;
-  const messages: InternalMsg[] = buildMessages(
-    req.messages,
-    engine,
-    allowSchema ? req.schema : null,
-    allowSchema ? req.engineContext : undefined,
-  );
+  // One-shot tasks (Fix with AI, Explain plan, NL filter) are Postgres-only,
+  // use their own system prompt and never get row-data tools.
+  const task = engine === 'postgres' ? req.task : undefined;
+  const messages: InternalMsg[] = task
+    ? buildTaskMessages(task, req.messages, allowSchema ? req.schema : null)
+    : buildMessages(
+        req.messages,
+        engine,
+        allowSchema ? req.schema : null,
+        allowSchema ? req.engineContext : undefined,
+      );
   const model = req.model?.trim() ? req.model : defaultModel;
   // U06: only offer row-data tools when the active connection opted in.
-  const allowRowData = options.allowRowData === true;
+  const allowRowData = options.allowRowData === true && !task;
   const tools = allowRowData ? toolsForEngine(engine) : [];
   const fetchImpl = options.fetchImpl ?? fetch;
 
@@ -283,7 +289,7 @@ async function pump(
       const body = buildOpenRouterBody({
         model,
         messages,
-        maxTokens: req.maxTokens,
+        maxTokens: req.maxTokens ?? (task ? taskMaxTokens(task) : undefined),
         tools: offeredTools,
         stream: true,
       });
@@ -479,10 +485,30 @@ function buildMessages(
   return out;
 }
 
+/**
+ * Messages for a one-shot task: the task's system prompt, then (only when
+ * the schema is allowed to leave the machine) the relevant schema, then the
+ * user turn(s) the renderer built with the prompt builders.
+ */
+export function buildTaskMessages(
+  task: NonNullable<AiChatRequest['task']>,
+  messages: AiMessage[],
+  schema?: SchemaInfo | null,
+): Array<{ role: 'system' | 'user' | 'assistant'; content: string }> {
+  const ddl = schema ? compactSchema(schema, { withIndexes: task === 'explain-plan' }) : '';
+  const system = `${taskSystemPrompt(task)}${ddl ? `\n\n--- SCHEMA ---\n${ddl}` : ''}`;
+  return [
+    { role: 'system', content: system },
+    ...messages
+      .filter((m) => m.role !== 'system')
+      .map((m) => ({ role: m.role, content: m.content })),
+  ];
+}
+
 const MAX_TABLES = 80;
 const MAX_COLS_PER_TABLE = 24;
 
-function compactSchema(schema: SchemaInfo): string {
+function compactSchema(schema: SchemaInfo, opts: { withIndexes?: boolean } = {}): string {
   const tables = schema.tables.slice(0, MAX_TABLES);
   const colByTable = new Map<string, SchemaInfo['columns']>();
   for (const c of schema.columns) {
@@ -514,6 +540,11 @@ function compactSchema(schema: SchemaInfo): string {
     const fks = fkByTable.get(key);
     if (fks && fks.length > 0) {
       lines.push(`  FK: ${fks.join('; ')}`);
+    }
+    if (opts.withIndexes) {
+      for (const ix of schema.indexes ?? []) {
+        if (`${ix.schema}.${ix.table}` === key) lines.push(`  INDEX: ${ix.definition}`);
+      }
     }
   }
   if (schema.tables.length > MAX_TABLES) {

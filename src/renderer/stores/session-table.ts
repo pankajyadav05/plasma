@@ -10,12 +10,16 @@ import {
   discardPendingEdit as discardPendingEditAction,
   duplicateValues,
   queueCellEdit,
+  queueCellEdits,
   queueInsert,
+  queueInserts,
   queueRowDeletes,
   revertPendingEdits as revertPendingEditsAction,
   tabsWithEdits,
   updatePendingInsert as updatePendingInsertAction,
+  updatePendingInserts as updatePendingInsertsAction,
 } from './session-pending-edits';
+import type { BulkEditResult, CellEditInput } from './session-pending-edits';
 import type { PendingEditsByTab, PendingEditsError } from './session-pending-edits';
 import {
   activeTab,
@@ -94,6 +98,11 @@ export interface TableSlice {
   /** Queue an INSERT copying the row (PKs with defaults left to the server). */
   duplicateRow(rowIndex: number): void;
   updatePendingInsert(id: string, column: string, value: string | null): void;
+  /** Bulk edits (set value / fill / paste / find & replace): one store update, reports what was staged. */
+  updateCells(edits: CellEditInput[]): BulkEditResult;
+  /** Queue several INSERTs at once (pasted rows); returns how many were queued. */
+  insertRows(rows: Array<Record<string, string | null>>): number;
+  updatePendingInserts(changes: Array<{ id: string; column: string; value: string | null }>): void;
   discardPendingEdit(id: string): void;
   // Pending edits (buffered inline-edit tray)
   /** Commits ONLY the edits of `tabId` (default: the active tab). */
@@ -405,6 +414,18 @@ export const createTableSlice: SliceCreator<TableSlice> = (set, get) => ({
 
   updatePendingInsert(id, column, value) {
     updatePendingInsertAction(set, get, id, column, value);
+  },
+
+  updateCells(edits) {
+    return queueCellEdits(set, get, edits);
+  },
+
+  insertRows(rows) {
+    return queueInserts(set, get, rows);
+  },
+
+  updatePendingInserts(changes) {
+    updatePendingInsertsAction(set, get, changes);
   },
 
   discardPendingEdit(id) {

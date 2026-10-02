@@ -47,6 +47,8 @@ const api: PlasmaAPI = {
     cancel: () => ipcRenderer.invoke(IpcChannel.QueryCancel),
     cancelAux: () => ipcRenderer.invoke(IpcChannel.QueryCancelAux),
     explain: (req) => ipcRenderer.invoke(IpcChannel.QueryExplain, req),
+    safeRun: (req) => ipcRenderer.invoke(IpcChannel.QuerySafeRun, req),
+    safeRunFinish: (req) => ipcRenderer.invoke(IpcChannel.QuerySafeRunFinish, req),
     sideband: (sql, params, opts) =>
       params || opts
         ? ipcRenderer.invoke(IpcChannel.QuerySideband, { sql, params, timeoutMs: opts?.timeoutMs })

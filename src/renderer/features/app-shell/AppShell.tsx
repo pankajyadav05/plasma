@@ -7,13 +7,16 @@ import { EditorResizer } from '@/features/editor/EditorResizer';
 import { RunningPlaceholder } from '@/features/editor/RunningPlaceholder';
 import { SqlCanvas } from '@/features/editor/SqlCanvas';
 import { TabStrip } from '@/features/editor/TabStrip';
+import { VariablesBar } from '@/features/editor/VariablesBar';
 import { runCommand, selectTabAt } from '@/features/keymap/commands';
 import { FilterRow } from '@/features/result-grid/FilterRow';
 import { ResultFooter } from '@/features/result-grid/ResultFooter';
 import { ResultGrid } from '@/features/result-grid/ResultGrid';
 import { ResultMessagesPanel, ResultTabs } from '@/features/result-grid/ResultTabs';
 import { RightRail } from '@/features/right-rail/RightRail';
+import { SafeRunPanel } from '@/features/safe-run/SafeRunPanel';
 import { Sidebar } from '@/features/sidebar/Sidebar';
+import { SnippetEditorDialog } from '@/features/snippets/SnippetEditorDialog';
 import { LazyOnOpen, lazyNamed } from '@/lib/lazy';
 import { PaneTabContext } from '@/stores/pane-context';
 import { type PaneId, activeIn, isSplit } from '@/stores/pane-state';
@@ -183,6 +186,7 @@ export function AppShell() {
       <ProdGateDialog />
       <PendingEditsGateDialog />
       <CloseTabsDialog />
+      <SnippetEditorDialog />
       {/* Store-gated dialogs: lazy chunks that load right after first paint. */}
       <Suspense fallback={null}>
         <NewIndexDialog />
@@ -222,6 +226,7 @@ export function AppShell() {
 const TYPING_CHORDS: ReadonlySet<KeyId> = new Set<KeyId>([
   'runQuery',
   'runQueryAll',
+  'safeRun',
   'cancelQuery',
   'exportCsv',
 ]);
@@ -372,7 +377,8 @@ function PaneSlot({
 function PaneCanvas({ pane }: { pane?: PaneId } = {}) {
   // Narrow selectors (F13): typing in the editor patches `sql` on every
   // keystroke; this layout only re-renders when its shape changes.
-  const { kind, viewMode, hasResultOrError, running } = useActiveTabSelect((t) => ({
+  const { tabId, kind, viewMode, hasResultOrError, running } = useActiveTabSelect((t) => ({
+    tabId: t?.id,
     kind: t?.kind,
     viewMode: t?.viewMode,
     hasResultOrError: Boolean(
@@ -388,7 +394,9 @@ function PaneCanvas({ pane }: { pane?: PaneId } = {}) {
   // take the rest. ⌘J hides the editor while there are results to show.
   const isSqlTab = kind === 'sql';
   const isDiagram = kind === 'er-diagram';
-  const hasResults = hasResultOrError || running;
+  // Safe Run: the review replaces the result grid while one exists for this tab.
+  const safeRunHere = useSession((s) => s.safeRun != null && s.safeRun.tabId === tabId) && isSqlTab;
+  const hasResults = hasResultOrError || running || safeRunHere;
   const showEditor = isSqlTab && (!editorHidden || !hasResults);
   const showGrid = !isDiagram && (!isSqlTab || hasResults);
   return (
@@ -401,10 +409,12 @@ function PaneCanvas({ pane }: { pane?: PaneId } = {}) {
       )}
       {showEditor && <SqlCanvas expanded={!hasResults} />}
       {showEditor && hasResults && <EditorResizer />}
+      {showEditor && <VariablesBar />}
       {isTableData && <FilterRow />}
-      {showGrid && isSqlTab && <ResultTabs />}
-      {showGrid && <ResultBody />}
-      {showGrid && <ResultFooter />}
+      {safeRunHere && <SafeRunPanel />}
+      {showGrid && !safeRunHere && isSqlTab && <ResultTabs />}
+      {showGrid && !safeRunHere && <ResultBody />}
+      {showGrid && !safeRunHere && <ResultFooter />}
     </main>
   );
 }

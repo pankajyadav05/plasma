@@ -82,6 +82,9 @@ export const DEFAULT_SETTINGS: Settings = {
   restoreWorkspace: true,
   safeModeDefault: 'confirm-dangerous',
   connectionSafeMode: {},
+  connectionAlwaysSafeRun: {},
+  safeRunRowThreshold: 1000,
+  safeRunTimeoutSec: 300,
   csvExport: { delimiter: ',', header: true, quote: '"', nullAs: 'empty', lineEnding: 'lf' },
   gridAlternatingRows: true,
   estimatedCountThreshold: 100_000,
@@ -100,6 +103,8 @@ export const DEFAULT_SETTINGS: Settings = {
   favoriteTables: {},
   tableColumnState: {},
   savedQueries: {},
+  snippets: [],
+  variableHistory: {},
   windowBounds: null,
 };
 

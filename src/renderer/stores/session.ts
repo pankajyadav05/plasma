@@ -10,6 +10,7 @@ import { createProdGateSlice } from './session-prod-gate';
 import { createQuerySlice } from './session-query';
 import { createRedisSlice } from './session-redis';
 import { createRolesSlice } from './session-roles';
+import { createSafeRunSlice } from './session-safe-run';
 import { createSavedQueriesSlice } from './session-saved-queries';
 import { createSchemaSlice } from './session-schema';
 import { createSettingsSlice } from './session-settings';
@@ -53,6 +54,7 @@ export const useSession = create<SessionState>()((...a) => ({
   ...createHistorySlice(...a),
   ...createAiSlice(...a),
   ...createProdGateSlice(...a),
+  ...createSafeRunSlice(...a),
   ...createUiSlice(...a),
 }));
 

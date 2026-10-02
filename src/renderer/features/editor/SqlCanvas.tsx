@@ -5,6 +5,7 @@ import { lazyNamed } from '@/lib/lazy';
 import { shortcut } from '@/lib/platform';
 import { type RunMode, resolveRunTarget, statementPosition } from '@/lib/sql-split';
 import { useActiveTab, useSession } from '@/stores/session';
+import { ensureVariablesReady } from '@/stores/session-variables';
 import { ROW_LIMIT_CHOICES, useWorkbench } from '@/stores/workbench';
 import { MAX_RESULT_ROWS } from '@shared/result-bounds';
 import {
@@ -14,6 +15,7 @@ import {
   ListOrdered,
   Play,
   Save,
+  ShieldCheck,
   SlidersHorizontal,
   Sparkles,
   Square,
@@ -160,13 +162,21 @@ export function SqlCanvas({ expanded = false }: { expanded?: boolean }) {
         isTable={isTable}
         onRun={handleAction}
         onRunMode={run}
-        onExplain={() => setExplainOpen(true)}
+        onExplain={() => {
+          // Variables must be filled in (and shown) before Explain binds them.
+          if (ensureVariablesReady(tab, explainSql)) setExplainOpen(true);
+        }}
         onAskAi={() => askAi(tab.sql)}
       />
 
       {!isTable && explainOpen && (
         <Suspense fallback={null}>
-          <ExplainDialog open={explainOpen} onOpenChange={setExplainOpen} sql={explainSql} />
+          <ExplainDialog
+            open={explainOpen}
+            onOpenChange={setExplainOpen}
+            sql={explainSql}
+            variables={tab.queryVars}
+          />
         </Suspense>
       )}
     </div>
@@ -207,6 +217,10 @@ function EditorActionBar({
   const [limitMenu, setLimitMenu] = useState(false);
   const wordWrap = useWorkbench((s) => s.wordWrap);
   const fontSize = useSession((s) => s.settings.editorFontSize);
+  const readOnlyConn = useSession((s) => s.activeConfig?.readOnly === true);
+  const safeRunBusy = useSession(
+    (s) => s.safeRun != null && ['running', 'review', 'finishing'].includes(s.safeRun.phase),
+  );
 
   if (!tab) return null;
 
@@ -376,6 +390,25 @@ function EditorActionBar({
             </Popover>
           </SplitPill>
         </>
+      )}
+
+      {!isTable && !running && (
+        <Pill
+          onClick={() => runCommand('safeRun')}
+          disabled={!canRun || readOnlyConn || safeRunBusy}
+          data-testid="safe-run"
+          title={
+            readOnlyConn
+              ? 'Safe Run is not available on a read-only connection'
+              : `Dry run an INSERT / UPDATE / DELETE: see the rows it changes, then Commit or Roll back (${shortcut('safeRun')})`
+          }
+        >
+          <ShieldCheck />
+          Safe Run
+          <span className="font-mono text-[12px] opacity-70 @max-[620px]:hidden">
+            {shortcut('safeRun')}
+          </span>
+        </Pill>
       )}
 
       {running ? (

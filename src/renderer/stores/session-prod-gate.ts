@@ -54,6 +54,8 @@ export function armProdGate(
     summary?: string;
     /** Offset of `sql` in the tab buffer, so a resumed run maps errors correctly (R-14). */
     base?: number;
+    /** Resume as a Safe Run (dry run) instead of a plain run. */
+    safe?: boolean;
   },
 ): void {
   set({ prodGate: { ...gate, connectionGen: get().connectionGen ?? 0 } });
@@ -152,6 +154,7 @@ export interface ProdGateSlice {
     reason?: 'prod' | 'safe-mode';
     summary?: string;
     base?: number;
+    safe?: boolean;
   } | null;
   /** Resume a prod-gated runQuery after user confirms. */
   confirmProdGate(): void;
@@ -198,6 +201,10 @@ export const createProdGateSlice: SliceCreator<ProdGateSlice> = (set, get) => ({
     if (get().activeTabId !== gate.tabId) {
       if (!get().tabs.some((t) => t.id === gate.tabId)) return;
       set({ activeTabId: gate.tabId });
+    }
+    if (gate.safe) {
+      void get().runSafeRun({ sql: gate.sql, base: gate.base, gated: true });
+      return;
     }
     void get().runQuery({ sql: gate.sql, base: gate.base });
   },

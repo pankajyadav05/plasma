@@ -37,6 +37,7 @@ import { ExportPopover } from './ExportMenu';
 import { ExportProgress } from './ExportProgress';
 import { InsertRowDialog } from './InsertRowDialog';
 import { useNoticeCount } from './ResultTabs';
+import { SelectionStatsChip } from './SelectionStats';
 import { SortPopover } from './SortPopover';
 import { isErrorTabActive } from './result-view';
 
@@ -241,7 +242,8 @@ export function ResultFooter() {
         <span className="ml-1.5 shrink-0 text-[13px] text-[var(--wb-text-2)]">Running…</span>
       )}
 
-      <div className="flex min-w-0 flex-1 justify-center">
+      <div className="flex min-w-0 flex-1 items-center justify-center gap-2">
+        {showDataTools && <SelectionStatsChip tabId={tab.id} />}
         {tableData || (!isTable && hasRows && resultView === 'data') ? <RowRange /> : null}
       </div>
 

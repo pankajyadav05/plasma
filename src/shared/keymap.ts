@@ -15,6 +15,7 @@ export type KeyId =
   | 'toggleEditor'
   | 'runQuery'
   | 'runQueryAll'
+  | 'safeRun'
   | 'cancelQuery'
   | 'history'
   | 'newTab'
@@ -149,6 +150,13 @@ export const KEYMAP: readonly KeyBinding[] = [
     category: 'Query',
     scope: 'global',
     menuChannel: 'plasma:menu:runQueryAll',
+  },
+  {
+    id: 'safeRun',
+    chord: { key: 'Enter', mod: true, alt: true },
+    label: 'Safe Run (dry run a write)',
+    category: 'Query',
+    scope: 'global',
   },
   {
     id: 'cancelQuery',

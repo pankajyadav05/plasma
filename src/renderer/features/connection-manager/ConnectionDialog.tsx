@@ -190,11 +190,19 @@ export function ConnectionDialog() {
   const groupSuggestions = useMemo(() => existingGroups(savedConnections), [savedConnections]);
   const allSafeMode = useSession((s) => s.settings.connectionSafeMode);
   const defaultSafeMode = useSession((s) => s.settings.safeModeDefault);
+  const allAlwaysSafeRun = useSession((s) => s.settings.connectionAlwaysSafeRun);
+  // null = untouched: follows the tag (on for Prod).
+  const [alwaysSafeRunChoice, setAlwaysSafeRunChoice] = useState<boolean | null>(
+    () => (dialogPrefill ? allAlwaysSafeRun?.[dialogPrefill.id] : undefined) ?? null,
+  );
   const [safeMode, setSafeMode] = useState<SafeModeLevel | 'default'>(
     () => (dialogPrefill ? allSafeMode?.[dialogPrefill.id] : undefined) ?? 'default',
   );
   const [advancedOpen, setAdvancedOpen] = useState(
-    () => safeMode !== 'default' || Boolean(dialogPrefill?.bootstrapSql),
+    () =>
+      safeMode !== 'default' ||
+      alwaysSafeRunChoice !== null ||
+      Boolean(dialogPrefill?.bootstrapSql),
   );
   const showDisconnect = Boolean(
     activeConfig && isEditing && activeConfig.id === dialogPrefill?.id,
@@ -315,7 +323,14 @@ export function ConnectionDialog() {
     const nextSafe = { ...(allSafeMode ?? {}) };
     if (safeMode === 'default') delete nextSafe[form.id];
     else nextSafe[form.id] = safeMode;
-    await updateSettings({ connectionSsh: nextSshMap, connectionSafeMode: nextSafe });
+    const nextSafeRun = { ...(allAlwaysSafeRun ?? {}) };
+    if (alwaysSafeRunChoice === null) delete nextSafeRun[form.id];
+    else nextSafeRun[form.id] = alwaysSafeRunChoice;
+    await updateSettings({
+      connectionSsh: nextSshMap,
+      connectionSafeMode: nextSafe,
+      connectionAlwaysSafeRun: nextSafeRun,
+    });
   };
 
   const handleConnect = async (e: React.FormEvent) => {
@@ -921,6 +936,32 @@ export function ConnectionDialog() {
                         A Prod tag still confirms destructive statements.
                       </p>
                     </Field>
+                    {engine === 'postgres' && (
+                      <Field label="Safe Run" htmlFor="conn-always-safe-run">
+                        <div className="flex items-center gap-2">
+                          <Checkbox
+                            id="conn-always-safe-run"
+                            checked={alwaysSafeRunChoice ?? tag === 'prod'}
+                            disabled={Boolean(form.readOnly)}
+                            onCheckedChange={(v) => {
+                              setAlwaysSafeRunChoice(Boolean(v));
+                              touched();
+                            }}
+                          />
+                          <label
+                            htmlFor="conn-always-safe-run"
+                            className="cursor-pointer text-[13px] text-[var(--wb-text)]"
+                          >
+                            Always Safe Run writes
+                          </label>
+                        </div>
+                        <p className="text-[12px] text-[var(--wb-text-2)]">
+                          Run on an INSERT, UPDATE, DELETE or MERGE executes it in a transaction
+                          first and shows the rows it changed; you Commit or Roll back. On by
+                          default for Prod connections.
+                        </p>
+                      </Field>
+                    )}
                     {engine === 'postgres' && (
                       <Field label="Run after connecting (SQL)" htmlFor="conn-bootstrap">
                         <textarea

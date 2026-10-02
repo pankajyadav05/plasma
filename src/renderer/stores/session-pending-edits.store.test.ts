@@ -354,3 +354,115 @@ describe('per-tab pending edits (R-01 / R-02 / R-03 / R-04)', () => {
     expect(useSession.getState().pendingEditsByTab).toEqual({});
   });
 });
+
+describe('bulk edits (set value / fill / paste / find & replace)', () => {
+  function threeRows() {
+    useSession.setState((s) => ({
+      tabs: s.tabs.map((t) =>
+        t.id === 'tab-a' && t.queryResult
+          ? {
+              ...t,
+              queryResult: {
+                ...t.queryResult,
+                rows: [
+                  [1, 'a@b.co'],
+                  [2, 'b@b.co'],
+                  [3, null],
+                ],
+                rowCount: 3,
+              },
+            }
+          : t,
+      ),
+    }));
+  }
+
+  it('stages many cells in one update and reports queued / unchanged / skipped', () => {
+    threeRows();
+    useSession.getState().deleteRows([1]);
+    const res = useSession.getState().updateCells([
+      { rowIndex: 0, columnIndex: 1, value: 'x' },
+      { rowIndex: 1, columnIndex: 1, value: 'x' }, // row 1 is marked for deletion
+      { rowIndex: 2, columnIndex: 1, value: null }, // already NULL
+      { rowIndex: 9, columnIndex: 1, value: 'x' }, // not loaded
+    ]);
+    expect(res).toEqual({ queued: 1, unchanged: 1, skipped: 2 });
+    const updates = tabAEdits().filter((e) => e.kind === 'update');
+    expect(updates).toHaveLength(1);
+    expect(updates[0]).toMatchObject({ column: 'email', newValue: 'x', pkValues: { id: '1' } });
+  });
+
+  it('a later bulk value replaces the cell edit and typing the original back un-queues it', () => {
+    threeRows();
+    useSession.getState().updateCells([{ rowIndex: 0, columnIndex: 1, value: 'x' }]);
+    useSession.getState().updateCells([{ rowIndex: 0, columnIndex: 1, value: 'y' }]);
+    expect(tabAEdits().map((e) => e.newValue)).toEqual(['y']);
+    useSession.getState().updateCells([{ rowIndex: 0, columnIndex: 1, value: 'a@b.co' }]);
+    expect(tabAEdits()).toHaveLength(0);
+  });
+
+  it('refuses bulk edits on read-only connections, read-only safe mode and without edit mode', () => {
+    threeRows();
+    useSession.setState((s) => ({ activeConfig: { ...s.activeConfig!, readOnly: true } }));
+    expect(() =>
+      useSession.getState().updateCells([{ rowIndex: 0, columnIndex: 1, value: 'x' }]),
+    ).toThrow(/read-only/);
+    useSession.setState((s) => ({ activeConfig: { ...s.activeConfig!, readOnly: false } }));
+    useSession.setState((s) => ({
+      settings: { ...s.settings, safeModeDefault: 'read-only' as const },
+    }));
+    expect(() =>
+      useSession.getState().updateCells([{ rowIndex: 0, columnIndex: 1, value: 'x' }]),
+    ).toThrow(/safe mode/);
+    useSession.setState((s) => ({
+      settings: { ...s.settings, safeModeDefault: 'confirm-dangerous' as const },
+    }));
+    useSession.setState({ editMode: false });
+    expect(() =>
+      useSession.getState().updateCells([{ rowIndex: 0, columnIndex: 1, value: 'x' }]),
+    ).toThrow(/edit mode/);
+    expect(tabAEdits()).toHaveLength(0);
+  });
+
+  it('requires a primary key', () => {
+    threeRows();
+    useSession.setState((s) => ({
+      schema: s.schema && {
+        ...s.schema,
+        columns: s.schema.columns.map((c) => ({ ...c, isPrimaryKey: false })),
+      },
+    }));
+    expect(() =>
+      useSession.getState().updateCells([{ rowIndex: 0, columnIndex: 1, value: 'x' }]),
+    ).toThrow(/primary key/);
+  });
+
+  it('queues pasted rows as inserts in one update and edits them in bulk', () => {
+    threeRows();
+    expect(
+      useSession.getState().insertRows([
+        { id: '10', email: 'p' },
+        { id: '11', email: 'q' },
+      ]),
+    ).toBe(2);
+    const inserts = tabAEdits().filter((e) => e.kind === 'insert');
+    expect(inserts.map((e) => e.values)).toEqual([
+      { id: '10', email: 'p' },
+      { id: '11', email: 'q' },
+    ]);
+    useSession.getState().updatePendingInserts([
+      { id: inserts[0]!.id, column: 'email', value: 'P' },
+      { id: inserts[1]!.id, column: 'email', value: null },
+    ]);
+    expect(tabAEdits().map((e) => e.values)).toEqual([
+      { id: '10', email: 'P' },
+      { id: '11', email: null },
+    ]);
+  });
+
+  it('refuses pasted inserts on a read-only connection', () => {
+    threeRows();
+    useSession.setState((s) => ({ activeConfig: { ...s.activeConfig!, readOnly: true } }));
+    expect(() => useSession.getState().insertRows([{ id: '10' }])).toThrow(/read-only/);
+  });
+});

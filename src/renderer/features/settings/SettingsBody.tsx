@@ -529,6 +529,53 @@ function SecuritySection() {
         />
       </Row>
       <Row
+        label="Safe Run warning"
+        htmlFor="safe-run-threshold"
+        hint="Safe Run (dry run of INSERT / UPDATE / DELETE) warns, and Commit turns red, above this many rows."
+      >
+        <Choice
+          id="safe-run-threshold"
+          value={String(settings.safeRunRowThreshold ?? 1000)}
+          onChange={(v) => void updateSettings({ safeRunRowThreshold: Number(v) })}
+          options={[
+            ...([10, 100, 1000, 10_000, 100_000].includes(settings.safeRunRowThreshold ?? 1000)
+              ? []
+              : [settings.safeRunRowThreshold ?? 1000]),
+            10,
+            100,
+            1000,
+            10_000,
+            100_000,
+          ].map((n) => ({ value: String(n), label: `Above ${n.toLocaleString()} rows` }))}
+          width="w-[180px]"
+        />
+      </Row>
+      <Row
+        label="Safe Run timeout"
+        htmlFor="safe-run-timeout"
+        hint="A Safe Run left undecided this long rolls back by itself, so it never holds locks open."
+      >
+        <Choice
+          id="safe-run-timeout"
+          value={String(settings.safeRunTimeoutSec ?? 300)}
+          onChange={(v) => void updateSettings({ safeRunTimeoutSec: Number(v) })}
+          options={[
+            ...([30, 60, 300, 900, 1800].includes(settings.safeRunTimeoutSec ?? 300)
+              ? []
+              : [settings.safeRunTimeoutSec ?? 300]),
+            30,
+            60,
+            300,
+            900,
+            1800,
+          ].map((n) => ({
+            value: String(n),
+            label: n < 60 ? `${n} seconds` : `${n / 60} minutes`,
+          }))}
+          width="w-[160px]"
+        />
+      </Row>
+      <Row
         label="Query timeout"
         htmlFor="query-timeout"
         hint="Sets statement_timeout for every query you run. Long exports and monitoring are not affected."

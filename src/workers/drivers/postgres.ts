@@ -9,6 +9,7 @@ import type {
   SchemaInfo,
   TxnState,
 } from '@shared/protocol';
+import type { SafeRunOutcome, SafeRunReport } from '@shared/protocol';
 import type {
   DdlApplyRequest,
   DdlApplyResult,
@@ -38,6 +39,7 @@ import Cursor from 'pg-cursor';
 import { runBootstrapSql } from './pg-bootstrap';
 import { type ImportHooks, applyDdl, runImport } from './pg-import';
 import { enforceReadOnlySession } from './pg-readonly';
+import { type CappedRead, finishSafeRun, rollbackSafeRun, startSafeRun } from './pg-safe-run';
 import {
   type EditUpdate,
   type TxnStatus,
@@ -47,6 +49,20 @@ import {
 } from './pg-txn';
 import { plasmaPgTypes } from './pg-type-parsers';
 import { introspectPostgres } from './postgres-introspect';
+
+/** Rows counted past the display cap before Safe Run stops counting. */
+const SAFE_RUN_COUNT_CEILING = 1_000_000;
+const SAFE_RUN_BLOCKED_MESSAGE =
+  'A Safe Run is waiting for your decision. Commit or roll it back before running anything else on this connection.';
+
+interface PendingSafeRun {
+  runId: string;
+  nested: boolean;
+  expiresAt: number;
+  timer: ReturnType<typeof setTimeout> | undefined;
+  /** A finish (commit / rollback / timeout) is already in progress. */
+  ending: boolean;
+}
 
 const errorMessage = (err: unknown): string => (err instanceof Error ? err.message : String(err));
 
@@ -188,6 +204,10 @@ export class PostgresDriver {
   private lostReason: string | null = null;
   /** The transport died while a user transaction was open (C5). */
   private lostInTxn = false;
+  /** Safe Run held open on the primary; everything else on it is refused meanwhile. */
+  private safeRun: PendingSafeRun | null = null;
+  /** The last Safe Run that ended without the renderer asking (timeout, disconnect). */
+  private lastSafeRunEnd: SafeRunOutcome | null = null;
   /** Timestamp of the last statement the server actually answered (U27). */
   private lastActivityAt = 0;
   private readonly idleProbeAfterMs: number;
@@ -348,6 +368,7 @@ export class PostgresDriver {
     this.lostReason = reason;
     this.lostInTxn = this.txnState === 'active';
     this.txnState = 'none';
+    this.dropSafeRun('disconnect');
     this.primaryBackendPid = null;
     this.auxBackendPid = null;
     this.pendingNotices = [];
@@ -545,6 +566,7 @@ export class PostgresDriver {
 
   async disconnect(): Promise<void> {
     this.txnState = 'none';
+    this.dropSafeRun('disconnect');
     this.lostInTxn = false;
     this.primaryBackendPid = null;
     this.pendingNotices = [];
@@ -614,6 +636,7 @@ export class PostgresDriver {
    * Optional `onChunk` emits cursor batches for the event channel (step 2).
    */
   async query(sql: string, params?: unknown[], opts?: QueryOpts): Promise<QueryResult> {
+    this.assertNoSafeRun();
     const client = await this.requireClient('primary');
     await this.guardReadOnly(client, sql, this.txnStatus());
 
@@ -701,14 +724,15 @@ export class PostgresDriver {
    * EXPLAIN one statement on the primary (F2). ANALYZE executes it inside
    * a transaction (or savepoint) that is always rolled back.
    */
-  async explain(sql: string, analyze: boolean): Promise<QueryResult> {
+  async explain(sql: string, analyze: boolean, params?: unknown[]): Promise<QueryResult> {
+    this.assertNoSafeRun();
     const client = await this.requireClient('primary');
     await this.guardReadOnly(client, sql, this.txnStatus());
     const start = Date.now();
     this.takeNotices();
     try {
       const result = await runExplain(client, this.txnStatus(), sql, analyze, (text) =>
-        this.runBounded(client, text, undefined),
+        this.runBounded(client, text, params),
       );
       return { ...result, durationMs: Date.now() - start, txnState: this.txnState };
     } finally {
@@ -915,6 +939,7 @@ export class PostgresDriver {
     sql: string,
     params?: unknown[],
   ): AsyncGenerator<{ columns: QueryResult['columns']; rows: unknown[][] }, void, void> {
+    this.assertNoSafeRun();
     const client = await this.requireClient('primary');
     await this.guardReadOnly(client, sql, this.txnStatus());
     const cursor = client.query(new Cursor(sql, params ?? [], { rowMode: 'array' }));
@@ -951,6 +976,7 @@ export class PostgresDriver {
   // ── Explicit transaction control (used by the Txn UI in the renderer) ──
 
   async beginTransaction(): Promise<TxnState> {
+    this.assertNoSafeRun();
     const client = await this.requireClient('primary');
     await client.query('BEGIN');
     this.lastActivityAt = Date.now();
@@ -958,6 +984,7 @@ export class PostgresDriver {
   }
 
   async commitTransaction(): Promise<TxnState> {
+    this.assertNoSafeRun();
     const client = await this.requireClient('primary');
     await client.query('COMMIT');
     this.lastActivityAt = Date.now();
@@ -965,10 +992,182 @@ export class PostgresDriver {
   }
 
   async rollbackTransaction(): Promise<TxnState> {
+    this.assertNoSafeRun();
     const client = await this.requireClient('primary');
     await client.query('ROLLBACK');
     this.lastActivityAt = Date.now();
     return this.txnState;
+  }
+
+  // ── Safe Run (see pg-safe-run.ts) ──
+
+  private assertNoSafeRun(): void {
+    if (this.safeRun) throw new Error(SAFE_RUN_BLOCKED_MESSAGE);
+  }
+
+  /** The Safe Run is over without a finish call (connection gone, new session). */
+  private dropSafeRun(reason: 'disconnect' | 'timeout'): void {
+    const pending = this.safeRun;
+    if (!pending) return;
+    clearTimeout(pending.timer);
+    this.safeRun = null;
+    this.lastSafeRunEnd = {
+      runId: pending.runId,
+      outcome: 'rolledBack',
+      reason,
+      txnState: 'none',
+    };
+  }
+
+  /** Cursor read that keeps the first `cap` rows and only counts the rest. */
+  private async readCapped(client: ClientT, sql: string, cap: number): Promise<CappedRead> {
+    const cursor = client.query(new Cursor(sql, [], { rowMode: 'array' }));
+    const state = emptyBoundState();
+    let columns: QueryResult['columns'] = [];
+    let total = 0;
+    let exact = true;
+    let commandRowCount: number | undefined;
+    let wanted = FIRST_CURSOR_CHUNK;
+    try {
+      while (true) {
+        const batch = await readCursorBatch(cursor, wanted);
+        this.lastActivityAt = Date.now();
+        if (columns.length === 0 && batch.fields.length > 0) {
+          columns = batch.fields.map((f) => ({
+            name: f.name,
+            dataTypeID: f.dataTypeID,
+            dataTypeName: pgTypeName(f.dataTypeID),
+          }));
+        }
+        if (batch.command) commandRowCount = batch.rowCount;
+        total += batch.rows.length;
+        if (!state.truncated) appendBoundedRows(state, batch.rows, cap, MAX_RESULT_BYTES);
+        if (batch.rows.length === 0 || batch.rows.length < wanted) break;
+        if (total >= SAFE_RUN_COUNT_CEILING) {
+          exact = false;
+          break;
+        }
+        wanted = nextCursorChunk(batch.rows);
+      }
+    } catch (err) {
+      if (isServerError(err)) this.lastActivityAt = Date.now();
+      throw this.asLossIfLost(err);
+    } finally {
+      await this.closeCursorBounded(client, cursor);
+    }
+    if (columns.length > 0) await this.resolveColumnTypeNames(columns);
+    return { columns, rows: state.rows, total, exact, commandRowCount };
+  }
+
+  /**
+   * Run one write inside a held-open transaction (a savepoint when the
+   * user already has one) and report what it changed. The transaction
+   * stays open until `safeRunFinish`, or `timeoutSec`, after which the
+   * worker rolls it back by itself.
+   */
+  async safeRunStart(
+    runId: string,
+    sql: string,
+    opts: { connectionGen: number; timeoutSec: number; explain: boolean },
+  ): Promise<SafeRunReport> {
+    this.assertNoSafeRun();
+    const client = await this.requireClient('primary');
+    if (opts.connectionGen !== this.connectionGen) {
+      throw new Error(
+        `connection generation mismatch: Safe Run is for generation ${opts.connectionGen}, current is ${this.connectionGen}`,
+      );
+    }
+    if (this.readOnlySession) {
+      throw new Error(
+        'Read-only connection: Safe Run is not allowed. Edit the connection to turn off read-only.',
+      );
+    }
+    await this.guardReadOnly(client, sql, this.txnStatus());
+    this.lastSafeRunEnd = null;
+    this.takeNotices();
+    // Claim the primary before the first await so nothing can slip in.
+    const claim: PendingSafeRun = {
+      runId,
+      nested: this.txnStatus() === 'T',
+      expiresAt: 0,
+      timer: undefined,
+      ending: false,
+    };
+    this.safeRun = claim;
+    try {
+      const { body, nested } = await startSafeRun(
+        {
+          query: (text, values) => client.query(text, values),
+          readCapped: (text, cap) => this.readCapped(client, text, cap),
+          status: this.txnStatus(),
+        },
+        { runId, sql, explain: opts.explain },
+      );
+      claim.nested = nested;
+      claim.expiresAt = Date.now() + opts.timeoutSec * 1000;
+      claim.timer = setTimeout(() => void this.expireSafeRun(runId), opts.timeoutSec * 1000);
+      this.lastActivityAt = Date.now();
+      return {
+        ...body,
+        expiresAt: claim.expiresAt,
+        timeoutSec: opts.timeoutSec,
+        txnState: this.txnState,
+      };
+    } catch (err) {
+      if (this.safeRun === claim) this.safeRun = null;
+      throw err;
+    } finally {
+      this.takeNotices();
+    }
+  }
+
+  private async expireSafeRun(runId: string): Promise<void> {
+    const pending = this.safeRun;
+    if (!pending || pending.runId !== runId || pending.ending) return;
+    pending.ending = true;
+    const client = this.primary;
+    try {
+      if (client) await rollbackSafeRun({ query: (t) => client.query(t) }, pending.nested);
+    } catch {
+      // The connection died; the server already rolled the work back.
+    }
+    if (this.safeRun === pending) {
+      this.safeRun = null;
+      this.lastSafeRunEnd = {
+        runId,
+        outcome: 'rolledBack',
+        reason: 'timeout',
+        txnState: this.txnState,
+      };
+    }
+  }
+
+  /** Commit or roll back the pending Safe Run. After a timeout, reports that instead. */
+  async safeRunFinish(runId: string, action: 'commit' | 'rollback'): Promise<SafeRunOutcome> {
+    const pending = this.safeRun;
+    if (!pending || pending.runId !== runId) {
+      const ended = this.lastSafeRunEnd;
+      if (ended && ended.runId === runId) return { ...ended, txnState: this.txnState };
+      throw new Error('No Safe Run is pending: it may have timed out or the connection changed.');
+    }
+    if (pending.ending) throw new Error('This Safe Run is already ending.');
+    pending.ending = true;
+    clearTimeout(pending.timer);
+    const client = await this.requireClient('primary');
+    try {
+      await finishSafeRun({ query: (t) => client.query(t) }, pending.nested, action);
+    } finally {
+      // A failed COMMIT (deferred constraint) ends the transaction and a
+      // failed rollback means the connection is gone: nothing is pending.
+      if (this.safeRun === pending) this.safeRun = null;
+    }
+    this.lastActivityAt = Date.now();
+    return {
+      runId,
+      outcome: action === 'commit' ? 'committed' : 'rolledBack',
+      reason: 'user',
+      txnState: this.txnState,
+    };
   }
 
   setConnectionGen(gen: number): void {
@@ -984,6 +1183,7 @@ export class PostgresDriver {
     expectedGen: number,
     updates: EditUpdate[],
   ): Promise<{ state: TxnState; applied: number }> {
+    this.assertNoSafeRun();
     const client = await this.requireClient('primary');
     if (expectedGen !== this.connectionGen)
       throw new Error(
@@ -1002,6 +1202,7 @@ export class PostgresDriver {
 
   /** Structure editor Apply (see pg-import.ts). */
   async applyDdl(req: DdlApplyRequest): Promise<DdlApplyResult> {
+    this.assertNoSafeRun();
     const client = await this.requireClient('primary');
     if (req.connectionGen !== this.connectionGen)
       throw new Error(
@@ -1020,6 +1221,7 @@ export class PostgresDriver {
 
   /** Import a file into a table in one transaction (see pg-import.ts). */
   async runImport(job: ImportJobSpec, hooks: ImportHooks): Promise<ImportResult> {
+    this.assertNoSafeRun();
     const client = await this.requireClient('primary');
     if (job.connectionGen !== this.connectionGen)
       throw new Error(

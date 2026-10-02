@@ -5,6 +5,14 @@
  */
 import { ipc } from '@/lib/ipc';
 import {
+  inlineVariables,
+  listVariables,
+  mergeVariableHistory,
+  runBound,
+  variableProblem,
+} from '@/lib/query-variables';
+import { shouldAutoSafeRun } from '@/lib/safe-run';
+import {
   type RunMode,
   resolveRunTarget,
   splitSqlStatements,
@@ -12,6 +20,7 @@ import {
 } from '@/lib/sql-split';
 import type { PgNotice, QueryResult, TxnState } from '@shared/protocol';
 import { armProdGate, evaluateGate } from './session-prod-gate';
+import { safeRunPending } from './session-safe-run';
 import { looksLikeDdl } from './session-sql-heuristics';
 import {
   activeTab,
@@ -77,6 +86,12 @@ export const createQuerySlice: SliceCreator<QuerySlice> = (set, get) => ({
     if (!tab) return;
     if (tab.queryRunState === 'running') return;
 
+    // A Safe Run holds the primary connection until it is committed or rolled back.
+    if (safeRunPending(state.safeRun)) {
+      get().noteSafeRunBlocked(tab.id);
+      return;
+    }
+
     // Table tabs compile their SQL from structured state.
     if (tab.kind === 'table') {
       await reloadTableTab(set, get, tab.id);
@@ -104,12 +119,33 @@ export const createQuerySlice: SliceCreator<QuerySlice> = (set, get) => ({
       base = target.base;
     }
 
+    // Query variables (:name, :'name', $name): the first run with variables
+    // (and any run with a missing or invalid value) opens the Variables bar
+    // above the results instead of running. Values bind as real parameters
+    // per statement below; the gate sees them written out, so what it
+    // classifies and shows is exactly what would run.
+    const varNames = listVariables(script);
+    const varValues = tab.queryVars ?? {};
+    if (varNames.length > 0) {
+      const problem = variableProblem(script, varValues);
+      if (problem || tab.varsReviewed !== true) {
+        patchTabById(set, tab.id, { varsBarOpen: true, varsAttention: problem });
+        return;
+      }
+    }
+    const gateScript = varNames.length > 0 ? inlineVariables(script, varValues) : script;
+    if (varNames.length > 0) {
+      const before = state.settings.variableHistory ?? {};
+      const after = mergeVariableHistory(before, varNames, varValues);
+      if (after !== before) void get().updateSettings({ variableHistory: after });
+    }
+
     // Prod gate: if active connection is tagged 'prod' and the script
     // includes any destructive statement, stash the SQL and prompt for
     // confirmation. The user resumes via `confirmProdGate()` with `{ sql }`,
     // which skips this check so the approved payload executes once.
     if (opts?.sql == null) {
-      const decision = evaluateGate(get, script);
+      const decision = evaluateGate(get, gateScript);
       if (decision.kind === 'refuse') {
         patchTabById(set, tab.id, {
           queryRunState: 'idle',
@@ -120,9 +156,26 @@ export const createQuerySlice: SliceCreator<QuerySlice> = (set, get) => ({
         return;
       }
       if (decision.kind === 'confirm' && state.prodGate === null) {
-        armProdGate(set, get, { sql: script, tabId: tab.id, reason: decision.reason, base });
+        armProdGate(set, get, { sql: gateScript, tabId: tab.id, reason: decision.reason, base });
         return;
       }
+    }
+
+    // Safe Run: connections that always dry-run writes (default for Prod)
+    // send a single INSERT / UPDATE / DELETE / MERGE through it. The gate
+    // above already ran, so the review starts without asking twice.
+    if (state.safeRun) set({ safeRun: null });
+    if (
+      shouldAutoSafeRun({
+        settings: state.settings,
+        connectionId: state.activeConfig?.id,
+        engine: state.activeConfig?.engine,
+        readOnly: state.activeConfig?.readOnly,
+        sql: gateScript,
+      })
+    ) {
+      void get().runSafeRun({ sql: gateScript, base, gated: true });
+      return;
     }
 
     // U03/U26: capture origin tab + generation before any await so results /
@@ -190,10 +243,10 @@ export const createQuerySlice: SliceCreator<QuerySlice> = (set, get) => ({
           const rowLimit = useWorkbench.getState().rowLimit;
           const unsupported = unsupportedStatementReason(stmt.text);
           if (unsupported) throw new Error(unsupported);
-          const result =
-            rowLimit === null
-              ? await ipc.query.run(stmt.text)
-              : await ipc.query.run(stmt.text, undefined, { maxRows: rowLimit });
+          const result = await runBound(stmt.text, varValues, (sql, params) => {
+            if (rowLimit !== null) return ipc.query.run(sql, params, { maxRows: rowLimit });
+            return params ? ipc.query.run(sql, params) : ipc.query.run(sql);
+          });
           // Attach any streamed notices that arrived for this statement
           // index (driver also returns notices; merge uniquely by message).
           const current = get().tabs.find((t) => t.id === originTabId);

@@ -1,3 +1,4 @@
+import type { ColumnStat } from '@/features/result-grid/column-stats';
 import type { EditorCaret } from '@/lib/sql-split';
 import type { ColumnMeta } from '@shared/protocol';
 import { create } from 'zustand';
@@ -31,6 +32,14 @@ export interface InspectedRow {
   columnIndex: number;
   columns: ColumnMeta[];
   row: unknown[];
+}
+
+/** Quick stats of the grid's selected cell range, shown in the result footer. */
+export interface SelectionStats {
+  tabId: string;
+  rows: number;
+  cells: number;
+  stats: ColumnStat[];
 }
 
 /** Choices for the editor's "No limit" menu. `null` = no limit. */
@@ -84,6 +93,7 @@ interface WorkbenchState {
   carets: Record<string, TabCaret>;
   editorCursor: EditorCursor | null;
   inspectedRow: InspectedRow | null;
+  selectionStats: SelectionStats | null;
   rowLimit: number | null;
   resultViews: Record<string, ResultView>;
   /** ⌘J: hide the SQL tab's inline editor so the results take the room. */
@@ -101,6 +111,7 @@ interface WorkbenchState {
   setCaret(tabId: string, caret: TabCaret | null): void;
   setEditorCursor(cursor: EditorCursor | null): void;
   setInspectedRow(row: InspectedRow | null): void;
+  setSelectionStats(stats: SelectionStats | null): void;
   setRowLimit(limit: number | null): void;
   setResultView(tabId: string, view: ResultView): void;
 }
@@ -110,6 +121,7 @@ export const useWorkbench = create<WorkbenchState>((set) => ({
   carets: {},
   editorCursor: null,
   inspectedRow: null,
+  selectionStats: null,
   rowLimit: readRowLimit(),
   resultViews: {},
   editorHidden: false,
@@ -137,6 +149,7 @@ export const useWorkbench = create<WorkbenchState>((set) => ({
     }),
   setEditorCursor: (editorCursor) => set({ editorCursor }),
   setInspectedRow: (inspectedRow) => set({ inspectedRow }),
+  setSelectionStats: (selectionStats) => set({ selectionStats }),
   setRowLimit: (rowLimit) => {
     try {
       if (rowLimit === null) globalThis.localStorage?.removeItem(ROW_LIMIT_KEY);

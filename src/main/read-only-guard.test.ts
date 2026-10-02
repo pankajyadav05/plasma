@@ -11,6 +11,11 @@ describe('assertAllowedOnReadOnly (C1)', () => {
     refused({ kind: 'commitEditBatch', connectionGen: 1, updates: [] });
   });
 
+  it('refuses Safe Run of a write, but lets a finish through', () => {
+    refused({ kind: 'safeRunStart', sql: 'DELETE FROM t', connectionGen: 1 });
+    ok({ kind: 'safeRunFinish', runId: 'r', action: 'rollback' });
+  });
+
   it('refuses structure DDL and imports, but lets an import be cancelled', () => {
     refused({
       kind: 'applyDdl',

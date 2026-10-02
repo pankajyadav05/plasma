@@ -6,6 +6,7 @@
  */
 import type { Filter, TableSort } from '@/lib/table-query';
 import type { AiMessage, QueryResult } from '@shared/protocol';
+import type { VariableValue } from '@shared/sql-variables';
 import type { StateCreator } from 'zustand';
 import type { AiSlice } from './session-ai';
 import type { ConnectionSlice } from './session-connection';
@@ -15,6 +16,7 @@ import type { ProdGateSlice } from './session-prod-gate';
 import type { QuerySlice } from './session-query';
 import type { RedisSlice } from './session-redis';
 import type { RolesSlice } from './session-roles';
+import type { SafeRunSlice } from './session-safe-run';
 import type { SavedQueriesSlice } from './session-saved-queries';
 import type { SchemaSlice } from './session-schema';
 import type { SettingsSlice } from './session-settings';
@@ -164,6 +166,16 @@ export interface QueryTab {
   /** Saved query this tab was opened from / saved as — "Update" writes back to it (PC6). */
   savedQueryId?: string;
 
+  // ── Query variables (SQL tabs) ──
+  /** Typed values by variable name (`:name`, `:'name'`, `$name`); see `@shared/sql-variables`. */
+  queryVars?: Record<string, VariableValue>;
+  /** Variables bar visible above the results. */
+  varsBarOpen?: boolean;
+  /** The user has looked at the values since the tab opened — Run no longer stops to ask. */
+  varsReviewed?: boolean;
+  /** Why the last Run stopped at the bar (missing / invalid value), shown in it. */
+  varsAttention?: string | null;
+
   // ── Redis tab fields (kind = 'redis-key' / 'redis-cli') ──
   /** Key currently being viewed in a redis-key tab. */
   redisKey?: string;
@@ -198,6 +210,7 @@ export type SessionState = ConnectionSlice &
   HistorySlice &
   AiSlice &
   ProdGateSlice &
+  SafeRunSlice &
   UiSlice & {
     // biome-ignore lint/suspicious/noExplicitAny: features read engine-specific extras (redisOverviewAt, …) off the store
     [key: string]: any;

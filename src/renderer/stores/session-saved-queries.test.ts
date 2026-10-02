@@ -42,6 +42,22 @@ describe('savedQueryFromTab', () => {
     });
   });
 
+  it('keeps variable values only for the placeholders the SQL still uses', () => {
+    const entry = savedQueryFromTab(
+      {
+        ...sqlTab,
+        sql: 'select * from t where a = :a',
+        queryVars: { a: { mode: 'number', value: '5' }, gone: { mode: 'text', value: 'x' } },
+      },
+      { id: 'a', name: 'A', now: 5 },
+    );
+    expect(entry).toMatchObject({ variables: { a: { mode: 'number', value: '5' } } });
+    expect((entry as { variables: object }).variables).not.toHaveProperty('gone');
+    expect(savedQueryFromTab(sqlTab, { id: 'b', name: 'B', now: 5 })).not.toHaveProperty(
+      'variables',
+    );
+  });
+
   it('keeps createdAt / folder / favourite when updating in place', () => {
     const base = q('a', { createdAt: 1, folder: 'Reports', favorite: true });
     const next = savedQueryFromTab(

@@ -439,29 +439,26 @@ function isRowDeleted(edits: PendingEdit[], tabId: string, key: string): boolean
   );
 }
 
+type CellEditOutcome = 'queued' | 'noop' | 'deleted' | 'missing';
+
 /**
- * Queue (or replace, or drop when it's a no-op) one cell update.
- * `newValue` is Postgres text; `null` sets SQL NULL.
+ * Apply one cell update to a tab's edit list (pure w.r.t. the store):
+ * replaces the cell's earlier edit, drops it when it's a no-op.
  */
-export function queueCellEdit(
-  set: Set,
-  get: Get,
+function applyCellEdit(
+  edits: PendingEdit[],
+  target: TableTarget,
+  connectionGen: number,
   rowIndex: number,
   columnIndex: number,
   newValue: string | null,
-): void {
-  const target = requireTableTarget(get);
-  if (!target) return;
+): { edits: PendingEdit[]; outcome: CellEditOutcome } {
   const col = target.columns[columnIndex];
   const row = target.rows[rowIndex];
-  if (!col || !row) return;
+  if (!col || !row) return { edits, outcome: 'missing' };
   const pkValues = requirePk(target, row, 'edit');
   const rowKey = rowKeyOf(pkValues);
-  const state = get();
-  const edits = editsOf(state.pendingEditsByTab, target.tab.id);
-  if (isRowDeleted(edits, target.tab.id, rowKey)) {
-    throw new Error('this row is marked for deletion — restore it before editing');
-  }
+  if (isRowDeleted(edits, target.tab.id, rowKey)) return { edits, outcome: 'deleted' };
   const sameCell = (e: PendingEdit) =>
     e.tabId === target.tab.id &&
     editKind(e) === 'update' &&
@@ -471,13 +468,7 @@ export function queueCellEdit(
   const oldValue = row[columnIndex];
   // Typing the original value back (or clicking in and out) un-queues.
   if (isNoopEdit(oldValue, newValue, col.dataTypeName)) {
-    if (rest.length !== edits.length) {
-      set({
-        pendingEditsByTab: withTabEdits(state.pendingEditsByTab, target.tab.id, rest),
-        pendingEditsError: null,
-      });
-    }
-    return;
+    return { edits: rest.length !== edits.length ? rest : edits, outcome: 'noop' };
   }
   const existing = edits.find(sameCell);
   const edit: PendingEdit = {
@@ -493,15 +484,164 @@ export function queueCellEdit(
     newValue,
     rowIndex,
     columnIndex,
-    connectionGen: state.connectionGen,
+    connectionGen,
   };
+  return {
+    edits: existing ? edits.map((e) => (e === existing ? edit : e)) : [...edits, edit],
+    outcome: 'queued',
+  };
+}
+
+/**
+ * Queue (or replace, or drop when it's a no-op) one cell update.
+ * `newValue` is Postgres text; `null` sets SQL NULL.
+ */
+export function queueCellEdit(
+  set: Set,
+  get: Get,
+  rowIndex: number,
+  columnIndex: number,
+  newValue: string | null,
+): void {
+  const target = requireTableTarget(get);
+  if (!target) return;
+  const state = get();
+  const edits = editsOf(state.pendingEditsByTab, target.tab.id);
+  const res = applyCellEdit(edits, target, state.connectionGen, rowIndex, columnIndex, newValue);
+  if (res.outcome === 'deleted') {
+    throw new Error('this row is marked for deletion — restore it before editing');
+  }
+  if (res.outcome === 'noop') {
+    if (res.edits !== edits) {
+      set({
+        pendingEditsByTab: withTabEdits(state.pendingEditsByTab, target.tab.id, res.edits),
+        pendingEditsError: null,
+      });
+    }
+    return;
+  }
+  if (res.outcome === 'queued') {
+    set({ pendingEditsByTab: withTabEdits(state.pendingEditsByTab, target.tab.id, res.edits) });
+  }
+}
+
+export interface CellEditInput {
+  /** Index into the tab's result rows (not the display row). */
+  rowIndex: number;
+  columnIndex: number;
+  value: string | null;
+}
+
+export interface BulkEditResult {
+  /** Cells that now carry a pending change. */
+  queued: number;
+  /** Cells whose new value equals the stored one (nothing staged). */
+  unchanged: number;
+  /** Cells on rows marked for deletion or no longer in the result. */
+  skipped: number;
+}
+
+/**
+ * Bulk form of {@link queueCellEdit} (set value, fill down, paste, find &
+ * replace): validates edit mode / read-only / safe mode / primary key once,
+ * stages every cell in ONE store update, and reports what happened instead
+ * of throwing on a deleted row.
+ */
+export function queueCellEdits(
+  set: Set,
+  get: Get,
+  inputs: readonly CellEditInput[],
+): BulkEditResult {
+  const result: BulkEditResult = { queued: 0, unchanged: 0, skipped: 0 };
+  if (inputs.length === 0) return result;
+  const target = requireTableTarget(get);
+  if (!target) return result;
+  const state = get();
+  const original = editsOf(state.pendingEditsByTab, target.tab.id);
+  let edits = original;
+  for (const input of inputs) {
+    const res = applyCellEdit(
+      edits,
+      target,
+      state.connectionGen,
+      input.rowIndex,
+      input.columnIndex,
+      input.value,
+    );
+    edits = res.edits;
+    if (res.outcome === 'queued') result.queued++;
+    else if (res.outcome === 'noop') result.unchanged++;
+    else result.skipped++;
+  }
+  if (edits !== original) {
+    set({
+      pendingEditsByTab: withTabEdits(state.pendingEditsByTab, target.tab.id, edits),
+      pendingEditsError: null,
+    });
+  }
+  return result;
+}
+
+/** Queue several INSERTs (pasted rows) in one store update. */
+export function queueInserts(
+  set: Set,
+  get: Get,
+  rows: ReadonlyArray<Record<string, string | null>>,
+): number {
+  if (rows.length === 0) return 0;
+  const target = requireTableTarget(get);
+  if (!target) return 0;
+  const state = get();
+  const added: PendingEdit[] = rows.map((values) => ({
+    id: freshEditId(),
+    tabId: target.tab.id,
+    schema: target.schema,
+    table: target.table,
+    kind: 'insert',
+    pkValues: {},
+    column: '',
+    oldValue: null,
+    newValue: null,
+    values: { ...values },
+    rowIndex: -1,
+    columnIndex: -1,
+    connectionGen: state.connectionGen,
+  }));
   set({
-    pendingEditsByTab: withTabEdits(
-      state.pendingEditsByTab,
-      target.tab.id,
-      existing ? edits.map((e) => (e === existing ? edit : e)) : [...edits, edit],
-    ),
+    pendingEditsByTab: withTabEdits(state.pendingEditsByTab, target.tab.id, [
+      ...editsOf(state.pendingEditsByTab, target.tab.id),
+      ...added,
+    ]),
+    pendingEditsError: null,
   });
+  return added.length;
+}
+
+/** Edit several values of queued INSERTs in one store update. */
+export function updatePendingInserts(
+  set: Set,
+  get: Get,
+  changes: ReadonlyArray<{ id: string; column: string; value: string | null }>,
+): void {
+  if (changes.length === 0) return;
+  const byId = new Map<string, Array<{ column: string; value: string | null }>>();
+  for (const c of changes) {
+    const list = byId.get(c.id);
+    if (list) list.push(c);
+    else byId.set(c.id, [c]);
+  }
+  const byTab = get().pendingEditsByTab as PendingEditsByTab;
+  const next: PendingEditsByTab = {};
+  for (const [tabId, list] of Object.entries(byTab)) {
+    next[tabId] = list.map((e) => {
+      const patch = byId.get(e.id);
+      if (!patch || editKind(e) !== 'insert') return e;
+      const values = { ...(e.values ?? {}) };
+      for (const p of patch) values[p.column] = p.value;
+      return { ...e, values };
+    });
+  }
+  set({ pendingEditsByTab: next });
 }
 
 /** Toggle rows' pending deletion (queued; committed with the tray). */

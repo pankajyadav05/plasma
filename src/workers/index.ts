@@ -5,6 +5,7 @@ import {
   type ConnectionEngine,
   type PgNotice,
   type RedisPubsubMessage,
+  SAFE_RUN_DEFAULT_TIMEOUT_SEC,
   WorkerRequest,
   type WorkerResponse,
 } from '@shared/protocol';
@@ -215,7 +216,7 @@ process.parentPort.on('message', async (evt: Electron.MessageEvent) => {
         }
         case 'explain': {
           if (activeEngine !== 'postgres') return unsupported(req.id, 'explain');
-          const result = await pg.explain(req.sql, req.analyze);
+          const result = await pg.explain(req.sql, req.analyze, req.params);
           send({ kind: 'queryResult', id: req.id, result });
           break;
         }
@@ -272,6 +273,22 @@ process.parentPort.on('message', async (evt: Electron.MessageEvent) => {
           if (activeEngine !== 'postgres') return unsupported(req.id, 'rollbackTxn');
           const state = await pg.rollbackTransaction();
           send({ kind: 'txnState', id: req.id, state });
+          break;
+        }
+        case 'safeRunStart': {
+          if (activeEngine !== 'postgres') return unsupported(req.id, 'safeRunStart');
+          const report = await pg.safeRunStart(req.id, req.sql, {
+            connectionGen: req.connectionGen,
+            timeoutSec: req.timeoutSec ?? SAFE_RUN_DEFAULT_TIMEOUT_SEC,
+            explain: req.explain === true,
+          });
+          send({ kind: 'safeRunReport', id: req.id, report });
+          break;
+        }
+        case 'safeRunFinish': {
+          if (activeEngine !== 'postgres') return unsupported(req.id, 'safeRunFinish');
+          const outcome = await pg.safeRunFinish(req.runId, req.action);
+          send({ kind: 'safeRunDone', id: req.id, outcome });
           break;
         }
 
