@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Plasma — Reference Manual, Division 1: Postgres</title>
+<style>
+  @font-face{font-family:"Cond";font-weight:700;src:local("HelveticaNeue-CondensedBold"),local("Helvetica Neue Condensed Bold"),local("HelveticaNeue-CondensedBlack");}
+  @font-face{font-family:"Manual";src:local("Iowan Old Style"),local("IowanOldStyle-Roman"),local("Charter"),local("Baskerville");}
+  @font-face{font-family:"Manual";font-style:italic;src:local("Iowan Old Style Italic"),local("IowanOldStyle-Italic"),local("Charter Italic"),local("Baskerville Italic");}
+  @font-face{font-family:"Machine";src:local("SF Mono"),local("SFMono-Regular"),local("Menlo"),local("Andale Mono");}
+
+  :root{
+    --board:#2b4aa8;
+    --redis:#e0541c;
+    --os:#12857e;
+    --grass:#4c8a3c;
+    --yellow:#f2c118;
+    --vermilion:#d9301c;
+    --ink:#141210;
+    --milk:#f6f3ec;
+    --milk-on-board:rgba(246,243,236,.97);
+    --shadow:rgba(20,18,16,.55);
+    --serif:"Manual","Iowan Old Style",Charter,Baskerville,serif;
+    --cond:"Cond","Helvetica Neue",Helvetica,sans-serif;
+    --mono:"Machine","SF Mono",Menlo,"Andale Mono",monospace;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;width:1600px;height:1000px;overflow:hidden}
+  body{background:var(--board);color:var(--ink);font-family:var(--serif);font-size:17px;line-height:26px;-webkit-font-smoothing:antialiased;position:relative}
+  a{color:inherit;text-decoration:none}
+
+  /* ---------- tab rail (right fore-edge) ---------- */
+  .rail{position:absolute;left:1452px;top:32px;width:148px;z-index:1}
+  .tab{position:relative;width:104px;border:1px solid var(--ink);display:flex;align-items:flex-start;justify-content:center;padding-top:12px;box-shadow:3px 3px 0 0 var(--shadow)}
+  .tab span{writing-mode:vertical-rl;font-family:var(--cond);font-weight:700;font-size:13px;letter-spacing:.1em;text-transform:uppercase;color:var(--milk);white-space:nowrap}
+  .tab.current{width:148px;background:var(--board);box-shadow:none;border-right:0}
+  .tab.current span{color:var(--milk)}
+  .tab.redis{background:var(--redis)}
+  .tab.os{background:var(--os)}
+  .tab.grass{background:var(--grass)}
+  .tab.yellow{background:var(--yellow)}
+  .tab.yellow span{color:var(--ink)}
+  .tab + .tab{margin-top:-1px}
+
+  /* ---------- the leaf ---------- */
+  .leaf{position:absolute;left:40px;top:32px;width:1420px;height:1040px;background:var(--milk-on-board);box-shadow:4px 4px 0 0 var(--shadow);z-index:2}
+  .hole{position:absolute;border-radius:50%;background:var(--board);box-shadow:inset 0 0 0 1px rgba(0,0,0,.35)}
+  .leaf > .hole{width:22px;height:22px;left:19px}
+  .leaf > .hole.h1{top:236px}
+  .leaf > .hole.h2{top:676px}
+
+  /* top strip */
+  .strip{position:absolute;left:56px;right:24px;top:26px;height:44px;display:flex;align-items:center;gap:18px}
+  .brand{display:flex;align-items:center;gap:10px}
+  .brand svg{width:30px;height:30px;display:block}
+  .brand .word{font-family:var(--serif);font-style:italic;font-size:27px;line-height:1;letter-spacing:-.01em;position:relative;top:-2px}
+  .strip .div{width:1px;height:24px;background:var(--ink);opacity:.4}
+  .machine{font-family:var(--mono);font-size:11px;line-height:1;letter-spacing:.14em;text-transform:uppercase}
+  .strip .machine{opacity:.85}
+  .strip .sp{flex:1}
+  .nav{display:flex;align-items:center;gap:26px;margin-right:12px}
+  .nav a{font-family:var(--serif);font-variant:small-caps;font-size:16px;letter-spacing:.1em;line-height:1;display:flex;align-items:center;gap:8px}
+  .nav .hole{position:static;width:11px;height:11px;flex:none}
+  .btn{display:inline-flex;align-items:center;height:36px;padding:0 16px;font-family:var(--cond);font-weight:700;font-size:16px;letter-spacing:.04em;line-height:1;border:1px solid var(--ink);white-space:nowrap}
+  .btn.primary{background:var(--yellow);color:var(--ink);box-shadow:2px 2px 0 0 var(--ink)}
+  .btn.secondary{background:transparent;color:var(--ink)}
+  .rule{position:absolute;left:56px;right:24px;height:1px;background:var(--ink)}
+  .rule.top{top:84px}
+
+  /* grid: hanging column + measure */
+  .division{position:absolute;left:56px;top:108px;width:620px;display:grid;grid-template-columns:100px 20px 500px;row-gap:0}
+  .hang{grid-column:1;font-family:var(--serif);font-variant:small-caps;font-size:12.5px;letter-spacing:.12em;line-height:26px;color:var(--ink);white-space:nowrap}
+  .hang .chip{display:inline-block;width:10px;height:10px;background:var(--board);vertical-align:-1px;margin-right:6px}
+  .hang .num{display:block;font-family:var(--cond);font-weight:700;font-size:64px;line-height:56px;letter-spacing:-.01em;font-variant:normal;margin-top:6px}
+  .body{grid-column:3}
+  h1{margin:0;font-family:var(--cond);font-weight:700;font-size:88px;line-height:80px;letter-spacing:-.005em;text-transform:uppercase;white-space:nowrap}
+  .statement{margin:22px 0 0;font-size:17px;line-height:26px}
+  .actions{display:flex;gap:12px;margin-top:26px}
+  .platforms{margin-top:16px;font-family:var(--mono);font-size:11px;line-height:18px;letter-spacing:.06em;opacity:.85}
+  .platforms b{font-weight:400;color:var(--ink);opacity:1}
+  .entry-gap{grid-column:1 / -1;height:22px}
+  .toc{grid-column:1 / -1;height:30px}
+
+  /* capture leaf */
+  .fig{position:absolute;left:700px;top:108px;width:696px;height:590px;background:var(--milk);border:1px solid rgba(20,18,16,.28);box-shadow:3px 3px 0 0 var(--shadow);padding:14px 14px 14px 26px}
+  .fig .frame{width:100%;height:100%;overflow:hidden;background:#fff;border:1px solid rgba(20,18,16,.18)}
+  .fig img{display:block;width:940px;height:auto}
+  .fig .hole{width:12px;height:12px;left:6px;background:var(--milk-on-board);box-shadow:inset 0 0 0 1px rgba(20,18,16,.4)}
+  .fig .hole.h1{top:62px}
+  .fig .hole.h2{top:516px}
+
+  .ticket{position:absolute;left:-1px;top:604px;display:flex;align-items:center;gap:12px;height:30px;padding:0 14px 0 10px;border:1px solid var(--ink);background:var(--milk);font-family:var(--mono);font-size:11px;letter-spacing:.06em;line-height:1;white-space:nowrap;color:var(--ink)}
+  .ticket .hole{position:static;width:9px;height:9px;background:var(--milk-on-board);box-shadow:inset 0 0 0 1px rgba(20,18,16,.5);flex:none}
+  .ticket em{font-style:normal;opacity:.7}
+
+  .errata{position:absolute;right:38px;top:790px;transform:rotate(-1.4deg);background:var(--vermilion);color:var(--milk);font-family:var(--mono);font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;line-height:1;padding:8px 12px;box-shadow:2px 2px 0 0 var(--shadow);white-space:nowrap}
+  .errata b{font-weight:400;border-bottom:1px solid var(--milk)}
+
+  /* running head of division 2, cut by the frame */
+  .rule.next{top:872px;left:56px;right:24px}
+  .next-head{position:absolute;left:56px;top:888px;width:1340px;display:grid;grid-template-columns:100px 20px 1220px}
+  .next-head .hang .chip{background:var(--redis)}
+  .next-head h2{margin:0;font-family:var(--cond);font-weight:700;font-size:72px;line-height:66px;text-transform:uppercase;letter-spacing:-.005em}
+  .next-head .aside{position:absolute;left:900px;top:10px;width:440px;font-size:17px;line-height:26px;margin:0}
+</style>
+</head>
+<body>
+
+  <!-- stepped tab rail on the fore-edge; heights proportional to division extent -->
+  <nav class="rail" aria-label="Divisions">
+    <div class="tab current" style="height:360px"><span>1 · Postgres</span></div>
+    <div class="tab redis" style="height:164px"><span>2 · Redis</span></div>
+    <div class="tab os" style="height:152px"><span>3 · OpenSearch</span></div>
+    <div class="tab grass" style="height:136px"><span>4 · Local &amp; open</span></div>
+    <div class="tab yellow" style="height:118px"><span>5 · Download</span></div>
+  </nav>
+
+  <!-- the milk acetate leaf, hinged above the ultramarine board -->
+  <main class="leaf">
+    <span class="hole h1"></span>
+    <span class="hole h2"></span>
+
+    <header class="strip">
+      <a class="brand" href="#">
+        <svg viewBox="0 0 128 128" role="img" aria-label="Plasma">
+          <text x="34" y="108" font-family="Iowan Old Style, Charter, Baskerville, serif" font-style="italic" font-weight="500" font-size="140" fill="#141210">P</text>
+          <rect x="22" y="116" width="84" height="5" fill="#7B2D26"/>
+        </svg>
+        <span class="word">Plasma</span>
+      </a>
+      <span class="div"></span>
+      <span class="machine">Plasma reference manual · Version 0.0.17</span>
+      <span class="sp"></span>
+      <nav class="nav">
+        <a href="#" aria-current="page"><span class="hole"></span>Product</a>
+        <a href="#">GitHub</a>
+      </nav>
+      <a class="btn primary" href="#">Download Plasma</a>
+    </header>
+    <span class="rule top"></span>
+
+    <section class="division">
+      <div class="hang">
+        <span class="chip"></span>Division 1
+        <span class="num">1</span>
+      </div>
+      <div></div>
+      <div class="body">
+        <h1>One client.<br>Three<br>workspaces.</h1>
+        <p class="statement">Engine-specific workspaces for Postgres, Redis and OpenSearch in one desktop app; connections and query history stored locally.</p>
+        <div class="actions">
+          <a class="btn primary" href="#">Download Plasma</a>
+          <a class="btn secondary" href="#">Read the source</a>
+        </div>
+        <p class="platforms">macOS · Apple Silicon / Intel &nbsp;·&nbsp; Windows · x64 installer / portable<br>Apache-2.0 &nbsp;·&nbsp; github.com/pankajyadav05/plasma</p>
+      </div>
+
+      <div class="toc"></div>
+
+      <div class="hang">1.1 Editor</div><div></div>
+      <div class="body"><p>A schema-aware SQL editor with the schema browser one pane to the left. Multi-statement scripts run as written.</p></div>
+      <div class="entry-gap"></div>
+
+      <div class="hang">1.2 Results</div><div></div>
+      <div class="body"><p>Results in a grid with cell details, and foreign-key navigation from a value to the row it references.</p></div>
+      <div class="entry-gap"></div>
+
+      <div class="hang">1.3 Explain</div><div></div>
+      <div class="body"><p>EXPLAIN ANALYZE, read in a plan inspector rather than as text.</p></div>
+    </section>
+
+    <!-- figure: its own smaller acetate leaf -->
+    <figure class="fig" style="margin:0">
+      <span class="hole h1"></span>
+      <span class="hole h2"></span>
+      <div class="frame">
+        <img src="../../../site/public/product/postgres.webp" alt="Plasma Postgres workspace: schema sidebar, SQL editor with recent-orders.sql, and a result grid of orders." width="1800" height="1125">
+      </div>
+      <figcaption class="ticket"><span class="hole"></span>FIG. 1.1 · SqlCanvas + ResultGrid · v0.0.17 · <em>Actual components, illustrative data.</em></figcaption>
+    </figure>
+
+    <div class="errata">Errata slip · v0.0.17 · <b>macOS builds are unsigned</b> · Windows: x64 installer or portable</div>
+
+    <span class="rule next"></span>
+    <section class="next-head">
+      <div class="hang"><span class="chip"></span>Division 2<span class="num">2</span></div>
+      <div></div>
+      <div>
+        <h2>Keys by namespace.<br>Values by type.</h2>
+      </div>
+      <p class="aside">Namespace key browsing, typed values and TTL, a CLI, memory analysis, the slow log and pub/sub — in the Redis workspace.</p>
+    </section>
+  </main>
+
+</body>
+</html>

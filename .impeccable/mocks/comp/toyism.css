@@ -1,0 +1,51 @@
+@font-face { font-family: "Barlow Condensed"; font-weight: 600; src: url("../assets/barlow-600.woff2") format("woff2"); }
+@font-face { font-family: "Barlow Condensed"; font-weight: 700; src: url("../assets/barlow-700.woff2") format("woff2"); }
+@font-face { font-family: Geist; font-weight: 100 900; src: url("../../previews/plasma-directions/assets/geist.woff2") format("woff2"); }
+@font-face { font-family: "Geist Mono"; font-weight: 400; src: url("../assets/geist-mono-b029b8.woff2") format("woff2"); }
+@font-face { font-family: "Geist Mono"; font-weight: 500; src: url("../assets/geist-mono-f92b62.woff2") format("woff2"); }
+
+:root {
+  --cobalt: #1a33ff; --magenta: #ff2da6; --lemon: #ffe600; --plate: #f7f4ed; --ink: #111111;
+  --display: "Barlow Condensed", "DIN Condensed", sans-serif;
+  --body: Geist, "Helvetica Neue", sans-serif;
+  --mono: "Geist Mono", "SF Mono", Menlo, monospace;
+  --shadow: 6px 6px 0 var(--ink);
+  --shadow-cobalt: 6px 6px 0 var(--cobalt);
+}
+html, body { margin: 0; width: 1600px; height: 1000px; overflow: hidden; }
+body { background: var(--plate); color: var(--ink); font-family: var(--body); font-size: 18px; line-height: 1.5; -webkit-font-smoothing: antialiased; position: relative; }
+* { box-sizing: border-box; }
+a { color: inherit; text-decoration: none; }
+h1, h2, p { margin: 0; }
+img { display: block; }
+
+.display { font-family: var(--display); font-weight: 700; text-transform: uppercase; line-height: .86; letter-spacing: -.005em; }
+.label { font-family: var(--mono); font-size: 12px; letter-spacing: .18em; text-transform: uppercase; font-weight: 500; }
+.ticket { font-family: var(--mono); font-size: 12px; letter-spacing: .06em; text-transform: uppercase; }
+
+/* Controls are symbols: flat on the ground, the active one hovers clear of it. */
+.btn { display: inline-flex; align-items: center; gap: 14px; height: 56px; padding: 0 26px 0 24px; font-family: var(--display); font-weight: 700; font-size: 24px; letter-spacing: .04em; text-transform: uppercase; border: 3px solid var(--ink); background: var(--plate); color: var(--ink); clip-path: polygon(0 0, calc(100% - 18px) 0, 100% 50%, calc(100% - 18px) 100%, 0 100%); padding-right: 40px; }
+.btn.primary { background: var(--cobalt); border-color: var(--cobalt); color: var(--plate); }
+.btn.hover { transform: translate(-4px, -4px); }
+.btn-wrap { position: relative; display: inline-block; }
+.btn-wrap.hover::after { content: ""; position: absolute; inset: 0; background: var(--ink); clip-path: polygon(0 0, calc(100% - 18px) 0, 100% 50%, calc(100% - 18px) 100%, 0 100%); z-index: -1; transform: translate(6px, 6px); }
+
+.nav { position: absolute; top: 0; left: 0; right: 0; height: 76px; display: flex; align-items: center; padding: 0 64px; border-bottom: 3px solid var(--ink); gap: 40px; }
+.brand { display: flex; align-items: center; gap: 12px; font-family: var(--display); font-weight: 700; font-size: 30px; text-transform: uppercase; letter-spacing: .02em; color: var(--cobalt); }
+.brand img { width: 36px; height: 36px; }
+.nav .links { display: flex; gap: 32px; margin-left: 24px; }
+.nav .links a { display: inline-flex; align-items: center; gap: 10px; font-family: var(--display); font-weight: 600; font-size: 20px; letter-spacing: .08em; text-transform: uppercase; }
+.nav .links svg { width: 18px; height: 18px; }
+.nav .spacer { flex: 1; }
+
+/* Plate: a hard-edged framed work signed in one corner */
+.plate { position: absolute; background: #fff; border: 4px solid var(--cobalt); }
+.plate.ink { border-color: var(--ink); }
+.plate .capture { position: absolute; inset: 0; overflow: hidden; }
+.plate .capture img { width: 100%; height: auto; }
+.sig { position: absolute; width: 44px; height: 44px; }
+.sym { position: absolute; z-index: 3; }
+.sym svg { display: block; }
+.sym.lift { filter: drop-shadow(6px 6px 0 var(--ink)); }
+.splat { background-image: radial-gradient(var(--cobalt) 1.6px, transparent 1.7px), radial-gradient(var(--cobalt) 1px, transparent 1.1px); background-size: 23px 19px, 11px 13px; background-position: 0 0, 6px 4px; }
+.band { background: repeating-linear-gradient(-45deg, var(--magenta) 0 14px, transparent 14px 28px); }

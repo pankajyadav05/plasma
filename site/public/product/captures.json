@@ -1,0 +1,49 @@
+{
+  "component_capture_date": "2026-09-08",
+  "method": "Workspace images render existing Plasma React components with synthetic data. The connection-setup image is a fresh capture of the actual running Electron application. See per-file provenance below.",
+  "files": {
+    "connection-setup-light.webp": {
+      "source": [
+        "src/main/index.ts",
+        "src/renderer/features/connection-manager/ConnectionDialog.tsx"
+      ],
+      "method": "Built the application with electron-vite and launched its actual main/preload/renderer bundles with an isolated temporary userData and sessionData profile using the app's light theme. Captured the real dialog with Electron webContents.capturePage at 2x resolution; no recoloring, reconstructed UI or uploaded image was used.",
+      "data": "Light-mode New connection dialog. Example values entered through the app: Local storefront, 127.0.0.1, storefront, developer. Password left empty; visible bullets are the app's placeholder. No database connection was made and no existing user profile was accessed.",
+      "encoding": "WebP quality 94 from a 1152 x 1532 PNG capture of the actual dialog."
+    },
+    "postgres.webp": {
+      "source": [
+        "src/renderer/features/app-shell/TopBar.tsx",
+        "src/renderer/features/sidebar/Sidebar.tsx",
+        "src/renderer/features/editor/TabStrip.tsx",
+        "src/renderer/features/editor/SqlCanvas.tsx",
+        "src/renderer/features/result-grid/ResultToolbar.tsx",
+        "src/renderer/features/result-grid/ResultGrid.tsx",
+        "src/renderer/features/app-shell/StatusBar.tsx"
+      ],
+      "data": "Illustrative commerce schema, orders and customers. Timings are example UI values, not performance claims."
+    },
+    "redis.webp": {
+      "source": [
+        "src/renderer/features/redis/RedisCanvas.tsx",
+        "src/renderer/features/redis/RedisSidebar.tsx",
+        "src/renderer/features/redis/RedisKeyView.tsx"
+      ],
+      "data": "Illustrative session hash, namespace keys and TTL."
+    },
+    "opensearch.webp": {
+      "source": [
+        "src/renderer/features/opensearch/OsCanvas.tsx",
+        "src/renderer/features/opensearch/OsSidebar.tsx",
+        "src/renderer/features/opensearch/OsSearchView.tsx"
+      ],
+      "data": "Illustrative commerce event index, mappings and documents."
+    },
+    "explain.webp": {
+      "source": ["src/renderer/features/explain/ExplainDialog.tsx"],
+      "data": "Illustrative PostgreSQL JSON plan supplied to the actual EXPLAIN inspector. This is not a benchmark."
+    }
+  },
+  "social_preview": "../og.png combines the full Plasma wordmark, hero copy and the actual-app connection-setup-light.webp capture.",
+  "encoding": "Component captures use WebP quality 92 at device scale factor 1.25 and are labeled as illustrative. The actual-app dialog capture has its own encoding record above."
+}

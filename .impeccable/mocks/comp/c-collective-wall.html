@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Plasma — Collective wall</title>
+<link rel="stylesheet" href="toyism.css">
+<style>
+  .rail { position: absolute; left: 0; top: 0; width: 220px; height: 1000px; background: var(--cobalt); color: var(--plate); padding: 28px 24px; border-right: 3px solid var(--ink); }
+  .rail .brand { color: var(--plate); flex-direction: column; align-items: flex-start; gap: 12px; }
+  .rail .menu { margin-top: 56px; display: grid; gap: 26px; }
+  .rail .menu a { display: flex; align-items: center; gap: 14px; font-family: var(--display); font-weight: 700; font-size: 22px; letter-spacing: .06em; text-transform: uppercase; }
+  .rail .active { position: absolute; left: 24px; right: 24px; bottom: 120px; border-top: 3px solid var(--plate); padding-top: 14px; }
+  .rail .active .label { color: var(--lemon); }
+  .rail .active .btn { margin-top: 12px; height: 46px; font-size: 18px; background: var(--lemon); border-color: var(--lemon); color: var(--ink); padding-right: 34px; }
+  .rail .sig { left: 24px; bottom: 28px; }
+  .grid { position: absolute; left: 220px; top: 0; right: 0; bottom: 0; }
+  .cell { position: absolute; border: 3px solid var(--ink); }
+  .cell.head { left: -3px; top: -3px; width: 690px; height: 505px; padding: 30px 40px; }
+  .cell.head .kicker { color: var(--cobalt); display: flex; gap: 12px; align-items: center; }
+  .cell.head h1 { font-size: 92px; color: var(--cobalt); margin-top: 18px; }
+  .cell.head .statement { font-size: 17px; line-height: 1.45; margin-top: 16px; width: 520px; }
+  .cell.head .actions { display: flex; gap: 16px; margin-top: 20px; }
+  .cell.head .btn { height: 50px; font-size: 20px; padding-right: 36px; }
+  .cell.p1 { left: 684px; top: -3px; width: 700px; height: 505px; }
+  .cell.p2 { left: -3px; top: 499px; width: 690px; height: 505px; }
+  .cell.p3 { left: 684px; top: 499px; width: 700px; height: 505px; }
+  .cell .plate { left: 28px; top: 62px; right: 28px; bottom: 44px; }
+  .cell .plate .capture img { width: 1000px; }
+  .cell .head-row { position: absolute; left: 28px; right: 28px; top: 18px; display: flex; justify-content: space-between; align-items: center; }
+  .cell .head-row .display { font-size: 26px; display: flex; align-items: center; gap: 10px; }
+  .cell .foot { position: absolute; left: 28px; right: 28px; bottom: 14px; color: #444; }
+  .cell.p2 { background: var(--magenta); color: var(--ink); }
+  .cell.p2 .plate { border-color: var(--ink); }
+  .cell.p2 .foot { color: var(--ink); }
+  .cell.p3 { background: var(--lemon); }
+</style></head>
+<body>
+<aside class="rail">
+  <a class="brand" href="#"><span data-mark="#f7f4ed|#ffe600" data-size="44"></span>Plasma</a>
+  <nav class="menu">
+    <a href="#"><span data-sym="stairs|#f7f4ed" data-size="20"></span>Postgres</a>
+    <a href="#"><span data-sym="hourglass|#ff2da6" data-size="20"></span>Redis</a>
+    <a href="#"><span data-sym="eye|#ffe600|#1a33ff" data-size="24"></span>OpenSearch</a>
+    <a href="#"><span data-sym="circle|#ffe600" data-size="20"></span>Local &amp; open</a>
+    <a href="#"><span data-sym="plus|#f7f4ed" data-size="18"></span>GitHub</a>
+  </nav>
+  <div class="active">
+    <div class="label">Version 0.0.17 · macOS · Windows</div>
+    <span class="btn-wrap"><a class="btn" href="#">Download <span data-sym="down|#111" data-size="20"></span></a></span>
+  </div>
+  <span class="sig" data-mark="#f7f4ed|#ffe600" data-size="40"></span>
+</aside>
+
+<div class="grid">
+  <section class="cell head">
+    <div class="kicker label"><span data-sym="diamond|#1a33ff" data-size="12"></span>Desktop data client</div>
+    <h1 class="display">One client.<br>Three workspaces.</h1>
+    <p class="statement">Postgres, Redis and OpenSearch each get a workspace built for that engine, in one desktop app. Connections and history stay on your disk.</p>
+    <div class="actions">
+      <span class="btn-wrap hover"><a class="btn primary" href="#">Download Plasma <span data-sym="down|#f7f4ed" data-size="20"></span></a></span>
+      <a class="btn" href="#">Read the source <span data-sym="plus|#111" data-size="16"></span></a>
+    </div>
+  </section>
+
+  <section class="cell p1">
+    <div class="head-row"><span class="display"><span data-sym="stairs|#1a33ff" data-size="22"></span>Plate 01 · Postgres</span><span class="ticket">SQL editor · results · explain</span></div>
+    <div class="plate"><div class="capture"><img src="../../../site/public/product/postgres.webp" alt=""></div><span class="sig" data-mark="#111|#1a33ff" data-size="36" style="right:10px;bottom:8px"></span></div>
+    <div class="foot ticket">SqlCanvas + ResultGrid · actual components, illustrative data</div>
+  </section>
+
+  <section class="cell p2">
+    <div class="head-row"><span class="display"><span data-sym="hourglass|#111" data-size="22"></span>Plate 02 · Redis</span><span class="ticket">Keys · TTL · CLI · memory</span></div>
+    <div class="plate"><div class="capture"><img src="../../../site/public/product/redis.webp" alt=""></div><span class="sig" data-mark="#111|#ff2da6" data-size="36" style="right:10px;bottom:8px"></span></div>
+    <div class="foot ticket">RedisCanvas + RedisKeyView · actual components, illustrative data</div>
+  </section>
+
+  <section class="cell p3">
+    <div class="head-row"><span class="display"><span data-sym="eye|#111|#ffe600" data-size="26"></span>Plate 03 · OpenSearch</span><span class="ticket">Documents · DSL · mappings</span></div>
+    <div class="plate"><div class="capture"><img src="../../../site/public/product/opensearch.webp" alt=""></div><span class="sig" data-mark="#111|#1a33ff" data-size="36" style="right:10px;bottom:8px"></span></div>
+    <div class="foot ticket">OsCanvas + OsSearchView · actual components, illustrative data</div>
+  </section>
+</div>
+<span class="sym lift" data-sym="star|#ff2da6" data-size="130" style="left:840px;top:20px"></span>
+<span class="sym lift" data-sym="circle|#ffe600" data-size="90" style="left:1500px;top:440px"></span>
+<span class="sym lift" data-sym="stairs|#1a33ff" data-size="90" style="left:1490px;top:880px"></span>
+<span class="sym lift" data-sym="eye|#1a33ff" data-size="110" style="left:180px;top:470px"></span>
+<script src="symbols.js"></script>
+</body></html>

@@ -1,0 +1,390 @@
+.section {
+  padding: 112px 0 72px;
+  color: var(--ink);
+  background: var(--paper);
+  overflow: clip;
+}
+
+.header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 64px;
+  margin-bottom: 84px;
+}
+
+.header h2 {
+  margin: 0;
+  max-width: 740px;
+  font-size: 64px;
+  line-height: 1.04;
+  font-weight: 500;
+  letter-spacing: -0.04em;
+  text-wrap: balance;
+}
+
+.header p {
+  width: 320px;
+  flex-shrink: 0;
+  margin: 0 0 3px;
+  color: var(--muted);
+  font-size: 17px;
+  line-height: 1.5;
+}
+
+.journey {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 100px;
+  min-height: 1430px;
+  isolation: isolate;
+}
+
+.desktopRoute,
+.mobileRoute {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.mobileRoute {
+  display: none;
+}
+
+.routeGuide,
+.routeInk {
+  fill: none;
+  stroke-width: 3px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.routeGuide {
+  stroke: var(--line);
+}
+
+.routeInk {
+  stroke: var(--accent);
+}
+
+.proof {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 700px) 220px;
+  align-items: center;
+  column-gap: 56px;
+  width: calc(100% - 140px);
+  max-width: 976px;
+  min-height: 410px;
+}
+
+.copy {
+  grid-column: 2;
+  grid-row: 1;
+  position: relative;
+  padding: 16px 0;
+  background: var(--paper);
+}
+
+.copy h3 {
+  margin: 0 0 20px;
+  font-size: 32px;
+  font-weight: 500;
+  line-height: 1.09;
+  letter-spacing: -0.035em;
+  text-wrap: balance;
+}
+
+.copy p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 16px;
+  line-height: 1.55;
+}
+
+.figure {
+  grid-column: 1;
+  grid-row: 1;
+  width: 100%;
+  min-width: 0;
+  margin: 0;
+}
+
+.frame {
+  overflow: hidden;
+  border-radius: 12px;
+}
+
+.frame img {
+  display: block;
+  height: auto;
+  max-width: none;
+}
+
+.schemaFrame {
+  padding: 18px;
+  background: var(--ink);
+}
+
+.schemaCrop {
+  aspect-ratio: 1.95;
+  overflow: hidden;
+  border-radius: 3px;
+}
+
+.schemaCrop img {
+  width: 170%;
+}
+
+.results {
+  align-self: flex-end;
+  grid-template-columns: 220px minmax(0, 700px);
+}
+
+.results .copy {
+  grid-column: 1;
+}
+
+.results .figure {
+  grid-column: 2;
+}
+
+.resultsFrame {
+  padding: 26px;
+  background: var(--paper-light);
+  border: 1px solid var(--line);
+}
+
+.resultsCrop {
+  aspect-ratio: 2.05;
+  overflow: hidden;
+}
+
+.resultsCrop img {
+  width: 120%;
+  transform: translate(-16.6667%, -43.8%);
+}
+
+.explainFrame {
+  padding: 16px;
+  background: var(--ink);
+}
+
+.explainFrame img {
+  width: 100%;
+  border-radius: 5px;
+}
+
+.figure figcaption {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px 16px;
+  margin-top: 14px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.figure figcaption a {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 32px;
+  color: var(--ink);
+  text-decoration: underline;
+  text-decoration-color: var(--line);
+  text-underline-offset: 4px;
+}
+
+.figure figcaption a:hover {
+  color: var(--accent);
+  text-decoration-color: currentColor;
+}
+
+.figure figcaption a:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+  border-radius: 2px;
+}
+
+@media (min-width: 900px) and (max-width: 1150px) {
+  .header {
+    align-items: flex-start;
+    gap: 32px;
+  }
+
+  .header h2 {
+    max-width: 510px;
+    font-size: 56px;
+  }
+
+  .header p {
+    width: 260px;
+  }
+
+  .proof {
+    width: calc(100% - 100px);
+    column-gap: 32px;
+  }
+}
+
+@media (max-width: 899px) {
+  .section {
+    padding: 72px 0 64px;
+  }
+
+  .header {
+    display: block;
+    margin-bottom: 52px;
+  }
+
+  .header h2 {
+    max-width: 650px;
+    font-size: 48px;
+  }
+
+  .header p {
+    width: auto;
+    max-width: 430px;
+    margin: 22px 0 0;
+    font-size: 16px;
+  }
+
+  .journey {
+    min-height: 0;
+    gap: 76px;
+    padding-bottom: 32px;
+  }
+
+  .desktopRoute {
+    display: none;
+  }
+
+  .mobileRoute {
+    display: block;
+    width: 16px;
+  }
+
+  .proof,
+  .results {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    align-self: flex-end;
+    gap: 28px;
+    width: calc(100% - 40px);
+    min-height: 0;
+  }
+
+  .proof::before {
+    content: "";
+    position: absolute;
+    top: 10px;
+    left: -38px;
+    width: 12px;
+    height: 12px;
+    border: 3px solid var(--accent);
+    border-radius: 50%;
+    background: var(--paper);
+  }
+
+  .copy {
+    padding: 0;
+    max-width: 440px;
+  }
+
+  .copy h3 {
+    margin-bottom: 16px;
+    font-size: 32px;
+  }
+
+  .schemaFrame,
+  .explainFrame {
+    padding: 10px;
+    border-radius: 8px;
+  }
+
+  .resultsFrame {
+    padding: 12px;
+    border-radius: 8px;
+  }
+
+  .figure figcaption {
+    margin-top: 10px;
+  }
+
+  .figure figcaption a {
+    min-height: 44px;
+  }
+}
+
+@media (max-width: 540px) {
+  .header h2 {
+    font-size: 32px;
+  }
+
+  .copy p {
+    font-size: 15px;
+  }
+
+  .figure figcaption {
+    display: block;
+    font-size: 11px;
+  }
+
+  .figure figcaption span {
+    display: block;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .routeInk {
+    stroke-dasharray: none !important;
+    stroke-dashoffset: 0 !important;
+  }
+
+  .figure {
+    opacity: 1 !important;
+    transform: none !important;
+  }
+}
+
+.copy h3 {
+  position: relative;
+}
+.copy h3::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  bottom: -10px;
+  width: 28px;
+  height: 2px;
+  background: var(--accent);
+  transform: scaleX(0);
+  transform-origin: left center;
+}
+.proof[data-current="true"] .copy h3 {
+  color: var(--accent);
+}
+.proof[data-current="true"] .copy h3::after {
+  transform: scaleX(1);
+}
+.proof[data-current="true"]::before {
+  background: var(--accent);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .copy h3 {
+    transition: color var(--motion-control) ease;
+  }
+  .copy h3::after {
+    transition: transform var(--motion-select) var(--ease-out);
+  }
+}

@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Plasma — Plate 01</title>
+<link rel="stylesheet" href="toyism.css">
+<style>
+  .nav .btn { height: 48px; font-size: 20px; padding-right: 36px; }
+  .kicker { position: absolute; left: 64px; top: 124px; display: flex; align-items: center; gap: 14px; color: var(--cobalt); }
+  .kicker i { width: 14px; height: 14px; background: var(--cobalt); display: inline-block; }
+  h1 { position: absolute; left: 60px; top: 166px; font-size: 138px; color: var(--cobalt); white-space: nowrap; }
+  .statement { position: absolute; left: 64px; top: 596px; width: 600px; font-size: 21px; line-height: 1.45; }
+  .actions { position: absolute; left: 64px; top: 712px; display: flex; gap: 22px; align-items: center; }
+  .meta { position: absolute; left: 64px; top: 796px; color: #444; }
+  .hero-plate { left: 780px; top: 128px; width: 756px; height: 700px; }
+  .hero-plate .capture img { width: 1180px; margin: -6px 0 0 -8px; }
+  .ticket-row { position: absolute; left: 780px; top: 852px; width: 756px; display: flex; justify-content: space-between; border-top: 3px solid var(--ink); padding-top: 10px; }
+  .next { position: absolute; left: 0; right: 0; top: 924px; height: 76px; background: var(--cobalt); color: var(--plate); display: flex; align-items: center; padding: 0 64px; gap: 28px; }
+  .next .display { font-size: 40px; }
+  .next .splat { position: absolute; right: 0; top: 0; width: 420px; height: 76px; background-color: var(--plate); border-left: 3px solid var(--ink); }
+</style></head>
+<body>
+<nav class="nav">
+  <a class="brand" href="#"><span data-mark="#111|#1a33ff" data-size="36"></span>Plasma</a>
+  <div class="links">
+    <a href="#"><span data-sym="stairs|#1a33ff" data-size="18"></span>Postgres</a>
+    <a href="#"><span data-sym="hourglass|#ff2da6" data-size="18"></span>Redis</a>
+    <a href="#"><span data-sym="eye|#1a33ff" data-size="20"></span>OpenSearch</a>
+    <a href="#"><span data-sym="plus|#111" data-size="16"></span>GitHub</a>
+  </div>
+  <div class="spacer"></div>
+  <span class="btn-wrap hover"><a class="btn primary" href="#">Download Plasma <span data-sym="arrow|#f7f4ed" data-size="22"></span></a></span>
+</nav>
+
+<div class="kicker label"><i></i>Plate 01 · Desktop data client · v0.0.17</div>
+<h1 class="display">One client.<br>Three<br>workspaces.</h1>
+<p class="statement">Postgres, Redis and OpenSearch each get a workspace built for that engine, in one desktop app. Connections and query history stay on your disk. Apache-2.0.</p>
+<div class="actions">
+  <span class="btn-wrap hover"><a class="btn primary" href="#">Download Plasma <span data-sym="down|#f7f4ed" data-size="22"></span></a></span>
+  <a class="btn" href="#">Read the source <span data-sym="plus|#111" data-size="18"></span></a>
+</div>
+<p class="meta ticket">macOS Apple Silicon / Intel · Windows x64 · unsigned macOS builds</p>
+
+<div class="plate hero-plate">
+  <div class="capture"><img src="../../../site/public/product/postgres.webp" alt=""></div>
+  <span class="sig" data-mark="#111|#1a33ff" data-size="44" style="right:14px;bottom:10px"></span>
+</div>
+<span class="sym lift" data-sym="star|#ff2da6" data-size="150" style="left:1420px;top:640px"></span>
+<span class="sym lift" data-sym="stairs|#1a33ff" data-size="110" style="left:716px;top:96px"></span>
+<span class="sym lift" data-sym="circle|#ffe600" data-size="96" style="left:724px;top:744px"></span>
+<span class="sym lift" data-sym="hourglass|#ff2da6" data-size="72" style="left:1470px;top:770px"></span>
+<span class="sym lift" data-sym="eye|#1a33ff" data-size="120" style="left:1180px;top:60px"></span>
+
+<div class="ticket-row ticket">
+  <span>Plate 01 · SqlCanvas + ResultGrid · Postgres workspace</span>
+  <span>Actual components, illustrative data</span>
+</div>
+
+<div class="next">
+  <span class="label" style="color:var(--lemon)">Next plate</span>
+  <span class="display">Plate 02 · Redis · Keys by namespace, values by type</span>
+  <span data-sym="arrow|#ffe600" data-size="36"></span>
+  <div class="splat"></div>
+</div>
+<script src="symbols.js"></script>
+</body></html>

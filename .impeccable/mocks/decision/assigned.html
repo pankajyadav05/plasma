@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Plasma — The Printout</title>
+<style>
+  :root {
+    --paper: #fbfbf7;
+    --bar: #e3eee0;
+    --ink: #17181a;
+    --ribbon: #b8281e;
+    --pitch: 24px;
+  }
+  html, body {
+    margin: 0;
+    width: 1600px;
+    height: 1000px;
+    overflow: hidden;
+  }
+  body {
+    position: relative;
+    color: var(--ink);
+    font-family: "SF Mono", Menlo, "Andale Mono", monospace;
+    font-size: 13px;
+    line-height: var(--pitch);
+    font-variant-numeric: tabular-nums;
+    -webkit-font-smoothing: antialiased;
+    /* green-bar form: 3 lines green, 3 lines paper, full width, behind everything */
+    background:
+      repeating-linear-gradient(to bottom, var(--bar) 0 72px, var(--paper) 72px 144px)
+      var(--paper);
+  }
+  .abs { position: absolute; }
+  .pre { white-space: pre; }
+  .caps { text-transform: uppercase; letter-spacing: 0.04em; }
+
+  /* tractor-feed margins */
+  .feed { top: 0; width: 56px; height: 1000px; }
+  .feed.l { left: 0; }
+  .feed.r { right: 0; }
+  .feed svg { display: block; }
+  .perf-v {
+    top: 0; width: 1px; height: 1000px;
+    background: linear-gradient(to bottom, var(--ink) 0 7px, transparent 7px 12px) 0 0/1px 12px repeat-y;
+  }
+  .perf-v.l { left: 56px; }
+  .perf-v.r { right: 56px; }
+  /* horizontal tear line, full sheet */
+  .perf-h {
+    left: 0; width: 1600px; height: 1px;
+    background: linear-gradient(to right, var(--ink) 0 7px, transparent 7px 12px) 0 0/12px 1px repeat-x;
+  }
+
+  /* report header */
+  .hdr { left: 96px; width: 1408px; display: flex; justify-content: space-between; }
+  .hdr > span { flex: 1 1 0; }
+  .hdr > span:nth-child(2) { text-align: center; }
+  .hdr > span:nth-child(3) { text-align: right; }
+  .hdr a { color: inherit; text-decoration: none; }
+  .hdr a + a { margin-left: 3ch; }
+  .mark { display: inline-block; width: 18px; height: 18px; vertical-align: -3px; margin-right: 1ch; }
+  .rule { left: 96px; width: 1408px; height: 1px; background: var(--ink); }
+
+  /* title block */
+  h1 {
+    margin: 0;
+    left: 96px; top: 96px;
+    font-size: 72px; line-height: 72px; font-weight: 600;
+    letter-spacing: -0.02em;
+    text-transform: uppercase;
+  }
+  .lede { left: 96px; top: 264px; font-size: 15px; }
+
+  /* tabular spec */
+  .spec { left: 864px; top: 96px; width: 640px; font-size: 13px; }
+  .spec > div { white-space: pre; }
+  .spec .head { text-decoration: underline; text-underline-offset: 3px; }
+  .spec .total {
+    color: var(--ribbon);
+    border-top: 1px solid var(--ink);
+    box-sizing: border-box; height: 24px; line-height: 23px;
+    font-weight: 600;
+  }
+  .spec .note { margin-top: 0; }
+
+  /* actions */
+  .actions { left: 96px; top: 336px; height: 48px; display: flex; align-items: center; }
+  .btn {
+    display: block; height: 48px; line-height: 48px;
+    padding: 0 24px;
+    background: var(--ribbon); color: var(--paper);
+    font-size: 15px; font-weight: 600; letter-spacing: 0.06em;
+    text-decoration: none; white-space: pre;
+  }
+  .src {
+    margin-left: 40px; color: var(--ink);
+    font-size: 15px; letter-spacing: 0.06em;
+    text-decoration: underline; text-underline-offset: 4px; text-decoration-thickness: 1px;
+  }
+  .plat { right: 96px; top: 336px; text-align: right; }
+
+  /* figure */
+  .cap { left: 96px; width: 1408px; top: 432px; display: flex; justify-content: space-between; }
+  .fig {
+    left: 96px; top: 480px; width: 1408px;
+    border: 1px solid var(--ink);
+    background: var(--paper);
+  }
+  .fig img { display: block; width: 1408px; height: auto; }
+</style>
+</head>
+<body>
+
+  <!-- tractor feed, left and right -->
+  <div class="abs feed l" aria-hidden="true">
+    <svg width="56" height="1000" viewBox="0 0 56 1000">
+      <defs>
+        <pattern id="holes" width="56" height="48" patternUnits="userSpaceOnUse">
+          <circle cx="28" cy="24" r="4.5" fill="#fbfbf7" stroke="#17181a" stroke-width="1"/>
+        </pattern>
+      </defs>
+      <rect width="56" height="1000" fill="url(#holes)"/>
+    </svg>
+  </div>
+  <div class="abs feed r" aria-hidden="true">
+    <svg width="56" height="1000" viewBox="0 0 56 1000">
+      <rect width="56" height="1000" fill="url(#holes)"/>
+    </svg>
+  </div>
+  <div class="abs perf-v l" aria-hidden="true"></div>
+  <div class="abs perf-v r" aria-hidden="true"></div>
+
+  <!-- report header, two lines -->
+  <header>
+    <div class="abs hdr caps" style="top:24px">
+      <span>
+        <svg class="mark" viewBox="0 0 128 128" aria-label="Plasma mark">
+          <text x="30" y="106" font-family="SF Mono, Menlo, Andale Mono, monospace" font-weight="700" font-size="124" fill="#17181a">P</text>
+          <rect x="22" y="116" width="84" height="8" fill="#b8281e"/>
+        </svg><span class="pre">PLASMA  DESKTOP DATA CLIENT</span>
+      </span>
+      <span class="pre">POSTGRES · REDIS · OPENSEARCH</span>
+      <span class="pre">VERSION 0.0.17   PAGE 1</span>
+    </div>
+    <nav class="abs hdr caps" style="top:48px">
+      <span class="pre">REPORT  LANDING / FIRST VIEWPORT   RUN 2026-09-09</span>
+      <span><a href="#product">Product</a><a href="https://github.com/pankajyadav05/plasma">GitHub</a><a href="#download">Download</a></span>
+      <span class="pre">APACHE-2.0   GITHUB.COM/PANKAJYADAV05/PLASMA</span>
+    </nav>
+    <div class="abs rule" style="top:72px"></div>
+  </header>
+
+  <!-- report title -->
+  <main>
+    <h1 class="abs">One client.<br>Three workspaces.</h1>
+
+    <p class="abs lede pre" style="margin:0">Engine-specific workspaces for Postgres, Redis and OpenSearch in one desktop app.
+Connections and history stored locally. Saved passwords use OS-backed encryption.</p>
+
+    <div class="abs spec caps">
+<div class="head">NO  WORKSPACE   CAPABILITIES</div>
+<div>01  POSTGRES    SCHEMA-AWARE SQL EDITOR, RESULTS, MULTI-STATEMENT SCRIPTS,</div>
+<div>                SCHEMA BROWSING, CELL DETAILS, FOREIGN KEYS, EXPLAIN ANALYZE</div>
+<div>02  REDIS       NAMESPACE KEY BROWSING, TYPED VALUES, TTL, CLI,</div>
+<div>                MEMORY ANALYSIS, SLOW LOG, PUB/SUB</div>
+<div>03  OPENSEARCH  DOCUMENT SEARCH, QUERY STRINGS, DSL, FIELDS, MAPPINGS</div>
+<div class="total">TOTAL           3 WORKSPACES · 1 DESKTOP APP · APACHE-2.0 SOURCE</div>
+<div class="note">NOTE            OPTIONAL OPENROUTER AI SENDS PROMPTS TO THE PROVIDER.</div>
+    </div>
+
+    <div class="abs actions" id="download">
+      <a class="btn" href="#download">[ DOWNLOAD PLASMA ]</a>
+      <a class="src caps" href="https://github.com/pankajyadav05/plasma">Read the source</a>
+    </div>
+    <div class="abs plat pre caps">MACOS  APPLE SILICON / INTEL  (UNSIGNED BUILDS)
+WINDOWS  X64 INSTALLER / PORTABLE</div>
+
+    <div class="abs perf-h" style="top:408px" aria-hidden="true"></div>
+
+    <div class="abs cap">
+      <span class="pre">FIG 01  SQL WORKSPACE  SqlCanvas + ResultGrid</span>
+      <span class="pre">ACTUAL COMPONENTS, ILLUSTRATIVE DATA</span>
+    </div>
+    <figure class="abs fig" style="margin:0">
+      <img src="../../../site/public/product/postgres.webp" width="1800" height="1125" alt="Plasma SQL workspace: schema sidebar, SQL editor and result grid on an illustrative commerce schema.">
+    </figure>
+  </main>
+
+</body>
+</html>

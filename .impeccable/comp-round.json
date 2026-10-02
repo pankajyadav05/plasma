@@ -1,0 +1,42 @@
+{
+  "title": "Collective Plate: pick the composition",
+  "question": "Same world, three first viewports. Lock the one to build, or steer: what should carry forward, what feels false to the world.",
+  "options": [
+    {
+      "id": "a-signed-plate",
+      "label": "A. The signed plate",
+      "lineage": "Headline column beside one framed work",
+      "thesis": "The Postgres workspace hangs as a single signed plate; the headline stands beside it in cobalt.",
+      "palette": ["#1a33ff", "#ff2da6", "#ffe600", "#f7f4ed", "#111111"],
+      "materials": ["cobalt frame", "hovering symbols", "signature mark", "next-plate band"],
+      "viewport": "Symbol nav; cobalt condensed headline left with statement and two actions; the capture framed right with symbols hovering off its corners and the mark signed inside; a cobalt band announces Plate 02 · Redis at the fold.",
+      "risk": "The classic split hero: the world carries it, the topology does not.",
+      "comp": ".impeccable/mocks/comp/a-signed-plate.webp"
+    },
+    {
+      "id": "b-gallery-wall",
+      "label": "B. The gallery wall",
+      "lineage": "One title band, one wall-sized work",
+      "thesis": "The headline is a cobalt title band; the workspace fills the wall beneath, switched by symbol tabs.",
+      "palette": ["#1a33ff", "#ff2da6", "#ffe600", "#f7f4ed", "#111111"],
+      "materials": ["cobalt title band", "wall-width plate", "hovering tabs", "symbols at the edges"],
+      "viewport": "Nav; a full-width cobalt band with the one-line headline, statement and lemon action; three plate tabs (the active one hovers); the SQL workspace at near full width with symbols breaking the frame.",
+      "risk": "Most product on screen, least room for the collective's play; scrolling must deliver the other plates.",
+      "comp": ".impeccable/mocks/comp/b-gallery-wall.webp"
+    },
+    {
+      "id": "c-collective-wall",
+      "label": "C. The collective wall",
+      "lineage": "A rail and four plates at once",
+      "thesis": "A cobalt rail signs the wall; four plates in one grid show the same symbols reused by three engines.",
+      "palette": ["#1a33ff", "#ff2da6", "#ffe600", "#f7f4ed", "#111111"],
+      "materials": ["cobalt rail", "plate grid", "magenta and lemon boards", "signatures per plate"],
+      "viewport": "Left rail with symbol nav and download; a 2x2 of plates: headline plate, Postgres, Redis on magenta, OpenSearch on lemon, each capture signed and ticketed.",
+      "risk": "Densest and loudest; the headline is smaller and each capture is a crop.",
+      "comp": ".impeccable/mocks/comp/c-collective-wall.webp"
+    }
+  ],
+  "buildPath": { "value": "comp", "toggle": false },
+  "canon": false,
+  "steer": true
+}

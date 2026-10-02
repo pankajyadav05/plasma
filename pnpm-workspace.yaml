@@ -1,18 +1,7 @@
-packages:
-  - "."
-blockExoticSubdeps: false
-# pnpm 11+ build approval (replaces the package.json "pnpm.onlyBuiltDependencies"
-# list, which pnpm 12 ignores; that field stays for pnpm 9/10 compat)
 allowBuilds:
-  electron: true
-  esbuild: true
-  "@biomejs/biome": true
+  '@biomejs/biome': true
   better-sqlite3: true
-  ssh2: true
+  cpu-features: true
   electron-winstaller: true
-  cpu-features: false
-ignoredOptionalDependencies:
-  - cpu-features
-overrides:
-  # @electron/rebuild bundles a node-abi that predates Electron 44's ABI.
-  node-abi@^4: ^4.35.0
+  esbuild: true
+  ssh2: true

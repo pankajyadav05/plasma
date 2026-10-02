@@ -1,0 +1,236 @@
+{
+  "title": "Choose Plasma's landing-page world",
+  "question": "One world owns the page. The roll dealt a reference-manual challenger that beat the assigned printout on both axes, so it leads. Lock one, add a steer, or re-roll. The current page is untouched until you choose.",
+  "options": [
+    {
+      "id": "challenger-rw-manual-acetate-tab-board",
+      "label": "The Reference Manual",
+      "verdict": "wins",
+      "lineage": "Boxed-software reference manuals, open at a tabbed section",
+      "thesis": "Plasma's landing page is its own manual lying open: one tabbed division per engine, the workspace capture on a clear leaf hinged over the section board.",
+      "palette": [
+        "#f6f3ec",
+        "#141210",
+        "#2b4aa8",
+        "#e0541c",
+        "#12857e",
+        "#f2c118"
+      ],
+      "materials": [
+        "milk acetate leaf",
+        "full-strength section board",
+        "print ink",
+        "stepped tab rail"
+      ],
+      "viewport": "A stepped tab rail runs down the right fore-edge: Postgres, Redis, OpenSearch, Local and open, Download, each tab its own hue with height by extent. The open division is Postgres on an ultramarine board; a milk acetate leaf carries the two-line statement, one primary action, and the real SQL workspace capture with a punched-hole edge. Switching a tab hinges the leaf in a 90ms two-frame step.",
+      "case": "Beats the printout on both axes: this audience grew up on tabbed engine manuals, and the tab rail literally is the three-workspace claim.",
+      "risk": "Full-strength section boards are the loudest color this brief allows; the acetate keeps every reading field milk. Sabon and Univers are commercial, so the build takes the closest obtainable faces.",
+      "raised": [
+        {
+          "from": "Toyism collective plate",
+          "raise": "Hard edges only: no gradient, blur, or soft shadow anywhere on the page; one short hard shadow along each leaf's cut side."
+        },
+        {
+          "from": "Moon-shadow bazaar",
+          "raise": "Every product capture carries an origin ticket: component name, app version, and the synthetic-data disclosure."
+        },
+        {
+          "from": "Silk canopy color chords",
+          "raise": "Every state is named in text or glyph, never color alone: the open tab extends and is labeled, the punched hole marks selection."
+        },
+        {
+          "from": "Ebru floated pigment",
+          "raise": "One continuous surface: no card grid; the page is one book, sections are leaves, and the scroll is a page turn."
+        },
+        {
+          "from": "Nixie laboratory counter",
+          "raise": "Engine switches are visible mechanical events: steps(2) at 90ms, no easing curve on the page."
+        }
+      ],
+      "hero": "https://impeccable.style/worlds/cards/rw-manual-acetate-tab-board-hero.webp",
+      "board": "https://impeccable.style/worlds/cards/rw-manual-acetate-tab-board.webp",
+      "comp": ".impeccable/mocks/decision/challenger-rw-manual-acetate-tab-board.webp"
+    },
+    {
+      "id": "assigned",
+      "label": "The Printout",
+      "kicker": "THE ROLL",
+      "lineage": "Green-bar continuous-form line-printer paper, the result grid's ancestor",
+      "thesis": "The page is one continuous report: alternating green bands set the rhythm, tractor-feed margins frame it, and each workspace capture is a live window laid over the form.",
+      "palette": [
+        "#fbfbf7",
+        "#e3eee0",
+        "#17181a",
+        "#b8281e"
+      ],
+      "materials": [
+        "continuous-form paper",
+        "perforated tear lines",
+        "tractor-feed margins",
+        "fixed character grid"
+      ],
+      "viewport": "A report header block at top: PLASMA / DESKTOP DATA CLIENT / RUN DATE. The headline is the report title, set on the character grid. The Postgres workspace capture prints as the first result block, bands running behind it. Sections tear at perforation lines.",
+      "risk": "Reads retro to visitors who never saw green-bar paper; the live-app feeling must come entirely from the captures.",
+      "comp": ".impeccable/mocks/decision/assigned.webp"
+    },
+    {
+      "id": "model-pick",
+      "label": "The Session",
+      "kicker": "IMPECCABLE’S PICK",
+      "lineage": "A psql / redis-cli session transcript",
+      "thesis": "The page reads as one recorded session: prompt lines narrate, and each command opens the real workspace it replaced.",
+      "palette": [
+        "#f4f4ef",
+        "#1d1e1c",
+        "#7b2d26",
+        "#6b6e66"
+      ],
+      "materials": [
+        "light terminal ground",
+        "monospace transcript",
+        "captured windows",
+        "hairline cursor"
+      ],
+      "viewport": "A prompt at top-left: plasma=# \\c commerce. The response is the headline. The next command opens the SQL workspace capture as a window over the transcript. Scrolling advances the session through Redis and OpenSearch.",
+      "risk": "Familiar: terminal-styled developer landing pages are where most runs in this category land.",
+      "comp": ".impeccable/mocks/decision/model-pick.webp"
+    },
+    {
+      "id": "challenger-toyism",
+      "label": "Collective Plate",
+      "verdict": "declined",
+      "lineage": "Toyism signed collective plates",
+      "thesis": "Engines as hard-edged symbols in cobalt, magenta and lemon.",
+      "palette": [
+        "#1f4bd8",
+        "#e2318f",
+        "#f5e04a"
+      ],
+      "materials": [
+        "flat ground",
+        "hard-edged symbols"
+      ],
+      "viewport": "Three hovering symbols on a flat plate, pseudonym mark in a corner.",
+      "case": "Developers do not identify with a painters' collective, and symbols hide the product.",
+      "kept": "Hard edges only: no gradient, blur or soft shadow anywhere.",
+      "risk": "Fine-art register; the product disappears behind the symbol set.",
+      "hero": "https://impeccable.style/worlds/cards/design-canon-toyism-signed-collective-plate-hero.webp"
+    },
+    {
+      "id": "challenger-bazaar",
+      "label": "Shadow Bazaar",
+      "verdict": "declined",
+      "lineage": "Moon-shadow bazaar",
+      "thesis": "Workspaces as stalls down a moonlit lane, each tagged with an origin ticket.",
+      "palette": [
+        "#0f1526",
+        "#c99a3b",
+        "#f2f4f8"
+      ],
+      "materials": [
+        "blue-black lane",
+        "saffron canvas",
+        "chalked tickets"
+      ],
+      "viewport": "A vertical lane of stalls, one per engine.",
+      "case": "Surreal commerce; no audience identification and the product reads as decoration.",
+      "kept": "Every capture carries an origin ticket with its provenance and disclosure.",
+      "risk": "Whimsy contradicts the quiet technical brief.",
+      "hero": "https://impeccable.style/worlds/cards/dream-surreal-impossible-worlds-moon-shadow-bazaar-hero.webp"
+    },
+    {
+      "id": "challenger-silk",
+      "label": "Silk Canopy",
+      "verdict": "declined",
+      "lineage": "Computational color-chord counterpoint",
+      "thesis": "Three translucent engine lanes crossing one bright field.",
+      "palette": [
+        "#2a3d8f",
+        "#a63a4b",
+        "#e9a922",
+        "#fdfcf7"
+      ],
+      "materials": [
+        "translucent silk",
+        "sun-white paving"
+      ],
+      "viewport": "Horizontal color lanes overlapping into chords.",
+      "case": "Overlap says the engines blend, the opposite of engine-specific workspaces.",
+      "kept": "Every state named in text or glyph, never color alone.",
+      "risk": "Atmosphere over product; contradicts the no-gradient brief.",
+      "hero": "https://impeccable.style/worlds/cards/generative-art-computational-color-chord-counterpoint-hero.webp"
+    },
+    {
+      "id": "challenger-ebru",
+      "label": "Floated Pigment",
+      "verdict": "declined",
+      "lineage": "Ebru marbling",
+      "thesis": "One liquid surface combed into figures in a single pass.",
+      "palette": [
+        "#1c2f6b",
+        "#b3392c",
+        "#e8dcc2"
+      ],
+      "materials": [
+        "floating pigment",
+        "sized paper"
+      ],
+      "viewport": "A full-frame bath the visitor drags through.",
+      "case": "Irreversible strokes and fluid canvas obscure a data client's task.",
+      "kept": "One continuous surface: no card grid, one page turning.",
+      "risk": "Decorative canvas with no product truth to carry.",
+      "hero": "https://impeccable.style/worlds/cards/medium-native-ebru-floated-pigment-hero.webp"
+    },
+    {
+      "id": "challenger-nixie",
+      "label": "Nixie Counter",
+      "verdict": "declined",
+      "lineage": "Nixie-tube laboratory counter",
+      "thesis": "Quantities as glowing digit banks on a blackened chassis.",
+      "palette": [
+        "#ff7a1a",
+        "#0d0d0f",
+        "#6b6f75"
+      ],
+      "materials": [
+        "glass envelopes",
+        "blackened steel",
+        "anode mesh"
+      ],
+      "viewport": "Tube banks counting rows, milliseconds, engines.",
+      "case": "The name-literal reading; the brief forbids invented metrics, so the banks have nothing honest to count.",
+      "kept": "State changes are visible mechanical events, never fades.",
+      "risk": "Glow and dark chassis are the SaaS-template register the brief rejects.",
+      "hero": "https://impeccable.style/worlds/cards/signals-instruments-nixie-laboratory-counter-hero.webp"
+    }
+  ],
+  "reroll": {
+    "registers": [
+      "safer",
+      "bolder"
+    ]
+  },
+  "buildPath": {
+    "value": "comp",
+    "toggle": false
+  },
+  "canon": true,
+  "canonCard": {
+    "label": "The category standard",
+    "thesis": "What desktop database clients ship: centered headline, big screenshot, feature rows, download button, executed at full craft.",
+    "palette": [
+      "#ffffff",
+      "#1a1a1a",
+      "#7b2d26"
+    ],
+    "materials": [
+      "clean grid",
+      "product screenshot",
+      "feature rows"
+    ],
+    "viewport": "Centered two-line headline, subhead, download button, the Postgres screenshot below, three feature rows after it.",
+    "risk": "Indistinguishable from TablePlus, DataGrip and Beekeeper pages by design.",
+    "comp": ".impeccable/mocks/decision/canon.webp"
+  },
+  "steer": true
+}

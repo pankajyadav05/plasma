@@ -1,0 +1,248 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Plasma — Desktop client for Postgres, Redis and OpenSearch</title>
+<style>
+  @font-face {
+    font-family: Geist;
+    src: url("../../previews/plasma-directions/assets/geist.woff2") format("woff2");
+    font-weight: 100 900;
+    font-display: block;
+  }
+
+  :root {
+    --ground: #ffffff;
+    --ink: #1a1a1a;
+    --muted: #5f6368;
+    --hairline: #e6e6e3;
+    --accent: #7b2d26;
+    --accent-ink: #ffffff;
+    --col: 1200px;
+    --radius: 6px;
+  }
+
+  html, body {
+    margin: 0;
+    width: 1600px;
+    height: 1000px;
+    overflow: hidden;
+  }
+
+  body {
+    position: relative;
+    background: var(--ground);
+    color: var(--ink);
+    font-family: Geist, "Helvetica Neue", Helvetica, Arial, sans-serif;
+    font-size: 18px;
+    line-height: 28px;
+    font-weight: 400;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    font-feature-settings: "ss01" 0, "cv11" 1;
+  }
+
+  a { color: inherit; text-decoration: none; }
+
+  .col {
+    width: var(--col);
+    margin: 0 auto;
+  }
+
+  /* ---------------------------------------------------------------- nav */
+  .nav {
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 72px;
+  }
+  .nav .col {
+    height: 72px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 17px;
+    line-height: 20px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    color: var(--ink);
+  }
+  .brand svg { width: 28px; height: 28px; display: block; }
+  .brand .p-glyph {
+    font-family: Charter, "Iowan Old Style", Baskerville, Georgia, serif;
+    font-style: italic;
+    font-weight: 500;
+    font-size: 140px;
+  }
+  .nav-links {
+    display: flex;
+    align-items: center;
+    gap: 36px;
+    margin-left: 44px;
+    font-size: 15px;
+    line-height: 20px;
+    font-weight: 500;
+    color: var(--muted);
+  }
+  .nav-left { display: flex; align-items: center; }
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    height: 40px;
+    padding: 0 18px;
+    border-radius: var(--radius);
+    font-size: 15px;
+    line-height: 20px;
+    font-weight: 500;
+    letter-spacing: -0.005em;
+    white-space: nowrap;
+    box-sizing: border-box;
+  }
+  .btn-fill {
+    background: var(--accent);
+    color: var(--accent-ink);
+    border: 1px solid var(--accent);
+  }
+  .btn-line {
+    background: transparent;
+    color: var(--ink);
+    border: 1px solid #cfcfca;
+  }
+  .nav .btn { height: 36px; padding: 0 14px; font-size: 14px; }
+
+  /* --------------------------------------------------------------- hero */
+  .hero {
+    position: absolute;
+    top: 72px; left: 0; right: 0;
+    text-align: center;
+  }
+  .eyebrow {
+    margin: 92px 0 0;
+    font-size: 15px;
+    line-height: 20px;
+    font-weight: 500;
+    color: var(--muted);
+    letter-spacing: 0;
+  }
+  h1 {
+    margin: 22px 0 0;
+    font-size: 64px;
+    line-height: 70px;
+    font-weight: 600;
+    letter-spacing: -0.03em;
+    color: var(--ink);
+  }
+  .sub {
+    width: 680px;
+    margin: 26px auto 0;
+    font-size: 18px;
+    line-height: 28px;
+    font-weight: 400;
+    color: var(--muted);
+    text-wrap: balance;
+  }
+  .actions {
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
+    gap: 12px;
+    margin-top: 36px;
+  }
+  .actions .btn { height: 44px; padding: 0 22px; font-size: 16px; }
+  .action {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+  .platforms {
+    margin-top: 10px;
+    font-size: 13px;
+    line-height: 16px;
+    font-weight: 400;
+    color: var(--muted);
+    letter-spacing: 0.005em;
+  }
+
+  /* ------------------------------------------------------------ capture */
+  .capture {
+    position: absolute;
+    top: 640px;
+    left: 200px;
+    width: var(--col);
+  }
+  .caption {
+    position: absolute;
+    right: 2px;
+    top: -30px;
+    font-size: 13px;
+    line-height: 18px;
+    font-weight: 400;
+    color: var(--muted);
+  }
+  .frame {
+    width: 1200px;
+    height: 750px;
+    box-sizing: border-box;
+    border: 1px solid var(--hairline);
+    border-radius: var(--radius);
+    overflow: hidden;
+    background: #fff;
+    box-shadow: 0 24px 60px rgba(0, 0, 0, .10);
+  }
+  .frame img {
+    display: block;
+    width: 1198px;
+    height: 748.75px;
+  }
+</style>
+</head>
+<body>
+
+  <header class="nav">
+    <div class="col">
+      <div class="nav-left">
+        <a class="brand" href="#" aria-label="Plasma home">
+          <svg viewBox="0 0 128 128" aria-hidden="true">
+            <text x="34" y="108" class="p-glyph" fill="#1a1a1a">P</text>
+            <rect x="22" y="116" width="84" height="5" fill="#7b2d26"/>
+          </svg>
+          <span>Plasma</span>
+        </a>
+        <nav class="nav-links" aria-label="Primary">
+          <a href="#">Product</a>
+          <a href="#">GitHub</a>
+        </nav>
+      </div>
+      <a class="btn btn-fill" href="#">Download Plasma</a>
+    </div>
+  </header>
+
+  <main class="hero">
+    <p class="eyebrow">Desktop client for Postgres, Redis and OpenSearch</p>
+    <h1>One client.<br>Three workspaces.</h1>
+    <p class="sub">Engine-specific workspaces for Postgres, Redis and OpenSearch in one Apache-2.0 desktop app, with connections and query history stored locally on your machine.</p>
+    <div class="actions">
+      <div class="action">
+        <a class="btn btn-fill" href="#">Download Plasma</a>
+        <span class="platforms">macOS · Windows</span>
+      </div>
+      <div class="action">
+        <a class="btn btn-line" href="#">Read the source</a>
+      </div>
+    </div>
+  </main>
+
+  <figure class="capture" style="margin:0">
+    <figcaption class="caption">Actual components, illustrative data.</figcaption>
+    <div class="frame">
+      <img src="../../../site/public/product/postgres.webp" width="1198" height="749" alt="Plasma Postgres workspace: schema sidebar, SQL editor and result grid">
+    </div>
+  </figure>
+
+</body>
+</html>

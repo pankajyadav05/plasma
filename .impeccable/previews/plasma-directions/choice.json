@@ -1,0 +1,71 @@
+{
+  "title": "Choose Plasma's landing direction",
+  "question": "Compare the three rendered directions. Select one, add a steer, or ask for a fresh set. The current landing page is unchanged.",
+  "options": [
+    {
+      "id": "reference",
+      "label": "A. Reference",
+      "lineage": "Well-edited technical product guides",
+      "thesis": "A light, documentation-inspired landing page with useful margin navigation and product proof close to each claim.",
+      "palette": [
+        "#f9f9f6",
+        "#242622",
+        "#7b2d26"
+      ],
+      "materials": [
+        "neutral paper surface",
+        "precise typography",
+        "real application captures"
+      ],
+      "viewport": "Left navigation rail; a concise two-line engine statement; the SQL workspace below. Full preview: http://127.0.0.1:3103/reference.html",
+      "risk": "Highest technical clarity, but less visually expressive.",
+      "comp": "/Users/pankajyadav/projects/plasma/.impeccable/previews/plasma-directions/assets/reference-preview.png"
+    },
+    {
+      "id": "workspace",
+      "label": "B. Workspace",
+      "lineage": "Monochrome software product presentation",
+      "thesis": "A dark neutral page that makes the application itself the dominant first impression.",
+      "palette": [
+        "#222521",
+        "#eff0e9",
+        "#d8a194"
+      ],
+      "materials": [
+        "matte charcoal",
+        "large application stage",
+        "compact type"
+      ],
+      "viewport": "Compact centered introduction above a nearly full-width workspace; engine views switch in place. Full preview: http://127.0.0.1:3103/workspace.html",
+      "risk": "Strongest product presence, but closest to familiar developer-tool marketing.",
+      "comp": "/Users/pankajyadav/projects/plasma/.impeccable/previews/plasma-directions/assets/workspace-preview.png"
+    },
+    {
+      "id": "editorial",
+      "label": "C. Editorial",
+      "lineage": "Understated product brochures and editorial composition",
+      "thesis": "An asymmetric composition balances a narrow headline with a close-up of the editor, then explains the engines through typography rather than cards.",
+      "palette": [
+        "#f5f4ef",
+        "#292824",
+        "#7b2d26"
+      ],
+      "materials": [
+        "warm neutral surface",
+        "deliberate product crop",
+        "large quiet typography"
+      ],
+      "viewport": "Headline and action on the left; a tall editor-and-results crop on the right. Full preview: http://127.0.0.1:3103/editorial.html",
+      "risk": "Most distinctive composition; the whole workspace is less visible at first glance.",
+      "comp": "/Users/pankajyadav/projects/plasma/.impeccable/previews/plasma-directions/assets/editorial-preview.png"
+    }
+  ],
+  "reroll": {
+    "registers": [
+      "safer",
+      "bolder"
+    ]
+  },
+  "canon": false,
+  "steer": true
+}

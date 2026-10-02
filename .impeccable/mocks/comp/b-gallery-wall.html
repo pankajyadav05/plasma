@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Plasma — Gallery wall</title>
+<link rel="stylesheet" href="toyism.css">
+<style>
+  .nav .btn { height: 48px; font-size: 20px; padding-right: 36px; }
+  .title-band { position: absolute; left: 0; right: 0; top: 76px; height: 220px; background: var(--cobalt); color: var(--plate); border-bottom: 3px solid var(--ink); }
+  .title-band h1 { position: absolute; left: 64px; top: 34px; font-size: 100px; white-space: nowrap; }
+  .title-band .statement { position: absolute; left: 68px; top: 140px; width: 760px; font-size: 19px; line-height: 1.4; color: var(--plate); }
+  .title-band .kicker { position: absolute; right: 64px; top: 24px; color: var(--lemon); text-align: right; }
+  .title-band .actions { position: absolute; right: 64px; top: 138px; display: flex; gap: 18px; }
+  .title-band .btn { background: var(--lemon); border-color: var(--lemon); color: var(--ink); }
+  .title-band .btn.ghost { background: transparent; border-color: var(--plate); color: var(--plate); }
+  .tabs { position: absolute; left: 64px; top: 328px; display: flex; gap: 0; }
+  .tab { display: flex; align-items: center; gap: 12px; height: 54px; padding: 0 26px; border: 3px solid var(--ink); margin-right: -3px; font-family: var(--display); font-weight: 700; font-size: 22px; letter-spacing: .06em; text-transform: uppercase; background: var(--plate); }
+  .tab.active { background: #fff; transform: translate(-4px, -4px); box-shadow: 4px 4px 0 var(--ink); position: relative; z-index: 2; }
+  .wall { left: 64px; top: 382px; width: 1472px; height: 720px; }
+  .wall .capture img { width: 1464px; }
+  .wall-ticket { position: absolute; right: 64px; top: 344px; display: flex; gap: 28px; }
+  .count { position: absolute; left: 1128px; top: 328px; display: flex; gap: 10px; align-items: center; }
+</style></head>
+<body>
+<nav class="nav">
+  <a class="brand" href="#"><span data-mark="#111|#1a33ff" data-size="36"></span>Plasma</a>
+  <div class="links">
+    <a href="#"><span data-sym="diamond|#1a33ff" data-size="16"></span>Plates</a>
+    <a href="#"><span data-sym="circle|#ffe600" data-size="16"></span>Local &amp; open</a>
+    <a href="#"><span data-sym="plus|#111" data-size="16"></span>GitHub</a>
+  </div>
+  <div class="spacer"></div>
+  <span class="btn-wrap hover"><a class="btn primary" href="#">Download Plasma <span data-sym="arrow|#f7f4ed" data-size="22"></span></a></span>
+</nav>
+
+<div class="title-band">
+  <h1 class="display">One client. Three workspaces.</h1>
+  <p class="statement">Postgres, Redis and OpenSearch each get a workspace built for that engine, in one desktop app. Connections and history stay on your disk. Apache-2.0 · macOS · Windows.</p>
+  <div class="kicker label">Desktop data client<br>Version 0.0.17</div>
+  <div class="actions">
+    <span class="btn-wrap hover"><a class="btn" href="#">Download <span data-sym="down|#111" data-size="22"></span></a></span>
+    <a class="btn ghost" href="#">Source <span data-sym="plus|#f7f4ed" data-size="18"></span></a>
+  </div>
+</div>
+
+<div class="tabs">
+  <span class="tab active"><span data-sym="stairs|#1a33ff" data-size="20"></span>Plate 01 · Postgres</span>
+  <span class="tab"><span data-sym="hourglass|#ff2da6" data-size="20"></span>Plate 02 · Redis</span>
+  <span class="tab"><span data-sym="eye|#1a33ff" data-size="24"></span>Plate 03 · OpenSearch</span>
+</div>
+<div class="wall-ticket ticket">
+  <span>SqlCanvas + ResultGrid</span>
+  <span>Actual components, illustrative data</span>
+</div>
+
+<div class="plate wall">
+  <div class="capture"><img src="../../../site/public/product/postgres.webp" alt=""></div>
+  <span class="sig" data-mark="#111|#1a33ff" data-size="44" style="right:14px;bottom:12px"></span>
+</div>
+<span class="sym lift" data-sym="star|#ff2da6" data-size="140" style="left:940px;top:200px"></span>
+<span class="sym lift" data-sym="stairs|#1a33ff" data-size="120" style="left:0px;top:420px"></span>
+<span class="sym lift" data-sym="circle|#ffe600" data-size="110" style="left:1480px;top:720px"></span>
+<span class="sym lift" data-sym="hourglass|#ff2da6" data-size="84" style="left:20px;top:820px"></span>
+<span class="sym lift" data-sym="eye|#ffe600|#111" data-size="140" style="left:1200px;top:930px"></span>
+<script src="symbols.js"></script>
+</body></html>
