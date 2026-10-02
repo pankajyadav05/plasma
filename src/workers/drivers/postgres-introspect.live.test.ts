@@ -5,13 +5,15 @@
  */
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { plasmaPgTypes } from './pg-type-parsers';
 import { introspectPostgres } from './postgres-introspect';
 
 const url = process.env.PLASMA_LIVE_PG;
 const S = 'plasma_introspect_test';
 
 describe.skipIf(!url)('introspectPostgres (live)', () => {
-  const client = new pg.Client({ connectionString: url });
+  // Same type parsers as the app's clients, so text-form arrays are caught.
+  const client = new pg.Client({ connectionString: url, types: plasmaPgTypes });
 
   beforeAll(async () => {
     await client.connect();

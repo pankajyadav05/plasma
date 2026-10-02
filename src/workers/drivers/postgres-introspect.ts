@@ -164,9 +164,11 @@ export async function introspectPostgres(
       `SELECT n.nspname AS schema,
               t.typname AS name,
               t.typtype AS kind,
+              -- json, not text[]: Plasma's type parsers keep arrays as their
+              -- text form ('{a,b}'), json arrives as a real array.
               CASE WHEN t.typtype = 'e' THEN
-                ARRAY(SELECT e.enumlabel::text FROM pg_enum e
-                      WHERE e.enumtypid = t.oid ORDER BY e.enumsortorder)
+                to_json(ARRAY(SELECT e.enumlabel::text FROM pg_enum e
+                              WHERE e.enumtypid = t.oid ORDER BY e.enumsortorder))
               END AS enum_values
        FROM pg_type t
        JOIN pg_namespace n ON n.oid = t.typnamespace
