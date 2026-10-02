@@ -1,7 +1,21 @@
+# Keep this file as-is: CI installs with pnpm 9, which needs `packages`, and
+# `electron: true` is what lets electron download its binary. Newer pnpm
+# versions (e.g. `pnpm approve-builds`) may rewrite it; restore it if so.
+packages:
+  - "."
+blockExoticSubdeps: false
+# pnpm 11+ build approval (replaces the package.json "pnpm.onlyBuiltDependencies"
+# list, which pnpm 12 ignores; that field stays for pnpm 9/10 compat)
 allowBuilds:
-  '@biomejs/biome': true
-  better-sqlite3: true
-  cpu-features: true
-  electron-winstaller: true
+  electron: true
   esbuild: true
+  "@biomejs/biome": true
+  better-sqlite3: true
   ssh2: true
+  electron-winstaller: true
+  cpu-features: false
+ignoredOptionalDependencies:
+  - cpu-features
+overrides:
+  # @electron/rebuild bundles a node-abi that predates Electron 44's ABI.
+  node-abi@^4: ^4.35.0
