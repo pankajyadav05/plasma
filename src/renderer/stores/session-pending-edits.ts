@@ -7,6 +7,11 @@
  * goes to the worker as one `commitEditBatch` (U05) with connectionGen
  * checks (U01) and the prod-tag confirmation.
  *
+ * Edits are kept **per tab** (`pendingEditsByTab`, keyed by tab id): a tab's
+ * edits are only ever shown, committed or discarded with that tab, ⌘S in
+ * another tab can never commit them, and closing the tab drops (or first
+ * asks about) them.
+ *
  * Edits are an **overlay**: the server rows in `queryResult` are never
  * mutated. The grid renders `overlayRows(…)`, so
  *  - the original primary key of a row is always the server's value, even
@@ -20,6 +25,7 @@ import { cleanIpcError } from '@/lib/errors';
 import { ipc } from '@/lib/ipc';
 import { buildDeleteSql, buildUpdateSql, quoteIdent } from '@/lib/table-query';
 import type { ColumnMeta, SchemaInfo } from '@shared/protocol';
+import { effectiveSafeMode } from './safe-mode';
 import { evaluateGate } from './session-prod-gate';
 import type { PendingEdit, QueryTab } from './session-types';
 
@@ -43,6 +49,75 @@ export interface PendingEditsError {
   message: string;
   /** Edits whose statement failed (tinted red in the grid). */
   editIds: string[];
+  /** Tab whose commit failed; absent = applies to any tab. */
+  tabId?: string;
+}
+
+/** Staged grid edits, keyed by the id of the tab they were made in. */
+export type PendingEditsByTab = Record<string, PendingEdit[]>;
+
+const NO_EDITS: PendingEdit[] = [];
+
+/** A tab's staged edits (a stable empty array when it has none). */
+export function editsOf(
+  byTab: PendingEditsByTab | undefined,
+  tabId: string | null | undefined,
+): PendingEdit[] {
+  return (tabId ? byTab?.[tabId] : undefined) ?? NO_EDITS;
+}
+
+/** Every staged edit of every tab (connection switches, reconnect guard). */
+export function allPendingEdits(byTab: PendingEditsByTab | undefined): PendingEdit[] {
+  return Object.values(byTab ?? {}).flat();
+}
+
+export function pendingEditCount(byTab: PendingEditsByTab | undefined): number {
+  let n = 0;
+  for (const list of Object.values(byTab ?? {})) n += list.length;
+  return n;
+}
+
+/** Ids of tabs that have staged edits. */
+export function tabsWithEdits(byTab: PendingEditsByTab | undefined): ReadonlySet<string> {
+  return new Set(
+    Object.entries(byTab ?? {})
+      .filter(([, list]) => list.length > 0)
+      .map(([id]) => id),
+  );
+}
+
+/** Replace one tab's edits (dropping the key when the list is empty). */
+export function withTabEdits(
+  byTab: PendingEditsByTab | undefined,
+  tabId: string,
+  edits: PendingEdit[],
+): PendingEditsByTab {
+  const next = { ...(byTab ?? {}) };
+  if (edits.length === 0) delete next[tabId];
+  else next[tabId] = edits;
+  return next;
+}
+
+/** Drop the edits of the given tabs (tab closed). */
+export function withoutTabEdits(
+  byTab: PendingEditsByTab | undefined,
+  tabIds: Iterable<string>,
+): PendingEditsByTab {
+  const next = { ...(byTab ?? {}) };
+  for (const id of tabIds) delete next[id];
+  return next;
+}
+
+/** Re-stamp every staged edit with the live connection generation (same connection recovered). */
+export function restampEdits(
+  byTab: PendingEditsByTab | undefined,
+  connectionGen: number,
+): PendingEditsByTab {
+  const out: PendingEditsByTab = {};
+  for (const [id, list] of Object.entries(byTab ?? {})) {
+    out[id] = list.map((e) => ({ ...e, connectionGen }));
+  }
+  return out;
 }
 
 export function editKind(e: Pick<PendingEdit, 'kind'>): PendingKind {
@@ -327,6 +402,9 @@ function requireTableTarget(get: Get): TableTarget | null {
   const state = get();
   if (!state.editMode) throw new Error('edit mode is off');
   if (state.activeConfig?.readOnly) throw new Error('read-only connection — writes are disabled');
+  if (effectiveSafeMode(state.settings, state.activeConfig?.id) === 'read-only') {
+    throw new Error('safe mode is read-only for this connection — editing rows is disabled');
+  }
   const tab = (state.tabs as QueryTab[]).find((t) => t.id === state.activeTabId);
   if (!tab || tab.kind !== 'table' || !tab.tableSchema || !tab.tableName || !tab.queryResult) {
     return null;
@@ -380,7 +458,7 @@ export function queueCellEdit(
   const pkValues = requirePk(target, row, 'edit');
   const rowKey = rowKeyOf(pkValues);
   const state = get();
-  const edits = state.pendingEdits as PendingEdit[];
+  const edits = editsOf(state.pendingEditsByTab, target.tab.id);
   if (isRowDeleted(edits, target.tab.id, rowKey)) {
     throw new Error('this row is marked for deletion — restore it before editing');
   }
@@ -393,7 +471,12 @@ export function queueCellEdit(
   const oldValue = row[columnIndex];
   // Typing the original value back (or clicking in and out) un-queues.
   if (isNoopEdit(oldValue, newValue, col.dataTypeName)) {
-    if (rest.length !== edits.length) set({ pendingEdits: rest, pendingEditsError: null });
+    if (rest.length !== edits.length) {
+      set({
+        pendingEditsByTab: withTabEdits(state.pendingEditsByTab, target.tab.id, rest),
+        pendingEditsError: null,
+      });
+    }
     return;
   }
   const existing = edits.find(sameCell);
@@ -413,7 +496,11 @@ export function queueCellEdit(
     connectionGen: state.connectionGen,
   };
   set({
-    pendingEdits: existing ? edits.map((e) => (e === existing ? edit : e)) : [...edits, edit],
+    pendingEditsByTab: withTabEdits(
+      state.pendingEditsByTab,
+      target.tab.id,
+      existing ? edits.map((e) => (e === existing ? edit : e)) : [...edits, edit],
+    ),
   });
 }
 
@@ -422,7 +509,7 @@ export function queueRowDeletes(set: Set, get: Get, rowIndices: readonly number[
   const target = requireTableTarget(get);
   if (!target) return;
   const state = get();
-  let edits = (state.pendingEdits as PendingEdit[]).slice();
+  let edits = editsOf(state.pendingEditsByTab, target.tab.id).slice();
   const keys = rowIndices
     .map((i) => target.rows[i])
     .filter((r): r is unknown[] => Boolean(r))
@@ -460,7 +547,10 @@ export function queueRowDeletes(set: Set, get: Get, rowIndices: readonly number[
       });
     }
   }
-  set({ pendingEdits: edits, pendingEditsError: null });
+  set({
+    pendingEditsByTab: withTabEdits(state.pendingEditsByTab, target.tab.id, edits),
+    pendingEditsError: null,
+  });
 }
 
 /** Queue an INSERT. `values` maps column → Postgres text (null = NULL). */
@@ -483,7 +573,13 @@ export function queueInsert(set: Set, get: Get, values: Record<string, string | 
     columnIndex: -1,
     connectionGen: state.connectionGen,
   };
-  set({ pendingEdits: [...(state.pendingEdits as PendingEdit[]), edit], pendingEditsError: null });
+  set({
+    pendingEditsByTab: withTabEdits(state.pendingEditsByTab, target.tab.id, [
+      ...editsOf(state.pendingEditsByTab, target.tab.id),
+      edit,
+    ]),
+    pendingEditsError: null,
+  });
 }
 
 /**
@@ -515,47 +611,67 @@ export function updatePendingInsert(
   column: string,
   value: string | null,
 ): void {
-  const edits = get().pendingEdits as PendingEdit[];
-  set({
-    pendingEdits: edits.map((e) =>
+  const byTab = get().pendingEditsByTab as PendingEditsByTab;
+  const next: PendingEditsByTab = {};
+  for (const [tabId, list] of Object.entries(byTab)) {
+    next[tabId] = list.map((e) =>
       e.id === id && editKind(e) === 'insert'
         ? { ...e, values: { ...(e.values ?? {}), [column]: value } }
         : e,
-    ),
-  });
+    );
+  }
+  set({ pendingEditsByTab: next });
 }
 
 export function discardPendingEdit(set: Set, get: Get, id: string): void {
-  const edits = get().pendingEdits as PendingEdit[];
-  set({ pendingEdits: edits.filter((e) => e.id !== id), pendingEditsError: null });
+  const byTab = get().pendingEditsByTab as PendingEditsByTab;
+  let next = byTab;
+  for (const [tabId, list] of Object.entries(byTab)) {
+    if (list.some((e) => e.id === id)) {
+      next = withTabEdits(
+        next,
+        tabId,
+        list.filter((e) => e.id !== id),
+      );
+    }
+  }
+  set({ pendingEditsByTab: next, pendingEditsError: null });
 }
 
 export async function commitPendingEdits(
   set: Set,
   get: Get,
   deps: PendingEditsDeps,
-  opts?: { confirmed?: boolean },
+  opts?: { confirmed?: boolean; tabId?: string },
 ): Promise<void> {
   const state = get();
-  const edits = state.pendingEdits as PendingEdit[];
+  // Commit only ever commits ONE tab's edits: the one asked for, else the
+  // active tab. Edits staged in other tabs are never swept in (R-01/R-02).
+  const tabId = (opts?.tabId ?? state.activeTabId) as string;
+  const edits = editsOf(state.pendingEditsByTab, tabId);
   if (edits.length === 0) return;
+  // Refusals are written to `pendingEditsError` BEFORE throwing, so every
+  // caller that swallows the rejection still has a visible message (R-04).
+  const fail = (message: string): never => {
+    set({ pendingEditsError: { message, editIds: [], tabId } satisfies PendingEditsError });
+    throw new Error(message);
+  };
   if (state.activeConfig?.readOnly) {
-    throw new Error('read-only connection — discard the pending changes');
+    fail('read-only connection — discard the pending changes');
   }
   // U01: every edit must still target the live connection generation.
   const liveGen = state.connectionGen as number;
   const mismatched = edits.filter((e) => e.connectionGen !== liveGen);
   if (mismatched.length > 0 || liveGen <= 0) {
-    throw new Error(
-      'pending edits belong to a previous connection — discard them before committing',
-    );
+    fail('pending edits belong to a previous connection — discard them before committing');
   }
   const batch = buildEditBatch(edits);
   // Prod tag / safe mode: every grid write needs an explicit confirm (or is
   // refused outright on a read-only safe mode).
   const decision = evaluateGate(get, '', true);
   if (decision.kind === 'refuse') {
-    set({ pendingEditsError: decision.message });
+    // R-03: an object, not a string — the grid reads `.message.replace(...)`.
+    set({ pendingEditsError: { message: decision.message, editIds: [], tabId } });
     return;
   }
   if (decision.kind === 'confirm' && !opts?.confirmed) {
@@ -563,7 +679,7 @@ export async function commitPendingEdits(
       set({
         prodGate: {
           sql: batch.updates.map((u) => `${u.sql};`).join('\n'),
-          tabId: edits[0]?.tabId ?? '',
+          tabId,
           connectionGen: liveGen,
           kind: 'commitEdits',
           reason: decision.reason,
@@ -588,6 +704,7 @@ export async function commitPendingEdits(
         pendingEditsError: {
           message,
           editIds: idx !== null ? (batch.editIds[idx] ?? []) : [],
+          tabId,
         } satisfies PendingEditsError,
       });
       throw new Error(message);
@@ -595,21 +712,19 @@ export async function commitPendingEdits(
     // Only drop what was committed — edits queued while the batch ran stay.
     const committed = new Set(edits.map((e) => e.id));
     set({
-      pendingEdits: (get().pendingEdits as PendingEdit[]).filter((e) => !committed.has(e.id)),
+      pendingEditsByTab: withTabEdits(
+        get().pendingEditsByTab,
+        tabId,
+        editsOf(get().pendingEditsByTab, tabId).filter((e) => !committed.has(e.id)),
+      ),
       txnState: res.state,
     });
-    // Refresh every still-open tab that had pending edits. Edits whose
-    // origin tab was closed are preserved through commit (U01) but have
-    // nothing to refresh.
-    const tabIds = new Set(edits.map((e) => e.tabId));
-    const rowCountChanged = new Set(
-      edits.filter((e) => editKind(e) !== 'update').map((e) => e.tabId),
-    );
-    for (const id of tabIds) {
-      const tab = get().tabs.find((t: QueryTab) => t.id === id) as QueryTab | undefined;
-      if (tab && tab.kind === 'table') {
-        void deps.runTableDataQuery(set, get, id);
-        if (rowCountChanged.has(id)) void deps.runTableCountQuery?.(set, get, id);
+    // Refresh the committed tab (it may have been closed meanwhile).
+    const tab = get().tabs.find((t: QueryTab) => t.id === tabId) as QueryTab | undefined;
+    if (tab && tab.kind === 'table') {
+      void deps.runTableDataQuery(set, get, tabId);
+      if (edits.some((e) => editKind(e) !== 'update')) {
+        void deps.runTableCountQuery?.(set, get, tabId);
       }
     }
   } finally {
@@ -619,10 +734,20 @@ export async function commitPendingEdits(
 
 export async function revertPendingEdits(
   set: Set,
-  _get: Get,
+  get: Get,
   _deps: PendingEditsDeps,
+  opts?: { tabId?: string },
 ): Promise<void> {
-  // Edits are an overlay over untouched server rows — dropping the queue
-  // is the whole revert.
-  set({ pendingEdits: [], pendingEditsError: null });
+  // Edits are an overlay over untouched server rows — dropping the tab's
+  // queue is the whole revert.
+  const tabId = (opts?.tabId ?? get().activeTabId) as string;
+  set({
+    pendingEditsByTab: withoutTabEdits(get().pendingEditsByTab, [tabId]),
+    pendingEditsError: null,
+  });
+}
+
+/** Drop every tab's staged edits (connection switch / disconnect gate). */
+export function discardAllPendingEdits(set: Set): void {
+  set({ pendingEditsByTab: {}, pendingEditsError: null });
 }

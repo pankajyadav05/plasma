@@ -89,6 +89,28 @@ describe('recoveryPolicy', () => {
     );
     expect(recoveryPolicy('osSql')).toBe('reconnect-only');
   });
+
+  it('replays Plasma lookups that run server-side READ ONLY, and EXPLAIN only without ANALYZE (SC-04)', () => {
+    expect(
+      recoveryPolicy('sidebandQuery', {
+        kind: 'sidebandQuery',
+        sql: 'SELECT f()',
+        timeoutMs: 5000,
+      }),
+    ).toBe('retry');
+    expect(recoveryPolicy('sidebandQuery', { kind: 'sidebandQuery', sql: 'SELECT f()' })).toBe(
+      'reconnect-only',
+    );
+    expect(recoveryPolicy('explain', { kind: 'explain', sql: 'select 1', analyze: true })).toBe(
+      'reconnect-only',
+    );
+    expect(recoveryPolicy('explain', { kind: 'explain', sql: 'select 1', analyze: false })).toBe(
+      'retry',
+    );
+    expect(recoveryPolicy('query', { kind: 'query', sql: 'SELECT charge_customer(42)' })).toBe(
+      'reconnect-only',
+    );
+  });
 });
 
 describe('isReplaySafeSql', () => {
@@ -98,6 +120,11 @@ describe('isReplaySafeSql', () => {
     'WITH x AS (SELECT 1) SELECT * FROM x',
     'EXPLAIN SELECT 1',
     '-- comment\nSHOW search_path',
+    "SELECT count(*), max(created_at), lower(name) FROM t WHERE id IN (1,2) AND x = 'a;b'",
+    'SELECT * FROM generate_series(1, 3) AS g(n)',
+    "SELECT date_trunc('day', now()), coalesce(a, 0), cast(b AS numeric(10,2)) FROM t",
+    'SELECT sum(x) OVER (PARTITION BY y ORDER BY z) FROM t',
+    'SELECT pg_catalog.count(*) FROM t WHERE note = $$call me(now)$$',
   ])('accepts %j', (sql) => {
     expect(isReplaySafeSql(sql)).toBe(true);
   });
@@ -114,6 +141,16 @@ describe('isReplaySafeSql', () => {
     'COMMIT',
     'SET ROLE admin',
     '',
+    // SC-04: functions that can't be proven pure are never replayed.
+    'SELECT charge_customer(42)',
+    "SELECT * FROM enqueue_job('x')",
+    "SELECT pg_notify('c', 'p')",
+    "SELECT setval('s', 10)",
+    'SELECT public.count(*) FROM t',
+    'SELECT "do_it"(1)',
+    'SELECT lower(name), purge_old_orders() FROM t',
+    'EXPLAIN (ANALYZE) SELECT 1',
+    "SELECT 'unterminated",
   ])('refuses %j', (sql) => {
     expect(isReplaySafeSql(sql)).toBe(false);
   });

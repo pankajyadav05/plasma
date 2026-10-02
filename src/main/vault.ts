@@ -234,8 +234,17 @@ export function deleteSecret(key: SecretKey, d: Database.Database = getDb()): vo
   d.prepare('DELETE FROM secrets WHERE key = ?').run(key);
 }
 
+/**
+ * Delete every secret whose key starts with `prefix`. Exact, case-sensitive
+ * prefix match: LIKE would treat `_` and `%` in a renderer-supplied id as
+ * wildcards and delete other connections' secrets (SC-26).
+ */
+export function deleteSecretsByPrefix(prefix: string, d: Database.Database = getDb()): void {
+  d.prepare('DELETE FROM secrets WHERE substr(key, 1, length(?)) = ?').run(prefix, prefix);
+}
+
 export function deleteSshSecrets(connectionId: string, d: Database.Database = getDb()): void {
-  d.prepare('DELETE FROM secrets WHERE key LIKE ?').run(`ssh:${connectionId}:%`);
+  deleteSecretsByPrefix(`ssh:${connectionId}:`, d);
 }
 
 export function getApiKey(d: Database.Database = getDb()): string {
@@ -488,7 +497,7 @@ export function saveConnection(config: ConnectionConfig): void {
 export function deleteConnection(id: string): void {
   const info = getDb().prepare('DELETE FROM connections WHERE id = ?').run(id);
   deleteSshSecrets(id);
-  getDb().prepare('DELETE FROM secrets WHERE key LIKE ?').run(`os:${id}:%`);
+  deleteSecretsByPrefix(`os:${id}:`);
   logger.info('[plasma] vault: deleted connection', id, 'changes=', info.changes);
 }
 

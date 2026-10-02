@@ -52,10 +52,23 @@ export function PostGisDialog({
         .map((c) => c.name),
     [result],
   );
-  const [pickedCol, setPickedCol] = useState<string>(geomCols[0] ?? '');
+  const [picked, setPicked] = useState<string>('');
+  // R-21: a stale pick (from an earlier result) falls back to the first column
+  // that actually holds GeoJSON, else the first candidate.
+  const pickedCol = useMemo(() => {
+    if (!open || !result) return '';
+    if (geomCols.includes(picked)) return picked;
+    return firstGeoJsonColumn(result, geomCols) ?? geomCols[0] ?? '';
+  }, [open, result, geomCols, picked]);
+  const setPickedCol = setPicked;
+  const pickedIsRawGeometry = Boolean(
+    result?.columns.find((c) => c.name === pickedCol && /geometry|geography/i.test(c.dataTypeName)),
+  );
 
+  // Nothing is parsed while the dialog is closed (a footer mounts this for
+  // every result).
   const features = useMemo(() => {
-    if (!result || !pickedCol) return [];
+    if (!open || !result || !pickedCol) return [];
     const idx = result.columns.findIndex((c) => c.name === pickedCol);
     if (idx === -1) return [];
     const out: GeoJsonGeom[] = [];
@@ -66,7 +79,7 @@ export function PostGisDialog({
       if (geom) out.push(geom);
     }
     return out;
-  }, [result, pickedCol]);
+  }, [open, result, pickedCol]);
 
   const bbox = useMemo(() => computeBbox(features), [features]);
 
@@ -110,7 +123,11 @@ export function PostGisDialog({
             <EmptyState
               className="h-[360px]"
               title="No features"
-              hint="No GeoJSON features found in the selected column."
+              hint={
+                pickedIsRawGeometry
+                  ? 'geometry / geography columns arrive as WKB hex. Select ST_AsGeoJSON(your_column) instead.'
+                  : 'No GeoJSON features found in the selected column.'
+              }
             />
           ) : (
             <MapSvg features={features} bbox={bbox} />
@@ -134,6 +151,24 @@ export function PostGisDialog({
       </DialogContent>
     </Dialog>
   );
+}
+
+/** First candidate column whose first non-empty value parses as GeoJSON. */
+export function firstGeoJsonColumn(
+  result: QueryResult,
+  candidates: readonly string[],
+): string | null {
+  for (const name of candidates) {
+    const idx = result.columns.findIndex((c) => c.name === name);
+    if (idx === -1) continue;
+    for (const row of result.rows.slice(0, 50)) {
+      const v = row[idx];
+      if (v == null || v === '') continue;
+      if (tryParseGeoJson(v)) return name;
+      break;
+    }
+  }
+  return null;
 }
 
 // ─── geometry types ────────────────────────────────────────────────────

@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { SITE_DOWNLOAD_URL, macDownloadUrl, parseFeedBaseUrl } from './update-feed';
+import {
+  SITE_DOWNLOAD_URL,
+  macDownloadUrl,
+  macDownloadUrlFromManifest,
+  parseFeedBaseUrl,
+} from './update-feed';
 
 /**
  * When macOS auto-install is impossible (unsigned build — see
@@ -54,5 +59,35 @@ describe('macDownloadUrl', () => {
       SITE_DOWNLOAD_URL,
     );
     expect(macDownloadUrl('https://cdn.example.com', 'nightly', 'arm64')).toBe(SITE_DOWNLOAD_URL);
+  });
+});
+
+describe('SC-24: version must be a whole, safe version string', () => {
+  it.each(['1.2.3/../x', '1.2.3?evil', '1.2.3#frag', '1.2.3 ', '1.2', '../1.2.3', '1.2.3/'])(
+    'falls back to the download page for %j',
+    (version) => {
+      expect(macDownloadUrl('https://cdn.example.com', version, 'arm64')).toBe(SITE_DOWNLOAD_URL);
+    },
+  );
+
+  it('still accepts release and pre-release versions', () => {
+    expect(macDownloadUrl('https://cdn.example.com', '1.2.3-beta.1', 'x64')).toBe(
+      'https://cdn.example.com/Plasma-1.2.3-beta.1-x64.dmg',
+    );
+  });
+});
+
+describe('macDownloadUrlFromManifest', () => {
+  const files = [{ url: 'Plasma-3.1.0-arm64.zip' }, { url: 'Plasma-3.1.0-arm64.dmg' }];
+  it('uses the dmg listed in the signed manifest', () => {
+    expect(macDownloadUrlFromManifest('https://cdn.example.com', files, '3.1.0', 'arm64')).toBe(
+      'https://cdn.example.com/Plasma-3.1.0-arm64.dmg',
+    );
+  });
+
+  it('falls back to the derived URL when the manifest lists no dmg for the arch', () => {
+    expect(macDownloadUrlFromManifest('https://cdn.example.com', files, '3.1.0', 'x64')).toBe(
+      'https://cdn.example.com/Plasma-3.1.0-x64.dmg',
+    );
   });
 });

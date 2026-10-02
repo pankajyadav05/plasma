@@ -1,4 +1,6 @@
-import { isReadOnlyRedisCommand } from './ai-policy';
+import { isOsReadRequest, isReadOnlyOsSql } from '@shared/os-write-policy';
+import { pgReadOnlyEscapeReason } from '@shared/pg-readonly-sql';
+import { isRedisReadCommand } from '@shared/redis-command-policy';
 
 /**
  * C1 — main-process guard for read-only connections, for every engine.
@@ -64,20 +66,6 @@ const READ_KINDS = new Set<string>([
 const WRITE_KIND_PATTERN =
   /(write|delete|del$|remove|rem$|create|insert|update|upsert|put|set(?!tings)|ttl|rename|flush|drop|truncate|push|add$|reindex|bulk|commit)/i;
 
-/**
- * SQL that would turn the server-side read-only switch back off. Plain
- * writes are refused by Postgres itself; these are the escape hatches.
- */
-const PG_READ_ONLY_ESCAPE =
-  /\b(read\s+write|default_transaction_read_only|transaction_read_only)\b/i;
-
-/** OpenSearch SQL plugin statements that only read. */
-const OS_SQL_READ = /^\s*(select|show|describe|explain)\b/i;
-
-/** OpenSearch REST endpoints that are reads even when sent as POST. */
-const OS_READ_POST_ENDPOINT =
-  /(^|\/)(_search|_msearch|_count|_mget|_validate\/query|_explain(\/|$)|_field_caps|_analyze|_search\/scroll|_pit|_termvectors|_mtermvectors|_rank_eval|_plugins\/_sql|_opendistro\/_sql|_sql)(\/|\?|$)/i;
-
 function str(v: unknown): string {
   return typeof v === 'string' ? v : '';
 }
@@ -91,13 +79,14 @@ export function assertAllowedOnReadOnly(req: GuardedRequest): void {
     case 'sidebandQuery':
     case 'aiQuery':
     case 'exportQuery':
-      if (PG_READ_ONLY_ESCAPE.test(str(req.sql))) {
-        throw new ReadOnlyViolationError('changing the transaction read-only setting');
+      {
+        const why = pgReadOnlyEscapeReason(str(req.sql));
+        if (why) throw new ReadOnlyViolationError(why);
       }
       return;
     case 'redisCommand': {
       const parts = Array.isArray(req.parts) ? req.parts.map((p) => String(p)) : [];
-      if (!isReadOnlyRedisCommand(parts)) {
+      if (!isRedisReadCommand(parts)) {
         throw new ReadOnlyViolationError(`${(parts[0] ?? 'command').toUpperCase()}`);
       }
       return;
@@ -108,15 +97,15 @@ export function assertAllowedOnReadOnly(req: GuardedRequest): void {
       return;
     case 'osSql': {
       const query = str(req.query);
-      if (query && !OS_SQL_READ.test(query)) {
+      if (query && !isReadOnlyOsSql(query)) {
         throw new ReadOnlyViolationError('this SQL statement');
       }
       return;
     }
     case 'osRequest': {
       const method = str(req.method).toUpperCase();
-      if (method === 'GET' || method === 'HEAD') return;
-      if (method === 'POST' && OS_READ_POST_ENDPOINT.test(str(req.path))) return;
+      // Same structural policy as the IPC parser and the worker driver.
+      if (isOsReadRequest(method, str(req.path), req.body)) return;
       throw new ReadOnlyViolationError(`${method || 'this'} request`);
     }
   }

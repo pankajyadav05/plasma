@@ -7,33 +7,61 @@ directories:
   output: release
   buildResources: resources
 
-# Ship the built main/preload/renderer plus the native pg + better-sqlite3.
-# Exclude source, tests, configs, and anything else that shouldn't ride along.
+# Ship the built main/preload/renderer plus the runtime dependencies (the
+# `dependencies` in package.json: pg, ioredis, better-sqlite3, ...). The
+# renderer is bundled by Vite, so its libraries live in devDependencies and
+# never ride along. Exclude source, tests, configs and unneeded binaries.
 files:
   - out/**/*
   - package.json
+  # better-sqlite3 loads prebuilds/<platform>-<arch>.node; ship only the
+  # target OS's. macOS keeps both archs (each arch is packaged separately and
+  # the loader picks by process.arch).
+  - "!**/node_modules/better-sqlite3/{deps,src,build}/**"
+  - "!**/node_modules/better-sqlite3/binding.gyp"
   - "!**/*.map"
   - "!**/node_modules/**/{CHANGELOG.md,README.md,readme.md,readme}"
   - "!**/node_modules/**/{test,tests,__tests__,__mocks__,example,examples,docs,.github}/**"
   - "!**/{.eslintrc,.eslintignore,.prettierrc,.editorconfig,tsconfig*.json,tslint.json,rollup.config*}"
 
-# better-sqlite3 ships a prebuilt .node binary — it must NOT live inside the
-# asar archive because Node's native loader can't dlopen from inside asar.
-asarUnpack:
-  - "**/node_modules/better-sqlite3/**"
+# The BrowserWindow icon (src/main/window.ts reads <resources>/icon.png);
+# matters on Linux/Windows, where the window icon is not taken from the bundle.
+extraResources:
+  - from: resources/icon.png
+    to: icon.png
 
-# Rebuild native modules against Electron's ABI, per target arch, at package
-# time. Required for better-sqlite3: a single node_modules can only hold one
-# arch's binary, and macOS ships both arm64 and x64 from one build — so the
-# rebuild MUST happen during packaging (electron-builder stages node_modules
-# per arch and rebuilds against each target). The postinstall hook only
-# covers the local dev ABI; `install-app-deps` in CI would rebuild just the
-# host arch and leave the other arch's package broken.
+# better-sqlite3 ships prebuilt N-API .node binaries (prebuilds/<os>-<arch>.node)
+# — they must NOT live inside the asar archive because Node's native loader
+# can't dlopen from inside asar.
+asarUnpack:
+  - "**/node_modules/better-sqlite3/prebuilds/*.node"
+
+# No native rebuild at package time. better-sqlite3 13 ships N-API prebuilds
+# for every platform/arch and loads them first; N-API binaries run in Electron
+# unchanged, so there is nothing to compile (and no VS/Xcode toolchain to break
+# the Windows build). ssh2's optional cpu-features is ignored (package.json).
 nodeGypRebuild: false
 buildDependenciesFromSource: false
-npmRebuild: true
+npmRebuild: false
+
+# Electron fuses (SC-28), flipped by electron-builder right before signing, i.e.
+# after the asar integrity data is embedded. Verify a packaged app with
+# `node scripts/verify-fuses.mjs <path-to-binary>`.
+electronFuses:
+  runAsNode: false
+  enableNodeOptionsEnvironmentVariable: false
+  enableNodeCliInspectArguments: false
+  onlyLoadAppFromAsar: true
+  # Electron honours this on macOS and Windows only; Linux ignores the fuse.
+  enableEmbeddedAsarIntegrityValidation: true
 
 win:
+  # Platform `files` must lead with a positive pattern: a list that starts with
+  # `!` gets `**/*` prepended and would pull the whole repo into the asar.
+  files:
+    - out/**/*
+    - package.json
+    - "!**/node_modules/better-sqlite3/prebuilds/{darwin,linux,linuxmusl}-*.node"
   target:
     - target: nsis
       arch:
@@ -98,6 +126,12 @@ portable:
 # whose code signature matches the running app, so a tampered bucket can't
 # push a foreign binary.
 mac:
+  # Platform `files` must lead with a positive pattern: a list that starts with
+  # `!` gets `**/*` prepended and would pull the whole repo into the asar.
+  files:
+    - out/**/*
+    - package.json
+    - "!**/node_modules/better-sqlite3/prebuilds/{win32,linux,linuxmusl}-*.node"
   target:
     - target: dmg
       arch:
@@ -113,6 +147,45 @@ mac:
   hardenedRuntime: true
   gatekeeperAssess: false
   identity: null
+
+# ── Linux ─────────────────────────────────────────────────────────────
+# AppImage self-updates (latest-linux.yml); the deb is a manual install.
+linux:
+  # Platform `files` must lead with a positive pattern: a list that starts with
+  # `!` gets `**/*` prepended and would pull the whole repo into the asar.
+  files:
+    - out/**/*
+    - package.json
+    - "!**/node_modules/better-sqlite3/prebuilds/{darwin,win32,linuxmusl}-*.node"
+    - "!**/node_modules/better-sqlite3/prebuilds/linux-arm64.node"
+  target:
+    - target: AppImage
+      arch:
+        - x64
+    - target: deb
+      arch:
+        - x64
+  category: Development
+  icon: resources/icon-512.png
+  maintainer: Plasma <noreply@plasma.sh>
+  artifactName: ${productName}-${version}-${arch}.${ext}
+  executableName: plasma
+
+appImage:
+  artifactName: ${productName}-${version}-${arch}.${ext}
+
+deb:
+  artifactName: ${productName}-${version}-${arch}.${ext}
+  depends:
+    - libgtk-3-0
+    - libnotify4
+    - libnss3
+    - libxss1
+    - libxtst6
+    - xdg-utils
+    - libatspi2.0-0
+    - libuuid1
+    - libsecret-1-0
 
 dmg:
   artifactName: ${productName}-${version}-${arch}.${ext}

@@ -1,11 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import {
+  FIRST_CURSOR_CHUNK,
   MAX_RESULT_BYTES,
   MAX_RESULT_ROWS,
+  RESULT_CURSOR_CHUNK,
   appendBoundedRows,
   emptyBoundState,
   estimateCellBytes,
   estimateRowBytes,
+  nextCursorChunk,
 } from './result-bounds';
 
 describe('estimateCellBytes / estimateRowBytes', () => {
@@ -55,5 +58,22 @@ describe('appendBoundedRows', () => {
     expect(stop).toBe(false);
     expect(state.truncated).toBe(false);
     expect(state.rows).toHaveLength(2);
+  });
+});
+
+describe('nextCursorChunk (P2-3)', () => {
+  it('asks for the full chunk when rows are narrow', () => {
+    expect(nextCursorChunk(Array.from({ length: 100 }, () => [1, 'a']))).toBe(RESULT_CURSOR_CHUNK);
+  });
+
+  it('shrinks the read when rows are wide', () => {
+    const wide = [['x'.repeat(500_000)]];
+    const n = nextCursorChunk(wide);
+    expect(n).toBeLessThan(10);
+    expect(n).toBeGreaterThanOrEqual(1);
+  });
+
+  it('falls back to the first-chunk size with no sample', () => {
+    expect(nextCursorChunk([])).toBe(FIRST_CURSOR_CHUNK);
   });
 });

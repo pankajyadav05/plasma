@@ -105,4 +105,27 @@ describe('postgres driver transport loss', () => {
     expect(result.rows).toEqual([['1']]);
     await driver.disconnect();
   });
+
+  it('treats a server error on the liveness probe as proof of life (SC-03)', async () => {
+    const driver = driverUnderTest();
+    await driver.connect(config(server.port), 0);
+    // An aborted transaction answers SELECT 1 with 25P02: alive, not lost.
+    const probe = (
+      driver as unknown as {
+        probe: (c: unknown, role: string) => Promise<void>;
+      }
+    ).probe.bind(driver);
+    const aborted = Object.assign(new Error('current transaction is aborted'), { code: '25P02' });
+    await expect(
+      probe({ query: () => Promise.reject(aborted) }, 'primary'),
+    ).resolves.toBeUndefined();
+    expect(driver.isConnected()).toBe(true);
+
+    // A socket-level failure (no SQLSTATE) still counts as loss.
+    await expect(
+      probe({ query: () => Promise.reject(new Error('read ECONNRESET')) }, 'primary'),
+    ).rejects.toThrow(/connection lost/i);
+    expect(driver.isConnected()).toBe(false);
+    await driver.disconnect();
+  });
 });

@@ -1,5 +1,6 @@
-import { runCommand } from '@/features/keymap/commands';
+import { runCommand, selectTabAt } from '@/features/keymap/commands';
 import { statementPosition } from '@/lib/sql-split';
+import { useSession } from '@/stores/session';
 import type { EditorCursor, TabCaret } from '@/stores/workbench';
 import type { OnChange, OnMount } from '@monaco-editor/react';
 import {
@@ -8,6 +9,7 @@ import {
   binding,
   matchGlobalBinding,
   monacoKeybinding,
+  selectTabIndex,
 } from '@shared/keymap';
 import type * as MonacoType from 'monaco-editor';
 import { Suspense, lazy, useCallback, useEffect, useRef, useState } from 'react';
@@ -220,6 +222,15 @@ export function MonacoEditor({
       // run the app command. Stopping propagation keeps Monaco's keybinding
       // service (on the container) from also handling them.
       const keyDisposable = editor.onKeyDown((e) => {
+        // R-27: ⌘1…⌘9 select a tab even while typing (the document handler
+        // skips events from inside Monaco).
+        const tabIndex = selectTabIndex(e.browserEvent);
+        if (tabIndex !== null && useSession.getState().connectionState === 'connected') {
+          selectTabAt(tabIndex);
+          e.preventDefault();
+          e.stopPropagation();
+          return;
+        }
         const hit = matchGlobalBinding(e.browserEvent);
         if (!hit || !EDITOR_PASSTHROUGH.has(hit.id)) return;
         if (runCommand(hit.id)) {

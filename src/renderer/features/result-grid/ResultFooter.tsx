@@ -1,12 +1,10 @@
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { IconButton, MenuItem, Pill, Segmented } from '@/components/ui/workbench';
-import { MockDataDialog } from '@/features/mock-data/MockDataDialog';
-import { PgVectorDialog } from '@/features/pgvector/PgVectorDialog';
-import { PostGisDialog } from '@/features/postgis/PostGisDialog';
 import { cn } from '@/lib/cn';
 import { exportTargetTable, queryFullExport, tableFullExport } from '@/lib/export';
 import { formatDuration } from '@/lib/format';
-import { type TableViewMode, useActiveTab, useSession } from '@/stores/session';
+import { LazyOnOpen, lazyNamed } from '@/lib/lazy';
+import { type TableViewMode, useActiveTabSansSql, useSession } from '@/stores/session';
 import { type ResultView, useWorkbench } from '@/stores/workbench';
 import type { QueryResult } from '@shared/protocol';
 import { MAX_RESULT_ROWS } from '@shared/result-bounds';
@@ -24,6 +22,16 @@ import {
   Sparkles,
 } from 'lucide-react';
 import { useEffect, useState } from 'react';
+const MockDataDialog = lazyNamed(
+  () => import('@/features/mock-data/MockDataDialog'),
+  'MockDataDialog',
+);
+const PostGisDialog = lazyNamed(() => import('@/features/postgis/PostGisDialog'), 'PostGisDialog');
+const PgVectorDialog = lazyNamed(
+  () => import('@/features/pgvector/PgVectorDialog'),
+  'PgVectorDialog',
+);
+
 import { ColumnsPopover } from './ColumnsPopover';
 import { ExportPopover } from './ExportMenu';
 import { ExportProgress } from './ExportProgress';
@@ -46,7 +54,7 @@ const PAGE_SIZES = [50, 100, 300, 500, 1000] as const;
 const EMPTY_COLUMNS: NonNullable<ReturnType<typeof useSession.getState>['schema']>['columns'] = [];
 
 export function ResultFooter() {
-  const tab = useActiveTab();
+  const tab = useActiveTabSansSql();
   const editMode = useSession((s) => s.editMode);
   const schemaColumns = useSession((s) => s.schema?.columns ?? EMPTY_COLUMNS);
   const connectionReadOnly = useSession((s) => Boolean(s.activeConfig?.readOnly));
@@ -63,6 +71,8 @@ export function ResultFooter() {
   const [mapOpen, setMapOpen] = useState(false);
   const [vectorOpen, setVectorOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
+  // R-08: a refused "− Row" (no primary key, safe mode…) is shown, not logged.
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   // File → Export Results (native menu) → save the active result.
   useEffect(() => {
@@ -92,11 +102,17 @@ export function ResultFooter() {
     return [sel.row];
   };
   const canDeleteRows = rowsToDelete().length > 0;
+  const tableHasPk =
+    tab.kind !== 'table' ||
+    schemaColumns.some(
+      (c) => c.schema === tab.tableSchema && c.table === tab.tableName && c.isPrimaryKey,
+    );
   const deleteSelectedRows = () => {
     try {
+      setDeleteError(null);
       deleteRows(rowsToDelete());
     } catch (err) {
-      console.error('[plasma] delete rows', err);
+      setDeleteError(err instanceof Error ? err.message : String(err));
     }
   };
 
@@ -190,12 +206,25 @@ export function ResultFooter() {
           </Pill>
           <Pill
             onClick={() => deleteSelectedRows()}
-            disabled={!canDeleteRows}
+            disabled={!canDeleteRows || !tableHasPk}
             aria-label="Delete row"
-            title="Mark the selected rows for deletion (⌘⌫) — committed with the pending changes"
+            title={
+              tableHasPk
+                ? 'Mark the selected rows for deletion (⌘⌫) — committed with the pending changes'
+                : 'This table has no primary key, so rows cannot be deleted safely'
+            }
           >
             <Minus />
           </Pill>
+          {deleteError && (
+            <span
+              role="alert"
+              className="max-w-[260px] truncate text-[12px] text-destructive"
+              title={deleteError}
+            >
+              {deleteError}
+            </span>
+          )}
         </>
       )}
 
@@ -295,9 +324,15 @@ export function ResultFooter() {
       )}
 
       <InsertRowDialog open={insertOpen} onOpenChange={setInsertOpen} />
-      <MockDataDialog open={mockOpen} onOpenChange={setMockOpen} />
-      <PostGisDialog result={result} open={mapOpen} onOpenChange={setMapOpen} />
-      <PgVectorDialog result={result} open={vectorOpen} onOpenChange={setVectorOpen} />
+      <LazyOnOpen open={mockOpen}>
+        <MockDataDialog open={mockOpen} onOpenChange={setMockOpen} />
+      </LazyOnOpen>
+      <LazyOnOpen open={mapOpen}>
+        <PostGisDialog result={result} open={mapOpen} onOpenChange={setMapOpen} />
+      </LazyOnOpen>
+      <LazyOnOpen open={vectorOpen}>
+        <PgVectorDialog result={result} open={vectorOpen} onOpenChange={setVectorOpen} />
+      </LazyOnOpen>
     </div>
   );
 }
@@ -307,7 +342,7 @@ export function ResultFooter() {
  * estimate); SQL tabs page the in-memory result.
  */
 function RowRange() {
-  const tab = useActiveTab();
+  const tab = useActiveTabSansSql();
   const setPage = useSession((s) => s.setPage);
   const setPageSize = useSession((s) => s.setPageSize);
   const [jump, setJump] = useState('');

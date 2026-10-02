@@ -5,16 +5,41 @@ import { useState } from 'react';
 import { SectionHead } from '@/components/plate';
 import { Reveal } from '@/components/reveal';
 import { cn } from '@/lib/cn';
-import { usePlatform, type DownloadVariant } from '@/lib/platform';
-import { LICENSE, VERSION } from '@/lib/version';
+import { LICENSE, type DownloadVariant, type Os } from '@/lib/feed';
+import { usePlatform } from '@/lib/platform';
 
 const CMD = 'xattr -cr /Applications/Plasma.app';
+
+const OS_NAME: Record<Os, string> = { win: 'Windows', mac: 'macOS', linux: 'Linux' };
+
+/** A platform with no build in the update feed yet: never a link. */
+function SoonCard({ os, n }: { os: Os; n: number }) {
+  return (
+    <div className="flex w-full">
+      <div
+        role="group"
+        aria-label={`${OS_NAME[os]} build coming soon`}
+        className="flex w-full flex-col justify-between gap-14 rounded-[14px] border border-dashed border-rule bg-paper-2/30 p-6 sm:p-7"
+      >
+        <span className="label">Part {String(n).padStart(2, '0')}</span>
+        <div>
+          <p className="t-h3 text-ink-2">{OS_NAME[os]}</p>
+          <p className="mono mt-3 text-[11.5px] tracking-[0.02em] text-ink-3">Not published yet</p>
+          <span className="mono mt-7 inline-flex h-11 items-center rounded-full border border-ink/15 px-5 text-[13px] font-medium text-ink-3">
+            Coming soon
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function Card({ v, primary, n }: { v: DownloadVariant; primary: boolean; n: number }) {
   return (
     <div className="flex w-full">
       <a
         href={v.url}
+        aria-label={`Download Plasma ${v.version} for ${v.label}${v.sizeLabel ? `, ${v.sizeLabel}` : ''}`}
         className={cn(
           'group relative flex w-full flex-col justify-between gap-14 rounded-[14px] border p-6 transition-[transform,box-shadow,border-color,background-color] duration-300 hover:-translate-y-1 sm:p-7',
           primary
@@ -31,7 +56,7 @@ function Card({ v, primary, n }: { v: DownloadVariant; primary: boolean; n: numb
         <div>
           <p className="t-h3">{v.label}</p>
           <p className="mono mt-3 text-[11.5px] tracking-[0.02em] text-ink-2">
-            v{VERSION} <span className="text-ink-3">·</span> {v.sizeLabel}
+            v{v.version} {v.sizeLabel && <span className="text-ink-3">·</span>} {v.sizeLabel}
           </p>
           <span
             className={cn(
@@ -51,7 +76,7 @@ function Card({ v, primary, n }: { v: DownloadVariant; primary: boolean; n: numb
 }
 
 export function Download() {
-  const { primary, alternates } = usePlatform();
+  const { primary, alternates, releases, visitor } = usePlatform();
   const [copied, setCopied] = useState(false);
 
   const copy = async () => {
@@ -64,7 +89,9 @@ export function Download() {
     }
   };
 
-  const all = [primary, ...alternates];
+  const all = primary ? [primary, ...alternates] : alternates;
+  const soon = (['mac', 'win', 'linux'] as const).filter((os) => releases[os] == null);
+  const mobile = visitor === 'mobile';
 
   return (
     <section id="download" aria-labelledby="download-title" className="border-t border-rule bg-paper-2/50 py-28 md:py-44">
@@ -79,15 +106,27 @@ export function Download() {
           </Reveal>
           <Reveal className="lg:col-span-4 lg:self-end" delay={100}>
             <p className="label">
-              v{VERSION} <span className="text-ink-3">·</span> {LICENSE} <span className="text-ink-3">·</span> Free
+              {releases.latestVersion ? `v${releases.latestVersion}` : 'Pre-release'} <span className="text-ink-3">·</span> {LICENSE}{' '}
+              <span className="text-ink-3">·</span> Free
             </p>
           </Reveal>
         </div>
 
+        {mobile && (
+          <p className="prose-p mt-10" role="note">
+            Plasma is a desktop app. Open this page on a Mac, Windows or Linux computer to install it.
+          </p>
+        )}
+
         <ul className="mt-20 grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
           {all.map((v, i) => (
             <Reveal as="li" key={v.key} delay={i * 70} className="flex">
-              <Card v={v} primary={i === 0} n={i + 1} />
+              <Card v={v} primary={primary != null && i === 0} n={i + 1} />
+            </Reveal>
+          ))}
+          {soon.map((os, i) => (
+            <Reveal as="li" key={`soon-${os}`} delay={(all.length + i) * 70} className="flex">
+              <SoonCard os={os} n={all.length + i + 1} />
             </Reveal>
           ))}
         </ul>
@@ -109,11 +148,11 @@ export function Download() {
               >
                 {copied ? <Check className="h-3.5 w-3.5" aria-hidden="true" /> : <Copy className="h-3.5 w-3.5" aria-hidden="true" />}
                 {copied ? 'Copied' : 'Copy'}
-                <span className="sr-only" aria-live="polite">
-                  {copied ? 'Command copied to clipboard' : ''}
-                </span>
               </button>
             </div>
+            <span className="sr-only" aria-live="polite">
+              {copied ? 'Command copied to clipboard' : ''}
+            </span>
           </div>
         </Reveal>
       </div>

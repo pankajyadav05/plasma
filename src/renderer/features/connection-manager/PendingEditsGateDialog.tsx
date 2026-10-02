@@ -8,6 +8,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { useSession } from '@/stores/session';
+import { pendingEditCount } from '@/stores/session-pending-edits';
 
 /**
  * Shown when disconnect / connect is attempted while buffered cell edits
@@ -16,7 +17,8 @@ import { useSession } from '@/stores/session';
  */
 export function PendingEditsGateDialog() {
   const gate = useSession((s) => s.connectionActionGate);
-  const edits = useSession((s) => s.pendingEdits);
+  const count = useSession((s) => pendingEditCount(s.pendingEditsByTab));
+  const error = useSession((s) => s.pendingEditsError?.message ?? null);
   const busy = useSession((s) => s.pendingEditsBusy);
   const resolve = useSession((s) => s.resolveConnectionAction);
   const cancel = useSession((s) => s.cancelConnectionAction);
@@ -41,12 +43,17 @@ export function PendingEditsGateDialog() {
           <DialogDescription>
             You have{' '}
             <span className="font-semibold text-foreground">
-              {edits.length} pending change{edits.length === 1 ? '' : 's'}
+              {count} pending change{count === 1 ? '' : 's'}
             </span>{' '}
             buffered against the current connection. Commit or discard them before you {actionLabel}
             .
           </DialogDescription>
         </DialogHeader>
+        {error && (
+          <p role="alert" className="text-[12px] text-destructive">
+            {error}
+          </p>
+        )}
         <DialogFooter className="flex-col gap-2 sm:flex-row sm:justify-end">
           <Button variant="secondary" disabled={busy} onClick={() => cancel()}>
             Cancel

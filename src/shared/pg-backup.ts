@@ -62,6 +62,22 @@ export interface PgEndpoint {
   user: string;
   password: string;
   ssl: boolean;
+  /**
+   * libpq sslmode. When set it wins over `ssl`; without it `ssl: true`
+   * means `require`. Forward the connection's own mode (SC-09) so a
+   * verify-full connection is never silently downgraded for backups.
+   */
+  sslMode?: 'disable' | 'prefer' | 'require' | 'verify-ca' | 'verify-full';
+  /** Absolute paths of the CA / client certificate / client key files. */
+  sslRootCert?: string;
+  sslCert?: string;
+  sslKey?: string;
+  /**
+   * Numeric address to dial instead of resolving `host` (libpq hostaddr).
+   * With an SSH tunnel `host` stays the real server name — so certificate
+   * verification checks the right name — and this is the tunnel's local end.
+   */
+  hostAddr?: string;
 }
 
 /** A finished argv + environment, ready for `spawn(bin, args, { env })`. */
@@ -89,9 +105,21 @@ function baseArgs(ep: PgEndpoint): string[] {
 function baseEnv(ep: PgEndpoint, database: string | null): Record<string, string> {
   const env: Record<string, string> = {};
   if (ep.password) env.PGPASSWORD = ep.password;
-  if (ep.ssl) env.PGSSLMODE = 'require';
+  const mode = ep.sslMode ?? (ep.ssl ? 'require' : undefined);
+  if (mode) env.PGSSLMODE = mode;
+  if (ep.sslRootCert) env.PGSSLROOTCERT = ep.sslRootCert;
+  if (ep.sslCert) env.PGSSLCERT = ep.sslCert;
+  if (ep.sslKey) env.PGSSLKEY = ep.sslKey;
+  if (ep.hostAddr) env.PGHOSTADDR = ep.hostAddr;
   if (database !== null) env.PGDATABASE = database;
   return env;
+}
+
+/** Where psql must read its (empty) startup file from, so ~/.psqlrc never runs (SC-16). */
+export function nullDevice(
+  platform: string = typeof process === 'undefined' ? '' : process.platform,
+): string {
+  return platform === 'win32' ? 'NUL' : '/dev/null';
 }
 
 function render(tool: string, args: readonly string[]): string {
@@ -157,6 +185,9 @@ export function buildPgRestoreInvocation(reqIn: RestoreRequest, ep: PgEndpoint):
     // psql reads the script from a file (or stdin for .gz, see the caller).
     const args = [
       ...baseArgs(ep),
+      // SC-16: never run the user's ~/.psqlrc (it can reset ON_ERROR_STOP
+      // or run shell commands); the script is the only thing that executes.
+      '--no-psqlrc',
       '--set=ON_ERROR_STOP=1',
       ...(req.singleTransaction ? ['--single-transaction'] : []),
       '--file=-',
@@ -164,7 +195,7 @@ export function buildPgRestoreInvocation(reqIn: RestoreRequest, ep: PgEndpoint):
     return {
       tool: 'psql',
       args,
-      env: baseEnv(ep, req.database),
+      env: { ...baseEnv(ep, req.database), PSQLRC: nullDevice() },
       display: render('psql', [...args.slice(0, -1), `--file=${req.filePath}`]),
     };
   }

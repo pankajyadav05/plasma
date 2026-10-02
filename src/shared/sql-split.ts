@@ -98,7 +98,9 @@ export function splitSqlStatementRanges(sql: string): SqlStatement[] {
     }
 
     if (c === ';') {
-      if (beginDepth === 0) {
+      // psql keeps a paren depth too: `CREATE RULE … DO ALSO (INSERT …; INSERT …)`
+      // is one statement.
+      if (beginDepth === 0 && parenDepth === 0) {
         pushSlice(start, i);
         start = i + 1;
         resetStatement();

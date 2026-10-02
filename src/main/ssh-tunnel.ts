@@ -51,7 +51,10 @@ interface OpenTunnel {
 }
 
 const tunnels = new Map<TunnelKey, OpenTunnel>();
-const opening = new Map<TunnelKey, Promise<{ host: string; port: number }>>();
+const opening = new Map<
+  TunnelKey,
+  { promise: Promise<{ host: string; port: number }>; signature: string }
+>();
 /** Ids closed while their open was still in flight. */
 const cancelled = new Set<TunnelKey>();
 
@@ -87,6 +90,16 @@ export function setHostKeyPrompt(fn: HostKeyPrompt): void {
   hostKeyPrompt = fn;
 }
 
+/**
+ * SC-17: how long the user gets to compare a host-key fingerprint. ssh2's
+ * `readyTimeout` also covers the async hostVerifier, so it must outlast this
+ * (plus authentication); reaching an unreachable host is bounded separately
+ * by SSH_CONNECT_TIMEOUT_MS, which stops once the server presents its key.
+ */
+export const HOST_KEY_PROMPT_TIMEOUT_MS = 50_000;
+export const SSH_CONNECT_TIMEOUT_MS = 15_000;
+export const SSH_READY_TIMEOUT_MS = HOST_KEY_PROMPT_TIMEOUT_MS + 40_000;
+
 /** ssh2 keepalive: probe every 10s, give up after 3 missed replies (C14). */
 export const SSH_KEEPALIVE_INTERVAL_MS = 10_000;
 export const SSH_KEEPALIVE_COUNT_MAX = 3;
@@ -103,8 +116,11 @@ function attachHostVerifier(
   opts: Parameters<SshClient['connect']>[0],
   host: string,
   port: number,
+  hooks: { onReached: () => void; isLive: () => boolean },
 ): void {
   opts.hostVerifier = (key: Buffer, verify: (valid: boolean) => void) => {
+    // The server answered: the connect timer's job is done.
+    hooks.onReached();
     void (async () => {
       try {
         const store = loadKnownHosts();
@@ -134,7 +150,9 @@ function attachHostVerifier(
               }
             : { host, port, fingerprint: decision.fingerprint, kind: 'unknown' },
         );
-        if (!ok) {
+        if (!ok || !hooks.isLive()) {
+          // Also covers an Accept that arrives after the attempt already
+          // failed: remembering a key for a dead connection would trust it later.
           verify(false);
           return;
         }
@@ -179,6 +197,8 @@ async function connectSsh(target: TunnelTarget): Promise<SshClient> {
   ssh.on('error', (err: Error) => {
     logger.error('[plasma-ssh] ssh client error', target.id, err.message);
   });
+  let live = true;
+  let connectTimer: ReturnType<typeof setTimeout> | undefined;
   try {
     await new Promise<void>((resolve, reject) => {
       const onReady = () => {
@@ -189,17 +209,25 @@ async function connectSsh(target: TunnelTarget): Promise<SshClient> {
         ssh.removeListener('ready', onReady);
         reject(err);
       };
+      connectTimer = setTimeout(() => {
+        ssh.removeListener('ready', onReady);
+        ssh.removeListener('error', onError);
+        reject(new Error('Timed out while waiting for handshake'));
+      }, SSH_CONNECT_TIMEOUT_MS);
       ssh.once('ready', onReady);
       ssh.once('error', onError);
       const opts: Parameters<typeof ssh.connect>[0] = {
         host: target.ssh.host,
         port: target.ssh.port,
         username: target.ssh.user,
-        readyTimeout: 15_000,
+        readyTimeout: SSH_READY_TIMEOUT_MS,
         keepaliveInterval: SSH_KEEPALIVE_INTERVAL_MS,
         keepaliveCountMax: SSH_KEEPALIVE_COUNT_MAX,
       };
-      attachHostVerifier(opts, target.ssh.host, target.ssh.port);
+      attachHostVerifier(opts, target.ssh.host, target.ssh.port, {
+        onReached: () => clearTimeout(connectTimer),
+        isLive: () => live,
+      });
       try {
         Object.assign(
           opts,
@@ -216,12 +244,15 @@ async function connectSsh(target: TunnelTarget): Promise<SshClient> {
       ssh.connect(opts);
     });
   } catch (err) {
+    live = false;
     try {
       ssh.end();
     } catch {
       // best-effort
     }
     throw err;
+  } finally {
+    clearTimeout(connectTimer);
   }
   return ssh;
 }
@@ -310,14 +341,16 @@ export function openTunnel(target: TunnelTarget): Promise<{ host: string; port: 
   const pending = opening.get(target.id);
   if (pending) {
     // A close arrived while that attempt was in flight: it will be torn
-    // down on arrival, so queue a fresh one behind it.
-    if (cancelled.has(target.id)) {
-      return pending.then(
+    // down on arrival, so queue a fresh one behind it. Likewise when the
+    // in-flight attempt is for another target (SC-29): handing back its
+    // local port would route this caller to the wrong host.
+    if (cancelled.has(target.id) || pending.signature !== signatureOf(target)) {
+      return pending.promise.then(
         () => openTunnel(target),
         () => openTunnel(target),
       );
     }
-    return pending;
+    return pending.promise;
   }
 
   const cached = tunnels.get(target.id);
@@ -341,7 +374,7 @@ export function openTunnel(target: TunnelTarget): Promise<{ host: string; port: 
       opening.delete(target.id);
       cancelled.delete(target.id);
     });
-  opening.set(target.id, attempt);
+  opening.set(target.id, { promise: attempt, signature: signatureOf(target) });
   return attempt;
 }
 

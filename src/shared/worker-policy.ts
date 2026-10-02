@@ -18,19 +18,37 @@ export function extractCorrelatedId(raw: unknown): string | null {
 }
 
 /**
- * Per-op IPC deadline. SQL queries return `null` — their budget is PG
- * `statement_timeout` (queryTimeoutMs), not a blanket IPC timer (U20).
+ * Per-op IPC deadline. `null` = no blanket timer. That is for work whose
+ * budget is not wall-clock: SQL (PG `statement_timeout`), exports and
+ * imports (they stream for as long as the data takes and report progress),
+ * DDL, EXPLAIN, edit batches and bulk Redis scans (SC-06). A worker that
+ * wedges instead is recycled by the supervisor watchdog (SC-12).
+ * OpenSearch requests carry their own `timeoutMs`; the deadline is that
+ * plus slack, so the driver's own timeout reports first.
  */
-export function ipcDeadlineMs(kind: WorkerRequest['kind']): number | null {
+export function ipcDeadlineMs(kind: WorkerRequest['kind'], req?: WorkerRequest): number | null {
   switch (kind) {
     case 'query':
     case 'sidebandQuery':
+    case 'importRun':
+    case 'applyDdl':
+    case 'explain':
+    case 'commitEditBatch':
+    case 'redisBulkDelete':
+    case 'redisDeleteByPattern':
+    case 'redisAnalyze':
       return null;
     // C30: exports stream to disk for as long as the data takes; a blanket
     // deadline rejected in main while the worker kept writing the file.
     case 'exportQuery':
     case 'exportRows':
       return null;
+    case 'osRequest':
+    case 'osSearch':
+    case 'osSql': {
+      const t = req && 'timeoutMs' in req ? req.timeoutMs : undefined;
+      return t && t > 0 ? t + OS_DEADLINE_SLACK_MS : 120_000;
+    }
     case 'ping':
       return 5_000;
     case 'connect':
@@ -43,6 +61,63 @@ export function ipcDeadlineMs(kind: WorkerRequest['kind']): number | null {
       return 180_000;
     default:
       return 120_000;
+  }
+}
+
+const OS_DEADLINE_SLACK_MS = 10_000;
+
+/**
+ * The request that stops the worker-side work of `req` once its IPC
+ * deadline passed (SC-06): a timeout must not leave the job running and
+ * the lane busy. Null when nothing can be cancelled.
+ */
+export function cancelRequestFor(req: WorkerRequest, id: string): WorkerRequest | null {
+  switch (req.kind) {
+    case 'aiQuery':
+    case 'commitEditBatch':
+    case 'applyDdl':
+    case 'explain':
+    case 'query':
+      return { kind: 'cancel', id };
+    case 'introspect':
+    case 'sidebandQuery':
+      return { kind: 'cancelAux', id };
+    case 'importRun':
+      return { kind: 'importCancel', id, jobId: req.job.jobId };
+    case 'osRequest':
+    case 'osSearch':
+    case 'osSql':
+      return req.requestId ? { kind: 'osCancel', id, requestId: req.requestId } : null;
+    case 'redisCommand':
+    case 'redisAnalyze':
+    case 'redisDeleteByPattern':
+    case 'redisBulkDelete':
+    case 'redisScan':
+      return { kind: 'redisCancel', id };
+    default:
+      return null;
+  }
+}
+
+/** Requests that occupy an exclusive worker lane: a hang here blocks everything behind. */
+export function holdsExclusiveLane(kind: WorkerRequest['kind']): boolean {
+  switch (kind) {
+    case 'query':
+    case 'commitEditBatch':
+    case 'applyDdl':
+    case 'importRun':
+    case 'explain':
+    case 'exportQuery':
+    case 'beginTxn':
+    case 'commitTxn':
+    case 'rollbackTxn':
+    case 'sidebandQuery':
+    case 'aiQuery':
+    case 'connect':
+    case 'disconnect':
+      return true;
+    default:
+      return false;
   }
 }
 

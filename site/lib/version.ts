@@ -1,22 +1,30 @@
-// @generated — bumped by version:sync at the repo root.
-// Do not hand-edit the version literal or artifact URLs — release.mjs and
-// sync-version.mjs regex-patch them. Size labels are manual; refresh from
-// release/latest-mac.yml each ship.
-export const VERSION = '3.0.0';
+import 'server-only';
+import { type Releases, loadReleasesFrom } from './feed';
 
-// Windows
-export const DOWNLOAD_URL =
-  'https://pub-05a2064511bc41689f299b542b07b67f.r2.dev/Plasma-Setup-3.0.0-x64.exe';
-export const PORTABLE_URL =
-  'https://pub-05a2064511bc41689f299b542b07b67f.r2.dev/Plasma-Portable-3.0.0-x64.exe';
-export const SIZE_LABEL = '92 MB';
+export * from './feed';
 
-// macOS
-export const MAC_ARM64_URL =
-  'https://pub-05a2064511bc41689f299b542b07b67f.r2.dev/Plasma-3.0.0-arm64.dmg';
-export const MAC_X64_URL =
-  'https://pub-05a2064511bc41689f299b542b07b67f.r2.dev/Plasma-3.0.0-x64.dmg';
-export const MAC_ARM64_SIZE_LABEL = '112 MB';
-export const MAC_X64_SIZE_LABEL = '117 MB';
+/**
+ * Download links, versions and sizes for the site, read from the update feed
+ * at build time (see ./feed.ts for the rules: per-platform versions, HEAD
+ * checks that fail the build, "coming soon" for platforms without a build).
+ *
+ * Set PLASMA_SITE_OFFLINE=1 to skip the network in `next dev` (every platform
+ * then shows "coming soon"). Production builds never skip.
+ */
 
-export const LICENSE = 'Apache-2.0';
+/** package.json version at the last `release:*`; patched by scripts/lib/sync-site-version.mjs. Offline label only. */
+export const PACKAGE_VERSION = '3.0.0';
+
+let cached: Promise<Releases> | undefined;
+
+/** Memoised per build; layout, footer and JSON-LD share one fetch. */
+export function getReleases(): Promise<Releases> {
+  cached ??= (async () => {
+    if (process.env.PLASMA_SITE_OFFLINE === '1' && process.env.NODE_ENV !== 'production') {
+      console.warn('[site] PLASMA_SITE_OFFLINE=1: no download links (all platforms "coming soon")');
+      return { win: null, mac: null, linux: null, latestVersion: null };
+    }
+    return loadReleasesFrom(fetch);
+  })();
+  return cached;
+}

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   MAX_STRING_BYTES,
   accumulateHashFields,
+  elementWindow,
   exceedsFetchBudget,
   largeValueStub,
   pairsFromHscanFlat,
@@ -67,5 +68,15 @@ describe('accumulateHashFields', () => {
       ['x', '0'],
       ['a', '1'],
     ]);
+  });
+});
+
+describe('elementWindow (P2-10)', () => {
+  it('starts small and shrinks for heavy elements', () => {
+    expect(elementWindow(null, 500, true)).toBe(25);
+    expect(elementWindow(null, 500)).toBe(500);
+    expect(elementWindow(10, 500)).toBe(500);
+    expect(elementWindow(2 * 1024 * 1024, 500, true)).toBe(1);
+    expect(elementWindow(100_000, 500)).toBe(10);
   });
 });

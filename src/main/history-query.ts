@@ -80,13 +80,4 @@ export function buildHistoryListQuery(opts: HistoryListOpts = {}): HistoryListQu
   return { sql, params };
 }
 
-/**
- * Mask credentials before SQL is written to query history (C34):
- * `PASSWORD '…'` in CREATE/ALTER ROLE|USER and `password=…` inside
- * connection strings (dblink, postgres_fdw user mappings).
- */
-export function redactSqlSecrets(sql: string): string {
-  return sql
-    .replace(/(\bpassword\s+)('(?:[^']|'')*'|\$\$[\s\S]*?\$\$)/gi, "$1'***'")
-    .replace(/(\bpassword=)([^\s'";]+)/gi, '$1***');
-}
+export { redactSqlSecrets } from './redact';

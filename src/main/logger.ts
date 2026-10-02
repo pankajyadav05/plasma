@@ -1,6 +1,7 @@
 import { join } from 'node:path';
 import { app } from 'electron';
 import log from 'electron-log/main.js';
+import { redactLogValue } from './redact';
 
 /**
  * Structured logger for the main process. Writes rotating files to
@@ -23,6 +24,13 @@ export function initLogger(): typeof log {
   log.transports.file.maxSize = 5 * 1024 * 1024;
   log.transports.file.format = '[{y}-{m}-{d} {h}:{i}:{s}.{ms}] [{level}] {text}';
   log.transports.console.format = '[{h}:{i}:{s}.{ms}] [{level}] {text}';
+
+  // SC-27: nothing that reaches a log file may carry credentials or echoed
+  // row values (error text from drivers, SQL snippets, connection strings).
+  log.hooks.push((message) => {
+    message.data = message.data.map(redactLogValue);
+    return message;
+  });
 
   log.transports.file.resolvePathFn = () => join(app.getPath('userData'), 'logs', 'main.log');
 

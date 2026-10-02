@@ -7,6 +7,7 @@ import {
 import { isSplit, paneTabIds } from '@/stores/pane-state';
 import { usePanes } from '@/stores/panes';
 import { activeTab, useSession } from '@/stores/session';
+import { editsOf } from '@/stores/session-pending-edits';
 import { useWorkbench } from '@/stores/workbench';
 import type { KeyId } from '@shared/keymap';
 import type { ConnectionEngine } from '@shared/protocol';
@@ -283,12 +284,15 @@ export function runCommand(id: CommandId): boolean {
       usePanes.getState().switchPane(id === 'nextPane' ? 1 : -1);
       return true;
     case 'commitEdits':
-      if (s.pendingEdits.length > 0) {
-        void s.commitPendingEdits().catch(() => undefined);
-        return true;
-      }
+      // R-01: ⌘S acts on the ACTIVE tab only. In a SQL tab it saves the
+      // file, whatever other tabs have staged; in a table tab it commits
+      // that tab's own edits. Failures land in `pendingEditsError`.
       if (activeTab(s)?.kind === 'sql') {
         void saveActiveSqlTab(false);
+        return true;
+      }
+      if (editsOf(s.pendingEditsByTab, s.activeTabId).length > 0) {
+        void s.commitPendingEdits({ tabId: s.activeTabId }).catch(() => undefined);
         return true;
       }
       return false;

@@ -86,7 +86,16 @@ describe.skipIf(!url)('introspectPostgres (live)', () => {
         refSchema: S,
         refTable: 'users',
         refColumn: 'id',
+        constraint: 'orders_user_id_fkey',
+        onDelete: 'NO ACTION',
+        onUpdate: 'NO ACTION',
       },
+    ]);
+    // R-10: defaults, identity and indexes travel with the snapshot.
+    const idCol = info.columns.find((c) => c.table === 'users' && c.name === 'id');
+    expect(idCol?.defaultExpr).toMatch(/^nextval\(/);
+    expect(info.indexes?.filter((i) => i.schema === S && i.table === 'orders')).toEqual([
+      expect.objectContaining({ name: 'orders_pkey', primary: true, unique: true }),
     ]);
     const none = await introspectPostgres(client, { objects: false, columnSchemas: [] });
     expect(none.columns).toEqual([]);

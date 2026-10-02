@@ -18,7 +18,11 @@ export function formatSql(sql: string): string {
       tabWidth: 2,
     });
   } catch (err) {
-    logger.warn('[plasma] sql-formatter rejected input:', err);
+    // The error can quote a slice of the user's SQL; keep only its kind (SC-27).
+    logger.warn(
+      '[plasma] sql-formatter rejected input:',
+      err instanceof Error ? err.name : 'error',
+    );
     return sql;
   }
 }

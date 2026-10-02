@@ -52,6 +52,8 @@ export function armProdGate(
     reason: 'prod' | 'safe-mode';
     kind?: 'external';
     summary?: string;
+    /** Offset of `sql` in the tab buffer, so a resumed run maps errors correctly (R-14). */
+    base?: number;
   },
 ): void {
   set({ prodGate: { ...gate, connectionGen: get().connectionGen ?? 0 } });
@@ -70,12 +72,42 @@ export function requestProdConfirm(
   sql: string,
   opts?: { force?: boolean; summary?: string },
 ): Promise<boolean> {
+  return requestProdConfirmDetailed(set, get, sql, opts).then((o) => o.ok);
+}
+
+/**
+ * Outcome of a gate check outside the editor. `refused` carries the safe-mode
+ * message so dialogs can say WHY nothing ran instead of silently doing
+ * nothing (R-09); `declined` is the user pressing Cancel.
+ */
+export type UserSqlOutcome =
+  | { ok: true }
+  | { ok: false; reason: 'refused'; message: string }
+  | { ok: false; reason: 'declined'; message: string };
+
+export function requestProdConfirmDetailed(
+  set: Set,
+  get: Get,
+  sql: string,
+  opts?: { force?: boolean; summary?: string },
+): Promise<UserSqlOutcome> {
   const decision = evaluateGate(get, sql, opts?.force);
-  if (decision.kind === 'run') return Promise.resolve(true);
-  if (decision.kind === 'refuse') return Promise.resolve(false);
-  if (get().prodGate != null) return Promise.resolve(false);
-  return new Promise<boolean>((resolve) => {
-    externalResolve = resolve;
+  if (decision.kind === 'run') return Promise.resolve({ ok: true });
+  if (decision.kind === 'refuse') {
+    return Promise.resolve({ ok: false, reason: 'refused', message: decision.message });
+  }
+  if (get().prodGate != null) {
+    return Promise.resolve({
+      ok: false,
+      reason: 'declined',
+      message: 'Another confirmation is already open — answer it first.',
+    });
+  }
+  return new Promise<UserSqlOutcome>((resolve) => {
+    externalResolve = (ok) =>
+      resolve(
+        ok ? { ok: true } : { ok: false, reason: 'declined', message: 'Cancelled — nothing ran.' },
+      );
     armProdGate(set, get, {
       sql,
       tabId: get().activeTabId ?? '',
@@ -119,6 +151,7 @@ export interface ProdGateSlice {
     /** Why it's asking: the PROD tag, or the connection's safe-mode level. */
     reason?: 'prod' | 'safe-mode';
     summary?: string;
+    base?: number;
   } | null;
   /** Resume a prod-gated runQuery after user confirms. */
   confirmProdGate(): void;
@@ -129,6 +162,11 @@ export interface ProdGateSlice {
    * even for non-destructive SQL (e.g. inserting mock rows).
    */
   confirmUserSql(sql: string, opts?: { force?: boolean; summary?: string }): Promise<boolean>;
+  /** Same gate, but says why it did not pass (safe-mode refusal vs. cancelled). */
+  confirmUserSqlDetailed(
+    sql: string,
+    opts?: { force?: boolean; summary?: string },
+  ): Promise<UserSqlOutcome>;
 }
 
 export const createProdGateSlice: SliceCreator<ProdGateSlice> = (set, get) => ({
@@ -149,7 +187,7 @@ export const createProdGateSlice: SliceCreator<ProdGateSlice> = (set, get) => ({
       // The grid's pending-changes tray: resume the confirmed commit.
       // Failures land in `pendingEditsError` for the grid to show.
       void get()
-        .commitPendingEdits({ confirmed: true })
+        .commitPendingEdits({ confirmed: true, tabId: gate.tabId })
         .catch(() => undefined);
       return;
     }
@@ -161,11 +199,15 @@ export const createProdGateSlice: SliceCreator<ProdGateSlice> = (set, get) => ({
       if (!get().tabs.some((t) => t.id === gate.tabId)) return;
       set({ activeTabId: gate.tabId });
     }
-    void get().runQuery({ sql: gate.sql });
+    void get().runQuery({ sql: gate.sql, base: gate.base });
   },
 
   confirmUserSql(sql, opts) {
     return requestProdConfirm(set, get, sql, opts);
+  },
+
+  confirmUserSqlDetailed(sql, opts) {
+    return requestProdConfirmDetailed(set, get, sql, opts);
   },
 
   cancelProdGate() {

@@ -1,5 +1,10 @@
 import type { WorkerRequest, WorkerResponse } from '@shared/protocol';
-import { ipcDeadlineMs, nextBackoffMs } from '@shared/worker-policy';
+import {
+  cancelRequestFor,
+  holdsExclusiveLane,
+  ipcDeadlineMs,
+  nextBackoffMs,
+} from '@shared/worker-policy';
 import { parseWorkerResponse } from '@shared/worker-response-parse';
 import { type UtilityProcess, utilityProcess } from 'electron';
 import { logger } from './logger';
@@ -33,12 +38,32 @@ export type WorkerBroadcast = Extract<
   | { kind: 'exportProgress' }
 >;
 
+/** Tunables a test can shrink; production uses the defaults. */
+export interface WorkerSupervisorOptions {
+  /** Watchdog ping period; 0 disables the watchdog. */
+  watchdogIntervalMs?: number;
+  /** How long one watchdog ping may go unanswered. */
+  watchdogPingTimeoutMs?: number;
+  /** Consecutive missed pings before the worker is recycled. */
+  watchdogMaxMisses?: number;
+  /** A timed-out exclusive-lane request still unanswered this long after its cancel recycles the worker. */
+  stuckAfterCancelMs?: number;
+}
+
 export class WorkerSupervisor {
   private proc: UtilityProcess | null = null;
   private pending = new Map<
     string,
     { resolve: (res: WorkerResponse) => void; timer?: ReturnType<typeof setTimeout> }
   >();
+  /** Requests whose IPC deadline passed but the worker has not answered yet (SC-06/SC-12). */
+  private abandoned = new Map<string, { kind: WorkerRequest['kind']; cancelledAt: number }>();
+  private restartTimer: ReturnType<typeof setTimeout> | null = null;
+  private watchdogTimer: ReturnType<typeof setInterval> | null = null;
+  private watchdogMisses = 0;
+  private watchdogInFlight = false;
+  private watchdogSeq = 0;
+  private readonly opts: Required<WorkerSupervisorOptions>;
   private workerEntry: string | null = null;
   private shuttingDown = false;
   private restartDelayMs = 0;
@@ -48,6 +73,7 @@ export class WorkerSupervisor {
     resolve: () => void;
     reject: (err: Error) => void;
     timer: ReturnType<typeof setTimeout>;
+    proc: UtilityProcess;
   } | null = null;
   private stableTimer: ReturnType<typeof setTimeout> | null = null;
   private spawnGeneration = 0;
@@ -59,6 +85,15 @@ export class WorkerSupervisor {
   private static readonly STABLE_UPTIME_MS = 5_000;
   private static readonly READY_TIMEOUT_MS = 15_000;
   private static readonly MAX_PENDING = 128;
+
+  constructor(options: WorkerSupervisorOptions = {}) {
+    this.opts = {
+      watchdogIntervalMs: options.watchdogIntervalMs ?? 20_000,
+      watchdogPingTimeoutMs: options.watchdogPingTimeoutMs ?? 5_000,
+      watchdogMaxMisses: options.watchdogMaxMisses ?? 3,
+      stuckAfterCancelMs: options.stuckAfterCancelMs ?? 30_000,
+    };
+  }
 
   /** Subscribe to non-correlated worker events. Replaces any prior handler. */
   setBroadcastHandler(handler: ((evt: WorkerBroadcast) => void) | null): void {
@@ -92,6 +127,82 @@ export class WorkerSupervisor {
       entry.resolve({ kind: 'error', id, message });
     }
     this.pending.clear();
+    this.abandoned.clear();
+  }
+
+  private stopWatchdog(): void {
+    if (this.watchdogTimer) clearInterval(this.watchdogTimer);
+    this.watchdogTimer = null;
+    this.watchdogMisses = 0;
+    this.watchdogInFlight = false;
+  }
+
+  /**
+   * SC-12: a wedged worker (native hang, blackholed query holding the
+   * FIFO lane) would otherwise fill the pending map and stay dead until
+   * the app restarts. Ping it on the free lane; after N misses, or when a
+   * timed-out exclusive job ignores its cancel, kill it and let the
+   * normal crash path restart it.
+   */
+  private startWatchdog(): void {
+    this.stopWatchdog();
+    if (this.opts.watchdogIntervalMs <= 0) return;
+    const proc = this.proc;
+    this.watchdogTimer = setInterval(() => {
+      if (proc !== this.proc || !this.isReady) return;
+      const now = Date.now();
+      for (const [id, a] of this.abandoned) {
+        if (holdsExclusiveLane(a.kind) && now - a.cancelledAt >= this.opts.stuckAfterCancelMs) {
+          this.recycle(`request ${a.kind} ignored its cancel (${id})`);
+          return;
+        }
+      }
+      if (this.watchdogInFlight) return;
+      this.watchdogInFlight = true;
+      const id = `watchdog-${++this.watchdogSeq}`;
+      void this.pingFor(id).then((ok) => {
+        this.watchdogInFlight = false;
+        if (proc !== this.proc) return;
+        if (ok) {
+          this.watchdogMisses = 0;
+          return;
+        }
+        this.watchdogMisses++;
+        if (this.watchdogMisses >= this.opts.watchdogMaxMisses) {
+          this.recycle(`${this.watchdogMisses} watchdog pings unanswered`);
+        }
+      });
+    }, this.opts.watchdogIntervalMs);
+    this.watchdogTimer.unref?.();
+  }
+
+  private pingFor(id: string): Promise<boolean> {
+    return new Promise((resolve) => {
+      if (!this.proc) return resolve(false);
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        resolve(false);
+      }, this.opts.watchdogPingTimeoutMs);
+      this.pending.set(id, {
+        resolve: (res) => {
+          clearTimeout(timer);
+          resolve(res.kind === 'ping');
+        },
+        timer,
+      });
+      this.proc.postMessage({ kind: 'ping', id, message: 'watchdog' });
+    });
+  }
+
+  /** Kill the current worker; its exit handler rejects pending work and schedules the restart. */
+  private recycle(reason: string): void {
+    logger.error('[plasma] recycling worker:', reason);
+    this.stopWatchdog();
+    try {
+      this.proc?.kill();
+    } catch {
+      // ignore
+    }
   }
 
   private async spawn(): Promise<void> {
@@ -101,6 +212,17 @@ export class WorkerSupervisor {
     const gen = ++this.spawnGeneration;
     this.isReady = false;
     this.clearStableTimer();
+    this.stopWatchdog();
+    // SC-11: never leave a previous process behind when taking over.
+    if (this.proc) {
+      const old = this.proc;
+      this.proc = null;
+      try {
+        old.kill();
+      } catch {
+        // ignore
+      }
+    }
     logger.info('[plasma] spawning worker at', entry);
 
     const proc = utilityProcess.fork(entry, [], {
@@ -146,6 +268,7 @@ export class WorkerSupervisor {
         wait?.resolve();
         return;
       }
+      this.abandoned.delete(data.id);
       const entry = this.pending.get(data.id);
       if (entry) {
         this.pending.delete(data.id);
@@ -163,6 +286,7 @@ export class WorkerSupervisor {
       const wasReady = this.isReady;
       this.isReady = false;
       this.clearStableTimer();
+      this.stopWatchdog();
 
       if (this.readyWait) {
         const wait = this.readyWait;
@@ -181,6 +305,8 @@ export class WorkerSupervisor {
         }
       }
 
+      // scheduleRestart is idempotent, so the spawn() failure caused by an
+      // exit before ready and this path can't double-schedule (SC-11).
       if (!this.shuttingDown) {
         this.scheduleRestart();
       }
@@ -191,7 +317,8 @@ export class WorkerSupervisor {
     // Wait for explicit ready — do NOT reset backoff here (U20).
     await new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => {
-        this.readyWait = null;
+        // Only clear the handshake if it is still ours; a newer process owns its own.
+        if (this.readyWait?.proc === proc) this.readyWait = null;
         if (this.proc === proc) this.proc = null;
         try {
           proc.kill();
@@ -210,12 +337,14 @@ export class WorkerSupervisor {
           reject(err);
         },
         timer,
+        proc,
       };
     });
 
     if (gen !== this.spawnGeneration) return;
 
     this.isReady = true;
+    this.startWatchdog();
 
     // Reset backoff only after the worker stays up for a stable window.
     this.stableTimer = setTimeout(() => {
@@ -227,13 +356,15 @@ export class WorkerSupervisor {
   }
 
   private scheduleRestart(): void {
+    if (this.shuttingDown || this.restartTimer) return;
     this.restartDelayMs = nextBackoffMs(
       this.restartDelayMs,
       WorkerSupervisor.BASE_BACKOFF_MS,
       WorkerSupervisor.MAX_BACKOFF_MS,
     );
     logger.info('[plasma] restarting worker in', this.restartDelayMs, 'ms');
-    setTimeout(() => {
+    this.restartTimer = setTimeout(() => {
+      this.restartTimer = null;
       if (!this.shuttingDown) {
         void this.spawn().catch((err) => {
           logger.error('[plasma] worker respawn failed', err);
@@ -259,12 +390,15 @@ export class WorkerSupervisor {
       });
     }
     return new Promise((resolve) => {
-      const deadline = ipcDeadlineMs(req.kind);
+      const deadline = ipcDeadlineMs(req.kind, req);
       let timer: ReturnType<typeof setTimeout> | undefined;
       if (deadline != null) {
         timer = setTimeout(() => {
           if (this.pending.has(req.id)) {
             this.pending.delete(req.id);
+            // SC-06: stop the work too, or it keeps running (and holding
+            // its lane) while the caller is told it failed.
+            this.cancelAbandoned(req);
             resolve({
               kind: 'error',
               id: req.id,
@@ -276,6 +410,12 @@ export class WorkerSupervisor {
       this.pending.set(req.id, { resolve, timer });
       this.proc?.postMessage(req);
     });
+  }
+
+  private cancelAbandoned(req: WorkerRequest): void {
+    const cancel = cancelRequestFor(req, `timeout-cancel-${req.id}`);
+    this.abandoned.set(req.id, { kind: req.kind, cancelledAt: Date.now() });
+    if (cancel) this.proc?.postMessage(cancel);
   }
 
   /** E2E only — pid of the current utility-process child, or null. */
@@ -291,6 +431,9 @@ export class WorkerSupervisor {
   stop(): void {
     this.shuttingDown = true;
     this.clearStableTimer();
+    this.stopWatchdog();
+    if (this.restartTimer) clearTimeout(this.restartTimer);
+    this.restartTimer = null;
     if (this.readyWait) {
       clearTimeout(this.readyWait.timer);
       this.readyWait = null;

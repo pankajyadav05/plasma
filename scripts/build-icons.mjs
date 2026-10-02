@@ -7,13 +7,16 @@
  *         resources/icon-{16..1024}.png (multi-size for platform icon bundles)
  *         resources/apple-touch-icon.png (180×180 — iOS/macOS web clip)
  *
- * Runs automatically via the `prepare` script in package.json after
- * `pnpm install`, so users never have to run this manually.
+ * Run it by hand (`pnpm build:icons`) after editing the SVGs. It is NOT wired
+ * to `prepare`/`postinstall`: the PNGs are committed, and regenerating them
+ * on every install made working trees dirty (system fonts differ per machine).
+ * Without `--force` it does nothing when every output is newer than both
+ * sources, and it never rewrites a file whose bytes would not change.
  *
  * Uses @resvg/resvg-js (pure napi, prebuilt binaries, no native build).
  */
 
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, existsSync, statSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -92,11 +95,25 @@ const outputs = [
   { svg: faviconSvg, size: 180, dest: logoDir, name: 'apple-touch-icon.png' },
 ];
 
+const force = process.argv.includes('--force');
+if (!force) {
+  const newestSource = Math.max(statSync(appIconPath).mtimeMs, statSync(faviconPath).mtimeMs);
+  const upToDate = outputs.every(({ dest, name }) => {
+    const out = resolve(dest, name);
+    return existsSync(out) && statSync(out).mtimeMs >= newestSource;
+  });
+  if (upToDate) {
+    console.log('[plasma:build-icons] outputs are newer than the SVG sources, nothing to do (use --force)');
+    process.exit(0);
+  }
+}
+
 console.log('[plasma:build-icons] rasterizing');
 for (const { svg, size, dest, name } of outputs) {
   try {
     const png = rasterize(svg, size);
-    writeFileSync(resolve(dest, name), png);
+    const target = resolve(dest, name);
+    if (!(existsSync(target) && readFileSync(target).equals(png))) writeFileSync(target, png);
     const relPath = dest === resourcesDir ? `resources/${name}` : `logo/${name}`;
     const kb = (png.length / 1024).toFixed(1);
     console.log(`  ✓ ${relPath.padEnd(32)} ${size}×${size}  ${kb} KB`);

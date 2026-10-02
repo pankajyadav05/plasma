@@ -3,10 +3,12 @@ import { cn } from '@/lib/cn';
 import { commandDetail, commandTitle } from '@/lib/command-summary';
 import { cleanIpcError } from '@/lib/errors';
 import { formatDuration } from '@/lib/format';
+import { lazyNamed } from '@/lib/lazy';
 import { readableTypeName } from '@/lib/pg-types';
-import { type PendingEdit, useActiveTab, useSession } from '@/stores/session';
+import { type PendingEdit, useActiveTabSansSql, useSession } from '@/stores/session';
 import {
   type RowOverlay,
+  editsOf,
   overlayRows,
   pendingInsertsFor,
   tablePkNames,
@@ -29,13 +31,12 @@ import {
   Undo2,
   X,
 } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { type CellDetail, CellDetailDialog } from './CellDetailDialog';
 import { ColumnHeaderMenu } from './ColumnHeaderMenu';
 import { GridContextMenu, type GridMenuEntry } from './GridContextMenu';
 import { type RowDetail, RowDetailSheet } from './RowDetailSheet';
 import { TableDefinitionView } from './TableDefinitionView';
-import { TableStructureView } from './TableStructureView';
 import { cellToText } from './cell-edit';
 import { COPY_FORMATS, type CopyFormat, formatRows, parseClipboardBlock } from './clipboard-format';
 import {
@@ -44,15 +45,17 @@ import {
   slicePageUnsorted,
   sortRowsWithIndex,
 } from './display-rows';
+import { shouldRefocusGrid } from './grid-focus';
 import { nextCell, prevCell } from './grid-nav';
 import { isErrorTabActive } from './result-view';
 import { ROW_HEIGHT_PX, computeRowWindow } from './windowed-rows';
+
+const TableStructureView = lazyNamed(() => import('./TableStructureView'), 'TableStructureView');
 
 // Stable empty Set used as a fallback when the active tab is null. Using
 // a module-level singleton keeps the useEffect dependency reference-stable
 // across renders so we don't trip the sticky-column re-measure loop.
 const EMPTY_STICKY_SET: ReadonlySet<string> = new Set();
-const EMPTY_EDITS: PendingEdit[] = [];
 
 /** Grid header height (TablePlus: 26px header over 24px rows). */
 const HEADER_HEIGHT_PX = 26;
@@ -138,7 +141,7 @@ const MOD = isMac ? '⌘' : 'Ctrl+';
  * Rows are windowed (only the visible slice is mounted).
  */
 export function ResultGrid() {
-  const tab = useActiveTab();
+  const tab = useActiveTabSansSql();
   const zebraRows = useSession((s) => s.settings.gridAlternatingRows);
   const setSort = useSession((s) => s.setSort);
   const setSelectedCell = useSession((s) => s.setSelectedCell);
@@ -157,10 +160,15 @@ export function ResultGrid() {
   const toggleColumnHidden = useSession((s) => s.toggleColumnHidden);
   const toggleStickyColumn = useSession((s) => s.toggleStickyColumn);
   const addFilter = useSession((s) => s.addFilter);
-  const pendingEdits = useSession(
-    (s) => (s.pendingEdits as PendingEdit[] | undefined) ?? EMPTY_EDITS,
+  // Staged edits are per tab: this grid only ever sees its own tab's.
+  // (`tab` is the pane's tab inside a split pane, so key by its id.)
+  const gridTabId = tab?.id;
+  const pendingEdits = useSession((s) => editsOf(s.pendingEditsByTab, gridTabId));
+  const pendingEditsError = useSession((s) =>
+    !s.pendingEditsError?.tabId || s.pendingEditsError.tabId === gridTabId
+      ? s.pendingEditsError
+      : null,
   );
-  const pendingEditsError = useSession((s) => s.pendingEditsError);
 
   // Header-menu sort actions. The existing setSort cycles asc → desc →
   // none; the menu wants explicit values, so we write directly through
@@ -369,14 +377,17 @@ export function ResultGrid() {
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
-    const onScroll = () => setScrollTop(el.scrollTop);
+    // R-20: the row window only depends on the first visible row, so snap
+    // to row boundaries — sub-row scrolling then triggers no re-render.
+    const snap = () => Math.floor(el.scrollTop / ROW_HEIGHT_PX) * ROW_HEIGHT_PX;
+    const onScroll = () => setScrollTop(snap());
     const ro = new ResizeObserver((entries) => {
       const h = entries[0]?.contentRect.height;
       if (typeof h === 'number' && h > 0) setViewportHeight(h);
     });
     el.addEventListener('scroll', onScroll, { passive: true });
     ro.observe(el);
-    setScrollTop(el.scrollTop);
+    setScrollTop(snap());
     setViewportHeight(el.clientHeight || 400);
     return () => {
       el.removeEventListener('scroll', onScroll);
@@ -497,11 +508,12 @@ export function ResultGrid() {
       if (!(e.metaKey || e.ctrlKey) || e.shiftKey || e.altKey || e.key.toLowerCase() !== 's')
         return;
       const state = useSession.getState();
-      if (state.pendingEdits.length === 0 || state.pendingEditsBusy) return;
+      const tabId = state.activeTabId;
+      if (editsOf(state.pendingEditsByTab, tabId).length === 0 || state.pendingEditsBusy) return;
       const active = document.activeElement as HTMLElement | null;
       if (active?.closest('.monaco-editor, [role="dialog"]')) return;
       e.preventDefault();
-      void state.commitPendingEdits().catch(() => undefined);
+      void state.commitPendingEdits({ tabId }).catch(() => undefined);
     };
     document.addEventListener('keydown', handler);
     return () => document.removeEventListener('keydown', handler);
@@ -642,8 +654,13 @@ export function ResultGrid() {
     }
   };
 
+  // R-05: never steal focus back from an editor or dialog the action just
+  // opened ("Edit value", "View value", "View row" from the context menu).
   const refocusGrid = () =>
-    requestAnimationFrame(() => gridRef.current?.focus({ preventScroll: true }));
+    requestAnimationFrame(() => {
+      if (!shouldRefocusGrid(document.activeElement)) return;
+      gridRef.current?.focus({ preventScroll: true });
+    });
 
   const canEditEntry = (entry: GridRow | undefined) =>
     Boolean(writable && entry && entry.status !== 'deleted');
@@ -1004,7 +1021,11 @@ export function ResultGrid() {
     return <TableDefinitionView />;
   }
   if (tab?.kind === 'table' && tab.viewMode === 'structure') {
-    return <TableStructureView />;
+    return (
+      <Suspense fallback={null}>
+        <TableStructureView />
+      </Suspense>
+    );
   }
 
   // ── Error state (E6: only when the Error tab is selected) ──

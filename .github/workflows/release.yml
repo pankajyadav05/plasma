@@ -1,7 +1,9 @@
 name: Release
 
 # Releases are built and published locally (pnpm release:mac / release:ship).
-# This workflow only runs when started by hand from the Actions tab.
+# This workflow only runs when started by hand from the Actions tab, and it
+# only PUBLISHES to the production update feed from `main` or from a `v*` tag
+# whose version equals package.json (see the `guard` job).
 on:
   workflow_dispatch:
 
@@ -12,9 +14,47 @@ concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
+env:
+  # No job needs node_modules/electron/dist: electron-builder downloads its
+  # own copy, and better-sqlite3 ships N-API prebuilds (no native rebuild).
+  ELECTRON_SKIP_BINARY_DOWNLOAD: 1
+
 jobs:
+  # Runs first and gates everything: a dispatch from a feature branch builds
+  # nothing, so unreviewed code can never reach the update channel.
+  guard:
+    name: Release guard
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Only main or a version tag may release
+        run: |
+          case "$GITHUB_REF" in
+            refs/heads/main) echo "releasing from main" ;;
+            refs/tags/v*) echo "releasing from tag $GITHUB_REF_NAME" ;;
+            *)
+              echo "::error::Releases publish only from main or a v* tag (got $GITHUB_REF)"
+              exit 1
+              ;;
+          esac
+
+      - name: Tag must match package.json
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          EXPECTED="${TAG#v}"
+          ACTUAL="$(node -p "require('./package.json').version")"
+          echo "tag=$TAG expected=$EXPECTED package.json=$ACTUAL"
+          if [ "$EXPECTED" != "$ACTUAL" ]; then
+            echo "::error::Tag $TAG does not match package.json version $ACTUAL"
+            exit 1
+          fi
+
   verify:
     name: Typecheck + tests
+    needs: [guard]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -61,9 +101,8 @@ jobs:
       - name: Install
         run: pnpm install --frozen-lockfile
 
-      - name: Rebuild native deps for Electron
-        run: pnpm exec electron-builder install-app-deps
-
+      # No native rebuild: electron-builder.yml sets npmRebuild: false and
+      # better-sqlite3's N-API prebuild is used as shipped.
       - name: Build Windows
         run: pnpm run dist:win
 
@@ -73,6 +112,42 @@ jobs:
           name: windows-release
           path: release/*
           if-no-files-found: error
+
+  # Launch the portable exe and prove the app boots and opens plasma.db.
+  smoke-windows:
+    needs: [build-windows]
+    runs-on: windows-latest
+    steps:
+      - name: Download Windows artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-release
+          path: release
+
+      - name: Launch app and verify plasma.db
+        shell: pwsh
+        run: |
+          $exe = (Get-ChildItem release -Filter 'Plasma-Portable-*.exe' | Select-Object -First 1).FullName
+          $userData = Join-Path $env:RUNNER_TEMP 'plasma-smoke'
+          New-Item -ItemType Directory -Force $userData | Out-Null
+          $env:PLASMA_USER_DATA = $userData
+          $env:PLASMA_DISABLE_UPDATER = '1'
+          $proc = Start-Process -FilePath $exe -PassThru
+          $db = Join-Path $userData 'plasma.db'
+          $ready = $false
+          for ($i = 0; $i -lt 90; $i++) {
+            if (Test-Path $db) { $ready = $true; break }
+            if ($proc.HasExited) { break }
+            Start-Sleep -Seconds 1
+          }
+          Get-Process -Name 'Plasma*' -ErrorAction SilentlyContinue | Stop-Process -Force
+          if (-not $ready) {
+            Write-Host "::error::plasma.db was not created within 90s of launch"
+            $log = Join-Path $userData 'logs/main.log'
+            if (Test-Path $log) { Get-Content $log }
+            exit 1
+          }
+          Write-Host "plasma.db created: $((Get-Item $db).Length) bytes"
 
   build-macos:
     needs: [verify]
@@ -98,10 +173,6 @@ jobs:
       - name: Install
         run: pnpm install --frozen-lockfile
 
-      # No `install-app-deps` here: it would only rebuild the host arch while
-      # dist:mac packages arm64 AND x64. electron-builder.yml sets
-      # npmRebuild: true, so packaging rebuilds better-sqlite3 against each
-      # target arch's Electron ABI itself.
       - name: Build macOS
         run: pnpm run dist:mac
 
@@ -113,8 +184,7 @@ jobs:
           if-no-files-found: error
 
   # Launch each packaged arch on a real Mac runner and prove the app boots
-  # and opens its SQLite database. This is the end-to-end guard for the
-  # per-arch native rebuild above: if better-sqlite3's bundled .node binary
+  # and opens its SQLite database: if better-sqlite3's .node prebuild
   # mismatches the arch, the app crashes before plasma.db ever appears.
   # macos-latest is Apple Silicon; the x64 app runs under Rosetta 2
   # (preinstalled on GitHub's arm64 images).
@@ -123,7 +193,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        arch: [arm64]
+        arch: [arm64, x64]
     runs-on: macos-latest
     steps:
       - name: Download macOS artifacts
@@ -183,24 +253,85 @@ jobs:
           LOG="$HOME/Library/Logs/Plasma/main.log"
           if [ -f "$LOG" ]; then cat "$LOG"; else echo "no app log at $LOG"; fi
 
-  publish:
-    needs: [build-windows, build-macos, smoke-macos]
+  build-linux:
+    needs: [verify]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Verify package.json version matches tag
-        if: startsWith(github.ref, 'refs/tags/v')
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Build Linux (AppImage + deb)
+        run: pnpm run dist:linux
+
+      - name: Check Electron fuses on the packaged binary
+        run: node scripts/verify-fuses.mjs release/linux-unpacked/plasma
+
+      - name: Upload Linux artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-release
+          path: release/*
+          if-no-files-found: error
+
+  smoke-linux:
+    needs: [build-linux]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download Linux artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-release
+          path: release
+
+      - name: Launch AppImage and verify plasma.db
         run: |
-          TAG="${GITHUB_REF_NAME}"
-          EXPECTED="${TAG#v}"
-          ACTUAL="$(node -p "require('./package.json').version")"
-          echo "tag=$TAG expected=$EXPECTED package.json=$ACTUAL"
-          if [ "$EXPECTED" != "$ACTUAL" ]; then
-            echo "::error::Tag $TAG does not match package.json version $ACTUAL"
+          sudo apt-get update
+          sudo apt-get install -y xvfb libgbm1 libasound2t64 sqlite3 || sudo apt-get install -y xvfb libgbm1 libasound2 sqlite3
+          chmod +x release/Plasma-*.AppImage
+          export PLASMA_USER_DATA="$RUNNER_TEMP/plasma-smoke"
+          export PLASMA_DISABLE_UPDATER=1
+          mkdir -p "$PLASMA_USER_DATA"
+          xvfb-run -a release/Plasma-*.AppImage --appimage-extract-and-run --no-sandbox &
+          READY=""
+          for i in $(seq 1 90); do
+            if [ -f "$PLASMA_USER_DATA/plasma.db" ] && sqlite3 "$PLASMA_USER_DATA/plasma.db" ".tables" | grep -q connections; then
+              READY=1
+              break
+            fi
+            sleep 1
+          done
+          pkill -f Plasma || true
+          if [ -z "$READY" ]; then
+            echo "::error::plasma.db was not created and migrated within 90s of launch"
+            cat "$PLASMA_USER_DATA/logs/main.log" 2>/dev/null || true
             exit 1
           fi
+          echo "tables: $(sqlite3 "$PLASMA_USER_DATA/plasma.db" '.tables')"
+
+  publish:
+    needs: [guard, build-windows, smoke-windows, build-macos, smoke-macos, build-linux, smoke-linux]
+    # Belt and braces: `guard` already failed any other ref.
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    # Protect this environment (required reviewers) in the repo settings.
+    environment: production
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
 
       - name: Download build artifacts
         uses: actions/download-artifact@v4
@@ -225,6 +356,8 @@ jobs:
       - name: Install
         run: pnpm install --frozen-lockfile
 
+      # Signs latest*.yml with the ed25519 key and uploads <manifest>.sig;
+      # refuses to overwrite an existing versioned artifact (see docs/release.md).
       - name: Upload to Cloudflare R2
         env:
           R2_ACCOUNT_ID: 945bc8f64778fda12f098a60e0ed122f
@@ -232,6 +365,7 @@ jobs:
           R2_PUBLIC_BASE_URL: https://pub-05a2064511bc41689f299b542b07b67f.r2.dev
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          PLASMA_UPDATE_SIGNING_KEY: ${{ secrets.PLASMA_UPDATE_SIGNING_KEY }}
         run: pnpm run release:upload
 
       - name: Create GitHub Release
@@ -244,6 +378,9 @@ jobs:
             release/Plasma-Portable-*.exe
             release/Plasma-*.dmg
             release/Plasma-*.zip
+            release/Plasma-*.AppImage
+            release/Plasma-*.deb
             release/latest.yml
             release/latest-mac.yml
+            release/latest-linux.yml
             release/*.blockmap

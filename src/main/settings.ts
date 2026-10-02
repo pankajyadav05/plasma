@@ -1,7 +1,15 @@
 import type { Settings } from '@shared/protocol';
 import { SettingsShape } from '@shared/protocol';
+import { z } from 'zod';
 import { getDb } from './db';
-import { deleteSshSecrets, putSecret, redactSettingsForRenderer, setSshSecrets } from './vault';
+import {
+  deleteSecret,
+  deleteSshSecrets,
+  putSecret,
+  redactSettingsForRenderer,
+  setSshSecrets,
+} from './vault';
+import { canReuseStoredSshSecrets } from './vault-secrets-plan';
 
 /**
  * Key-value settings store backed by SQLite.
@@ -72,40 +80,45 @@ export function getPublicSettings(): Settings {
   return redactSettingsForRenderer(parsed);
 }
 
+/** Secrets of an SSH entry that a patch may clear individually (SC-08). */
+const SshSecretField = z.enum(['password', 'privateKey', 'passphrase']);
+const ClearSshSecrets = z.record(z.string(), z.array(SshSecretField)).catch({});
+
 /**
  * Apply a settings patch. Secret fields are routed to the vault:
  * - non-empty API key / SSH secret → encrypt + store
  * - empty secret string → keep existing vault value (leave blank to keep)
  * - removed connectionSsh entry → delete that connection's SSH secrets
+ * - `clearSshSecrets: { [id]: ['password'|'privateKey'|'passphrase'] }` →
+ *   delete exactly those stored secrets (blank alone can never do that)
+ * - an entry whose host / port / user changed never inherits the old
+ *   bastion's secrets: they are dropped unless the patch supplies new ones
  *
  * Ordinary settings are merged and written; secret plaintext is never
- * persisted into the settings table.
+ * persisted into the settings table. Everything is validated first and then
+ * written in ONE SQLite transaction, so a patch with one invalid field
+ * leaves both settings and vault untouched (SC-25).
  */
 export function applySettingsPatch(patch: unknown): Settings {
   const rawPatch = (patch ?? {}) as Record<string, unknown>;
   const prevRaw = SettingsShape.parse(getAllSettings());
 
-  // ── API keys → vault ──
-  if (typeof rawPatch.openrouterApiKey === 'string' && rawPatch.openrouterApiKey.length > 0) {
-    putSecret('setting:openrouterApiKey', rawPatch.openrouterApiKey);
-  }
-  if (typeof rawPatch.claudeApiKey === 'string' && rawPatch.claudeApiKey.length > 0) {
-    putSecret('setting:claudeApiKey', rawPatch.claudeApiKey);
-  }
-
-  // ── SSH map → public metadata in settings + secrets in vault ──
+  // ── Validate everything before touching storage ──
+  const incomingSsh =
+    'connectionSsh' in rawPatch
+      ? SettingsShape.shape.connectionSsh.parse(rawPatch.connectionSsh)
+      : null;
   let nextSshPublic = prevRaw.connectionSsh ?? {};
-  if ('connectionSsh' in rawPatch) {
-    const incoming = SettingsShape.shape.connectionSsh.parse(rawPatch.connectionSsh);
-    const prevIds = new Set(Object.keys(prevRaw.connectionSsh ?? {}));
-    const nextIds = new Set(Object.keys(incoming));
-
-    for (const id of prevIds) {
-      if (!nextIds.has(id)) deleteSshSecrets(id);
+  const sshWrites: Array<{ id: string; dropOld: boolean; secrets: SshSecrets }> = [];
+  const sshDeletes: string[] = [];
+  if (incomingSsh) {
+    const prevMap = prevRaw.connectionSsh ?? {};
+    const nextIds = new Set(Object.keys(incomingSsh));
+    for (const id of Object.keys(prevMap)) {
+      if (!nextIds.has(id)) sshDeletes.push(id);
     }
-
     const publicMap: Settings['connectionSsh'] = {};
-    for (const [id, ssh] of Object.entries(incoming)) {
+    for (const [id, ssh] of Object.entries(incomingSsh)) {
       publicMap[id] = {
         host: ssh.host,
         port: ssh.port,
@@ -116,21 +129,27 @@ export function applySettingsPatch(patch: unknown): Settings {
         privateKeyPath: ssh.privateKeyPath ?? '',
         useAgent: ssh.useAgent ?? false,
       };
-      setSshSecrets(id, {
-        password: ssh.password,
-        privateKey: ssh.privateKey,
-        passphrase: ssh.passphrase,
+      const prev = prevMap[id];
+      sshWrites.push({
+        id,
+        // SC-08: blank means "keep" only for the same bastion + login.
+        dropOld: Boolean(prev && !canReuseStoredSshSecrets(prev, ssh)),
+        secrets: { password: ssh.password, privateKey: ssh.privateKey, passphrase: ssh.passphrase },
       });
     }
     nextSshPublic = publicMap;
-    setSetting('connectionSsh', stripSshSecrets(publicMap));
   }
+  const sshClears = ClearSshSecrets.parse(rawPatch.clearSshSecrets ?? {});
 
   // ── Merge non-secret keys ──
   const STRIPPED_PATCH_KEYS = new Set<string>([
     'openrouterApiKey',
     'claudeApiKey',
     'connectionSsh',
+    'clearSshSecrets',
+    // Host-key trust is changed only by the host-key prompt flow in main
+    // (SC-28): a compromised renderer must not pre-approve a MITM key.
+    'sshKnownHosts',
     ...RESPONSE_ONLY_KEYS,
     // Also strip has* flags if any slipped in
     'hasOpenrouterApiKey',
@@ -149,22 +168,49 @@ export function applySettingsPatch(patch: unknown): Settings {
     claudeApiKey: '',
   });
 
+  const settingsToWrite: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(merged)) {
     if (RESPONSE_ONLY_KEYS.has(k)) continue;
     if (k === 'hasOpenrouterApiKey' || k === 'hasClaudeApiKey') continue;
     if (k === 'connectionSsh') {
-      setSetting(k, stripSshSecrets(v as Settings['connectionSsh']));
+      if (incomingSsh) settingsToWrite[k] = stripSshSecrets(v as Settings['connectionSsh']);
       continue;
     }
     if (k === 'openrouterApiKey' || k === 'claudeApiKey') {
-      setSetting(k, '');
+      settingsToWrite[k] = '';
       continue;
     }
-    setSetting(k, v);
+    settingsToWrite[k] = v;
   }
+
+  // ── Apply, atomically ──
+  const db = getDb();
+  db.transaction(() => {
+    if (typeof rawPatch.openrouterApiKey === 'string' && rawPatch.openrouterApiKey.length > 0) {
+      putSecret('setting:openrouterApiKey', rawPatch.openrouterApiKey, db);
+    }
+    if (typeof rawPatch.claudeApiKey === 'string' && rawPatch.claudeApiKey.length > 0) {
+      putSecret('setting:claudeApiKey', rawPatch.claudeApiKey, db);
+    }
+    for (const id of sshDeletes) deleteSshSecrets(id, db);
+    for (const w of sshWrites) {
+      if (w.dropOld) deleteSshSecrets(w.id, db);
+      setSshSecrets(w.id, w.secrets, db);
+    }
+    for (const [id, fields] of Object.entries(sshClears)) {
+      for (const field of fields) {
+        // A secret supplied in the same patch wins over a clear request.
+        const supplied = sshWrites.find((w) => w.id === id)?.secrets[field];
+        if (!supplied) deleteSecret(`ssh:${id}:${field}`, db);
+      }
+    }
+    setSettings(settingsToWrite);
+  })();
 
   return getPublicSettings();
 }
+
+type SshSecrets = { password: string; privateKey: string; passphrase: string };
 
 function stripSshSecrets(
   map: Settings['connectionSsh'],

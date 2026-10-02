@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { sshUnsupportedReason } from '@shared/connection-endpoint';
 import { CONNECTION_LOST, ConnectionLostError } from '@shared/connection-loss';
+import { assertOsSingleIndexName, isReadOnlyOsSql } from '@shared/os-write-policy';
 import {
   type AdminJobEvent,
   BackupRequest,
@@ -51,6 +52,7 @@ import {
   cancelAiChat,
   capAiToolJson,
   isAiRowDataAllowed,
+  isAiSchemaAllowed,
   isReadOnlyRedisCommand,
   isReadOnlySql,
   serializeAiToolRows,
@@ -81,6 +83,8 @@ import {
   parseOsSqlArgs,
 } from './opensearch-ipc';
 import { cancelAllJobs, cancelJob, detectTools, startJob } from './pg-admin';
+import { materializeAdminTls, planAdminTls } from './pg-admin-tls';
+import { describePsqlProblem, scanPsqlScript } from './psql-script-guard';
 import { assertAllowedOnReadOnly } from './read-only-guard';
 import {
   assertRedisCommandAllowed,
@@ -95,9 +99,22 @@ import {
   parseRedisSetTtlArgs,
   parseRedisWriteArgs,
 } from './redis-ipc-args';
+import {
+  deleteSchemaSnapshot,
+  getSchemaSnapshot,
+  listSchemaSnapshots,
+  saveSchemaSnapshot,
+} from './schema-snapshots';
+import { SessionGate, connectOrCleanUp } from './session-gate';
 import { applySettingsPatch, getAllSettings, getPublicSettings } from './settings';
 import { formatSql } from './sql-format';
-import { closeAllTunnels, closeTunnel, openTunnel, setHostKeyPrompt } from './ssh-tunnel';
+import {
+  HOST_KEY_PROMPT_TIMEOUT_MS,
+  closeAllTunnels,
+  closeTunnel,
+  openTunnel,
+  setHostKeyPrompt,
+} from './ssh-tunnel';
 import { disposeUpdater, initUpdater } from './updater';
 import {
   clearApiKeys,
@@ -346,8 +363,8 @@ app
         // Only allow SELECT — the SQL plugin can technically issue
         // CREATE / DELETE on some distributions, but the AI's job is
         // observation only.
-        if (!/^\s*select\b/i.test(query)) {
-          return JSON.stringify({ error: 'only SELECT allowed' });
+        if (!isReadOnlyOsSql(query)) {
+          return JSON.stringify({ error: 'only a single SELECT / SHOW / DESCRIBE allowed' });
         }
         try {
           const res = await callWorker({ kind: 'osSql', query }, 'osSql');
@@ -424,6 +441,14 @@ app.on('will-quit', () => {
  */
 type DistributiveOmit<T, K extends keyof T> = T extends T ? Omit<T, K> : never;
 
+/** Requests that are part of a session change themselves and must not wait for it. */
+const SESSION_PLUMBING_KINDS: ReadonlySet<WorkerRequest['kind']> = new Set([
+  'connect',
+  'disconnect',
+  'testConnect',
+  'ping',
+]);
+
 async function callWorker<K extends WorkerResponse['kind']>(
   req: DistributiveOmit<WorkerRequest, 'id'>,
   expected: K,
@@ -431,6 +456,12 @@ async function callWorker<K extends WorkerResponse['kind']>(
   // U27: a request that died with the transport is retried once on a
   // freshly re-established session; see connection-recovery.ts.
   const loose = req as { kind: WorkerRequest['kind'] } & Record<string, unknown>;
+  // SC-29: a connect/disconnect in flight will change which session (and
+  // which read-only flag) this request runs against; evaluate the guard
+  // and post the request only once the session has settled.
+  if (!SESSION_PLUMBING_KINDS.has(req.kind)) {
+    await sessionGate.settled();
+  }
   // C1: one guard for every engine and every route — whatever handler
   // issued it, a write never reaches the worker on a read-only session.
   if (retainedSession?.config.readOnly === true) assertAllowedOnReadOnly(loose);
@@ -518,6 +549,12 @@ const connectionRecovery = new ConnectionRecovery({
   },
 });
 
+/** Settings → result size cap in bytes (P2-3); the worker clamps it to 256 MiB. */
+function resultMaxBytes(): number | undefined {
+  const mb = SettingsShape.parse(getAllSettings()).resultMaxMegabytes;
+  return mb ? mb * 1024 * 1024 : undefined;
+}
+
 function currentQueryTimeoutMs(): number {
   return SettingsShape.parse(getAllSettings()).queryTimeoutMs;
 }
@@ -536,11 +573,9 @@ async function applyStatementTimeout(timeoutMs = currentQueryTimeoutMs()): Promi
 // ─── Connection session helpers (C2/C4/C9/C10/C11/C12/C13/C21) ─────────
 
 /** One connect/disconnect at a time from main (C12). */
-let sessionChain: Promise<unknown> = Promise.resolve();
+const sessionGate = new SessionGate();
 function serializeSessionChange<T>(fn: () => Promise<T>): Promise<T> {
-  const run = sessionChain.then(fn, fn);
-  sessionChain = run.catch(() => undefined);
-  return run;
+  return sessionGate.serialize(fn);
 }
 
 /** Parse a renderer config, with a readable message instead of Zod JSON (F6). */
@@ -611,20 +646,24 @@ function clearSession(): void {
  */
 async function establishSession(config: ConnectionConfigType) {
   sessionEpoch++;
-  const settings = SettingsShape.parse(getAllSettings());
-  // C4: unverified TLS is refused for prod-tagged connections.
-  assertTlsAllowedForTag(resolveTls(config), settings.connectionTags?.[config.id]);
-  const withFiles = await withTlsFiles(config);
-  const ssh = getFullSshConfig(config.id, settings.connectionSsh);
+  let ssh: ReturnType<typeof getFullSshConfig> = null;
+  // SC-07: everything that can fail sits inside the try, so any failure
+  // (TLS policy, unreadable cert file, tunnel, host-key refusal) leaves
+  // main AND the worker disconnected, in agreement with what the UI shows.
+  const attempt = async () => {
+    const settings = SettingsShape.parse(getAllSettings());
+    // C4: unverified TLS is refused for prod-tagged connections.
+    assertTlsAllowedForTag(resolveTls(config), settings.connectionTags?.[config.id]);
+    const withFiles = await withTlsFiles(config);
+    ssh = getFullSshConfig(config.id, settings.connectionSsh);
 
-  // C13: switching connection closes the previous one's tunnel; a
-  // reconnect to the same one gets a fresh tunnel rather than a stale one.
-  const previousId = activeConnectionId;
-  if (previousId && previousId !== config.id) closeTunnel(previousId);
-  if (ssh) closeTunnel(config.id);
+    // C13: switching connection closes the previous one's tunnel; a
+    // reconnect to the same one gets a fresh tunnel rather than a stale one.
+    const previousId = activeConnectionId;
+    if (previousId && previousId !== config.id) closeTunnel(previousId);
+    if (ssh) closeTunnel(config.id);
 
-  let effective: ConnectionConfigType = { ...withFiles, readOnly: config.readOnly ?? false };
-  try {
+    let effective: ConnectionConfigType = { ...withFiles, readOnly: config.readOnly ?? false };
     if (ssh) {
       const refusal = sshUnsupportedReason(config);
       if (refusal) throw new Error(refusal);
@@ -660,20 +699,21 @@ async function establishSession(config: ConnectionConfigType) {
       tunnelled: Boolean(ssh),
     };
     return res;
-  } catch (err) {
+  };
+  return connectOrCleanUp(attempt, async () => {
     // C21: the worker tore the previous session down before dialling, so
-    // main must not keep claiming it.
+    // main must not keep claiming it. When the failure came before the
+    // worker was reached, the previous session is still open there: close it.
     clearSession();
     if (ssh) closeTunnel(config.id);
-    throw err;
-  }
+    await callWorker({ kind: 'disconnect' }, 'disconnected').catch(() => undefined);
+  });
 }
 
 // ─── SSH host-key prompt (C8) ─────────────────────────────────────────
 
 const hostKeyWaiters = new Map<string, (accept: boolean) => void>();
-/** Longer than a user needs to read a fingerprint, shorter than ssh readyTimeout. */
-const HOST_KEY_PROMPT_TIMEOUT_MS = 50_000;
+// HOST_KEY_PROMPT_TIMEOUT_MS (ssh-tunnel.ts) is shorter than the ssh ready timeout (SC-17).
 
 setHostKeyPrompt((info) => {
   const win = mainWindow;
@@ -967,7 +1007,7 @@ function registerIpcHandlers() {
       // worker BEGINs when the session is idle and reports txnState.
       const autoBegin = !internal && SettingsShape.parse(getAllSettings()).transactionMode === true;
       const res = await callWorker(
-        { kind: 'query', sql, params, revision, maxRows, autoBegin },
+        { kind: 'query', sql, params, revision, maxRows, autoBegin, maxBytes: resultMaxBytes() },
         'queryResult',
       );
       if (!internal) {
@@ -1144,29 +1184,54 @@ function registerIpcHandlers() {
 
   // ── Backup / restore (pg_dump, pg_restore, psql) ──
 
-  const adminEndpoint = async (): Promise<PgEndpoint> => {
+  /** Temp TLS files of running admin jobs, removed when the job ends (SC-09). */
+  const adminCleanups = new Map<string, () => Promise<void>>();
+  const adminEndpoint = async (): Promise<{
+    endpoint: PgEndpoint;
+    cleanup: () => Promise<void>;
+  }> => {
     const session = retainedSession;
     if (!session || activeEngine !== 'postgres')
       throw new Error('Connect to a Postgres database first.');
+    const settings = SettingsShape.parse(getAllSettings());
+    // SC-09: same TLS mode, CA and client certificate as the live session.
+    const plan = planAdminTls(session.config, settings.connectionTags?.[session.id]);
     let { host, port } = session.config;
+    let hostAddr: string | undefined;
     if (session.tunnelled) {
       // Same tunnel the worker uses (identical target -> cached local port).
-      const ssh = getFullSshConfig(session.id, SettingsShape.parse(getAllSettings()).connectionSsh);
+      const ssh = getFullSshConfig(session.id, settings.connectionSsh);
       if (!ssh) throw new Error('The SSH tunnel for this connection is gone — reconnect first.');
       const local = await openTunnel({ id: session.id, ssh, pgHost: host, pgPort: port });
-      host = local.host;
+      // Keep the real name for certificate checks; dial the tunnel's local end.
+      host = session.config.tls?.servername?.trim() || host;
+      hostAddr = local.host;
       port = local.port;
     }
+    const files = await materializeAdminTls(plan);
     return {
-      host,
-      port,
-      user: session.config.user,
-      password: session.config.password,
-      ssl: session.config.ssl === true,
+      endpoint: {
+        host,
+        port,
+        user: session.config.user,
+        password: session.config.password,
+        ssl: plan.sslMode !== 'disable',
+        sslMode: plan.sslMode,
+        sslRootCert: files.sslRootCert,
+        sslCert: files.sslCert,
+        sslKey: files.sslKey,
+        hostAddr,
+      },
+      cleanup: files.cleanup,
     };
   };
   const adminBinDir = (): string => SettingsShape.parse(getAllSettings()).pgBinDir;
   const emitAdminEvent = (ev: AdminJobEvent) => {
+    if (ev.type === 'done') {
+      const cleanup = adminCleanups.get(ev.jobId);
+      adminCleanups.delete(ev.jobId);
+      void cleanup?.().catch(() => undefined);
+    }
     if (mainWindow && !mainWindow.isDestroyed())
       mainWindow.webContents.send(IpcChannel.AdminJobEvent, ev);
   };
@@ -1185,14 +1250,21 @@ function registerIpcHandlers() {
   ipcMain.handle(IpcChannel.AdminBackup, async (_e, raw: unknown) => {
     const req = BackupRequest.parse(raw);
     assertAdminPicked(req.outputPath);
-    const invocation = buildPgDumpInvocation(req, await adminEndpoint());
-    const jobId = await startJob({
-      invocation,
-      binDir: adminBinDir(),
-      emit: emitAdminEvent,
-      outputPath: req.outputPath,
-    });
-    return { jobId, command: invocation.display };
+    const { endpoint, cleanup } = await adminEndpoint();
+    try {
+      const invocation = buildPgDumpInvocation(req, endpoint);
+      const jobId = await startJob({
+        invocation,
+        binDir: adminBinDir(),
+        emit: emitAdminEvent,
+        outputPath: req.outputPath,
+      });
+      adminCleanups.set(jobId, cleanup);
+      return { jobId, command: invocation.display };
+    } catch (err) {
+      await cleanup().catch(() => undefined);
+      throw err;
+    }
   });
 
   ipcMain.handle(IpcChannel.AdminRestore, async (_e, raw: unknown) => {
@@ -1204,16 +1276,27 @@ function registerIpcHandlers() {
     const st = await stat(req.filePath);
     if (req.kind === 'plain' && st.isDirectory())
       throw new Error('Choose a file, not a folder, for a plain SQL restore.');
-    const invocation = buildPgRestoreInvocation(req, await adminEndpoint());
-    const jobId = await startJob({
-      invocation,
-      binDir: adminBinDir(),
-      emit: emitAdminEvent,
-      ...(req.kind === 'plain'
-        ? { stdinFile: { path: req.filePath, gunzip: /\.gz$/i.test(req.filePath) } }
-        : {}),
-    });
-    return { jobId, command: invocation.display };
+    const gunzip = /\.gz$/i.test(req.filePath);
+    if (req.kind === 'plain') {
+      // SC-16: refuse psql meta-commands that reach the shell, before anything runs.
+      const problem = await scanPsqlScript(req.filePath, gunzip);
+      if (problem) throw new Error(describePsqlProblem(problem));
+    }
+    const { endpoint, cleanup } = await adminEndpoint();
+    try {
+      const invocation = buildPgRestoreInvocation(req, endpoint);
+      const jobId = await startJob({
+        invocation,
+        binDir: adminBinDir(),
+        emit: emitAdminEvent,
+        ...(req.kind === 'plain' ? { stdinFile: { path: req.filePath, gunzip } } : {}),
+      });
+      adminCleanups.set(jobId, cleanup);
+      return { jobId, command: invocation.display };
+    } catch (err) {
+      await cleanup().catch(() => undefined);
+      throw err;
+    }
   });
 
   ipcMain.handle(IpcChannel.AdminCancel, (_e, jobId: unknown): void => {
@@ -1250,8 +1333,22 @@ function registerIpcHandlers() {
     // falls back to the legacy claudeApiKey slot from v0.0.10.
     const apiKey = getApiKey();
     // Row-data tools only when the active connection opted in (C18).
+    // SC-05: bind the chat to the connection it started on and re-check the
+    // opt-in every time a tool is about to run (the user may switch to prod
+    // or revoke the opt-in between rounds).
+    const chatConnectionId = activeConnectionId;
     const result = await startAiChat(mainWindow, parsed, apiKey, settings.openrouterModel, {
-      allowRowData: isAiRowDataAllowed(activeConnectionId, settings.connectionAiRowData),
+      allowRowData: isAiRowDataAllowed(chatConnectionId, settings.connectionAiRowData),
+      allowSchema: isAiSchemaAllowed(chatConnectionId, settings),
+      toolGuard: () => {
+        if (!chatConnectionId || activeConnectionId !== chatConnectionId) {
+          return 'the active connection changed since this chat started';
+        }
+        const live = SettingsShape.parse(getAllSettings());
+        return isAiRowDataAllowed(chatConnectionId, live.connectionAiRowData)
+          ? null
+          : 'row-data access is not enabled for this connection';
+      },
     });
     if (!result.accepted && result.reason) {
       // Surface the failure as a stream event too, so the UI shows it
@@ -1324,6 +1421,21 @@ function registerIpcHandlers() {
       void applyStatementTimeout(merged.queryTimeoutMs);
     }
     return merged;
+  });
+
+  // ── Schema-diff snapshots (R-18) ──
+
+  ipcMain.handle(IpcChannel.SchemaSnapshotList, () => listSchemaSnapshots(getDb()));
+  ipcMain.handle(IpcChannel.SchemaSnapshotGet, (_e, id: unknown) => {
+    if (typeof id !== 'string') throw new Error('id must be a string');
+    return getSchemaSnapshot(getDb(), id);
+  });
+  ipcMain.handle(IpcChannel.SchemaSnapshotSave, (_e, raw: unknown) =>
+    saveSchemaSnapshot(getDb(), raw),
+  );
+  ipcMain.handle(IpcChannel.SchemaSnapshotDelete, (_e, id: unknown): void => {
+    if (typeof id !== 'string') throw new Error('id must be a string');
+    deleteSchemaSnapshot(getDb(), id);
   });
 
   ipcMain.handle(IpcChannel.SettingsClearApiKey, (): Settings => {
@@ -1502,6 +1614,7 @@ function registerIpcHandlers() {
     const p = (raw ?? {}) as { name?: unknown; body?: unknown };
     if (typeof p.name !== 'string' || !p.name) throw new Error('index name required');
     assertOsWritable(retainedSession?.config.readOnly === true);
+    assertOsSingleIndexName(p.name);
     const body =
       p.body && typeof p.body === 'object' && !Array.isArray(p.body)
         ? (p.body as Record<string, unknown>)
@@ -1513,6 +1626,7 @@ function registerIpcHandlers() {
   ipcMain.handle(IpcChannel.OsDeleteIndex, async (_e, raw: unknown) => {
     if (typeof raw !== 'string' || !raw) throw new Error('index name required');
     assertOsWritable(retainedSession?.config.readOnly === true);
+    assertOsSingleIndexName(raw);
     const res = await callWorker({ kind: 'osDeleteIndex', name: raw }, 'osDeleteIndex');
     return { acknowledged: res.acknowledged };
   });

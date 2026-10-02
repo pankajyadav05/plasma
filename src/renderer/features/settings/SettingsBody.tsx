@@ -358,6 +358,13 @@ function TableSection() {
           checked={csv.header}
           onChange={(v) => setCsv({ header: v })}
         />
+        <CheckRow
+          id="csv-formula-guard"
+          label="Spreadsheet safety"
+          text="Prefix cells starting with = + - @ with an apostrophe so Excel and Sheets don't run them as formulas"
+          checked={csv.formulaGuard !== false}
+          onChange={(v) => setCsv({ formulaGuard: v })}
+        />
       </Rows>
     </>
   );
@@ -555,9 +562,9 @@ function AiSection() {
         hint={
           <>
             Bring your own key — encrypted with the OS keychain and never shown again. One key gives
-            access to Claude, GPT, Gemini, Qwen and more. The schema is sent as a system prompt. Row
-            data is only sent when you enable &quot;Allow AI tools to read row data&quot; on a
-            connection (off by default); tool results are capped by rows and bytes.
+            access to Claude, GPT, Gemini, Qwen and more. The schema is sent as a system prompt (see
+            below). Row data is only sent when you enable &quot;Allow AI tools to read row
+            data&quot; on a connection (off by default); tool results are capped by rows and bytes.
           </>
         }
       >
@@ -602,6 +609,14 @@ function AiSection() {
           placeholder="anthropic/claude-sonnet-4.5"
         />
       </Row>
+      <CheckRow
+        id="ai-send-schema"
+        label="Schema context"
+        text="Send table / column names, sample Redis keys and cluster summaries"
+        hint="Included in the AI system prompt so answers fit your database. Production-tagged connections send it only after you enable AI access on that connection."
+        checked={settings.aiSendSchema !== false}
+        onChange={(v) => void updateSettings({ aiSendSchema: v })}
+      />
     </Rows>
   );
 }

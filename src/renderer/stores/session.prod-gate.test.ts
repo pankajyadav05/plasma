@@ -103,8 +103,46 @@ describe('prod gate (U11)', () => {
       sql: 'DELETE FROM users',
       tabId: 'tab-a',
       connectionGen: 0,
+      base: 0,
     });
     expect(queryRun).not.toHaveBeenCalled();
+  });
+
+  it('keeps the statement offset through the gate so errors land on it (R-14)', async () => {
+    const sql = 'SELECT 1;\nDELETE FROM users;';
+    useSession.setState((s) => ({ tabs: s.tabs.map((t) => ({ ...t, sql })) }));
+    queryRun.mockReset();
+    queryRun.mockRejectedValue(new Error('boom'));
+    useSession.setState({
+      prodGate: {
+        sql: 'DELETE FROM users',
+        tabId: 'tab-a',
+        connectionGen: 0,
+        reason: 'prod',
+        base: 10,
+      },
+    });
+    useSession.getState().confirmProdGate();
+    await vi.waitFor(() => {
+      expect(useSession.getState().tabs[0]?.queryError).toMatch(/boom/);
+    });
+    expect(useSession.getState().tabs[0]?.queryErrorRange).toEqual({ start: 10, end: 27 });
+  });
+
+  it('stops a multi-statement script when the connection changes mid-run (R-13)', async () => {
+    useSession.setState((s) => ({
+      settings: { ...s.settings, connectionTags: {} },
+      tabs: s.tabs.map((t) => ({ ...t, sql: 'SELECT 1; SELECT 2; SELECT 3' })),
+    }));
+    queryRun.mockImplementationOnce(async () => {
+      useSession.setState({ connectionGen: 42 });
+      return sampleResult;
+    });
+    await useSession.getState().runQuery({ all: true });
+    expect(queryRun).toHaveBeenCalledTimes(1);
+    const tab = useSession.getState().tabs[0];
+    expect(tab?.queryRunState).toBe('idle');
+    expect(tab?.queryError).toMatch(/connection changed/);
   });
 
   it('confirm executes the captured payload once and does not re-open the gate', async () => {

@@ -117,6 +117,12 @@ const api: PlasmaAPI = {
     clear: () => ipcRenderer.invoke(IpcChannel.HistoryClear),
     delete: (id) => ipcRenderer.invoke(IpcChannel.HistoryDelete, id),
   },
+  schemaSnapshots: {
+    list: () => ipcRenderer.invoke(IpcChannel.SchemaSnapshotList),
+    get: (id) => ipcRenderer.invoke(IpcChannel.SchemaSnapshotGet, id),
+    save: (req) => ipcRenderer.invoke(IpcChannel.SchemaSnapshotSave, req),
+    delete: (id) => ipcRenderer.invoke(IpcChannel.SchemaSnapshotDelete, id),
+  },
   settings: {
     get: () => ipcRenderer.invoke(IpcChannel.SettingsGet),
     set: (patch) => ipcRenderer.invoke(IpcChannel.SettingsSet, patch),

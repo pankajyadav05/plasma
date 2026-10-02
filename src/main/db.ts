@@ -3,6 +3,7 @@ import { dirname, join } from 'node:path';
 import Database from 'better-sqlite3';
 import { app } from 'electron';
 import { logger } from './logger';
+import { ensureSchemaSnapshotsTable, migrateSettingsSnapshots } from './schema-snapshots';
 import { ensureSecretsTable, migratePlaintextSettingsSecrets } from './vault';
 
 /**
@@ -126,6 +127,10 @@ function migrate(d: Database.Database): void {
   ensureReadOnlyColumn(d);
   ensureTlsColumn(d);
   ensureExtraColumn(d);
+  // R-18: snapshots get their own table; move any left in settings by older builds.
+  ensureSchemaSnapshotsTable(d);
+  const moved = migrateSettingsSnapshots(d);
+  if (moved > 0) logger.info('[plasma] moved', moved, 'schema snapshots out of settings');
 }
 
 /** C28 / O12: folder, bootstrap SQL and OpenSearch options as JSON (no secrets). */

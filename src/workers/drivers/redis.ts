@@ -17,6 +17,7 @@ import type {
 } from '@shared/protocol';
 import type { RedisCell } from '@shared/redis-cell';
 import { classifyRedisCommand } from '@shared/redis-command-policy';
+import { decodeKey, displayRedisKey, encodeKey } from '@shared/redis-key';
 import { buildNodeTlsOptions, insecureTlsWarning, resolveTls } from '@shared/tls';
 import Redis, { Cluster, type ClusterOptions, type RedisOptions } from 'ioredis';
 import { type RedisEndpoint, parseRedisEndpoint } from './redis-endpoint';
@@ -26,6 +27,7 @@ import {
   MAX_PAGE_BYTES,
   MAX_STRING_BYTES,
   cellCost,
+  elementWindow,
   encodeCell,
   exceedsFetchBudget,
   largeValueStub,
@@ -61,7 +63,17 @@ const PAGE_ELEMENTS = 500;
 export const MAX_ANALYZE_SAMPLE = 100_000;
 /** A blocking CLI command is abandoned after this long (R3). */
 export const BLOCKING_DEADLINE_MS = 30_000;
+/** The server-side block timeout ends this much before the client deadline. */
+const BLOCKING_MARGIN_MS = 2_000;
 const DEFAULT_SCAN_BUDGET_MS = 1_500;
+/** Per-db clients idle this long are closed; checked every IDLE_SWEEP_MS (P2-12). */
+const IDLE_CLIENT_MS = 5 * 60_000;
+const IDLE_SWEEP_MS = 60_000;
+/** Pub/sub flood control (P2-9). */
+const PUBSUB_FLUSH_MS = 50;
+const PUBSUB_BATCH_MAX = 200;
+/** A single message is cut to this many bytes before it crosses IPC. */
+const PUBSUB_MESSAGE_MAX_BYTES = 64 * 1024;
 
 function parseDbIndex(raw: string | undefined): number {
   if (!raw) return 0;
@@ -80,6 +92,9 @@ export class RedisDriver {
   /** Standalone / sentinel / socket: one client per db index. */
   private clients = new Map<number, RedisClient>();
   private pendingClients = new Map<number, Promise<RedisClient>>();
+  /** Last use of each per-db client, so idle ones can be closed (P2-12). */
+  private clientLastUsed = new Map<number, number>();
+  private idleSweep: ReturnType<typeof setInterval> | null = null;
   private cluster: Cluster | null = null;
   private baseDb = 0;
   private readOnly = false;
@@ -90,6 +105,13 @@ export class RedisDriver {
    * once it enters subscriber mode, so we keep this one isolated.
    */
   private subscriber: RedisClient | Cluster | null = null;
+  /** In-flight subscriber creation, so concurrent subscribes share one connection (P2-9). */
+  private subscriberPromise: Promise<RedisClient | Cluster> | null = null;
+  /** subscribe / unsubscribe run one at a time (P2-9). */
+  private pubsubChain: Promise<unknown> = Promise.resolve();
+  private pubsubOut: RedisPubsubMessage[] = [];
+  private pubsubTimer: ReturnType<typeof setTimeout> | null = null;
+  private pubsubDropped = 0;
   /** Active subscriptions: `${pattern ? 'p' : 's'}:${channel}` → reference count. */
   private subscriptions = new Map<string, number>();
   private pubsubListener: RedisPubsubListener | null = null;
@@ -99,6 +121,8 @@ export class RedisDriver {
   /** Bumped by cancel(); long walks stop when it changes. */
   private cancelGen = 0;
   private blockingClient: RedisClient | null = null;
+  /** CLIENT ID of `blockingClient`, so cancel can unblock it without losing an element (P2-12). */
+  private blockingClientId: number | null = null;
 
   async connect(config: ConnectionConfig): Promise<string> {
     await this.disconnect();
@@ -149,9 +173,18 @@ export class RedisDriver {
     ];
     this.clients.clear();
     this.pendingClients.clear();
+    this.clientLastUsed.clear();
+    if (this.idleSweep) clearInterval(this.idleSweep);
+    this.idleSweep = null;
     this.cluster = null;
     this.subscriber = null;
+    this.subscriberPromise = null;
     this.blockingClient = null;
+    this.blockingClientId = null;
+    if (this.pubsubTimer) clearTimeout(this.pubsubTimer);
+    this.pubsubTimer = null;
+    this.pubsubOut = [];
+    this.pubsubDropped = 0;
     this.subscriptions.clear();
     this.overview = null;
     this.connectConfig = null;
@@ -171,14 +204,30 @@ export class RedisDriver {
   cancel(): void {
     this.cancelGen++;
     const b = this.blockingClient;
+    const id = this.blockingClientId;
     this.blockingClient = null;
-    if (b) {
+    this.blockingClientId = null;
+    if (!b) return;
+    const hangUp = () => {
       try {
         b.disconnect();
       } catch {
         // best-effort
       }
+    };
+    // BLPOP & co. are destructive: killing the socket while the server is
+    // handing an element over loses it. CLIENT UNBLOCK ends the wait cleanly
+    // (a nil reply) and only then is the connection dropped.
+    const other =
+      id !== null ? (this.clients.get(this.baseDb) ?? [...this.clients.values()][0]) : null;
+    if (id === null || !other) {
+      hangUp();
+      return;
     }
+    other
+      .call('CLIENT', 'UNBLOCK', String(id))
+      .catch(() => undefined)
+      .finally(() => setTimeout(hangUp, 100).unref?.());
   }
 
   private assertWritable(what: string): void {
@@ -197,6 +246,7 @@ export class RedisDriver {
       if (target !== 0) throw new Error('Redis Cluster has a single database (db0)');
       return this.cluster as unknown as RedisClient;
     }
+    this.clientLastUsed.set(target, Date.now());
     const existing = this.clients.get(target);
     if (existing) return existing;
     const pending = this.pendingClients.get(target);
@@ -210,11 +260,45 @@ export class RedisDriver {
           throw new Error('not connected');
         }
         this.clients.set(target, c);
+        this.startIdleSweep();
         return c;
       })
-      .finally(() => this.pendingClients.delete(target));
+      .finally(() => {
+        // A reconnect may have registered a newer attempt under this key.
+        if (this.pendingClients.get(target) === p) this.pendingClients.delete(target);
+      });
     this.pendingClients.set(target, p);
     return p;
+  }
+
+  /** Close per-db clients (not the default db) that nobody used for a while. */
+  private startIdleSweep(): void {
+    if (this.idleSweep) return;
+    this.idleSweep = setInterval(() => this.sweepIdleClients(), IDLE_SWEEP_MS);
+    this.idleSweep.unref?.();
+  }
+
+  /** Exposed for tests. */
+  sweepIdleClients(now = Date.now(), maxIdleMs = IDLE_CLIENT_MS): number {
+    let closed = 0;
+    for (const [db, c] of [...this.clients]) {
+      if (db === this.baseDb) continue;
+      if (now - (this.clientLastUsed.get(db) ?? 0) < maxIdleMs) continue;
+      this.clients.delete(db);
+      this.clientLastUsed.delete(db);
+      try {
+        c.disconnect();
+      } catch {
+        // best-effort
+      }
+      closed++;
+    }
+    return closed;
+  }
+
+  /** Per-db clients currently open (tests). */
+  openDatabases(): number[] {
+    return [...this.clients.keys()].sort((a, b) => a - b);
   }
 
   /** Clients to walk for keyspace-wide scans: every master in cluster mode. */
@@ -294,7 +378,8 @@ export class RedisDriver {
     const nodes = await this.scanNodes(opts.db);
     const deadline = Date.now() + (opts.budgetMs ?? DEFAULT_SCAN_BUDGET_MS);
     const want = opts.minResults ?? 1;
-    let { node, cursor } = parseCompositeCursor(opts.cursor, nodes.length);
+    const nodeIds = nodes.map(nodeId);
+    let { node, cursor } = parseCompositeCursor(opts.cursor, nodeIds);
     const found = new Map<string, RedisClient>();
     let iterations = 0;
     let done = false;
@@ -304,10 +389,14 @@ export class RedisDriver {
       if (opts.match) args.push('MATCH', opts.match);
       args.push('COUNT', opts.count);
       if (opts.type) args.push('TYPE', opts.type);
-      const [next, keys] = (await c.call('SCAN', ...args)) as [string, string[]];
+      // Buffers, so keys that are not valid UTF-8 keep their exact bytes (P2-8).
+      const [next, rawKeys] = (await c.callBuffer('SCAN', ...args)) as [Buffer, Buffer[]];
       iterations++;
-      for (const k of keys) if (!found.has(k)) found.set(k, c);
-      cursor = next;
+      for (const raw of rawKeys) {
+        const k = encodeKey(raw);
+        if (!found.has(k)) found.set(k, c);
+      }
+      cursor = next.toString();
       if (cursor === '0') {
         if (node + 1 < nodes.length) {
           node++;
@@ -317,7 +406,7 @@ export class RedisDriver {
       }
     } while (!done && found.size < want && Date.now() < deadline);
 
-    const nextCursor = done ? '0' : formatCompositeCursor(node, cursor, nodes.length);
+    const nextCursor = done ? '0' : formatCompositeCursor(node, cursor, nodeIds);
     const keys = [...found.keys()];
     if (keys.length === 0) {
       return { cursor: nextCursor, keys: [], scanned: 0, iterations, db: opts.db };
@@ -334,8 +423,8 @@ export class RedisDriver {
     for (const [c, list] of byNode) {
       const pipe = c.pipeline();
       for (const k of list) {
-        pipe.type(k);
-        pipe.pttl(k);
+        pipe.type(decodeKey(k));
+        pipe.pttl(decodeKey(k));
       }
       const results = (await pipe.exec()) ?? [];
       list.forEach((k, i) => {
@@ -354,8 +443,10 @@ export class RedisDriver {
     return { cursor: nextCursor, keys: out, scanned: out.length, iterations, db: opts.db };
   }
 
-  async getKey(key: string, opts: RedisGetKeyOpts = {}): Promise<RedisKeyValue> {
+  async getKey(wireKey: string, opts: RedisGetKeyOpts = {}): Promise<RedisKeyValue> {
     const c = await this.client(opts.db);
+    // Binary-safe: a key that is not valid UTF-8 is addressed by its exact bytes (P2-8).
+    const key = decodeKey(wireKey);
     const count = opts.count ?? PAGE_ELEMENTS;
     const firstPage = opts.cursor === undefined;
     const [typeRaw, pttl] = await Promise.all([c.type(key), c.pttl(key)]);
@@ -411,17 +502,25 @@ export class RedisDriver {
       case 'list': {
         const total = await c.llen(key);
         const start = Math.max(0, Number.parseInt(opts.cursor ?? '0', 10) || 0);
-        const raw = await c.lrangeBuffer(key, start, start + count - 1);
         const items: (RedisCell | null)[] = [];
         let bytes = 0;
-        for (const b of raw) {
-          const cell = encodeCell(b);
-          items.push(cell);
-          bytes += cellCost(cell);
-          if (bytes > MAX_PAGE_BYTES) {
-            byteCapped = true;
-            break;
+        // Windowed: a list of 500 x 10 MB elements must not be pulled whole (P2-10).
+        let window = elementWindow(memoryBytes && total ? memoryBytes / total : null, count, true);
+        while (items.length < count && !byteCapped) {
+          const from = start + items.length;
+          const n = Math.min(window, count - items.length);
+          const raw = await c.lrangeBuffer(key, from, from + n - 1);
+          for (const b of raw) {
+            const cell = encodeCell(b);
+            items.push(cell);
+            bytes += cellCost(cell);
+            if (bytes > MAX_PAGE_BYTES) {
+              byteCapped = true;
+              break;
+            }
           }
+          if (raw.length < n) break;
+          window = elementWindow(bytes / Math.max(1, items.length), count);
         }
         const nextStart = start + items.length;
         nextCursor = nextStart < total ? String(nextStart) : null;
@@ -436,7 +535,7 @@ export class RedisDriver {
         do {
           const args: (string | number)[] = [cur];
           if (opts.match) args.push('MATCH', opts.match);
-          args.push('COUNT', 200);
+          args.push('COUNT', elementWindow(items.length ? bytes / items.length : null, 200));
           const [next, members] = (await c.callBuffer('SSCAN', key, ...args)) as [Buffer, Buffer[]];
           for (const m of members) {
             const cell = encodeCell(m);
@@ -477,22 +576,33 @@ export class RedisDriver {
           nextCursor = cur === '0' ? null : cur;
         } else {
           const start = Math.max(0, Number.parseInt(opts.cursor ?? '0', 10) || 0);
-          const flat = (await c.callBuffer(
-            opts.reverse ? 'ZREVRANGE' : 'ZRANGE',
-            key,
-            start,
-            start + count - 1,
-            'WITHSCORES',
-          )) as Buffer[];
           let bytes = 0;
-          for (let i = 0; i + 1 < flat.length; i += 2) {
-            const cell = encodeCell(flat[i]!);
-            items.push([cell, flat[i + 1]!.toString()]);
-            bytes += cellCost(cell);
-            if (bytes > MAX_PAGE_BYTES) {
-              byteCapped = true;
-              break;
+          let window = elementWindow(
+            memoryBytes && total ? memoryBytes / total : null,
+            count,
+            true,
+          );
+          while (items.length < count && !byteCapped) {
+            const from = start + items.length;
+            const n = Math.min(window, count - items.length);
+            const flat = (await c.callBuffer(
+              opts.reverse ? 'ZREVRANGE' : 'ZRANGE',
+              key,
+              from,
+              from + n - 1,
+              'WITHSCORES',
+            )) as Buffer[];
+            for (let i = 0; i + 1 < flat.length; i += 2) {
+              const cell = encodeCell(flat[i]!);
+              items.push([cell, flat[i + 1]!.toString()]);
+              bytes += cellCost(cell);
+              if (bytes > MAX_PAGE_BYTES) {
+                byteCapped = true;
+                break;
+              }
             }
+            if (flat.length / 2 < n) break;
+            window = elementWindow(bytes / Math.max(1, items.length), count);
           }
           const nextStart = start + items.length;
           nextCursor = nextStart < total ? String(nextStart) : null;
@@ -509,7 +619,7 @@ export class RedisDriver {
         do {
           const args: (string | number)[] = [cur];
           if (opts.match) args.push('MATCH', opts.match);
-          args.push('COUNT', 200);
+          args.push('COUNT', elementWindow(items.length ? bytes / (items.length * 2) : null, 200));
           const [next, flat] = (await c.callBuffer('HSCAN', key, ...args)) as [Buffer, Buffer[]];
           for (let i = 0; i + 1 < flat.length; i += 2) {
             const f = encodeCell(flat[i]!);
@@ -579,7 +689,7 @@ export class RedisDriver {
     }
 
     return {
-      key,
+      key: wireKey,
       type,
       ttlMs,
       encoding,
@@ -597,7 +707,7 @@ export class RedisDriver {
   async deleteKey(key: string, db?: number): Promise<void> {
     this.assertWritable('delete');
     const c = await this.client(db);
-    await unlinkOrDel(c, [key]);
+    await unlinkOrDel(c, [decodeKey(key)]);
   }
 
   async setTtl(
@@ -608,17 +718,20 @@ export class RedisDriver {
   ): Promise<void> {
     this.assertWritable('set TTL');
     const c = await this.client(db);
+    const wire = key;
+    const k = decodeKey(key);
     let res: number;
     if (mode === 'persist' || (mode === 'expire' && value <= 0)) {
-      res = await c.persist(key);
-      if (res === 0 && (await c.exists(key)) === 0) throw new Error(`key "${key}" does not exist`);
+      res = await c.persist(k);
+      if (res === 0 && (await c.exists(k)) === 0)
+        throw new Error(`key "${displayRedisKey(wire)}" does not exist`);
       return;
     }
     if (value <= 0) throw new Error('TTL must be positive — use Persist to remove the expiry');
-    if (mode === 'pexpire') res = await c.pexpire(key, value);
-    else if (mode === 'expireat') res = await c.expireat(key, value);
-    else res = await c.expire(key, value);
-    if (res === 0) throw new Error(`key "${key}" does not exist`);
+    if (mode === 'pexpire') res = await c.pexpire(k, value);
+    else if (mode === 'expireat') res = await c.expireat(k, value);
+    else res = await c.expire(k, value);
+    if (res === 0) throw new Error(`key "${displayRedisKey(wire)}" does not exist`);
   }
 
   async bulkDelete(keys: string[], db?: number): Promise<RedisBulkDeleteResult> {
@@ -629,7 +742,7 @@ export class RedisDriver {
       // Cross-slot pipelines are rejected in cluster mode: one call per key.
       const results = await Promise.all(
         keys.map((k) =>
-          c.unlink(k).then(
+          c.unlink(decodeKey(k)).then(
             (r): [Error | null, unknown] => [null, r],
             (e: Error): [Error | null, unknown] => [e, null],
           ),
@@ -642,8 +755,8 @@ export class RedisDriver {
     const useUnlink = await supportsUnlink(c);
     const pipe = c.pipeline();
     for (const k of keys) {
-      if (useUnlink) pipe.unlink(k);
-      else pipe.del(k);
+      if (useUnlink) pipe.unlink(decodeKey(k));
+      else pipe.del(decodeKey(k));
     }
     const results = (await pipe.exec()) ?? [];
     return classifyBulkDelete(keys, results);
@@ -673,15 +786,16 @@ export class RedisDriver {
       let cursor = '0';
       do {
         if (this.cancelGen !== gen) break outer;
-        const [next, keys] = (await node.call(
+        const [next, rawKeys] = (await node.callBuffer(
           'SCAN',
           cursor,
           'MATCH',
           opts.match,
           'COUNT',
           1000,
-        )) as [string, string[]];
-        cursor = next;
+        )) as [Buffer, Buffer[]];
+        cursor = next.toString();
+        const keys = rawKeys.map(encodeKey);
         const fresh = keys.filter((k) => !seen.has(k));
         for (const k of fresh) seen.add(k);
         const room = opts.limit - matched;
@@ -691,8 +805,8 @@ export class RedisDriver {
         if (!opts.dryRun && batch.length > 0) {
           const pipe = node.pipeline();
           for (const k of batch) {
-            if (useUnlink) pipe.unlink(k);
-            else pipe.del(k);
+            if (useUnlink) pipe.unlink(decodeKey(k));
+            else pipe.del(decodeKey(k));
           }
           const res = classifyBulkDelete(batch, (await pipe.exec()) ?? []);
           deleted += res.deleted.length;
@@ -710,79 +824,85 @@ export class RedisDriver {
   async write(op: RedisWriteOp, db?: number): Promise<void> {
     this.assertWritable(op.kind);
     const c = await this.client(db);
+    // Binary-safe keys (P2-8): commands get the exact bytes of an escaped key.
+    const k = decodeKey(op.key);
     switch (op.kind) {
       case 'setString':
         if (op.ttlSeconds && op.ttlSeconds > 0) {
-          await c.set(op.key, op.value, 'EX', op.ttlSeconds);
+          await c.set(k, op.value, 'EX', op.ttlSeconds);
         } else if (op.keepTtl) {
-          await setKeepTtl(c, op.key, op.value);
+          await setKeepTtl(c, k, op.value);
         } else {
-          await c.set(op.key, op.value);
+          await c.set(k, op.value);
         }
         return;
       case 'hashSet':
-        await c.hset(op.key, op.field, op.value);
+        await c.hset(k, op.field, op.value);
         return;
       case 'hashDel':
-        await c.hdel(op.key, op.field);
+        await c.hdel(k, op.field);
         return;
       case 'hashRename': {
         if (op.field === op.newField) return;
-        if ((await c.hexists(op.key, op.newField)) === 1) {
+        if ((await c.hexists(k, op.newField)) === 1) {
           throw new Error(`field "${op.newField}" already exists`);
         }
-        const v = await c.hgetBuffer(op.key, op.field);
+        const v = await c.hgetBuffer(k, op.field);
         if (v === null) throw new Error(`field "${op.field}" no longer exists`);
-        await execOrThrow(c.multi().hset(op.key, op.newField, v).hdel(op.key, op.field));
+        await execOrThrow(c.multi().hset(k, op.newField, v).hdel(k, op.field));
         return;
       }
       case 'listPush':
-        if (op.side === 'l') await c.lpush(op.key, ...op.values);
-        else await c.rpush(op.key, ...op.values);
+        if (op.side === 'l') await c.lpush(k, ...op.values);
+        else await c.rpush(k, ...op.values);
         return;
       case 'listSet':
-        await c.lset(op.key, op.index, op.value);
+        await c.lset(k, op.index, op.value);
         return;
       case 'listRem': {
-        const n = await c.lrem(op.key, op.count ?? 1, op.value);
+        const n = await c.lrem(k, op.count ?? 1, op.value);
         if (n === 0) throw new Error('element not found (the list changed?) — refresh and retry');
         return;
       }
       case 'setAdd':
-        await c.sadd(op.key, ...op.members);
+        await c.sadd(k, ...op.members);
         return;
       case 'setRem':
-        await c.srem(op.key, op.member);
+        await c.srem(k, op.member);
         return;
       case 'zsetAdd':
-        await c.zadd(op.key, op.score, op.member);
+        await c.zadd(k, op.score, op.member);
         return;
       case 'zsetRem':
-        await c.zrem(op.key, op.member);
+        await c.zrem(k, op.member);
         return;
       case 'streamAdd':
-        await c.call('XADD', op.key, op.id || '*', ...op.fields.flat());
+        await c.call('XADD', k, op.id || '*', ...op.fields.flat());
         return;
       case 'streamDel':
-        await c.call('XDEL', op.key, ...op.ids);
+        await c.call('XDEL', k, ...op.ids);
         return;
       case 'jsonSet':
-        await c.call('JSON.SET', op.key, op.path || '$', op.value);
+        await c.call('JSON.SET', k, op.path || '$', op.value);
         return;
       case 'rename': {
-        if (op.key === op.newKey) return;
+        if (k === op.newKey) return;
+        const nk = decodeKey(op.newKey);
         if (op.overwrite) {
-          await c.rename(op.key, op.newKey);
-        } else if ((await c.renamenx(op.key, op.newKey)) === 0) {
-          throw new Error(`key "${op.newKey}" already exists`);
+          await c.rename(k, nk);
+        } else if ((await c.renamenx(k, nk)) === 0) {
+          throw new Error(`key "${displayRedisKey(op.newKey)}" already exists`);
         }
         return;
       }
       case 'copy':
-        await copyKey(c, op.key, op.newKey, op.overwrite === true);
+        await copyKey(c, k, decodeKey(op.newKey), op.overwrite === true, [
+          displayRedisKey(op.key),
+          displayRedisKey(op.newKey),
+        ]);
         return;
       case 'createKey':
-        await createKey(c, op);
+        await createKey(c, op, k);
         return;
     }
   }
@@ -813,15 +933,16 @@ export class RedisDriver {
         const args: (string | number)[] = [cursor];
         if (opts.match) args.push('MATCH', opts.match);
         args.push('COUNT', 500);
-        const [next, keys] = (await c.call('SCAN', ...args)) as [string, string[]];
-        cursor = next;
-        if (keys.length === 0) continue;
+        const [next, rawKeys] = (await c.callBuffer('SCAN', ...args)) as [Buffer, Buffer[]];
+        cursor = next.toString();
+        if (rawKeys.length === 0) continue;
         const pipe = c.pipeline();
-        for (const k of keys) {
+        for (const k of rawKeys) {
           pipe.type(k);
           pipe.pttl(k);
           pipe.call('MEMORY', 'USAGE', k);
         }
+        const keys = rawKeys.map(encodeKey);
         const results = (await pipe.exec()) ?? [];
         for (let i = 0; i < keys.length; i++) {
           const meta = readAnalyzeMeta(results[i * 3], results[i * 3 + 1], results[i * 3 + 2]);
@@ -859,8 +980,56 @@ export class RedisDriver {
     return out;
   }
 
+  private serializePubsub<T>(fn: () => Promise<T>): Promise<T> {
+    const run = this.pubsubChain.then(fn, fn);
+    this.pubsubChain = run.catch(() => undefined);
+    return run;
+  }
+
   /** Reference-counted: a second tab on the same channel shares the subscription (R13). */
-  async subscribe(channel: string, pattern: boolean): Promise<void> {
+  subscribe(channel: string, pattern: boolean): Promise<void> {
+    return this.serializePubsub(() => this.subscribeNow(channel, pattern));
+  }
+
+  unsubscribe(channel: string, pattern: boolean): Promise<void> {
+    return this.serializePubsub(() => this.unsubscribeNow(channel, pattern));
+  }
+
+  /**
+   * Flood control (P2-9): a hot channel can deliver 10k msg/s. Messages are
+   * forwarded in batches every PUBSUB_FLUSH_MS, at most PUBSUB_BATCH_MAX per
+   * flush; the rest are dropped and counted, and a single notice says so.
+   */
+  private emitPubsub(msg: RedisPubsubMessage): void {
+    if (this.pubsubOut.length >= PUBSUB_BATCH_MAX) {
+      this.pubsubDropped++;
+    } else {
+      this.pubsubOut.push(msg);
+    }
+    if (!this.pubsubTimer) {
+      this.pubsubTimer = setTimeout(() => this.flushPubsub(), PUBSUB_FLUSH_MS);
+      this.pubsubTimer.unref?.();
+    }
+  }
+
+  private flushPubsub(): void {
+    this.pubsubTimer = null;
+    const out = this.pubsubOut;
+    this.pubsubOut = [];
+    const dropped = this.pubsubDropped;
+    this.pubsubDropped = 0;
+    for (const m of out) this.pubsubListener?.(m);
+    if (dropped > 0) {
+      this.pubsubListener?.({
+        channel: '(plasma)',
+        message: `${dropped.toLocaleString('en-US')} messages were dropped: the channel is faster than the viewer can show.`,
+        pattern: false,
+        timestamp: Date.now(),
+      });
+    }
+  }
+
+  private async subscribeNow(channel: string, pattern: boolean): Promise<void> {
     if (!this.connectConfig) throw new Error('not connected');
     const tag = `${pattern ? 'p' : 's'}:${channel}`;
     const refs = this.subscriptions.get(tag) ?? 0;
@@ -874,7 +1043,7 @@ export class RedisDriver {
     this.subscriptions.set(tag, (this.subscriptions.get(tag) ?? 0) + 1);
   }
 
-  async unsubscribe(channel: string, pattern: boolean): Promise<void> {
+  private async unsubscribeNow(channel: string, pattern: boolean): Promise<void> {
     const sub = this.subscriber;
     if (!sub) return;
     const tag = `${pattern ? 'p' : 's'}:${channel}`;
@@ -899,8 +1068,18 @@ export class RedisDriver {
     }
   }
 
-  private async ensureSubscriber(): Promise<RedisClient | Cluster> {
-    if (this.subscriber) return this.subscriber;
+  private ensureSubscriber(): Promise<RedisClient | Cluster> {
+    if (this.subscriber) return Promise.resolve(this.subscriber);
+    if (!this.subscriberPromise) {
+      const p = this.openSubscriber().finally(() => {
+        if (this.subscriberPromise === p) this.subscriberPromise = null;
+      });
+      this.subscriberPromise = p;
+    }
+    return this.subscriberPromise;
+  }
+
+  private async openSubscriber(): Promise<RedisClient | Cluster> {
     const config = this.connectConfig;
     const endpoint = this.endpoint;
     if (!config || !endpoint) throw new Error('not connected');
@@ -916,13 +1095,34 @@ export class RedisDriver {
           maxRetriesPerRequest: null,
         });
     sub.on('error', () => {});
-    sub.on('message', (channel: string, message: string) => {
-      this.pubsubListener?.({ channel, message, pattern: false, timestamp: Date.now() });
+    // Buffers: payloads are bytes, and a non-UTF-8 message must not be mangled.
+    sub.on('messageBuffer', (channel: Buffer, message: Buffer) => {
+      this.emitPubsub({
+        channel: encodeKey(channel),
+        message: pubsubText(message),
+        pattern: false,
+        timestamp: Date.now(),
+      });
     });
-    sub.on('pmessage', (_pattern: string, channel: string, message: string) => {
-      this.pubsubListener?.({ channel, message, pattern: true, timestamp: Date.now() });
+    sub.on('pmessageBuffer', (_pattern: Buffer, channel: Buffer, message: Buffer) => {
+      this.emitPubsub({
+        channel: encodeKey(channel),
+        message: pubsubText(message),
+        pattern: true,
+        timestamp: Date.now(),
+      });
     });
-    await sub.connect();
+    try {
+      await sub.connect();
+    } catch (err) {
+      sub.disconnect();
+      throw err;
+    }
+    // disconnect() ran while we were connecting: don't resurrect a session.
+    if (this.connectConfig !== config) {
+      sub.disconnect();
+      throw new Error('not connected');
+    }
     this.subscriber = sub;
     return sub;
   }
@@ -980,9 +1180,17 @@ export class RedisDriver {
     if (this.blockingClient) throw new Error('another blocking command is still running');
     const c = await openClient(config, endpoint, db ?? this.baseDb, { maxRetriesPerRequest: 0 });
     this.blockingClient = c;
+    this.blockingClientId = Number(await c.call('CLIENT', 'ID').catch(() => Number.NaN));
+    if (!Number.isFinite(this.blockingClientId)) this.blockingClientId = null;
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      const [head, ...tail] = parts as [string, ...string[]];
+      // A server-side timeout a little shorter than our deadline: the wait
+      // ends on the server's terms (nil), never by us hanging up on a
+      // delivery that is already in flight (P2-12).
+      const [head, ...tail] = withServerBlockTimeout(
+        parts,
+        BLOCKING_DEADLINE_MS - BLOCKING_MARGIN_MS,
+      ) as [string, ...string[]];
       return await Promise.race([
         c.callBuffer(head, ...tail),
         new Promise((_, reject) => {
@@ -1002,7 +1210,10 @@ export class RedisDriver {
       throw err;
     } finally {
       if (timer) clearTimeout(timer);
-      if (this.blockingClient === c) this.blockingClient = null;
+      if (this.blockingClient === c) {
+        this.blockingClient = null;
+        this.blockingClientId = null;
+      }
       try {
         c.disconnect();
       } catch {
@@ -1022,7 +1233,10 @@ interface StreamGroup {
   lag: number | null;
 }
 
-async function readStreamGroups(c: RedisClient, key: string): Promise<StreamGroup[] | undefined> {
+async function readStreamGroups(
+  c: RedisClient,
+  key: string | Buffer,
+): Promise<StreamGroup[] | undefined> {
   try {
     const raw = (await c.call('XINFO', 'GROUPS', key)) as unknown[][];
     return raw.map((flat) => {
@@ -1082,12 +1296,38 @@ export function aggregateAnalyze(
   };
 }
 
-/** `SCAN` cursor across cluster masters: "node:cursor". Plain cursor for one node. */
+/**
+ * `SCAN` cursor across cluster masters: "host:port|cursor", keyed by node
+ * identity (P2-13). A positional index pointed at a different master after
+ * a failover or slot migration, silently skipping or repeating keys. When
+ * the named node is gone, the walk resumes at the next node in order from
+ * cursor 0 (some repeats, never a silent gap). Plain cursor for one node.
+ * The legacy positional "N:cursor" form is still understood.
+ */
 export function parseCompositeCursor(
   raw: string,
-  nodeCount: number,
+  nodeIds: readonly string[] | number,
 ): { node: number; cursor: string } {
-  if (nodeCount <= 1) return { node: 0, cursor: raw || '0' };
+  const ids = typeof nodeIds === 'number' ? null : nodeIds;
+  const nodeCount = typeof nodeIds === 'number' ? nodeIds : nodeIds.length;
+  if (nodeCount <= 1) {
+    const bar = raw.lastIndexOf('|');
+    if (bar < 0) return { node: 0, cursor: raw || '0' };
+    // A cluster cursor against a single node: only valid for that very node.
+    return {
+      node: 0,
+      cursor: ids && ids[0] !== raw.slice(0, bar) ? '0' : raw.slice(bar + 1) || '0',
+    };
+  }
+  const bar = raw.lastIndexOf('|');
+  if (bar >= 0 && ids) {
+    const id = raw.slice(0, bar);
+    const cursor = raw.slice(bar + 1) || '0';
+    const at = ids.indexOf(id);
+    if (at >= 0) return { node: at, cursor };
+    const next = ids.findIndex((candidate) => candidate.localeCompare(id) > 0);
+    return { node: next >= 0 ? next : 0, cursor: '0' };
+  }
   const i = raw.indexOf(':');
   if (i < 0) return { node: 0, cursor: raw || '0' };
   const node = Number(raw.slice(0, i));
@@ -1097,9 +1337,68 @@ export function parseCompositeCursor(
   };
 }
 
-export function formatCompositeCursor(node: number, cursor: string, nodeCount: number): string {
-  if (nodeCount <= 1) return cursor;
-  return `${node}:${cursor}`;
+export function formatCompositeCursor(
+  node: number,
+  cursor: string,
+  nodeIds: readonly string[] | number,
+): string {
+  const count = typeof nodeIds === 'number' ? nodeIds : nodeIds.length;
+  if (count <= 1) return cursor;
+  if (typeof nodeIds === 'number') return `${node}:${cursor}`;
+  return `${nodeIds[node] ?? node}|${cursor}`;
+}
+
+/**
+ * Clamp the timeout argument of a blocking command to `maxMs`, so the server
+ * gives up before the client does. 0 ("forever") and larger values are cut.
+ * Unknown commands pass through unchanged.
+ */
+export function withServerBlockTimeout(parts: string[], maxMs: number): string[] {
+  const verb = (parts[0] ?? '').toUpperCase();
+  const out = [...parts];
+  const clampSeconds = (i: number) => {
+    const n = Number(out[i]);
+    const maxS = maxMs / 1000;
+    if (out[i] !== undefined && (!Number.isFinite(n) || n <= 0 || n > maxS)) out[i] = String(maxS);
+  };
+  switch (verb) {
+    case 'BLPOP':
+    case 'BRPOP':
+    case 'BZPOPMIN':
+    case 'BZPOPMAX':
+    case 'BRPOPLPUSH':
+    case 'BLMOVE':
+      clampSeconds(out.length - 1);
+      break;
+    case 'BLMPOP':
+    case 'BZMPOP':
+      clampSeconds(1);
+      break;
+    case 'XREAD':
+    case 'XREADGROUP': {
+      const at = out.findIndex((p) => p.toUpperCase() === 'BLOCK');
+      if (at >= 0 && out[at + 1] !== undefined) {
+        const n = Number(out[at + 1]);
+        if (!Number.isFinite(n) || n <= 0 || n > maxMs) out[at + 1] = String(maxMs);
+      }
+      break;
+    }
+  }
+  return out;
+}
+
+/** Message payload as text: UTF-8 when valid, redis-cli style escapes otherwise; capped. */
+export function pubsubText(buf: Buffer): string {
+  const cut = buf.byteLength > PUBSUB_MESSAGE_MAX_BYTES;
+  const head = cut ? buf.subarray(0, PUBSUB_MESSAGE_MAX_BYTES) : buf;
+  const text = cut ? head.toString('utf8') : encodeKeyLike(head);
+  return cut ? `${text}… (${buf.byteLength.toLocaleString('en-US')} bytes, truncated)` : text;
+}
+
+function encodeKeyLike(buf: Buffer): string {
+  const wire = encodeKey(buf);
+  // A message is not a key: show escapes without the key marker.
+  return displayRedisKey(wire);
 }
 
 function nodeId(c: RedisClient): string {
@@ -1140,7 +1439,7 @@ async function supportsUnlink(c: RedisClient): Promise<boolean> {
   return ok;
 }
 
-async function unlinkOrDel(c: RedisClient, keys: string[]): Promise<number> {
+async function unlinkOrDel(c: RedisClient, keys: (string | Buffer)[]): Promise<number> {
   try {
     return await c.unlink(...keys);
   } catch (err) {
@@ -1158,7 +1457,7 @@ async function execOrThrow(multi: ReturnType<RedisClient['multi']>): Promise<voi
 }
 
 /** SET … KEEPTTL (Redis ≥ 6); older servers: re-apply the *current* PTTL (R9). */
-async function setKeepTtl(c: RedisClient, key: string, value: string): Promise<void> {
+async function setKeepTtl(c: RedisClient, key: string | Buffer, value: string): Promise<void> {
   try {
     await c.call('SET', key, value, 'KEEPTTL');
   } catch (err) {
@@ -1171,17 +1470,18 @@ async function setKeepTtl(c: RedisClient, key: string, value: string): Promise<v
 
 async function copyKey(
   c: RedisClient,
-  from: string,
-  to: string,
+  from: string | Buffer,
+  to: string | Buffer,
   overwrite: boolean,
+  [fromName, toName]: [string, string],
 ): Promise<void> {
   if (from === to) throw new Error('source and destination are the same key');
   try {
     const args = overwrite ? [from, to, 'REPLACE'] : [from, to];
     const n = Number(await c.call('COPY', ...args));
     if (n === 0) {
-      if ((await c.exists(from)) === 0) throw new Error(`key "${from}" does not exist`);
-      throw new Error(`key "${to}" already exists`);
+      if ((await c.exists(from)) === 0) throw new Error(`key "${fromName}" does not exist`);
+      throw new Error(`key "${toName}" already exists`);
     }
     return;
   } catch (err) {
@@ -1189,7 +1489,7 @@ async function copyKey(
   }
   // Redis < 6.2: DUMP + RESTORE (same server, binary safe), keeping the TTL.
   const dump = await c.dumpBuffer(from);
-  if (!dump) throw new Error(`key "${from}" does not exist`);
+  if (!dump) throw new Error(`key "${fromName}" does not exist`);
   const pttl = await c.pttl(from);
   const args: (string | number | Buffer)[] = [to, pttl > 0 ? pttl : 0, dump];
   if (overwrite) args.push('REPLACE');
@@ -1197,7 +1497,7 @@ async function copyKey(
     await c.call('RESTORE', ...args);
   } catch (err) {
     if (/BUSYKEY/i.test(err instanceof Error ? err.message : String(err))) {
-      throw new Error(`key "${to}" already exists`);
+      throw new Error(`key "${toName}" already exists`);
     }
     throw err;
   }
@@ -1206,38 +1506,40 @@ async function copyKey(
 async function createKey(
   c: RedisClient,
   op: Extract<RedisWriteOp, { kind: 'createKey' }>,
+  key: string | Buffer,
 ): Promise<void> {
-  if ((await c.exists(op.key)) === 1) throw new Error(`key "${op.key}" already exists`);
+  if ((await c.exists(key)) === 1)
+    throw new Error(`key "${displayRedisKey(op.key)}" already exists`);
   const m = c.multi();
   switch (op.keyType) {
     case 'string':
-      m.set(op.key, op.value);
+      m.set(key, op.value);
       break;
     case 'hash':
       if (!op.field) throw new Error('a hash needs a first field');
-      m.hset(op.key, op.field, op.value);
+      m.hset(key, op.field, op.value);
       break;
     case 'list':
-      m.rpush(op.key, op.value);
+      m.rpush(key, op.value);
       break;
     case 'set':
-      m.sadd(op.key, op.value);
+      m.sadd(key, op.value);
       break;
     case 'zset':
       if (op.score === undefined || !Number.isFinite(op.score))
         throw new Error('a sorted set needs a score');
-      m.zadd(op.key, op.score, op.value);
+      m.zadd(key, op.score, op.value);
       break;
     case 'stream':
       if (!op.field) throw new Error('a stream entry needs a field name');
-      m.call('XADD', op.key, '*', op.field, op.value);
+      m.call('XADD', key, '*', op.field, op.value);
       break;
     case 'json':
       JSON.parse(op.value); // validate before sending
-      m.call('JSON.SET', op.key, '$', op.value, 'NX');
+      m.call('JSON.SET', key, '$', op.value, 'NX');
       break;
   }
-  if (op.ttlSeconds) m.expire(op.key, op.ttlSeconds);
+  if (op.ttlSeconds) m.expire(key, op.ttlSeconds);
   await execOrThrow(m);
 }
 

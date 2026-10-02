@@ -1,7 +1,7 @@
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { MenuItem, Pill, PillChevron, SplitPill } from '@/components/ui/workbench';
-import { ExplainDialog } from '@/features/explain/ExplainDialog';
 import { openSqlFileInTab, runCommand, saveActiveSqlTab } from '@/features/keymap/commands';
+import { lazyNamed } from '@/lib/lazy';
 import { shortcut } from '@/lib/platform';
 import { type RunMode, resolveRunTarget, statementPosition } from '@/lib/sql-split';
 import { useActiveTab, useSession } from '@/stores/session';
@@ -22,8 +22,10 @@ import {
   Wand2,
   WrapText,
 } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { Suspense, useEffect, useState } from 'react';
 import { MonacoEditor } from './MonacoEditor';
+
+const ExplainDialog = lazyNamed(() => import('@/features/explain/ExplainDialog'), 'ExplainDialog');
 
 const MODEL_PREFIX = '/plasma-tab-';
 
@@ -163,7 +165,9 @@ export function SqlCanvas({ expanded = false }: { expanded?: boolean }) {
       />
 
       {!isTable && explainOpen && (
-        <ExplainDialog open={explainOpen} onOpenChange={setExplainOpen} sql={explainSql} />
+        <Suspense fallback={null}>
+          <ExplainDialog open={explainOpen} onOpenChange={setExplainOpen} sql={explainSql} />
+        </Suspense>
       )}
     </div>
   );

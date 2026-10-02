@@ -83,6 +83,19 @@ describe('buildDataSql', () => {
     expect(built.params).toEqual(['%pro%', 'a@b.co']);
   });
 
+  it('treats %, _ and backslash in LIKE / ILIKE filters as literal text (R-28)', () => {
+    const built = buildDataSql(
+      input({
+        filters: [
+          filter({ column: 'a', op: 'ILIKE', value: '50%' }),
+          filter({ column: 'b', op: 'LIKE', value: 'user_1' }),
+          filter({ column: 'c', op: 'NOT LIKE', value: 'a\\b' }),
+        ],
+      }),
+    );
+    expect(built.params).toEqual(['%50\\%%', '%user\\_1%', '%a\\\\b%']);
+  });
+
   it('renders null checks without a placeholder', () => {
     const built = buildDataSql(
       input({

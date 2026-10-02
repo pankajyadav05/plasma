@@ -38,6 +38,9 @@
   "exclude": [
     "node_modules",
     "out",
-    ".next"
+    ".next",
+    "**/*.test.ts",
+    "_qa",
+    "_samples"
   ]
 }

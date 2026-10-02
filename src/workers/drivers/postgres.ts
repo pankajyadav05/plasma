@@ -1,4 +1,5 @@
 import { ConnectionLostError } from '@shared/connection-loss';
+import { pgReadOnlyEscapeReason } from '@shared/pg-readonly-sql';
 import { pgTypeName } from '@shared/pg-type-oids';
 import type {
   ConnectionConfig,
@@ -15,10 +16,13 @@ import type {
   ImportResult,
 } from '@shared/protocol';
 import {
+  FIRST_CURSOR_CHUNK,
+  MAX_RESULT_BYTES,
+  MAX_RESULT_BYTES_CEILING,
   MAX_RESULT_ROWS,
-  RESULT_CURSOR_CHUNK,
   appendBoundedRows,
   emptyBoundState,
+  nextCursorChunk,
 } from '@shared/result-bounds';
 import { isSingleSqlStatement, isTxnExemptSql } from '@shared/sql-statements';
 import {
@@ -33,6 +37,7 @@ import pg from 'pg';
 import Cursor from 'pg-cursor';
 import { runBootstrapSql } from './pg-bootstrap';
 import { type ImportHooks, applyDdl, runImport } from './pg-import';
+import { enforceReadOnlySession } from './pg-readonly';
 import {
   type EditUpdate,
   type TxnStatus,
@@ -84,6 +89,23 @@ const KEEPALIVE_INITIAL_DELAY_MS = 10_000;
 export interface PostgresLivenessOptions {
   idleProbeAfterMs?: number;
   probeTimeoutMs?: number;
+  /** Bound on closing a cursor whose connection may be dead (P1-1). */
+  closeTimeoutMs?: number;
+  /** Bound on the control connection's pg_cancel_backend round trip (P2-1). */
+  cancelTimeoutMs?: number;
+}
+
+const CURSOR_CLOSE_TIMEOUT_MS = 2_000;
+const CANCEL_TIMEOUT_MS = 3_000;
+
+/** A server ErrorResponse (SQLSTATE) proves the transport is alive. */
+function isServerError(err: unknown): boolean {
+  return (
+    err instanceof Error &&
+    'code' in err &&
+    typeof err.code === 'string' &&
+    /^[0-9A-Z]{5}$/.test(err.code)
+  );
 }
 
 export type QueryChunkHandler = (chunk: {
@@ -103,7 +125,17 @@ type QueryOpts = {
   autoBegin?: boolean;
   /** Sideband only: run read-only under this statement_timeout (F12). */
   timeoutMs?: number;
+  /** Retained-bytes cap for this result (clamped to MAX_RESULT_BYTES_CEILING). */
+  maxBytes?: number;
 };
+
+/** True while the client has a statement running or queued (best effort). */
+function hasInflightQuery(client: ClientT | null): boolean {
+  if (!client) return false;
+  const c = client as unknown as { _activeQuery?: unknown; queryQueue?: unknown[] };
+  if (c._activeQuery === undefined) return true; // unknown pg internals: assume busy
+  return c._activeQuery !== null || (c.queryQueue?.length ?? 0) > 0;
+}
 
 /** F11: at most this many notices are kept / streamed per statement. */
 export const MAX_NOTICES_PER_STATEMENT = 1000;
@@ -128,16 +160,6 @@ function readCursorBatch(
   });
 }
 
-async function closeCursor(cursor: Cursor): Promise<void> {
-  await new Promise<void>((resolve) => {
-    try {
-      cursor.close(() => resolve());
-    } catch {
-      resolve();
-    }
-  });
-}
-
 /**
  * Postgres driver — wraps three `pg.Client` connections (U19):
  *   1. `primary` — carries user queries / transactions
@@ -156,6 +178,8 @@ export class PostgresDriver {
   private txnState: TxnState = 'none';
   private statementTimeoutMs = 0;
   private connectionGen = 0;
+  /** SC-02: re-assert / verify read-only before every user statement. */
+  private readOnlySession = false;
   /** Notices accumulated for the in-flight primary query (U26). */
   private pendingNotices: PgNotice[] = [];
   /** Optional fan-out so the worker can stream notices over the event channel. */
@@ -168,10 +192,21 @@ export class PostgresDriver {
   private lastActivityAt = 0;
   private readonly idleProbeAfterMs: number;
   private readonly probeTimeoutMs: number;
+  private readonly closeTimeoutMs: number;
+  private readonly cancelTimeoutMs: number;
+  /** Wakes cursor closes that are waiting on a connection that just died. */
+  private lostWaiters = new Set<() => void>();
+  /** statement_timeout last applied to each session (P2-5). */
+  private appliedTimeout: { primary: number | null; aux: number | null } = {
+    primary: null,
+    aux: null,
+  };
 
   constructor(liveness?: PostgresLivenessOptions) {
     this.idleProbeAfterMs = liveness?.idleProbeAfterMs ?? IDLE_PROBE_AFTER_MS;
     this.probeTimeoutMs = liveness?.probeTimeoutMs ?? LIVENESS_PROBE_TIMEOUT_MS;
+    this.closeTimeoutMs = liveness?.closeTimeoutMs ?? CURSOR_CLOSE_TIMEOUT_MS;
+    this.cancelTimeoutMs = liveness?.cancelTimeoutMs ?? CANCEL_TIMEOUT_MS;
   }
 
   /** Subscribe to NOTICE / RAISE NOTICE events from the primary client. */
@@ -221,7 +256,11 @@ export class PostgresDriver {
    * connection so it never runs inside the user's transaction; any failure
    * leaves the placeholder, which the renderer still shows.
    */
-  private async resolveColumnTypeNames(columns: QueryResult['columns']): Promise<void> {
+  private async resolveColumnTypeNames(
+    columns: QueryResult['columns'],
+    /** Set when already running inside an aux job (withAux would deadlock on itself). */
+    auxClient?: ClientT,
+  ): Promise<void> {
     const unknown = [
       ...new Set(
         columns
@@ -233,12 +272,12 @@ export class PostgresDriver {
     ];
     if (unknown.length > 0) {
       try {
-        const res = await this.withAux((client) =>
+        const lookup = (client: ClientT) =>
           client.query<{ oid: number; name: string }>(
             'SELECT oid::int AS oid, format_type(oid, NULL) AS name FROM pg_type WHERE oid = ANY($1::oid[])',
             [unknown],
-          ),
-        );
+          );
+        const res = auxClient ? await lookup(auxClient) : await this.withAux(lookup);
         for (const r of res.rows) this.customTypeNames.set(Number(r.oid), r.name);
       } catch {
         return;
@@ -316,6 +355,8 @@ export class PostgresDriver {
     this.control = null;
     this.aux = null;
     this.customTypeNames.clear();
+    this.appliedTimeout = { primary: null, aux: null };
+    for (const wake of [...this.lostWaiters]) wake();
 
     for (const client of clients) {
       if (!client) continue;
@@ -342,10 +383,32 @@ export class PostgresDriver {
     if (this.lostReason) throw new ConnectionLostError(this.lostReason);
     const client = role === 'primary' ? this.primary : role === 'aux' ? this.aux : this.control;
     if (!client) throw new Error('not connected');
-    if (Date.now() - this.lastActivityAt < this.idleProbeAfterMs) return client;
-    await this.probe(client, role);
-    if (this.lostReason) throw new ConnectionLostError(this.lostReason);
+    if (
+      Date.now() - this.lastActivityAt >= this.idleProbeAfterMs &&
+      // An aborted transaction answers everything with 25P02: the probe
+      // would prove nothing, and the next statement finds out anyway.
+      !(role === 'primary' && this.txnStatus() === 'E')
+    ) {
+      await this.probe(client, role);
+      if (this.lostReason) throw new ConnectionLostError(this.lostReason);
+    }
+    if (role === 'primary' || role === 'aux') await this.syncStatementTimeout(role, client);
     return client;
+  }
+
+  /**
+   * P2-5: statement_timeout changes are applied only while the session is
+   * outside a transaction (a SET inside one is undone by ROLLBACK, and
+   * fails in an aborted one); the next statement after it ends applies it.
+   */
+  private async syncStatementTimeout(role: 'primary' | 'aux', client: ClientT): Promise<void> {
+    if (this.appliedTimeout[role] === this.statementTimeoutMs) return;
+    if (role === 'primary' && this.txnStatus() !== 'I') return;
+    await client.query(formatStatementTimeoutSql(this.statementTimeoutMs));
+    // Re-check: a connection loss while awaiting resets the table.
+    if (this.primary === client || this.aux === client) {
+      this.appliedTimeout[role] = this.statementTimeoutMs;
+    }
   }
 
   /** `SELECT 1` under a hard cap; a half-open socket simply never answers. */
@@ -366,6 +429,12 @@ export class PostgresDriver {
       ]);
       this.lastActivityAt = Date.now();
     } catch (err) {
+      // SC-03: an ErrorResponse (aborted transaction, permission...) means
+      // the server answered, so the transport is alive.
+      if (isServerError(err)) {
+        this.lastActivityAt = Date.now();
+        return;
+      }
       const detail = err instanceof Error ? err.message : String(err);
       this.markConnectionLost(`${role} liveness probe failed: ${detail}`);
       throw new ConnectionLostError(`${role} liveness probe failed: ${detail}`);
@@ -382,6 +451,7 @@ export class PostgresDriver {
   async connect(config: ConnectionConfig, statementTimeoutMs?: number): Promise<string> {
     // Hang up any previous clients first
     await this.disconnect();
+    this.readOnlySession = config.readOnly === true;
 
     if (statementTimeoutMs !== undefined) {
       this.statementTimeoutMs = Math.max(0, Math.floor(statementTimeoutMs));
@@ -431,8 +501,18 @@ export class PostgresDriver {
         }
       }
 
+      // P2-4: bytea values are shown / exported from their hex text form; a
+      // server or role default of `escape` would garble them. Bootstrap SQL
+      // below can still override this deliberately.
+      for (const client of [primary, aux]) {
+        await client.query("SET bytea_output = 'hex'");
+      }
+
       // C28: per-connection bootstrap SQL (search_path, time zone, role…).
       await runBootstrapSql(primary, config.bootstrapSql);
+      // SC-14: aux carries AI tool queries, lookups and introspection; it must
+      // run under the same role / search_path as the user's session.
+      await runBootstrapSql(aux, config.bootstrapSql);
 
       // U26: capture RAISE NOTICE / server notices for the messages strip
       // and stream them to the worker's broadcast channel.
@@ -470,6 +550,7 @@ export class PostgresDriver {
     this.pendingNotices = [];
     this.lostReason = null;
     this.lastActivityAt = 0;
+    this.appliedTimeout = { primary: null, aux: null };
     const p = this.primary;
     const c = this.control;
     const a = this.aux;
@@ -492,13 +573,39 @@ export class PostgresDriver {
    */
   async setStatementTimeout(timeoutMs: number): Promise<void> {
     this.statementTimeoutMs = Math.max(0, Math.floor(timeoutMs));
-    await this.applyStatementTimeout();
+    // P2-5: primary picks the new value up before its next statement that
+    // starts outside a transaction (see syncStatementTimeout); aux runs it
+    // through its own chain so it can't land inside a sideband BEGIN...COMMIT.
+    if (this.aux) await this.withAux(async () => {});
   }
 
+  /** Connect time: both sessions are idle, so apply directly. */
   private async applyStatementTimeout(): Promise<void> {
     const sql = formatStatementTimeoutSql(this.statementTimeoutMs);
-    if (this.primary) await this.primary.query(sql);
-    if (this.aux) await this.aux.query(sql);
+    if (this.primary) {
+      await this.primary.query(sql);
+      this.appliedTimeout.primary = this.statementTimeoutMs;
+    }
+    if (this.aux) {
+      await this.aux.query(sql);
+      this.appliedTimeout.aux = this.statementTimeoutMs;
+    }
+  }
+
+  /**
+   * SC-02: on read-only connections refuse statements that try to switch
+   * the session back to read-write, and re-assert / verify the read-only
+   * flag before the statement runs (see pg-readonly.ts).
+   */
+  private async guardReadOnly(client: ClientT, sql: string, status: TxnStatus): Promise<void> {
+    if (!this.readOnlySession) return;
+    const why = pgReadOnlyEscapeReason(sql);
+    if (why) {
+      throw new Error(
+        `Read-only connection: ${why} is not allowed. Edit the connection to turn off read-only.`,
+      );
+    }
+    await enforceReadOnlySession(client, status);
   }
 
   /**
@@ -508,6 +615,7 @@ export class PostgresDriver {
    */
   async query(sql: string, params?: unknown[], opts?: QueryOpts): Promise<QueryResult> {
     const client = await this.requireClient('primary');
+    await this.guardReadOnly(client, sql, this.txnStatus());
 
     // F9: Transaction mode — open a transaction before the first statement
     // of a unit of work, unless the statement manages transactions itself
@@ -519,7 +627,17 @@ export class PostgresDriver {
     this.pendingNotices = [];
     this.droppedNotices = 0;
     const start = Date.now();
-    const result = await this.runBounded(client, sql, params, opts);
+    let result: Awaited<ReturnType<PostgresDriver['runBounded']>>;
+    try {
+      result = await this.runBounded(client, sql, params, opts);
+    } catch (err) {
+      // P2-6: a statement that RAISEd and then failed keeps its notices.
+      const notices = this.takeNotices();
+      if (err instanceof Error && notices.length > 0) {
+        (err as Error & { notices?: PgNotice[] }).notices = notices;
+      }
+      throw err;
+    }
     const durationMs = Date.now() - start;
     const notices = this.takeNotices();
 
@@ -555,6 +673,7 @@ export class PostgresDriver {
   async sidebandQuery(sql: string, params?: unknown[], opts?: QueryOpts): Promise<QueryResult> {
     return this.withAux(async (client) => {
       const start = Date.now();
+      await this.guardReadOnly(client, sql, 'I');
       if (!opts?.timeoutMs) {
         const result = await this.runBounded(client, sql, params, opts);
         return { ...result, durationMs: Date.now() - start };
@@ -584,11 +703,60 @@ export class PostgresDriver {
    */
   async explain(sql: string, analyze: boolean): Promise<QueryResult> {
     const client = await this.requireClient('primary');
+    await this.guardReadOnly(client, sql, this.txnStatus());
     const start = Date.now();
-    const result = await runExplain(client, this.txnStatus(), sql, analyze, (text) =>
-      this.runBounded(client, text, undefined),
-    );
-    return { ...result, durationMs: Date.now() - start, txnState: this.txnState };
+    this.takeNotices();
+    try {
+      const result = await runExplain(client, this.txnStatus(), sql, analyze, (text) =>
+        this.runBounded(client, text, undefined),
+      );
+      return { ...result, durationMs: Date.now() - start, txnState: this.txnState };
+    } finally {
+      this.takeNotices();
+    }
+  }
+
+  /** A read that failed because the transport died should say so (P1-1). */
+  private asLossIfLost(err: unknown): unknown {
+    if (this.lostReason && !(err instanceof ConnectionLostError) && !isServerError(err)) {
+      return new ConnectionLostError(this.lostReason);
+    }
+    return err;
+  }
+
+  /**
+   * Close a cursor without ever waiting on a dead connection (P1-1).
+   * pg-cursor's close() waits for ReadyForQuery, which a killed backend
+   * or a dead socket never sends; bound it, and treat silence as a
+   * lost connection so the query settles and recovery can run.
+   */
+  private async closeCursorBounded(client: ClientT, cursor: Cursor): Promise<void> {
+    const state = (cursor as unknown as { state?: string }).state;
+    const c = client as unknown as { _queryable?: boolean; _ending?: boolean };
+    if (this.lostReason || state === 'done' || c._queryable === false || c._ending) {
+      return;
+    }
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let wake: (() => void) | undefined;
+    const closed = await Promise.race([
+      new Promise<boolean>((resolve) => {
+        try {
+          cursor.close(() => resolve(true));
+        } catch {
+          resolve(true);
+        }
+      }),
+      new Promise<boolean>((resolve) => {
+        timer = setTimeout(() => resolve(false), this.closeTimeoutMs);
+      }),
+      new Promise<boolean>((resolve) => {
+        wake = () => resolve(true);
+        this.lostWaiters.add(wake);
+      }),
+    ]);
+    clearTimeout(timer);
+    if (wake) this.lostWaiters.delete(wake);
+    if (!closed) this.markConnectionLost('cursor close unanswered');
   }
 
   /**
@@ -606,10 +774,12 @@ export class PostgresDriver {
     let command: string | undefined;
     let commandRowCount: number | undefined;
     let chunkIndex = 0;
+    const maxBytes = Math.min(opts?.maxBytes ?? MAX_RESULT_BYTES, MAX_RESULT_BYTES_CEILING);
+    let wanted = FIRST_CURSOR_CHUNK;
 
     try {
       while (true) {
-        const batch = await readCursorBatch(cursor, RESULT_CURSOR_CHUNK);
+        const batch = await readCursorBatch(cursor, wanted);
         // Every answered batch proves the transport is alive, which is
         // what the idle probe in requireClient() keys off (U27).
         this.lastActivityAt = Date.now();
@@ -619,7 +789,6 @@ export class PostgresDriver {
             dataTypeID: f.dataTypeID,
             dataTypeName: pgTypeName(f.dataTypeID),
           }));
-          await this.resolveColumnTypeNames(columns);
         }
         if (batch.command) {
           command = batch.command;
@@ -632,6 +801,7 @@ export class PostgresDriver {
           state,
           batch.rows,
           Math.min(opts?.maxRows ?? MAX_RESULT_ROWS, MAX_RESULT_ROWS),
+          maxBytes,
         );
         const accepted = state.rows.length - before;
         const chunkRows = accepted > 0 ? batch.rows.slice(0, accepted) : [];
@@ -647,12 +817,22 @@ export class PostgresDriver {
         }
         chunkIndex++;
 
-        if (stop || batch.rows.length === 0 || batch.rows.length < RESULT_CURSOR_CHUNK) {
+        if (stop || batch.rows.length === 0 || batch.rows.length < wanted) {
           break;
         }
+        // P2-3: size the next read from what rows actually weigh, so wide
+        // rows can't pile up 500 at a time before the byte cap is checked.
+        wanted = nextCursorChunk(batch.rows);
       }
+    } catch (err) {
+      // A server error is an answer: the transport is alive (SC-03).
+      if (isServerError(err)) this.lastActivityAt = Date.now();
+      throw this.asLossIfLost(err);
     } finally {
-      await closeCursor(cursor);
+      await this.closeCursorBounded(client, cursor);
+    }
+    if (columns.length > 0) {
+      await this.resolveColumnTypeNames(columns, client === this.aux ? client : undefined);
     }
 
     if (opts?.onChunk) {
@@ -678,14 +858,40 @@ export class PostgresDriver {
    * Cancel an in-flight query on the primary connection by sending
    * `pg_cancel_backend(pid)` from the dedicated control client (U19).
    */
-  async cancelQuery(): Promise<void> {
-    if (!this.control || this.primaryBackendPid === null) return;
+  async cancelQuery(): Promise<boolean> {
+    if (!this.control || this.primaryBackendPid === null) return false;
+    // Cancel is racy by nature: if the statement already finished, the
+    // signal would hit whatever runs next. Nothing in flight, nothing to do.
+    if (!hasInflightQuery(this.primary)) return false;
+    return this.cancelBackend(this.control, this.primaryBackendPid, 'primary');
+  }
+
+  /**
+   * pg_cancel_backend from the control session, bounded: on a half-open
+   * network (exactly when Cancel gets pressed) the control socket would
+   * otherwise hang too. An unanswered cancel means the transport is gone.
+   */
+  private async cancelBackend(control: ClientT, pid: number, which: string): Promise<boolean> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const answer = control.query<{ ok: boolean }>('SELECT pg_cancel_backend($1) AS ok', [pid]);
+    answer.catch(() => {});
     try {
-      await this.control.query('SELECT pg_cancel_backend($1)', [this.primaryBackendPid]);
+      const res = await Promise.race([
+        answer,
+        new Promise<never>((_r, reject) => {
+          timer = setTimeout(
+            () => reject(new Error(`no answer in ${this.cancelTimeoutMs}ms`)),
+            this.cancelTimeoutMs,
+          );
+        }),
+      ]);
+      return res.rows[0]?.ok === true;
     } catch (err) {
-      // If cancellation itself fails, log but don't throw — the
-      // primary will either finish naturally or time out.
-      console.error('[plasma] pg_cancel_backend failed:', err);
+      if (!isServerError(err)) this.markConnectionLost(`cancel (${which}) unanswered`);
+      console.error(`[plasma] pg_cancel_backend (${which}) failed:`, err);
+      return false;
+    } finally {
+      clearTimeout(timer);
     }
   }
 
@@ -694,13 +900,10 @@ export class PostgresDriver {
    * query, a monitor lookup). The control connection issues it, so it never
    * queues behind the work it is stopping.
    */
-  async cancelAux(): Promise<void> {
-    if (!this.control || this.auxBackendPid === null) return;
-    try {
-      await this.control.query('SELECT pg_cancel_backend($1)', [this.auxBackendPid]);
-    } catch (err) {
-      console.error('[plasma] pg_cancel_backend (aux) failed:', err);
-    }
+  async cancelAux(): Promise<boolean> {
+    if (!this.control || this.auxBackendPid === null) return false;
+    if (!hasInflightQuery(this.aux)) return false;
+    return this.cancelBackend(this.control, this.auxBackendPid, 'aux');
   }
 
   /**
@@ -713,12 +916,15 @@ export class PostgresDriver {
     params?: unknown[],
   ): AsyncGenerator<{ columns: QueryResult['columns']; rows: unknown[][] }, void, void> {
     const client = await this.requireClient('primary');
+    await this.guardReadOnly(client, sql, this.txnStatus());
     const cursor = client.query(new Cursor(sql, params ?? [], { rowMode: 'array' }));
     let columns: QueryResult['columns'] = [];
     let first = true;
+    let wanted = FIRST_CURSOR_CHUNK;
     try {
       while (true) {
-        const batch = await readCursorBatch(cursor, RESULT_CURSOR_CHUNK);
+        const batch = await readCursorBatch(cursor, wanted);
+        this.lastActivityAt = Date.now();
         if (columns.length === 0 && batch.fields.length > 0) {
           columns = batch.fields.map((f) => ({
             name: f.name,
@@ -732,10 +938,13 @@ export class PostgresDriver {
         if (batch.rows.length === 0 && !first) break;
         first = false;
         yield { columns, rows: batch.rows };
-        if (batch.rows.length < RESULT_CURSOR_CHUNK) break;
+        if (batch.rows.length < wanted) break;
+        wanted = nextCursorChunk(batch.rows);
       }
+    } catch (err) {
+      throw this.asLossIfLost(err);
     } finally {
-      await closeCursor(cursor);
+      await this.closeCursorBounded(client, cursor);
     }
   }
 
@@ -780,7 +989,13 @@ export class PostgresDriver {
       throw new Error(
         `connection generation mismatch: edit batch is for generation ${expectedGen}, current is ${this.connectionGen}`,
       );
-    const applied = await runEditBatch(client, this.txnStatus(), updates);
+    this.takeNotices();
+    let applied: number;
+    try {
+      applied = await runEditBatch(client, this.txnStatus(), updates);
+    } finally {
+      this.takeNotices();
+    }
     this.lastActivityAt = Date.now();
     return { state: this.txnState, applied };
   }
@@ -792,7 +1007,13 @@ export class PostgresDriver {
       throw new Error(
         `connection generation mismatch: structure change is for generation ${req.connectionGen}, current is ${this.connectionGen}`,
       );
-    const res = await applyDdl(client, this.txnStatus(), req);
+    this.takeNotices();
+    let res: DdlApplyResult;
+    try {
+      res = await applyDdl(client, this.txnStatus(), req);
+    } finally {
+      this.takeNotices();
+    }
     this.lastActivityAt = Date.now();
     return res;
   }
@@ -804,7 +1025,13 @@ export class PostgresDriver {
       throw new Error(
         `connection generation mismatch: import is for generation ${job.connectionGen}, current is ${this.connectionGen}`,
       );
-    const res = await runImport(client, this.txnStatus(), job, hooks);
+    this.takeNotices();
+    let res: ImportResult;
+    try {
+      res = await runImport(client, this.txnStatus(), job, hooks);
+    } finally {
+      this.takeNotices();
+    }
     this.lastActivityAt = Date.now();
     return res;
   }

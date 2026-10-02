@@ -18,12 +18,12 @@ import {
 } from '@/components/ui/select';
 import { cleanIpcError } from '@/lib/errors';
 import { ipc } from '@/lib/ipc';
-import { quoteIdent } from '@/lib/table-query';
 import { useActiveTab, useSession } from '@/stores/session';
 import type { SchemaInfo } from '@shared/protocol';
 import { AlertTriangle, Sparkles } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { GENERATOR_CHOICES, type GenKind, defaultKind, generate } from './mock-generators';
+import { buildMockInserts } from './mock-insert';
 
 /**
  * Mock data generator. Pick a row count, hit Generate, and Plasma
@@ -102,42 +102,48 @@ export function MockDataDialog({
         setBusy(false);
         return;
       }
-      const params: unknown[] = [];
-      const valueRows: string[] = [];
-      for (let r = 0; r < count; r++) {
-        const cells: string[] = [];
-        for (const col of enabled) {
-          const v = generate(col, r);
-          if (v === undefined) {
-            cells.push('DEFAULT');
-            continue;
-          }
-          if (v === null) {
-            cells.push('NULL');
-            continue;
-          }
-          params.push(v);
-          cells.push(`$${params.length}`);
-        }
-        valueRows.push(`(${cells.join(', ')})`);
-      }
-      const colList = enabled.map((c) => quoteIdent(c.name)).join(', ');
-      const sql = `INSERT INTO ${quoteIdent(tableSchema)}.${quoteIdent(tableName)} (${colList}) VALUES\n${valueRows.join(',\n')}`;
+      // R-23: batches stay under Postgres' bind-parameter limit.
+      const batches = buildMockInserts({
+        schema: tableSchema,
+        table: tableName,
+        columns: enabled.map((c) => c.name),
+        count,
+        cell: (ci, r) => generate(enabled[ci]!, r),
+      });
       // A7: mock rows are writes — refuse on read-only connections and
       // confirm on prod-tagged ones.
       const session = useSession.getState();
       if (session.activeConfig?.readOnly) {
         throw new Error('This connection is read-only.');
       }
-      const ok = await session.confirmUserSql(sql, {
+      const outcome = await session.confirmUserSqlDetailed(batches[0]?.sql ?? '', {
         force: true,
         summary: `Insert ${count} mock rows into ${tableSchema}.${tableName}`,
       });
-      if (!ok) {
+      if (!outcome.ok) {
+        // R-09: say why nothing happened (safe mode) instead of just stopping.
+        if (outcome.reason === 'refused') setError(outcome.message);
         setBusy(false);
         return;
       }
-      await ipc.query.run(sql, params, { internal: true });
+      // One transaction for all batches (unless the user already has one open).
+      const ownTxn = session.txnState === 'none';
+      if (ownTxn) useSession.setState({ txnState: await ipc.txn.begin() });
+      try {
+        for (const batch of batches) {
+          await ipc.query.run(batch.sql, batch.params, { internal: true });
+        }
+        if (ownTxn) useSession.setState({ txnState: await ipc.txn.commit() });
+      } catch (err) {
+        if (ownTxn) {
+          try {
+            useSession.setState({ txnState: await ipc.txn.rollback() });
+          } catch {
+            /* connection already gone */
+          }
+        }
+        throw err;
+      }
       onOpenChange(false);
       void refreshTable();
     } catch (err) {

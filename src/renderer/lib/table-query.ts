@@ -130,7 +130,8 @@ function buildFilterClauses(filters: Filter[], addParam: (value: unknown) => str
       case 'ILIKE':
       case 'NOT LIKE':
       case 'NOT ILIKE':
-        clauses.push(`${col}::text ${f.op} ${addParam(`%${f.value}%`)}`);
+        // R-28: "contains": the user's %, _ and backslash are literal text.
+        clauses.push(`${col}::text ${f.op} ${addParam(`%${escapeLikePattern(f.value)}%`)}`);
         break;
       case 'IN':
       case 'NOT IN': {

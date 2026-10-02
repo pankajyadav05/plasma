@@ -6,6 +6,7 @@ import { type PaneId, activeIn, isSplit, paneOf, paneTabIds } from '@/stores/pan
 import { usePanes } from '@/stores/panes';
 import { useSession } from '@/stores/session';
 import type { TabKind } from '@/stores/session';
+import { tabsWithEdits } from '@/stores/session-pending-edits';
 import { isPreviewTab, isTabDirty } from '@/stores/session-tabs';
 import {
   Activity,
@@ -68,7 +69,7 @@ const SEP = '\u0001';
 function useTabViews(): TabView[] {
   const keys = useSession(
     useShallow((s) => {
-      const edited = new Set(s.pendingEdits.map((e) => e.tabId));
+      const edited = tabsWithEdits(s.pendingEditsByTab);
       return s.tabs.map((t) =>
         [
           t.id,
@@ -76,7 +77,7 @@ function useTabViews(): TabView[] {
           t.queryRunState === 'running' ? 1 : 0,
           t.queryError ? 1 : 0,
           isPreviewTab(t, edited) ? 1 : 0,
-          isTabDirty(t) ? 1 : 0,
+          isTabDirty(t) || edited.has(t.id) ? 1 : 0,
           t.title,
         ].join(SEP),
       );

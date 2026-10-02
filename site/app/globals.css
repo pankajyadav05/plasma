@@ -295,24 +295,23 @@ body::before {
   animation-delay: var(--d, 0ms);
 }
 
-/* ---------- Scroll reveal (subtle, once) ---------- */
+/* ---------- Scroll reveal (subtle, once) ----------
+   Content is visible by default (no JS, failed hydration, crawlers). The
+   hidden starting state exists only once <Reveal> has mounted and added
+   `.armed` to an element that is still below the fold. */
 .reveal {
-  opacity: 0;
-  transform: translateY(8px);
   transition:
     opacity 0.8s var(--ease-out-expo),
     transform 0.8s var(--ease-out-expo);
   transition-delay: var(--d, 0ms);
 }
-.reveal.in {
+.reveal.armed {
+  opacity: 0;
+  transform: translateY(8px);
+}
+.reveal.armed.in {
   opacity: 1;
   transform: none;
-}
-@media (scripting: none) {
-  .reveal {
-    opacity: 1;
-    transform: none;
-  }
 }
 
 /* ---------- Keycaps ---------- */
@@ -390,7 +389,8 @@ details[open] .faq-plus > span:last-child {
     transition: none !important;
     scroll-behavior: auto !important;
   }
-  .reveal {
+  .reveal,
+  .reveal.armed {
     opacity: 1;
     transform: none;
   }

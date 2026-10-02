@@ -155,7 +155,7 @@ export function AiPanel() {
         <p className="mt-1.5 px-1 text-[11px] leading-snug text-[var(--wb-text-3)]">
           {allowAiRowData
             ? 'Schema + capped tool row samples may be sent to OpenRouter when tools run.'
-            : 'Schema sent as system prompt. Enable "Allow AI tools to read row data" on this connection to let tools send capped row samples.'}
+            : 'Schema names are sent as the system prompt (Settings → AI). Enable "Allow AI tools to read row data" on this connection to let tools send capped row samples.'}
         </p>
       </div>
     </div>

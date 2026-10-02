@@ -81,6 +81,25 @@ export function useActiveTab(): QueryTab | undefined {
 }
 
 /**
+ * The active tab without its editor text. For a SQL tab `sql` changes on
+ * every keystroke; consumers that never read it (result grid, footer,
+ * result tabs, details pane) use this so typing doesn't re-render them
+ * (R-20). The returned object keeps its identity while only `sql` changes,
+ * and `sql` is '' for SQL tabs — table tabs are returned untouched.
+ */
+export function useActiveTabSansSql(): QueryTab | undefined {
+  const paneTab = useContext(PaneTabContext);
+  return useSession(
+    useShallow((s) => {
+      const t = s.tabs.find((x) => x.id === (paneTab ?? s.activeTabId));
+      if (!t || t.kind !== 'sql') return t;
+      const { sql: _sql, ...rest } = t;
+      return { ...rest, sql: '' } as QueryTab;
+    }),
+  );
+}
+
+/**
  * Narrow subscription to the active tab (F13). `useActiveTab()` returns the
  * whole tab, so every keystroke in the editor (which patches `sql`)
  * re-renders its subscribers; pick only the fields a component reads:

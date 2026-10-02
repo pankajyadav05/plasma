@@ -37,9 +37,26 @@ export async function runTableDataQuery(
   get: () => SessionState,
   tabId: string,
 ) {
-  const state = get();
-  const tab = state.tabs.find((t) => t.id === tabId);
+  let state = get();
+  let tab = state.tabs.find((t) => t.id === tabId);
   if (!tab || tab.kind !== 'table' || !tab.tableSchema || !tab.tableName) return;
+
+  // R-06: the query is compiled from the table's columns (ORDER BY, hidden
+  // columns, primary key). If its schema's columns haven't been loaded yet,
+  // wait for them — otherwise page 0 is `SELECT * … ORDER BY ctid` and
+  // later pages are PK-ordered.
+  const columnsLoaded =
+    !state.schema || !state.ensureSchemaColumns || state.columnSchemas?.has(tab.tableSchema);
+  if (!columnsLoaded) {
+    patchTabById(set, tabId, { queryRunState: 'running', queryError: null, queryErrorSql: null });
+    const isCurrentEarly = claimTableRequest(dataRequestGen, tabId, get);
+    await state.ensureSchemaColumns(tab.tableSchema);
+    if (!isCurrentEarly()) return;
+    // Hand over to a normal (re-claimed) run now that the columns are in.
+    state = get();
+    tab = state.tabs.find((t) => t.id === tabId);
+    if (!tab || tab.kind !== 'table' || !tab.tableSchema || !tab.tableName) return;
+  }
 
   const allColumns = columnsForTable(state.schema, tab.tableSchema, tab.tableName);
   // B4: always fetch primary-key columns — row edits need them even when
@@ -110,6 +127,12 @@ export function loadTableTab(set: SetFn, get: () => SessionState, tabId: string,
   void runTableDataQuery(set, get, tabId);
   void runTableCountQuery(set, get, tabId);
   if (withRls) void runRlsCountForTab(set, get, tabId);
+}
+
+/** Index of the last page for `total` rows (0 for an empty table). */
+export function lastPageIndex(total: number, pageSize: number): number {
+  if (!(pageSize > 0) || total <= 0) return 0;
+  return Math.ceil(total / pageSize) - 1;
 }
 
 /** First integer of a `SELECT count(*)`-style result cell, or null. */
@@ -200,11 +223,22 @@ export async function runTableCountQuery(
       : await ipc.query.sideband(sql, params, { timeoutMs: LOOKUP_TIMEOUT_MS });
     if (!isCurrent()) return;
     const raw = result.rows[0]?.[0];
+    const total = parseCount(raw);
     patchTabById(set, tabId, {
-      totalRowCount: parseCount(raw),
+      totalRowCount: total,
       totalRowCountIsEstimate: useEstimate,
       countLoading: false,
     });
+    // R-32: a filter / delete shrank the table below the current page. The
+    // footer only clamped its label; move the real page and re-query.
+    const current = get().tabs.find((t) => t.id === tabId);
+    if (current && total !== null && !useEstimate) {
+      const last = lastPageIndex(total, current.pageSize);
+      if (current.page > last) {
+        patchTabById(set, tabId, { page: last });
+        void runTableDataQuery(set, get, tabId);
+      }
+    }
   } catch {
     if (isCurrent()) patchTabById(set, tabId, { countLoading: false });
   }

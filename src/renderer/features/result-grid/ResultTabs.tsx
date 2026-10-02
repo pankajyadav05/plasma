@@ -2,7 +2,7 @@ import { cn } from '@/lib/cn';
 import { commandBadge, commandDetail, commandTitle } from '@/lib/command-summary';
 import { cleanIpcError } from '@/lib/errors';
 import { formatDuration } from '@/lib/format';
-import { useActiveTab, useSession } from '@/stores/session';
+import { useActiveTabSansSql, useSession } from '@/stores/session';
 import type { PgNotice, QueryResult } from '@shared/protocol';
 import { AlertCircle, CheckCircle2, MessageSquareWarning } from 'lucide-react';
 import { useEffect, useMemo } from 'react';
@@ -12,7 +12,7 @@ type StatementRow = { index: number; result: QueryResult; notices: PgNotice[] };
 
 /** Per-statement results with streamed notices merged in (U26). */
 function useStatementRows(): StatementRow[] {
-  const tab = useActiveTab();
+  const tab = useActiveTabSansSql();
   const results: QueryResult[] = tab?.queryResults ?? [];
   const streamingNotices: Array<{ statementIndex: number; notice: PgNotice }> =
     tab?.queryNotices ?? [];
@@ -36,7 +36,7 @@ function useStatementRows(): StatementRow[] {
  * succeeded stay reachable (E6 / VF4).
  */
 export function ResultTabs() {
-  const tab = useActiveTab();
+  const tab = useActiveTabSansSql();
   const setActiveResultIndex = useSession((s) => s.setActiveResultIndex);
   const cycleActiveResult = useSession((s) => s.cycleActiveResult);
   const rows = useStatementRows();
@@ -137,7 +137,7 @@ export function ResultTabs() {
  * failed. Clicking a statement focuses its result.
  */
 export function ResultMessagesPanel() {
-  const tab = useActiveTab();
+  const tab = useActiveTabSansSql();
   const setActiveResultIndex = useSession((s) => s.setActiveResultIndex);
   const rows = useStatementRows();
   const active = tab?.activeResultIndex ?? 0;

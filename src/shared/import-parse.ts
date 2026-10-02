@@ -62,6 +62,11 @@ export class CsvParser {
   private quotePending = false;
   private crPending = false;
   private rowHasContent = false;
+  /** 1-based file line the parser is on (newlines inside quoted fields count). */
+  private lineNo = 1;
+  private rowStartLine = 1;
+  /** File line each row returned by the latest push()/end() started on (P2-17). */
+  rowLines: number[] = [];
 
   constructor(opts: CsvOptions) {
     if (opts.delimiter.length !== 1) throw new Error('The delimiter must be one character');
@@ -84,6 +89,7 @@ export class CsvParser {
     if (this.rowHasContent || this.row.length > 0 || this.field !== '' || this.fieldQuoted) {
       this.endField();
       out.push(this.row);
+      this.rowLines.push(this.rowStartLine);
     }
     this.row = [];
     this.rowHasContent = false;
@@ -91,6 +97,7 @@ export class CsvParser {
 
   push(chunk: string): Cell[][] {
     const out: Cell[][] = [];
+    this.rowLines = [];
     const { delimiter, quote } = this;
     for (let i = 0; i < chunk.length; i++) {
       const ch = chunk[i] as string;
@@ -108,7 +115,10 @@ export class CsvParser {
       }
       if (this.inQuotes) {
         if (quote && ch === quote) this.quotePending = true;
-        else this.field += ch;
+        else {
+          if (ch === '\n') this.lineNo++;
+          this.field += ch;
+        }
         continue;
       }
       if (quote && ch === quote && this.field === '' && !this.fieldQuoted) {
@@ -120,9 +130,11 @@ export class CsvParser {
         this.endField();
       } else if (ch === '\n') {
         this.endRow(out);
+        this.rowStartLine = ++this.lineNo;
       } else if (ch === '\r') {
         this.crPending = true;
         this.endRow(out);
+        this.rowStartLine = ++this.lineNo;
       } else {
         this.field += ch;
         this.rowHasContent = true;
@@ -134,6 +146,7 @@ export class CsvParser {
   /** Flush the last row when the file does not end with a newline. */
   end(): Cell[][] {
     const out: Cell[][] = [];
+    this.rowLines = [];
     if (this.quotePending) {
       this.quotePending = false;
       this.inQuotes = false;

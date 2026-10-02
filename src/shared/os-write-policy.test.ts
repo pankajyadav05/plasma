@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { isOsReadRequest, isReadOnlyOsSql, osPathSegments } from './os-write-policy';
+import {
+  assertOsSingleIndexName,
+  isOsReadRequest,
+  isReadOnlyOsSql,
+  osPathSegments,
+} from './os-write-policy';
 
 describe('osPathSegments', () => {
   it('drops the query string and empty parts', () => {
@@ -66,6 +71,25 @@ describe('isOsReadRequest', () => {
     ['POST', '/_reindex', '{}', false],
     ['POST', '/_aliases', '{}', false],
     ['POST', '/_tasks/abc:1/_cancel', undefined, false],
+    // Document-API ids / sub-paths that merely look like read endpoints (P0-3).
+    ['POST', '/orders/_doc/_search', '{"x":1}', false],
+    ['POST', '/orders/_create/_count', '{"x":1}', false],
+    ['POST', '/orders/_update/_mget', '{}', false],
+    ['POST', '/orders/_doc/1/_search', '{}', false],
+    ['POST', '/orders/_doc/_explain', '{}', false],
+    ['POST', '/orders/_doc/_termvectors', '{}', false],
+    ['POST', '/orders/_source/_analyze', '{}', false],
+    ['POST', '/orders/_doc/1?routing=/_search', '{}', false],
+    ['POST', '/orders%2F_doc/_search', '{}', false],
+    ['POST', '/a/b/_search', '{}', false],
+    ['POST', '/idx/_plugins/_ppl', '{}', false],
+    ['POST', '/logs-*/_search', '{}', true],
+    ['POST', '/a,b/_count', '{}', true],
+    ['POST', '/_all/_search', '{}', true],
+    ['POST', '/orders/_search/template', '{}', true],
+    ['POST', '/orders/_termvectors/1', '{}', true],
+    ['DELETE', '/orders/_doc/_search/scroll', undefined, false],
+    ['DELETE', '/idx/_search/scroll', undefined, false],
     ['PATCH', '/x', undefined, false],
     ['OPTIONS', '/', undefined, false],
   ];
@@ -75,5 +99,27 @@ describe('isOsReadRequest', () => {
 
   it('does not treat an index literally named _search-like as read on PUT', () => {
     expect(isOsReadRequest('PUT', '/_search', '{}')).toBe(false);
+  });
+});
+
+describe('assertOsSingleIndexName (SC-30)', () => {
+  it.each([
+    '*',
+    '_all',
+    'logs-*',
+    'a,b',
+    'logs-*,orders',
+    '_hidden',
+    'a b',
+    '-x',
+    '',
+    'all',
+    'a/b',
+    '..',
+  ])('rejects %j', (name) => {
+    expect(() => assertOsSingleIndexName(name)).toThrow();
+  });
+  it.each(['orders', 'logs-2026.10.02', '.kibana', 'My_Index'])('accepts %j', (name) => {
+    expect(() => assertOsSingleIndexName(name)).not.toThrow();
   });
 });

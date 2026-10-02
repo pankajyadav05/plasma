@@ -33,7 +33,7 @@ export function RestoreDialog({
   onOpenChange,
 }: { open: boolean; onOpenChange: (v: boolean) => void }) {
   const activeConfig = useSession((s) => s.activeConfig);
-  const confirmUserSql = useSession((s) => s.confirmUserSql);
+  const confirmUserSql = useSession((s) => s.confirmUserSqlDetailed);
   const readOnly = activeConfig?.readOnly === true;
   const currentDb = activeConfig?.database ?? '';
   const [kind, setKind] = useState<Kind>('archive');
@@ -50,11 +50,14 @@ export function RestoreDialog({
   const [singleTx, setSingleTx] = useState(false);
   const [jobs, setJobs] = useState('1');
   const [armed, setArmed] = useState(false);
+  // R-09: why the gate stopped the restore (safe-mode refusal), shown in the dialog.
+  const [gateMessage, setGateMessage] = useState<string | null>(null);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: reset once per open
   useEffect(() => {
     if (!open) return;
     job.reset();
+    setGateMessage(null);
     setDatabase(currentDb);
     setFilePath('');
     setIsDir(false);
@@ -106,11 +109,15 @@ export function RestoreDialog({
         kind === 'archive' && !singleTx ? Math.max(1, Number.parseInt(jobs, 10) || 1) : undefined,
     };
     // Restore is a write: safe-mode / prod-tag confirmation first.
-    const ok = await confirmUserSql(
+    setGateMessage(null);
+    const outcome = await confirmUserSql(
       `pg_restore ${req.clean ? '--clean ' : ''}--dbname=${JSON.stringify(database)} ${JSON.stringify(filePath)}`,
       { force: true, summary: `Restore "${filePath}" into database "${database}"` },
     );
-    if (!ok) return;
+    if (!outcome.ok) {
+      if (outcome.reason === 'refused') setGateMessage(outcome.message);
+      return;
+    }
     setArmed(false);
     void job.start(() => ipc.admin.restore(req));
   };
@@ -127,6 +134,14 @@ export function RestoreDialog({
           </DialogDescription>
         </DialogHeader>
 
+        {gateMessage && (
+          <p
+            className="rounded-[7px] bg-[var(--wb-field)] p-2 text-[12px] text-destructive"
+            role="alert"
+          >
+            {gateMessage}
+          </p>
+        )}
         {readOnly && (
           <p
             className="rounded-[7px] bg-[var(--wb-field)] p-2 text-[12px] text-[var(--wb-text-2)]"
@@ -181,6 +196,13 @@ export function RestoreDialog({
                 <SelectItem value="plain">SQL script, optionally .gz (psql)</SelectItem>
               </SelectContent>
             </Select>
+            {kind === 'plain' && (
+              <p className="mt-1 text-[12px] text-[var(--wb-text-2)]">
+                A SQL script runs every statement in it with your privileges on this database. Only
+                restore scripts you trust. Shell escapes (psql meta-commands such as \!) are
+                refused, and your ~/.psqlrc is not used.
+              </p>
+            )}
           </FormRow>
           <FormRow label="Into database" hint="The database must already exist.">
             <Select value={database} onValueChange={setDatabase} disabled={job.state.running}>

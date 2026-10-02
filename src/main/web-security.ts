@@ -98,6 +98,12 @@ export function installWebSecurity(entry: RendererEntry): void {
   session.defaultSession.setPermissionRequestHandler((_wc, permission, callback) => {
     callback(isAllowedPermission(permission));
   });
+  // Synchronous checks (`navigator.permissions.query`, device enumeration, ...)
+  // go through a separate handler; without it Chromium's defaults apply.
+  session.defaultSession.setPermissionCheckHandler((_wc, permission) =>
+    isAllowedPermission(permission),
+  );
+  session.defaultSession.setDevicePermissionHandler(() => false);
 }
 
 /**

@@ -71,6 +71,7 @@ export function GridContextMenu({
         sideOffset={2}
         className="w-[248px] p-1"
         onOpenAutoFocus={(e) => e.preventDefault()}
+        onCloseAutoFocus={(e) => e.preventDefault()}
       >
         <div ref={listRef} role="menu" aria-label="Cell actions" onKeyDown={onKeyDown}>
           {entries.map((entry, i) => {

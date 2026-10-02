@@ -10,6 +10,7 @@ import type {
   ConnectionSshConfig,
   SavedConnection,
 } from '@shared/protocol';
+import { discardAllPendingEdits, pendingEditCount, restampEdits } from './session-pending-edits';
 import { redisConnectReset } from './session-redis';
 import { clearTabResults } from './session-tab-model';
 import { adoptConnectionTabs } from './session-tabs';
@@ -130,7 +131,7 @@ export const createConnectionSlice: SliceCreator<ConnectionSlice> = (set, get) =
   },
 
   async connect(config) {
-    if (get().pendingEdits.length > 0) {
+    if (pendingEditCount(get().pendingEditsByTab) > 0) {
       set({ connectionActionGate: { kind: 'connect', config } });
       return;
     }
@@ -155,7 +156,7 @@ export const createConnectionSlice: SliceCreator<ConnectionSlice> = (set, get) =
   },
 
   async connectSaved(id) {
-    if (get().pendingEdits.length > 0) {
+    if (pendingEditCount(get().pendingEditsByTab) > 0) {
       set({ connectionActionGate: { kind: 'connectSaved', id } });
       return;
     }
@@ -175,7 +176,7 @@ export const createConnectionSlice: SliceCreator<ConnectionSlice> = (set, get) =
   },
 
   async disconnect() {
-    if (get().pendingEdits.length > 0) {
+    if (pendingEditCount(get().pendingEditsByTab) > 0) {
       set({ connectionActionGate: { kind: 'disconnect' } });
       return;
     }
@@ -216,8 +217,7 @@ export const createConnectionSlice: SliceCreator<ConnectionSlice> = (set, get) =
     // Main reconnected for us, so the app is genuinely connected again —
     // but on a brand-new server session: no open transaction, and a new
     // generation that in-flight results and staged edits are checked
-    // against (U01/U27). Pending edits are deliberately kept so the user
-    // decides whether to discard them; the write gate refuses them.
+    // against (U01/U27). Pending edits are kept and re-targeted below.
     const lostRole = get().activeRole;
     set({
       connectionState: 'connected',
@@ -225,6 +225,10 @@ export const createConnectionSlice: SliceCreator<ConnectionSlice> = (set, get) =
       serverVersion: recovered.serverVersion,
       connectionGen: recovered.connectionGen,
       txnState: 'none',
+      // Same connection, new server session: staged edits (keyed by PK, not
+      // by session) stay valid, so re-target them instead of leaving Commit
+      // dead behind a generation mismatch (R-04).
+      pendingEditsByTab: restampEdits(get().pendingEditsByTab, recovered.connectionGen),
     });
     // C15: SET ROLE lived on the old server session. Re-apply it so the UI
     // never shows a role the queries aren't running as; if that fails,
@@ -291,12 +295,29 @@ export const createConnectionSlice: SliceCreator<ConnectionSlice> = (set, get) =
   async resolveConnectionAction(choice: 'commit' | 'discard'): Promise<void> {
     const gate = get().connectionActionGate;
     if (!gate) return;
-    if (choice === 'commit') await get().commitPendingEdits();
-    else set({ pendingEdits: [], pendingEditsError: null });
+    if (choice === 'commit') {
+      // Every tab with staged edits is committed (each as its own batch).
+      // A failure keeps the dialog open: the message is in
+      // `pendingEditsError` and shown there (R-04), and Discard still works.
+      const tabIds = Object.keys(get().pendingEditsByTab);
+      for (const tabId of tabIds) {
+        try {
+          await get().commitPendingEdits({ tabId });
+        } catch {
+          return;
+        }
+        // Prod-tagged / safe-mode: this commit waits on its own confirmation.
+        if (get().prodGate) {
+          set({ connectionActionGate: null });
+          return;
+        }
+      }
+    } else {
+      discardAllPendingEdits(set);
+    }
+    // A refused commit (read-only safe mode) leaves edits behind: stay put.
+    if (pendingEditCount(get().pendingEditsByTab) > 0) return;
     set({ connectionActionGate: null });
-    // Prod-tagged: the commit waits on its own confirmation — stop here and
-    // let the user retry the connection action once the tray is empty.
-    if (get().pendingEdits.length > 0) return;
     if (gate.kind === 'disconnect') await get().disconnect();
     else if (gate.kind === 'connect') await get().connect(gate.config);
     else await get().connectSaved(gate.id);
@@ -356,7 +377,16 @@ function beginSession(
   // Tab identity/SQL stay (adoptConnectionTabs decides which tabs survive);
   // results, selections and the inspected row belong to the old session.
   useWorkbench.getState().setInspectedRow(null);
-  clearTabResults(set, { totalRowCount: null, rlsPolicyCount: null });
+  // R-07: requests in flight on the old session are dropped as stale and
+  // would leave their tab 'running' forever — reset the flags with the data.
+  clearTabResults(set, {
+    totalRowCount: null,
+    rlsPolicyCount: null,
+    queryRunState: 'idle',
+    queryRunningRange: null,
+    queryErrorRange: null,
+    countLoading: false,
+  });
   set({
     ...redisConnectReset(config),
     // Never keep the password in renderer state (C17); main holds it.
@@ -383,7 +413,16 @@ function failConnect(set: SessionSet, err: unknown): void {
     connectionError: err instanceof Error ? err.message : String(err),
   });
   useWorkbench.getState().setInspectedRow(null);
-  clearTabResults(set, { totalRowCount: null, rlsPolicyCount: null });
+  // R-07: requests in flight on the old session are dropped as stale and
+  // would leave their tab 'running' forever — reset the flags with the data.
+  clearTabResults(set, {
+    totalRowCount: null,
+    rlsPolicyCount: null,
+    queryRunState: 'idle',
+    queryRunningRange: null,
+    queryErrorRange: null,
+    countLoading: false,
+  });
 }
 
 function rememberLastConnection(get: () => SessionState, id: string) {

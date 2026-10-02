@@ -3,7 +3,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ImportJobSpec } from '@shared/protocol';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { type ImportClient, applyDdl, runImport } from './pg-import';
+import {
+  type ImportClient,
+  applyDdl,
+  localizeSessionSettings,
+  runImport,
+  withoutBom,
+} from './pg-import';
 
 type Q = string | { text: string; values?: unknown[] };
 const textOf = (q: Q) => (typeof q === 'string' ? q : q.text);
@@ -154,7 +160,8 @@ describe('runImport', () => {
     );
     expect(res.ok).toBe(false);
     expect(res.rowsImported).toBe(0);
-    expect(res.error).toMatchObject({ row: 3 });
+    // File line 4 (header is line 1): matches what an editor shows (P2-17).
+    expect(res.error).toMatchObject({ row: 4 });
     expect(res.error?.sample).toContain('bad');
     expect(f.texts().at(-1)).toBe('ROLLBACK');
     expect(f.texts()).not.toContain('COMMIT');
@@ -275,5 +282,140 @@ describe('runImport', () => {
     );
     expect(b.error?.message).toMatch(/Cannot read/);
     expect(f.log).toHaveLength(0);
+  });
+
+  it('numbers errors by file line even with multi-line quoted fields', async () => {
+    const f = fake((q) =>
+      typeof q !== 'string' && q.text.startsWith('INSERT') && (q.values ?? []).includes('bad')
+        ? new Error('invalid input syntax')
+        : null,
+    );
+    const res = await runImport(
+      f.client,
+      'I',
+      job({
+        filePath: file('lines.csv', 'id,name\n1,"two\nlines"\n2,ok\nbad,x\n'),
+        batchRows: 100,
+      }),
+      hooks().hooks,
+    );
+    // header = line 1, "1" starts on 2 and spans 2-3, "2" is line 4, "bad" is line 5.
+    expect(res.error).toMatchObject({ row: 5 });
+  });
+
+  it('strips a UTF-8 BOM so the first value / header / line parses (P1-8)', async () => {
+    const bom = '\uFEFF';
+    // CSV without a header: the first cell must be "7", not "\uFEFF7".
+    const f1 = fake();
+    await runImport(
+      f1.client,
+      'I',
+      job({
+        filePath: file('bom.csv', `${bom}7,a\n`),
+        csv: { delimiter: ',', quote: '"', header: false, nullString: '' },
+      }),
+      hooks().hooks,
+    );
+    const ins = f1.log.find((q) => textOf(q).startsWith('INSERT')) as { values: unknown[] };
+    expect(ins.values[0]).toBe('7');
+
+    // NDJSON
+    const f2 = fake();
+    const nd = await runImport(
+      f2.client,
+      'I',
+      job({
+        format: 'ndjson',
+        columns: [{ target: 'id', source: 'id' }],
+        filePath: file('bom.ndjson', `${bom}{"id":1}\n{"id":2}\n`),
+        csv: undefined,
+      }),
+      hooks().hooks,
+    );
+    expect(nd).toMatchObject({ ok: true, rowsImported: 2 });
+
+    // SQL
+    const f3 = fake();
+    await runImport(
+      f3.client,
+      'I',
+      job({
+        format: 'sql',
+        filePath: file('bom.sql', `${bom}SELECT 1;\nSELECT 2;\n`),
+        csv: undefined,
+      }),
+      hooks().hooks,
+    );
+    expect(f3.texts()).toContain('SELECT 1');
+  });
+
+  it("keeps a pg_dump header's session settings local to the import (P1-9)", async () => {
+    const f = fake();
+    await runImport(
+      f.client,
+      'I',
+      job({
+        format: 'sql',
+        csv: undefined,
+        filePath: file(
+          'dump.sql',
+          "SET statement_timeout = 0;\nSELECT pg_catalog.set_config('search_path', '', false);\nSET client_encoding = 'UTF8';\nCREATE TABLE t (a int);\n",
+        ),
+      }),
+      hooks().hooks,
+    );
+    const t = f.texts();
+    expect(t).toContain('SET LOCAL statement_timeout = 0');
+    expect(t).toContain("SELECT pg_catalog.set_config('search_path', '', true)");
+    expect(t).toContain("SET LOCAL client_encoding = 'UTF8'");
+    expect(t.some((s) => /^SET (?!LOCAL)/.test(s))).toBe(false);
+  });
+
+  it('checks for cancel while replaying a failed batch row by row (P2-17)', async () => {
+    const f = fake((q) =>
+      typeof q !== 'string' && q.text.startsWith('INSERT') && (q.values ?? []).length > 2
+        ? new Error('batch failed')
+        : null,
+    );
+    const res = await runImport(
+      f.client,
+      'I',
+      job({ filePath: file('slow.csv', 'id,name\n1,a\n2,b\n3,c\n4,d\n'), batchRows: 100 }),
+      // Cancel is polled once per row in the replay; stop after the first.
+      hooks(1).hooks,
+    );
+    expect(res).toMatchObject({ ok: false, cancelled: true });
+  });
+});
+
+describe('localizeSessionSettings', () => {
+  it.each([
+    ['SET search_path = public', 'SET LOCAL search_path = public'],
+    ['set session statement_timeout to 0', 'SET LOCAL statement_timeout to 0'],
+    ['-- c\nSET lock_timeout = 0', '-- c\nSET LOCAL lock_timeout = 0'],
+    ["SET TIME ZONE 'UTC'", "SET LOCAL TIME ZONE 'UTC'"],
+    ['SET LOCAL x = 1', 'SET LOCAL x = 1'],
+    ['SET TRANSACTION READ ONLY', 'SET TRANSACTION READ ONLY'],
+    [
+      'SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY',
+      'SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY',
+    ],
+    ["SELECT set_config('search_path','', false)", "SELECT set_config('search_path','', true)"],
+    ["SELECT set_config('x','y',true)", "SELECT set_config('x','y',true)"],
+    ['CREATE TABLE settings (a int)', 'CREATE TABLE settings (a int)'],
+  ])('%j', (input, expected) => {
+    expect(localizeSessionSettings(input)).toBe(expected);
+  });
+});
+
+describe('withoutBom', () => {
+  it('only touches the very first chunk', async () => {
+    async function* gen() {
+      yield '\uFEFFabc';
+      yield '\uFEFFdef';
+    }
+    const out: string[] = [];
+    for await (const c of withoutBom(gen())) out.push(c);
+    expect(out).toEqual(['abc', '\uFEFFdef']);
   });
 });

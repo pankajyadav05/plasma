@@ -70,14 +70,59 @@ function endsWith(segs: string[], suffix: readonly string[]): boolean {
 }
 
 /**
- * `_explain/<id>` and `_termvectors/<id>` carry a trailing doc id; both
- * read. Checked separately because the suffix isn't fixed.
+ * A segment that can name an index expression (`logs-*`, `a,b`, `_all`).
+ * Real index names never start with `_`, which is what stops
+ * `/idx/_doc/_search` (a document whose id is `_search`) from looking like
+ * `/<index>/_search`. Percent-escapes and slashes are refused outright so
+ * an encoded `_doc` cannot hide in the "index" slot.
+ */
+function isIndexExpression(seg: string): boolean {
+  if (seg === '_all') return true;
+  return /^[^_%/\\][^%/\\]*$/.test(seg);
+}
+
+/**
+ * Suffixes that are cluster-level or plugin APIs: they only read when
+ * nothing precedes them, so `/anything/_plugins/_ppl` is not trusted.
+ */
+function isAnchoredSuffix(suffix: readonly string[]): boolean {
+  const first = suffix[0];
+  return (
+    first === '_plugins' ||
+    first === '_cluster' ||
+    first === '_render' ||
+    first === '_sql' ||
+    // `_search/scroll` and `_search/point_in_time` are cluster-level;
+    // `_search/template` and `_msearch/template` may carry an index.
+    (first === '_search' && (suffix[1] === 'scroll' || suffix[1] === 'point_in_time'))
+  );
+}
+
+/**
+ * True when `segs` ends with `suffix` and what precedes it is either
+ * nothing or a single index expression. Anything else (`_doc`, `_create`,
+ * `_update`, `_bulk`, extra segments) is a document/write API whose id or
+ * sub-path merely looks like a read endpoint.
+ */
+function matchesReadEndpoint(segs: string[], suffix: readonly string[]): boolean {
+  if (!endsWith(segs, suffix)) return false;
+  const prefix = segs.slice(0, segs.length - suffix.length);
+  if (prefix.length === 0) return true;
+  if (isAnchoredSuffix(suffix)) return false;
+  return prefix.length === 1 && isIndexExpression(prefix[0] ?? '');
+}
+
+/**
+ * `/<index>/_explain/<id>` and `/<index>/_termvectors[/<id>]` read. The
+ * keyword must sit directly after a single index expression, so
+ * `/idx/_doc/_explain` (a document id) stays a write.
  */
 function isIdScopedRead(segs: string[]): boolean {
-  const n = segs.length;
-  if (n >= 2 && (segs[n - 2] === '_explain' || segs[n - 2] === '_termvectors')) return true;
-  if (n >= 1 && (segs[n - 1] === '_explain' || segs[n - 1] === '_termvectors')) return true;
-  return false;
+  const [index, kw] = segs;
+  if (segs.length < 2 || segs.length > 3) return false;
+  if (!isIndexExpression(index ?? '')) return false;
+  if (kw === '_explain') return segs.length === 3;
+  return kw === '_termvectors';
 }
 
 /** Leading-comment / whitespace stripped first keyword of a SQL statement. */
@@ -139,14 +184,41 @@ export function isOsReadRequest(method: string, path: string, body?: unknown): b
     if (SQL_PATHS.some((p) => segs.length === p.length && endsWith(segs, p))) {
       return sqlBodyIsRead(body);
     }
-    if (READ_POST_SUFFIXES.some((s) => endsWith(segs, s))) return true;
+    if (READ_POST_SUFFIXES.some((s) => matchesReadEndpoint(segs, s))) return true;
     if (isIdScopedRead(segs)) return true;
     return false;
   }
   if (m === 'DELETE') {
-    return READ_DELETE_SUFFIXES.some((s) => endsWith(segs, s));
+    // Only the cluster-level scroll / PIT / cursor releases read.
+    return READ_DELETE_SUFFIXES.some((s) => segs.length === s.length && endsWith(segs, s));
   }
   return false;
 }
 
 export const OS_READ_ONLY_MESSAGE = 'this connection is read-only — writes are blocked';
+
+/**
+ * Create/delete index must name exactly one concrete index (SC-30). A
+ * pattern, list or `_all` could drop many indices on clusters that don't
+ * require explicit names for destructive actions.
+ */
+export function osSingleIndexNameError(name: string): string | null {
+  if (!name || name.trim() !== name) return 'index name must be a single concrete name';
+  if (/[*?,\s/\\%]/.test(name))
+    return 'index name must be a single concrete name (no wildcards or lists)';
+  if (
+    name.startsWith('_') ||
+    name.startsWith('-') ||
+    name.startsWith('+') ||
+    name === '.' ||
+    name === '..'
+  )
+    return 'index name must not start with "_", "-" or "+"';
+  if (name.toLowerCase() === 'all') return 'index name must be a single concrete name';
+  return null;
+}
+
+export function assertOsSingleIndexName(name: string): void {
+  const err = osSingleIndexNameError(name);
+  if (err) throw new Error(err);
+}

@@ -1,15 +1,18 @@
 import { Button } from '@/components/ui/button';
 import { Segmented } from '@/components/ui/workbench';
-import { OsSidebar } from '@/features/opensearch/OsSidebar';
-import { RedisSidebar } from '@/features/redis/RedisSidebar';
 import { cn } from '@/lib/cn';
+import { lazyNamed } from '@/lib/lazy';
 import { useSession } from '@/stores/session';
 import { type SidebarMode, useWorkbench } from '@/stores/workbench';
 import { Circle, Copy, Pencil, Plus } from 'lucide-react';
+import { Suspense } from 'react';
 import { groupConnections } from '../connection-manager/connection-groups';
 import { EntityList } from './EntityList';
 import { HistoryList } from './HistoryList';
 import { SavedQueriesList } from './SavedQueriesList';
+
+const OsSidebar = lazyNamed(() => import('@/features/opensearch/OsSidebar'), 'OsSidebar');
+const RedisSidebar = lazyNamed(() => import('@/features/redis/RedisSidebar'), 'RedisSidebar');
 
 const MODES: Array<{ mode: SidebarMode; label: string }> = [
   { mode: 'items', label: 'Items' },
@@ -39,9 +42,13 @@ export function Sidebar() {
         {!activeConfig ? (
           <SavedConnectionsList />
         ) : engine === 'redis' ? (
-          <RedisSidebar />
+          <Suspense fallback={null}>
+            <RedisSidebar />
+          </Suspense>
         ) : engine === 'opensearch' ? (
-          <OsSidebar />
+          <Suspense fallback={null}>
+            <OsSidebar />
+          </Suspense>
         ) : mode === 'queries' ? (
           <SavedQueriesList />
         ) : mode === 'history' ? (

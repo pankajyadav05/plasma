@@ -51,7 +51,6 @@ const READ_COMMANDS = new Set([
   'SCAN',
   'DBSIZE',
   'LCS',
-  'TOUCH',
   'SORT_RO',
   // bitmaps / hll
   'BITCOUNT',
@@ -130,8 +129,6 @@ const READ_COMMANDS = new Set([
   'TIME',
   'LASTSAVE',
   'ROLE',
-  'READONLY',
-  'READWRITE',
   'EVAL_RO',
   'EVALSHA_RO',
   'FCALL_RO',
@@ -225,6 +222,10 @@ const CONNECTION_STATE_VERBS: Record<string, string> = {
   DISCARD: 'Transactions are not supported in the CLI.',
   WATCH: 'WATCH is not supported on the shared connection.',
   UNWATCH: 'WATCH is not supported on the shared connection.',
+  READONLY: 'READONLY changes the state of the shared connection (cluster replica reads).',
+  READWRITE: 'READWRITE changes the state of the shared connection (cluster replica reads).',
+  SYNC: 'SYNC turns the shared connection into a replication stream and never returns.',
+  PSYNC: 'PSYNC turns the shared connection into a replication stream and never returns.',
   HELLO: 'HELLO switches the protocol of the shared connection; Plasma speaks RESP2.',
   AUTH: 'AUTH would change the user of the shared connection — edit the connection instead.',
   RESET: 'RESET would reset the shared connection.',
@@ -249,6 +250,11 @@ const BLOCKING_VERBS = new Set([
 
 /** Always confirm, whatever the connection tag. */
 const DESTRUCTIVE: Record<string, string> = {
+  EVAL: 'Runs a Lua script, which can read or write anything on the server.',
+  EVALSHA: 'Runs a cached Lua script, which can read or write anything on the server.',
+  FCALL: 'Calls a server-side function, which can read or write anything on the server.',
+  'FUNCTION LOAD': 'Loads a function library that can later run with full access (FCALL).',
+  'SCRIPT LOAD': 'Loads a Lua script that can later run with full access (EVALSHA).',
   FLUSHALL: 'Deletes every key in every database.',
   FLUSHDB: 'Deletes every key in the current database.',
   SHUTDOWN: 'Stops the Redis server.',
@@ -322,7 +328,12 @@ export function classifyRedisCommand(parts: readonly string[]): RedisCommandVerd
   }
   if (
     head === 'CLIENT' &&
-    (sub === 'REPLY' || sub === 'TRACKING' || sub === 'SETNAME' || sub === 'SETINFO')
+    (sub === 'REPLY' ||
+      sub === 'TRACKING' ||
+      sub === 'SETNAME' ||
+      sub === 'SETINFO' ||
+      sub === 'NO-TOUCH' ||
+      sub === 'CACHING')
   ) {
     return {
       verb,

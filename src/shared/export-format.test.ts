@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  DEFAULT_CSV_OPTIONS,
   DEFAULT_EXPORT_TABLE,
   createExportStreamer,
   csvEscape,
@@ -159,5 +160,51 @@ describe('export-format edge cases', () => {
     expect(exportExtension('json')).toBe('json');
     expect(exportExtension('sql')).toBe('sql');
     expect(exportMime('json')).toMatch(/json/);
+  });
+});
+
+describe('CSV formula guard (SC-15)', () => {
+  it('prefixes a quote on cells that spreadsheets would run as formulas', () => {
+    expect(csvEscape('=HYPERLINK("http://evil","x")')).toBe(`"'=HYPERLINK(""http://evil"",""x"")"`);
+    expect(csvEscape('+1+1')).toBe("'+1+1");
+    expect(csvEscape('-cmd')).toBe("'-cmd");
+    expect(csvEscape('@SUM(A1)')).toBe("'@SUM(A1)");
+    expect(csvEscape('\tTAB')).toBe("'\tTAB");
+    expect(csvEscape('\rCR')).toBe(`"'\rCR"`);
+  });
+
+  it('leaves ordinary text, numbers and numeric strings alone', () => {
+    expect(csvEscape('hello')).toBe('hello');
+    expect(csvEscape(-5)).toBe('-5');
+    expect(csvEscape('-12.50')).toBe('-12.50');
+    expect(csvEscape('+3e5')).toBe('+3e5');
+    expect(csvEscape('a=b')).toBe('a=b');
+  });
+
+  it('can be switched off', () => {
+    expect(csvEscape('=1+1', { ...DEFAULT_CSV_OPTIONS, formulaGuard: false })).toBe('=1+1');
+  });
+
+  it('applies to TSV too', () => {
+    expect(csvEscape('=1', { ...DEFAULT_CSV_OPTIONS, delimiter: '\t' })).toBe("'=1");
+  });
+});
+
+describe('JSON export fidelity (P2-4)', () => {
+  const cols = (...names: string[]): ColumnMeta[] =>
+    names.map((name) => ({ name, dataTypeID: 25, dataTypeName: 'text' }));
+
+  it('keeps duplicate column names as separate keys', () => {
+    const out = formatResultString(cols('a', 'a', 'a', 'b'), [[1, 2, 3, 4]], 'json');
+    expect(JSON.parse(out)).toEqual([{ a: 1, a_2: 2, a_3: 3, b: 4 }]);
+  });
+
+  it('writes NaN and Infinity as strings instead of silently turning them into null', () => {
+    const out = formatResultString(
+      cols('x', 'y', 'z'),
+      [[Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]],
+      'json',
+    );
+    expect(JSON.parse(out)).toEqual([{ x: 'NaN', y: 'Infinity', z: '-Infinity' }]);
   });
 });

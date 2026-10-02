@@ -65,3 +65,30 @@ describe('cluster composite cursor', () => {
     expect(parseCompositeCursor('9:1', 3)).toEqual({ node: 0, cursor: '1' });
   });
 });
+
+describe('cluster SCAN cursor follows node identity (P2-13)', () => {
+  const ids = ['a:7000', 'b:7001', 'c:7002'];
+
+  it('round-trips by node id', () => {
+    const cur = formatCompositeCursor(1, '77', ids);
+    expect(cur).toBe('b:7001|77');
+    expect(parseCompositeCursor(cur, ids)).toEqual({ node: 1, cursor: '77' });
+  });
+
+  it('keeps pointing at the same master when the node order changes', () => {
+    const cur = formatCompositeCursor(1, '77', ids);
+    // A master was added before it: the positional index would now mean another node.
+    const after = ['a:7000', 'a:7005', 'b:7001', 'c:7002'];
+    expect(parseCompositeCursor(cur, after)).toEqual({ node: 2, cursor: '77' });
+  });
+
+  it('restarts at the next node, from 0, when the named master is gone', () => {
+    const cur = formatCompositeCursor(1, '77', ids);
+    expect(parseCompositeCursor(cur, ['a:7000', 'c:7002'])).toEqual({ node: 1, cursor: '0' });
+    expect(parseCompositeCursor(cur, ['a:7000'])).toEqual({ node: 0, cursor: '0' });
+  });
+
+  it('still reads the legacy positional form', () => {
+    expect(parseCompositeCursor('2:55', ids)).toEqual({ node: 2, cursor: '55' });
+  });
+});

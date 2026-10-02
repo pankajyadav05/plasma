@@ -19,3 +19,5 @@ ignoredOptionalDependencies:
 overrides:
   # @electron/rebuild bundles a node-abi that predates Electron 44's ABI.
   node-abi@^4: ^4.35.0
+  # electron-updater's js-yaml has quadratic-CPU DoS advisories below 4.3.2.
+  js-yaml@^4: "^4.3.2"

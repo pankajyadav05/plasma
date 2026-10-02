@@ -169,13 +169,14 @@ suite('structure editing + import (live)', () => {
     writeFileSync(filePath, 'id,name\n9001,ok\n9002,ok\nnotanint,x\n9004,ok\n');
     const res = await driver.runImport(job({ filePath }), noHooks);
     expect(res.ok).toBe(false);
-    expect(res.error?.row).toBe(3);
+    // File line numbers (the header is line 1), so they match an editor (P2-17).
+    expect(res.error?.row).toBe(4);
     expect(res.error?.message).toMatch(/integer/);
     expect((await rows('SELECT count(*) FROM public.people WHERE id > 9000'))[0]?.[0]).toBe('0');
     // duplicate keys inside a single batch are located too
     writeFileSync(filePath, 'id,name\n9001,a\n9002,b\n9001,c\n');
     const dup = await driver.runImport(job({ filePath }), noHooks);
-    expect(dup.error?.row).toBe(3);
+    expect(dup.error?.row).toBe(4);
   });
 
   it('creates a new table from a file (types inferred) inside the import transaction', async () => {

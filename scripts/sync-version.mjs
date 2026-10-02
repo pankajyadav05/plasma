@@ -6,7 +6,7 @@
  *
  * Single source of truth: package.json.version
  *   → electron-builder picks it up via ${version} in electron-builder.yml
- *   → this script pushes it into site/lib/version.ts (Next.js site reads it)
+ *   → this script pushes it into site/lib/version.ts (PACKAGE_VERSION, the offline label)
  *
  * Patching lives in scripts/lib/sync-site-version.mjs (shared with release.mjs).
  */

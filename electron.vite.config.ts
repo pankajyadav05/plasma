@@ -98,21 +98,24 @@ export default defineConfig({
           // Split heavy vendor code into stable chunks so cached chunks survive
           // app-code updates. Monaco is the big one (~3MB) and deserves its own
           // chunk since it's lazy-loaded behind a Suspense boundary.
-          manualChunks: {
-            // `@monaco-editor/react` resolves to the local-Monaco shim; name
-            // the core entry it imports rather than `monaco-editor`, whose
-            // main entry would drag in the TS/CSS/HTML language services.
-            'vendor-monaco': ['@monaco-editor/react', 'monaco-editor/esm/vs/editor/edcore.main'],
-            'vendor-radix': [
-              '@radix-ui/react-checkbox',
-              '@radix-ui/react-dialog',
-              '@radix-ui/react-label',
-              '@radix-ui/react-popover',
-              '@radix-ui/react-select',
-              '@radix-ui/react-separator',
-              '@radix-ui/react-slot',
-            ],
-            'vendor-react': ['react', 'react-dom'],
+          // Function form (not an object): an object map drags shared helpers
+          // (vite's preload helper, react) into whichever listed chunk first
+          // touches them, which made the 8 MB Monaco chunk a static import of
+          // the entry and defeated its lazy loading.
+          manualChunks(id: string) {
+            // Vite's dynamic-import helper is needed by the entry; keep it out of
+            // the Monaco chunk, which would otherwise have to load at startup.
+            if (id.includes('vite/preload-helper')) return 'vendor-react';
+            if (id.includes('/node_modules/')) {
+              if (id.includes('/monaco-editor/') || id.includes('/@monaco-editor/')) {
+                return 'vendor-monaco';
+              }
+              if (id.includes('/@radix-ui/')) return 'vendor-radix';
+              if (/\/node_modules\/(react|react-dom|scheduler)\//.test(id)) return 'vendor-react';
+            }
+            // The shim wires the bundled Monaco (and its workers) into the loader.
+            if (id.endsWith('/src/renderer/lib/monaco/monaco-react.ts')) return 'vendor-monaco';
+            return undefined;
           },
         },
       },

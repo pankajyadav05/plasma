@@ -92,4 +92,30 @@ describe('assertAllowedOnReadOnly (C1)', () => {
     refused({ kind: 'redisRenameKey' });
     ok({ kind: 'osNodesStats' });
   });
+
+  it('lets ordinary Redis reads through on read-only connections (SC-10)', () => {
+    for (const parts of [
+      ['HVALS', 'h'],
+      ['KEYS', 'user:*'],
+      ['LINDEX', 'l', '0'],
+      ['GETRANGE', 'k', '0', '3'],
+    ]) {
+      ok({ kind: 'redisCommand', parts });
+    }
+    refused({ kind: 'redisCommand', parts: ['EVAL', 'return 1', '0'] });
+    refused({ kind: 'redisCommand', parts: ['SYNC'] });
+    refused({ kind: 'redisCommand', parts: ['TOUCH', 'k'] });
+  });
+
+  it('classifies OpenSearch requests structurally, not by suffix (P0-3 / SC-31)', () => {
+    ok({ kind: 'osRequest', method: 'POST', path: '/orders/_search', body: '{}' });
+    ok({ kind: 'osRequest', method: 'GET', path: '/orders/_doc/1' });
+    refused({ kind: 'osRequest', method: 'POST', path: '/orders/_doc/_search', body: '{"x":1}' });
+    refused({ kind: 'osRequest', method: 'POST', path: '/orders/_create/_count', body: '{}' });
+    refused({ kind: 'osRequest', method: 'POST', path: '/orders/_doc/1?routing=/_search' });
+    refused({ kind: 'osRequest', method: 'POST', path: '/orders/_update/_mget', body: '{}' });
+    refused({ kind: 'osRequest', method: 'DELETE', path: '/orders' });
+    refused({ kind: 'osSql', query: 'DELETE FROM orders' });
+    ok({ kind: 'osSql', query: 'SELECT 1' });
+  });
 });

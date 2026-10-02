@@ -59,7 +59,16 @@ export const createQuerySlice: SliceCreator<QuerySlice> = (set, get) => ({
   txnState: 'none',
 
   setSql(sql) {
-    patchActiveTab(set, get, { sql });
+    const tab = activeTab(get());
+    // R-15: offsets of the last error / running statement refer to the OLD
+    // text — once the buffer changes they would mark unrelated characters.
+    const stale =
+      tab && tab.sql !== sql && (tab.queryErrorRange != null || tab.queryRunningRange != null);
+    patchActiveTab(
+      set,
+      get,
+      stale ? { sql, queryErrorRange: null, queryRunningRange: null } : { sql },
+    );
   },
 
   async runQuery(opts?: { all?: boolean; mode?: RunMode; sql?: string; base?: number }) {
@@ -111,7 +120,7 @@ export const createQuerySlice: SliceCreator<QuerySlice> = (set, get) => ({
         return;
       }
       if (decision.kind === 'confirm' && state.prodGate === null) {
-        armProdGate(set, get, { sql: script, tabId: tab.id, reason: decision.reason });
+        armProdGate(set, get, { sql: script, tabId: tab.id, reason: decision.reason, base });
         return;
       }
     }
@@ -162,6 +171,16 @@ export const createQuerySlice: SliceCreator<QuerySlice> = (set, get) => ({
       let anyDdl = false;
       for (let i = 0; i < statements.length; i++) {
         const stmt = statements[i]!;
+        // R-13: never issue the rest of a script on a different connection
+        // (or for a tab that was closed / re-run) than it started on.
+        if (i > 0) {
+          const current = get().tabs.find((t) => t.id === originTabId);
+          if (!current || current.queryGeneration !== generation) return;
+          if ((get().connectionGen ?? 0) !== originConnGen) {
+            publishOrigin({});
+            return;
+          }
+        }
         publishOrigin({
           queryRunningRange: { start: stmt.start, end: stmt.end },
         });

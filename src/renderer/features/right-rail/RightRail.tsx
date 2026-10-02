@@ -2,12 +2,12 @@ import { Button } from '@/components/ui/button';
 import { Kbd } from '@/components/ui/kbd';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { IconButton, MenuItem, Pill, Segmented } from '@/components/ui/workbench';
-import { AiPanel } from '@/features/ai/AiPanel';
 import { SidebarResizer } from '@/features/app-shell/SidebarResizer';
 import { MonacoEditor } from '@/features/editor/MonacoEditor';
 import { SidebarSearch } from '@/features/sidebar/sidebar-parts';
 import { cn } from '@/lib/cn';
 import { ipc } from '@/lib/ipc';
+import { lazyNamed } from '@/lib/lazy';
 import { kbd } from '@/lib/platform';
 import { buildRlsPoliciesSql } from '@/lib/table-query';
 import { type RightPanelMode, useActiveTab, useSession } from '@/stores/session';
@@ -30,8 +30,10 @@ import {
   Wand2,
   X,
 } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { Suspense, useEffect, useState } from 'react';
 import { DetailsPanel } from './DetailsPanel';
+
+const AiPanel = lazyNamed(() => import('@/features/ai/AiPanel'), 'AiPanel');
 
 const NOOP = () => {};
 
@@ -132,7 +134,11 @@ export function RightRail() {
         </div>
         <div className="min-h-0 flex-1">
           {effective === 'query' && <QueryPanel />}
-          {effective === 'ai' && <AiPanel />}
+          {effective === 'ai' && (
+            <Suspense fallback={null}>
+              <AiPanel />
+            </Suspense>
+          )}
           {effective === 'details' && <DetailsPanel />}
           {effective === 'role' && <RolePanel />}
           {effective === 'rls' && <RlsPanel />}

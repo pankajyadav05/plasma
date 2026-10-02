@@ -143,3 +143,23 @@ export function serializeCliReply(reply: unknown): unknown {
   }
   return reply;
 }
+
+/** Elements fetched by the first read of a list / sorted set page. */
+export const FIRST_ELEMENT_WINDOW = 25;
+
+/**
+ * How many elements to fetch next, from the average element weight seen so
+ * far (or MEMORY USAGE / length for the first read). Keeps a page of huge
+ * elements from being pulled whole before MAX_PAGE_BYTES is applied (P2-10).
+ */
+export function elementWindow(
+  avgBytes: number | null,
+  max: number,
+  first = false,
+  budget: number = MAX_PAGE_BYTES,
+): number {
+  const ceiling = first ? Math.min(max, FIRST_ELEMENT_WINDOW) : max;
+  if (avgBytes === null || !Number.isFinite(avgBytes) || avgBytes <= 0) return ceiling;
+  // Aim for a quarter of the page budget per round trip.
+  return Math.max(1, Math.min(ceiling, Math.floor(budget / 4 / avgBytes)));
+}

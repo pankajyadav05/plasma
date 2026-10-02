@@ -16,17 +16,11 @@ import {
 } from '@/components/ui/select';
 import { EmptyState } from '@/components/ui/view-parts';
 import { readableTypeName } from '@/lib/pg-types';
-import { useActiveTab, useSession } from '@/stores/session';
+import { useActiveTabSansSql, useSession } from '@/stores/session';
 import type { QueryResult } from '@shared/protocol';
 import { Brain, Check, Copy, Sigma } from 'lucide-react';
 import { useMemo, useState } from 'react';
-
-type Distance = 'cosine' | 'l2' | 'inner';
-const OP_FOR: Record<Distance, string> = {
-  cosine: '<=>',
-  l2: '<->',
-  inner: '<#>',
-};
+import { type Distance, buildNearestSql, parseTableRef } from './nearest-sql';
 
 /**
  * pgvector helper. When a result contains `vector` columns, this dialog
@@ -47,9 +41,8 @@ export function PgVectorDialog({
   open: boolean;
   onOpenChange: (v: boolean) => void;
 }) {
-  const tab = useActiveTab();
-  const setSql = useSession((s) => s.setSql);
-  const addTab = useSession((s) => s.addTab);
+  const tab = useActiveTabSansSql();
+  const openSqlInNewTab = useSession((s) => s.openSqlInNewTab);
 
   const vectorCols = useMemo(
     () =>
@@ -77,11 +70,18 @@ export function PgVectorDialog({
     return out;
   }, [result, vectorCols]);
 
-  const [colName, setColName] = useState<string>(vectorCols[0]?.name ?? '');
-  const [rowIdx, setRowIdx] = useState<number>(0);
+  const [pickedCol, setColName] = useState<string>('');
+  const [pickedRow, setRowIdx] = useState<number>(0);
   const [distance, setDistance] = useState<Distance>('cosine');
   const [limit, setLimit] = useState<number>(10);
   const [copied, setCopied] = useState(false);
+  const [tableText, setTableText] = useState('');
+
+  // R-22: picks made for an earlier result must not leak into this one.
+  const colName = vectorCols.some((c) => c.name === pickedCol)
+    ? pickedCol
+    : (vectorCols[0]?.name ?? '');
+  const rowIdx = Math.max(0, Math.min(pickedRow, (result?.rows.length ?? 1) - 1));
 
   const anchor = useMemo(() => {
     if (!result || !colName) return '';
@@ -91,17 +91,17 @@ export function PgVectorDialog({
     return typeof v === 'string' ? v : '';
   }, [result, colName, rowIdx]);
 
-  const sql = useMemo(() => {
-    if (!anchor || !colName) return '';
-    const op = OP_FOR[distance];
-    const target =
-      tab?.kind === 'table' && tab.tableSchema && tab.tableName
-        ? `"${tab.tableSchema}"."${tab.tableName}"`
-        : '/* TODO: source table */ <table>';
-    // Embed anchor as a literal — pg accepts the standard `[...]::vector` syntax.
-    const literal = anchor.replace(/'/g, "''");
-    return `SELECT *, "${colName}" ${op} '${literal}'::vector AS distance\nFROM ${target}\nORDER BY "${colName}" ${op} '${literal}'::vector\nLIMIT ${limit};`;
-  }, [anchor, colName, distance, limit, tab]);
+  // A table tab names its table; for a SQL tab the user must say which one.
+  const fromTab =
+    tab?.kind === 'table' && tab.tableSchema && tab.tableName
+      ? { schema: tab.tableSchema as string, table: tab.tableName as string }
+      : null;
+  const table = fromTab ?? parseTableRef(tableText);
+
+  const sql = useMemo(
+    () => buildNearestSql({ anchor, column: colName, distance, limit, table }),
+    [anchor, colName, distance, limit, table],
+  );
 
   const handleCopy = () => {
     if (!sql) return;
@@ -113,8 +113,8 @@ export function PgVectorDialog({
 
   const insertIntoEditor = () => {
     if (!sql) return;
-    if (tab?.kind === 'table') addTab();
-    queueMicrotask(() => setSql(sql));
+    // Never clobbers the buffer the user is working in.
+    openSqlInNewTab(sql);
     onOpenChange(false);
   };
 
@@ -215,6 +215,17 @@ export function PgVectorDialog({
               </Field>
             </div>
 
+            {!fromTab && (
+              <Field label="Source table (required for a SQL result)">
+                <Input
+                  value={tableText}
+                  onChange={(e) => setTableText(e.target.value)}
+                  placeholder="schema.table"
+                  aria-invalid={tableText !== '' && !table}
+                />
+              </Field>
+            )}
+
             <div className="overflow-hidden rounded-[7px] border border-[var(--wb-separator)]">
               <div className="flex items-center gap-2 border-b border-[var(--wb-separator)] bg-[var(--wb-sidebar)] px-2 py-1 text-[12px] font-medium text-[var(--wb-text-2)]">
                 <span>Nearest-neighbor SQL</span>
@@ -230,7 +241,7 @@ export function PgVectorDialog({
                 </Button>
               </div>
               <pre className="overflow-x-auto bg-[var(--wb-content)] p-3 font-mono text-[12px] text-[var(--wb-text)]">
-                {sql || '-- pick an anchor row above'}
+                {sql || (table ? '-- pick an anchor row above' : '-- enter the source table above')}
               </pre>
             </div>
 

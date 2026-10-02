@@ -23,6 +23,9 @@ export interface HistorySlice {
   recallPreviousHistory(): Promise<boolean>;
 }
 
+/** Monotonic id of the latest `loadHistory` call. */
+let historyRequestSeq = 0;
+
 export const createHistorySlice: SliceCreator<HistorySlice> = (set, get) => ({
   history: [],
   historyFilter: { status: 'all', duration: 'all' },
@@ -54,6 +57,9 @@ export const createHistorySlice: SliceCreator<HistorySlice> = (set, get) => ({
     const duration = merged.duration === 'all' ? undefined : merged.duration;
     const search = merged.search?.trim() ? merged.search : undefined;
 
+    // R-29: only the newest request may publish; a slow older search must
+    // not overwrite the results of the one the user typed after it.
+    const seq = ++historyRequestSeq;
     try {
       const history = await ipc.history.list({
         limit: merged.limit,
@@ -62,6 +68,7 @@ export const createHistorySlice: SliceCreator<HistorySlice> = (set, get) => ({
         status,
         duration,
       });
+      if (seq !== historyRequestSeq) return;
       set({ history });
     } catch (err) {
       console.error('[plasma] history.list failed', err);

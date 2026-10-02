@@ -1,4 +1,4 @@
-import { Client } from '@opensearch-project/opensearch';
+import { Client, errors as osErrors } from '@opensearch-project/opensearch';
 import { AwsSigv4Signer } from '@opensearch-project/opensearch/aws';
 import { OS_READ_ONLY_MESSAGE, isOsReadRequest, isReadOnlyOsSql } from '@shared/os-write-policy';
 import type {
@@ -33,6 +33,44 @@ import {
 /** Default per-request timeout when neither the request nor settings set one (O6). */
 const DEFAULT_TIMEOUT_MS = 60_000;
 
+/**
+ * P2-14: the client buffers whole responses (a Dev Tools `_search?size=10000`
+ * or `_cat` on a big cluster can be hundreds of MB). Responses are read as a
+ * stream and abandoned past this many bytes.
+ */
+export const MAX_RESPONSE_BYTES = 64 * 1024 * 1024;
+
+/** SQL cursors kept open at once; the oldest is closed when exceeded. */
+const MAX_OPEN_SQL_CURSORS = 16;
+
+export class ResponseTooLargeError extends Error {
+  override readonly name = 'ResponseTooLargeError';
+  constructor(limit: number) {
+    super(
+      `The response is larger than ${Math.round(limit / (1024 * 1024))} MB and was dropped. Narrow the request: use filter_path, a smaller size, or a more specific index.`,
+    );
+  }
+}
+
+/** Read a response stream into text, giving up (and destroying it) past `limit` bytes. */
+export async function readCappedText(
+  body: AsyncIterable<Buffer | string> & { destroy?: () => void },
+  limit: number,
+): Promise<string> {
+  const chunks: Buffer[] = [];
+  let total = 0;
+  for await (const chunk of body) {
+    const buf = typeof chunk === 'string' ? Buffer.from(chunk) : chunk;
+    total += buf.byteLength;
+    if (total > limit) {
+      body.destroy?.();
+      throw new ResponseTooLargeError(limit);
+    }
+    chunks.push(buf);
+  }
+  return Buffer.concat(chunks).toString('utf8');
+}
+
 type Abortable<T> = Promise<T> & { abort?: () => void };
 
 interface TransportParams {
@@ -62,6 +100,19 @@ export class OpenSearchDriver {
   private defaultTimeoutMs = DEFAULT_TIMEOUT_MS;
   /** In-flight abortable requests keyed by the renderer's request id (O6). */
   private inflight = new Map<string, () => void>();
+  private autoRequestSeq = 0;
+  /** SQL cursors the server still holds for us, oldest first (P2-14). */
+  private openSqlCursors = new Set<string>();
+  private readonly maxResponseBytes: number;
+
+  constructor(opts: { maxResponseBytes?: number } = {}) {
+    this.maxResponseBytes = opts.maxResponseBytes ?? MAX_RESPONSE_BYTES;
+  }
+
+  /** SQL cursors the server may still hold for us (tests, diagnostics). */
+  openSqlCursorCount(): number {
+    return this.openSqlCursors.size;
+  }
 
   async connect(config: ConnectionConfig, timeoutMs?: number): Promise<string> {
     await this.disconnect();
@@ -101,6 +152,11 @@ export class OpenSearchDriver {
     for (const abort of this.inflight.values()) abort();
     this.inflight.clear();
     const c = this.client;
+    // Free the server-side SQL cursors while we can still talk to it.
+    if (c && this.openSqlCursors.size > 0) {
+      await Promise.allSettled([...this.openSqlCursors].map((cur) => this.closeCursorWith(c, cur)));
+    }
+    this.openSqlCursors.clear();
     this.client = null;
     this.readOnly = false;
     if (c) {
@@ -136,19 +192,45 @@ export class OpenSearchDriver {
       {
         ...(requestTimeout ? { requestTimeout } : {}),
         maxRetries: 0,
+        // Read the body ourselves so it can be size-capped (P2-14).
+        asStream: true,
         ...(opts.requestId ? { opaqueId: `plasma-${opts.requestId}` } : {}),
       },
-    ) as unknown as Abortable<{ statusCode: number | null; body: unknown }>;
+    ) as unknown as Abortable<{
+      statusCode: number | null;
+      headers?: Record<string, string | string[] | undefined>;
+      body: AsyncIterable<Buffer | string> & { destroy?: () => void };
+    }>;
     let aborted = false;
-    if (opts.requestId) {
-      this.inflight.set(opts.requestId, () => {
-        aborted = true;
-        promise.abort?.();
-      });
-    }
+    let bodyStream: { destroy?: () => void } | null = null;
+    // Every request is abortable: without a renderer id, `disconnect()` still reaches it.
+    const key = opts.requestId ?? `auto-${++this.autoRequestSeq}`;
+    this.inflight.set(key, () => {
+      aborted = true;
+      promise.abort?.();
+      bodyStream?.destroy?.();
+    });
     try {
       const res = await promise;
-      return { statusCode: res.statusCode ?? 200, body: res.body };
+      bodyStream = res.body;
+      const statusCode = res.statusCode ?? 200;
+      const text = await readCappedText(res.body, this.maxResponseBytes);
+      const contentType = String(res.headers?.['content-type'] ?? '');
+      let body: unknown = text;
+      if (params.method === 'HEAD') {
+        body = statusCode < 400;
+      } else if (/json/.test(contentType) && text !== '') {
+        body = JSON.parse(text);
+      }
+      if (statusCode >= 400 && !(params.method === 'HEAD' && statusCode === 404)) {
+        throw new osErrors.ResponseError({
+          statusCode,
+          body,
+          headers: res.headers ?? {},
+          meta: {},
+        } as unknown as ConstructorParameters<typeof osErrors.ResponseError>[0]);
+      }
+      return { statusCode, body };
     } catch (err) {
       if (aborted) throw new Error('request cancelled');
       const name = err && typeof err === 'object' ? (err as { name?: string }).name : undefined;
@@ -159,7 +241,57 @@ export class OpenSearchDriver {
       }
       throw err;
     } finally {
-      if (opts.requestId) this.inflight.delete(opts.requestId);
+      this.inflight.delete(key);
+    }
+  }
+
+  /**
+   * Run a typed client call (overview, mapping, aliases…) so `cancel()` and
+   * `disconnect()` can abort it too; without this only search / SQL / REST
+   * requests were abortable (P2-14).
+   */
+  private async tracked<T>(p: Abortable<T>, requestId?: string): Promise<T> {
+    const key = requestId ?? `auto-${++this.autoRequestSeq}`;
+    let aborted = false;
+    this.inflight.set(key, () => {
+      aborted = true;
+      p.abort?.();
+    });
+    try {
+      return await p;
+    } catch (err) {
+      if (aborted) throw new Error('request cancelled');
+      throw err;
+    } finally {
+      this.inflight.delete(key);
+    }
+  }
+
+  private async closeCursorWith(client: Client, cursor: string): Promise<void> {
+    await client.transport
+      .request(
+        { method: 'POST', path: '/_plugins/_sql/close', body: { cursor } },
+        { requestTimeout: 5_000, maxRetries: 0 },
+      )
+      .catch(() => undefined);
+  }
+
+  /** Release a server-side SQL cursor the user stopped paging through. */
+  async closeSqlCursor(cursor: string): Promise<void> {
+    if (!this.openSqlCursors.delete(cursor) || !this.client) return;
+    await this.closeCursorWith(this.client, cursor);
+  }
+
+  private rememberSqlCursor(previous: string | undefined, next: string | null): void {
+    if (previous) this.openSqlCursors.delete(previous);
+    if (!next) return;
+    this.openSqlCursors.delete(next);
+    this.openSqlCursors.add(next);
+    // Abandoned paging must not pile up on the cluster: close the oldest.
+    while (this.openSqlCursors.size > MAX_OPEN_SQL_CURSORS) {
+      const oldest = this.openSqlCursors.values().next().value as string | undefined;
+      if (!oldest) break;
+      void this.closeSqlCursor(oldest);
     }
   }
 
@@ -201,33 +333,36 @@ export class OpenSearchDriver {
 
   async overview(): Promise<OsOverview> {
     const client = this.requireClient();
-    const info = (await client.info()).body as {
+    const info = (await this.tracked(client.info() as Abortable<{ body: unknown }>)).body as {
       cluster_name?: string;
       version?: { distribution?: string; number?: string };
     };
-    const health = (await client.cluster.health({})).body as {
+    const health = (await this.tracked(client.cluster.health({}) as Abortable<{ body: unknown }>))
+      .body as {
       status?: string;
       number_of_nodes?: number;
     };
 
     // cat.indices returns one row per index with live counts/sizes.
     const cat = (
-      await client.cat.indices({
-        format: 'json',
-        bytes: 'b',
-        expand_wildcards: 'all',
-        h: [
-          'index',
-          'health',
-          'status',
-          'uuid',
-          'pri',
-          'rep',
-          'docs.count',
-          'docs.deleted',
-          'store.size',
-        ],
-      } as Parameters<Client['cat']['indices']>[0])
+      await this.tracked(
+        client.cat.indices({
+          format: 'json',
+          bytes: 'b',
+          expand_wildcards: 'all',
+          h: [
+            'index',
+            'health',
+            'status',
+            'uuid',
+            'pri',
+            'rep',
+            'docs.count',
+            'docs.deleted',
+            'store.size',
+          ],
+        } as Parameters<Client['cat']['indices']>[0]) as Abortable<{ body: unknown }>,
+      )
     ).body as unknown as Array<Record<string, string | null | undefined>>;
 
     // System indices (including `.security*`) are hidden in the UI, not
@@ -258,10 +393,9 @@ export class OpenSearchDriver {
 
   async mapping(index: string): Promise<OsMappingNode> {
     const client = this.requireClient();
-    const res = (await client.indices.getMapping({ index })).body as Record<
-      string,
-      { mappings?: { properties?: Record<string, unknown> } }
-    >;
+    const res = (
+      await this.tracked(client.indices.getMapping({ index }) as Abortable<{ body: unknown }>)
+    ).body as Record<string, { mappings?: { properties?: Record<string, unknown> } }>;
     // res is keyed by concrete index name (resolves wildcards/aliases).
     // Merge per path and flag conflicting types instead of hiding them (O5).
     const perIndex = Object.values(res).map((entry) => entry.mappings?.properties ?? {});
@@ -370,6 +504,8 @@ export class OpenSearchDriver {
     }));
     const rows = (payload.datarows ?? payload.rows ?? []) as unknown[][];
     const total = typeof payload.total === 'number' ? payload.total : rows.length;
+    const nextCursor = typeof payload.cursor === 'string' && payload.cursor ? payload.cursor : null;
+    this.rememberSqlCursor(opts.cursor, nextCursor);
     return {
       columns,
       rows,
@@ -459,10 +595,12 @@ export class OpenSearchDriver {
   async aliases(): Promise<OsAlias[]> {
     const client = this.requireClient();
     const cat = (
-      await client.cat.aliases({
-        format: 'json',
-        h: ['alias', 'index', 'filter', 'is_write_index'],
-      })
+      await this.tracked(
+        client.cat.aliases({
+          format: 'json',
+          h: ['alias', 'index', 'filter', 'is_write_index'],
+        }) as Abortable<{ body: unknown }>,
+      )
     ).body as unknown as Array<Record<string, string | undefined>>;
     return cat.map((row) => ({
       alias: row.alias ?? '',
@@ -481,10 +619,12 @@ export class OpenSearchDriver {
     const client = this.requireClient();
     // OpenSearch ISM path
     try {
-      const res = await client.transport.request({
-        method: 'GET',
-        path: '/_plugins/_ism/policies',
-      });
+      const res = await this.tracked(
+        client.transport.request({
+          method: 'GET',
+          path: '/_plugins/_ism/policies',
+        }) as Abortable<{ body: unknown }>,
+      );
       const body = res.body as unknown as {
         policies?: Array<{
           _id?: string;
@@ -502,10 +642,12 @@ export class OpenSearchDriver {
       // Fall through to ES ILM
     }
     try {
-      const res = await client.transport.request({
-        method: 'GET',
-        path: '/_ilm/policy',
-      });
+      const res = await this.tracked(
+        client.transport.request({
+          method: 'GET',
+          path: '/_ilm/policy',
+        }) as Abortable<{ body: unknown }>,
+      );
       const body = res.body as unknown as Record<
         string,
         { policy: unknown; modified_date_string?: string; modified_date?: number }
@@ -536,13 +678,17 @@ export class OpenSearchDriver {
     fields: string[];
     queryString?: string;
     query?: string;
+    requestId?: string;
+    timeoutMs?: number;
   }): Promise<OsFieldStats[]> {
     const client = this.requireClient();
 
-    const mappingRes = (await client.indices.getMapping({ index: opts.index })).body as Record<
-      string,
-      { mappings?: { properties?: Record<string, unknown> } }
-    >;
+    const mappingRes = (
+      await this.tracked(
+        client.indices.getMapping({ index: opts.index }) as Abortable<{ body: unknown }>,
+        opts.requestId,
+      )
+    ).body as Record<string, { mappings?: { properties?: Record<string, unknown> } }>;
     const flat: ReturnType<typeof flattenMappingProps> = {};
     for (const v of Object.values(mappingRes)) {
       flattenMappingProps(v.mappings?.properties ?? {}, '', flat);
@@ -569,11 +715,14 @@ export class OpenSearchDriver {
           }),
         );
       }
-      const res = await this.transport({
-        method: 'POST',
-        path: '/_msearch',
-        bulkBody: `${lines.join('\n')}\n`,
-      });
+      const res = await this.transport(
+        {
+          method: 'POST',
+          path: '/_msearch',
+          bulkBody: `${lines.join('\n')}\n`,
+        },
+        { timeoutMs: opts.timeoutMs, requestId: opts.requestId },
+      );
       responses = (res.body as { responses?: unknown[] }).responses ?? [];
     }
 

@@ -77,4 +77,11 @@ END`;
     expect(unsupportedStatementReason("COPY t FROM '/tmp/x.csv'")).toBeNull();
     expect(unsupportedStatementReason('SELECT 1')).toBeNull();
   });
+
+  it('does not split on ; inside parentheses (multi-action CREATE RULE)', () => {
+    const rule =
+      'CREATE RULE r AS ON INSERT TO t DO ALSO (INSERT INTO a VALUES (1); INSERT INTO b VALUES (2))';
+    const out = splitSqlStatementRanges(`${rule}; SELECT 1;`).map((s) => s.text);
+    expect(out).toEqual([rule, 'SELECT 1']);
+  });
 });

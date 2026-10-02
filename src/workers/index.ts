@@ -1,5 +1,6 @@
 /// <reference types="electron" />
 import { CONNECTION_LOST, isConnectionLostError } from '@shared/connection-loss';
+import { assertOsSingleIndexName } from '@shared/os-write-policy';
 import {
   type ConnectionEngine,
   type PgNotice,
@@ -11,7 +12,7 @@ import { OpenSearchDriver } from './drivers/opensearch';
 import { PostgresDriver } from './drivers/postgres';
 import { RedisDriver } from './drivers/redis';
 import { dispatchRedis } from './drivers/redis-dispatch';
-import { ExportCancelledError, writeExportFile, writeExportRows } from './export-file';
+import { ExportCancelledError, writeExportFromQueryStream, writeExportRows } from './export-file';
 import { RequestScheduler } from './request-scheduler';
 import { runIsolatedTestConnect } from './test-connect';
 
@@ -33,6 +34,7 @@ import { runIsolatedTestConnect } from './test-connect';
 const pg = new PostgresDriver();
 /** Import jobs the user asked to cancel; polled between batches. */
 const importCancelled = new Set<string>();
+const runningImports = new Set<string>();
 const exportCancelled = new Set<string>();
 const redis = new RedisDriver();
 const os = new OpenSearchDriver();
@@ -41,6 +43,12 @@ let activeEngine: ConnectionEngine | null = null;
 const scheduler = new RequestScheduler();
 /** Bumped on every successful connect; edit batches must match (U01). */
 let connectionGen = 0;
+
+/** Notices a failed statement raised before it errored (P2-6). */
+function noticesOf(err: unknown): PgNotice[] | undefined {
+  const n = err instanceof Error ? (err as Error & { notices?: PgNotice[] }).notices : undefined;
+  return n && n.length > 0 ? n : undefined;
+}
 
 function send(res: WorkerResponse): void {
   process.parentPort.postMessage(res);
@@ -157,6 +165,7 @@ process.parentPort.on('message', async (evt: Electron.MessageEvent) => {
             const result = await pg.query(req.sql, req.params, {
               revision: req.revision ?? 0,
               maxRows: req.maxRows,
+              maxBytes: req.maxBytes,
               autoBegin: req.autoBegin,
             });
             send({ kind: 'queryResult', id: req.id, result });
@@ -179,6 +188,7 @@ process.parentPort.on('message', async (evt: Electron.MessageEvent) => {
           if (activeEngine !== 'postgres') return unsupported(req.id, 'importRun');
           const jobId = req.job.jobId;
           importCancelled.delete(jobId);
+          runningImports.add(jobId);
           try {
             const result = await pg.runImport(req.job, {
               isCancelled: () => importCancelled.has(jobId),
@@ -188,12 +198,19 @@ process.parentPort.on('message', async (evt: Electron.MessageEvent) => {
             send({ kind: 'importResult', id: req.id, result });
           } finally {
             importCancelled.delete(jobId);
+            runningImports.delete(jobId);
           }
           break;
         }
         case 'importCancel': {
           importCancelled.add(req.jobId);
-          send({ kind: 'cancelled', id: req.id });
+          // P2-17: a slow statement can't poll the flag; interrupt it server-side
+          // (only while that import is the thing running on the primary).
+          const delivered =
+            activeEngine === 'postgres' && runningImports.has(req.jobId)
+              ? await pg.cancelQuery()
+              : undefined;
+          send({ kind: 'cancelled', id: req.id, delivered });
           break;
         }
         case 'explain': {
@@ -219,10 +236,11 @@ process.parentPort.on('message', async (evt: Electron.MessageEvent) => {
           send({ kind: 'queryResult', id: req.id, result });
           break;
         }
-        case 'cancel':
-          if (activeEngine === 'postgres') await pg.cancelQuery();
-          send({ kind: 'cancelled', id: req.id });
+        case 'cancel': {
+          const delivered = activeEngine === 'postgres' ? await pg.cancelQuery() : undefined;
+          send({ kind: 'cancelled', id: req.id, delivered });
           break;
+        }
         case 'introspect': {
           if (activeEngine === 'postgres') {
             const info = await pg.introspect(req.opts);
@@ -286,24 +304,24 @@ process.parentPort.on('message', async (evt: Electron.MessageEvent) => {
           if (jobId) exportCancelled.delete(jobId);
           const isCancelled = () => (jobId ? exportCancelled.has(jobId) : false);
           try {
-            const batches = pg.streamQueryForExport(req.sql, req.params);
-            const first = await batches.next();
-            const columns = first.done ? [] : first.value.columns;
-            const result = await writeExportFile({
-              filePath: req.filePath,
-              format: req.format,
-              columns,
-              targetTable: req.targetTable,
-              csv: req.csv,
-              isCancelled,
-              onProgress: (p) =>
-                jobId &&
-                send({ kind: 'exportProgress', id: 'export-progress', progress: { jobId, ...p } }),
-              batches: (async function* () {
-                if (!first.done) yield first.value.rows;
-                for await (const batch of batches) yield batch.rows;
-              })(),
-            });
+            // P1-3: the stream is closed inside, whatever fails first.
+            const result = await writeExportFromQueryStream(
+              pg.streamQueryForExport(req.sql, req.params),
+              {
+                filePath: req.filePath,
+                format: req.format,
+                targetTable: req.targetTable,
+                csv: req.csv,
+                isCancelled,
+                onProgress: (p) =>
+                  jobId &&
+                  send({
+                    kind: 'exportProgress',
+                    id: 'export-progress',
+                    progress: { jobId, ...p },
+                  }),
+              },
+            );
             send({ kind: 'exportDone', id: req.id, filePath: req.filePath, ...result });
           } catch (err) {
             // The server-side cancel surfaces as a pg error; report it as the
@@ -320,13 +338,13 @@ process.parentPort.on('message', async (evt: Electron.MessageEvent) => {
           exportCancelled.add(req.jobId);
           // A long-running fetch is interrupted server-side; the writer also
           // checks the flag between batches.
-          if (activeEngine === 'postgres') await pg.cancelQuery();
-          send({ kind: 'cancelled', id: req.id });
+          const delivered = activeEngine === 'postgres' ? await pg.cancelQuery() : undefined;
+          send({ kind: 'cancelled', id: req.id, delivered });
           break;
         }
         case 'cancelAux': {
-          if (activeEngine === 'postgres') await pg.cancelAux();
-          send({ kind: 'cancelled', id: req.id });
+          const delivered = activeEngine === 'postgres' ? await pg.cancelAux() : undefined;
+          send({ kind: 'cancelled', id: req.id, delivered });
           break;
         }
 
@@ -418,6 +436,7 @@ process.parentPort.on('message', async (evt: Electron.MessageEvent) => {
         }
         case 'osCreateIndex': {
           if (activeEngine !== 'opensearch') return unsupported(req.id, 'osCreateIndex');
+          assertOsSingleIndexName(req.name);
           const result = await os.createIndex(req.name, req.body);
           send({
             kind: 'osCreateIndex',
@@ -429,6 +448,7 @@ process.parentPort.on('message', async (evt: Electron.MessageEvent) => {
         }
         case 'osDeleteIndex': {
           if (activeEngine !== 'opensearch') return unsupported(req.id, 'osDeleteIndex');
+          assertOsSingleIndexName(req.name);
           const result = await os.deleteIndex(req.name);
           send({ kind: 'osDeleteIndex', id: req.id, acknowledged: result.acknowledged });
           break;
@@ -440,6 +460,8 @@ process.parentPort.on('message', async (evt: Electron.MessageEvent) => {
             fields: req.fields,
             queryString: req.queryString,
             query: req.query,
+            requestId: req.requestId,
+            timeoutMs: req.timeoutMs,
           });
           send({ kind: 'osFieldStats', id: req.id, stats });
           break;
@@ -458,6 +480,7 @@ process.parentPort.on('message', async (evt: Electron.MessageEvent) => {
       // C5: main must not replay anything into a fresh session when the
       // old one died with a transaction open.
       txnLost: isConnectionLostError(err) && pg.lostDuringTransaction() ? true : undefined,
+      notices: noticesOf(err),
     });
   }
 });

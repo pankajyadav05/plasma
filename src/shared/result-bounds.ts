@@ -13,8 +13,30 @@ export const MAX_RESULT_ROWS = 10_000;
 /** Soft cap on estimated retained payload bytes (UTF-16-ish). */
 export const MAX_RESULT_BYTES = 32 * 1024 * 1024; // 32 MiB
 
-/** Rows requested per pg-cursor EXECUTE. */
+/** Hard ceiling for a user-configured byte cap (P2-3). */
+export const MAX_RESULT_BYTES_CEILING = 256 * 1024 * 1024; // 256 MiB
+
+/** Rows requested per pg-cursor EXECUTE (upper bound). */
 export const RESULT_CURSOR_CHUNK = 500;
+
+/** First read is small: row width is unknown until something arrives. */
+export const FIRST_CURSOR_CHUNK = 100;
+
+/** Target estimated size of one cursor read. */
+const TARGET_CHUNK_BYTES = 4 * 1024 * 1024;
+
+/**
+ * Rows to ask for next, from the weight of the batch just read: wide rows
+ * (big text/jsonb/bytea) shrink the read so one fetch can't buffer
+ * hundreds of megabytes before the byte cap is checked.
+ */
+export function nextCursorChunk(lastBatch: readonly unknown[][]): number {
+  if (lastBatch.length === 0) return FIRST_CURSOR_CHUNK;
+  let bytes = 0;
+  for (const row of lastBatch) bytes += estimateRowBytes(row);
+  const avg = Math.max(1, bytes / lastBatch.length);
+  return Math.max(1, Math.min(RESULT_CURSOR_CHUNK, Math.floor(TARGET_CHUNK_BYTES / avg)));
+}
 
 export type BoundAccumulateState = {
   rows: unknown[][];

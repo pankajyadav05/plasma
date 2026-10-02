@@ -32,8 +32,8 @@ export function resolveIconPath(): string | undefined {
     }
   }
   console.warn(
-    '[plasma] window icon not found. Run `pnpm install` (triggers prepare script) ' +
-      'or `pnpm build:icons` to generate resources/icon.png. Tried:',
+    '[plasma] window icon not found. Run ' +
+      '`pnpm build:icons --force` to generate resources/icon.png. Tried:',
     candidates,
   );
   return undefined;

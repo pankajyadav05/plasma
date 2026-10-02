@@ -1,4 +1,5 @@
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
+import { effectiveSafeMode } from '@/stores/safe-mode';
 import { useSession } from '@/stores/session';
 
 /**
@@ -13,6 +14,9 @@ export function ProdGateDialog() {
   const cancelProdGate = useSession((s) => s.cancelProdGate);
   const isCommit = gate?.kind === 'commitEdits';
   const safeMode = gate?.reason === 'safe-mode';
+  const readOnlyLevel = useSession(
+    (s) => effectiveSafeMode(s.settings, s.activeConfig?.id) === 'read-only',
+  );
 
   return (
     <ConfirmDialog
@@ -30,7 +34,15 @@ export function ProdGateDialog() {
             : 'Run destructive query on production?'
       }
       description={
-        safeMode ? (
+        safeMode && readOnlyLevel ? (
+          <span>
+            Safe mode is read-only on{' '}
+            <span className="font-mono font-semibold">
+              {activeConfig?.name ?? 'this connection'}
+            </span>
+            , and this statement calls a function Plasma can't verify is read-only. It may write.
+          </span>
+        ) : safeMode ? (
           <span>
             Safe mode is asking before this runs on{' '}
             <span className="font-mono font-semibold">

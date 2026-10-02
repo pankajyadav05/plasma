@@ -685,6 +685,8 @@ export const CsvExportOptions = z.object({
   /** How SQL NULL is written: empty field or the literal `NULL`. */
   nullAs: z.enum(['empty', 'NULL']).catch('empty').default('empty'),
   lineEnding: z.enum(['lf', 'crlf']).catch('lf').default('lf'),
+  /** Prefix `'` on cells starting with = + - @ TAB CR so spreadsheets don't run them (SC-15). Absent = on. */
+  formulaGuard: z.boolean().catch(true).optional(),
 });
 
 export const ExportSaveRequest = z.object({
@@ -894,6 +896,10 @@ export const SchemaInfo = z.object({
       isPrimaryKey: z.boolean().default(false),
       isNullable: z.boolean().default(true),
       hasDefault: z.boolean().default(false),
+      /** DEFAULT expression text (pg_get_expr); omitted by older drivers / snapshots. */
+      defaultExpr: z.string().nullable().optional(),
+      /** GENERATED … AS IDENTITY flavour, when the column is an identity column. */
+      identity: z.enum(['always', 'by default']).nullable().optional(),
     }),
   ),
   /**
@@ -910,9 +916,31 @@ export const SchemaInfo = z.object({
         refSchema: z.string(),
         refTable: z.string(),
         refColumn: z.string(),
+        /** Constraint name — groups the rows of a composite FK. */
+        constraint: z.string().optional(),
+        onDelete: z
+          .enum(['NO ACTION', 'RESTRICT', 'CASCADE', 'SET NULL', 'SET DEFAULT'])
+          .optional(),
+        onUpdate: z
+          .enum(['NO ACTION', 'RESTRICT', 'CASCADE', 'SET NULL', 'SET DEFAULT'])
+          .optional(),
       }),
     )
     .default([]),
+  /** Indexes of introspected tables (R-10); older snapshots / drivers may omit this. */
+  indexes: z
+    .array(
+      z.object({
+        schema: z.string(),
+        table: z.string(),
+        name: z.string(),
+        /** Full `CREATE [UNIQUE] INDEX …` text from pg_get_indexdef. */
+        definition: z.string(),
+        unique: z.boolean().default(false),
+        primary: z.boolean().default(false),
+      }),
+    )
+    .optional(),
   /** Functions and procedures (extension-owned routines excluded). */
   routines: z
     .array(
@@ -945,6 +973,24 @@ export const SchemaInfo = z.object({
     .default([]),
 });
 export type SchemaInfo = z.infer<typeof SchemaInfo>;
+
+/** A saved schema snapshot without its schema payload (R-18). */
+export const SchemaSnapshotMeta = z.object({
+  id: z.string(),
+  connectionId: z.string().nullable(),
+  connectionName: z.string(),
+  name: z.string(),
+  createdAt: z.number(),
+});
+export type SchemaSnapshotMeta = z.infer<typeof SchemaSnapshotMeta>;
+
+export const SchemaSnapshotSaveRequest = SchemaSnapshotMeta.omit({
+  id: true,
+  createdAt: true,
+}).extend({
+  schema: SchemaInfo,
+});
+export type SchemaSnapshotSaveRequest = z.infer<typeof SchemaSnapshotSaveRequest>;
 
 /**
  * Scope of an introspection request (F16 / PC4). Omitted fields mean
@@ -1040,6 +1086,8 @@ export const WorkerRequest = z.discriminatedUnion('kind', [
     revision: z.number().int().nonnegative().optional(),
     /** Editor row limit — stop reading the cursor after this many rows. */
     maxRows: z.number().int().positive().optional(),
+    /** Retained-bytes cap for this result; the worker clamps it to 256 MiB (P2-3). */
+    maxBytes: z.number().int().positive().optional(),
     /** Transaction mode: BEGIN first when the session is idle (F9). */
     autoBegin: z.boolean().optional(),
   }),
@@ -1273,6 +1321,9 @@ export const WorkerRequest = z.discriminatedUnion('kind', [
     queryString: z.string().optional(),
     /** Optional DSL `query` object (JSON) — wins over queryString (O2). */
     query: z.string().optional(),
+    /** Lets `osCancel` abort the stats (P2-14). */
+    requestId: z.string().optional(),
+    timeoutMs: z.number().int().nonnegative().optional(),
   }),
   // ── Export (U16) ──
   z.object({
@@ -1324,7 +1375,12 @@ export const WorkerResponse = z.discriminatedUnion('kind', [
   }),
   z.object({ kind: z.literal('disconnected'), id: z.string() }),
   z.object({ kind: z.literal('queryResult'), id: z.string(), result: QueryResult }),
-  z.object({ kind: z.literal('cancelled'), id: z.string() }),
+  z.object({
+    kind: z.literal('cancelled'),
+    id: z.string(),
+    /** Postgres: false when nothing was in flight or the server refused the cancel. */
+    delivered: z.boolean().optional(),
+  }),
   /** Worker process finished bootstrapping and can accept requests (U20). */
   z.object({ kind: z.literal('ready'), id: z.string() }),
   z.object({ kind: z.literal('statementTimeoutSet'), id: z.string() }),
@@ -1348,6 +1404,8 @@ export const WorkerResponse = z.discriminatedUnion('kind', [
     fatal: z.literal(CONNECTION_LOST).optional(),
     /** The transport died while a transaction was open — its work is gone (C5). */
     txnLost: z.boolean().optional(),
+    /** Notices a failed statement raised before it errored (P2-6). */
+    notices: z.array(PgNotice).optional(),
   }),
   z.object({ kind: z.literal('redisScan'), id: z.string(), result: RedisScanResult }),
   z.object({ kind: z.literal('redisKey'), id: z.string(), result: RedisKeyValue }),
@@ -1501,6 +1559,11 @@ export const SettingsShape = z.object({
    * when the estimate is above this many rows. 0 = always count exactly.
    */
   estimatedCountThreshold: z.number().int().nonnegative().catch(100_000).default(100_000),
+  /**
+   * Cap on the data one query result keeps in memory, in MB (default 32,
+   * at most 256). A result past it is cut and shown as truncated (P2-3).
+   */
+  resultMaxMegabytes: z.number().int().min(1).max(256).catch(32).optional(),
   telemetryEnabled: z.boolean().optional(),
   /**
    * AI provider config. Plasma uses OpenRouter as the unified gateway —
@@ -1542,6 +1605,8 @@ export const SettingsShape = z.object({
    * to safeStorage on next schema bump.
    */
   connectionAiRowData: z.record(z.string(), z.boolean()).optional(),
+  /** SC-20: send schema names / sample keys to the AI provider (default on; prod needs the per-connection opt-in). */
+  aiSendSchema: z.boolean().optional(),
   connectionSsh: z
     .record(
       z.string(),
@@ -1903,6 +1968,11 @@ export const IpcChannel = {
   HistoryLatest: 'plasma:history:latest',
   HistoryClear: 'plasma:history:clear',
   HistoryDelete: 'plasma:history:delete',
+  /** Schema-diff snapshots live in their own table, not in settings (R-18). */
+  SchemaSnapshotList: 'plasma:schemaSnapshot:list',
+  SchemaSnapshotGet: 'plasma:schemaSnapshot:get',
+  SchemaSnapshotSave: 'plasma:schemaSnapshot:save',
+  SchemaSnapshotDelete: 'plasma:schemaSnapshot:delete',
   SettingsGet: 'plasma:settings:get',
   SettingsSet: 'plasma:settings:set',
   /** Remove the saved AI API key(s) from the vault. */
@@ -2145,6 +2215,13 @@ export interface PlasmaAPI {
     clear(): Promise<void>;
     /** Remove a single entry by id. */
     delete(id: number): Promise<void>;
+  };
+  schemaSnapshots: {
+    /** Metadata only: the (large) schema is fetched per snapshot with `get`. */
+    list(): Promise<SchemaSnapshotMeta[]>;
+    get(id: string): Promise<SchemaInfo | null>;
+    save(req: SchemaSnapshotSaveRequest): Promise<SchemaSnapshotMeta>;
+    delete(id: string): Promise<void>;
   };
   settings: {
     get(): Promise<Settings>;

@@ -24,6 +24,29 @@ export function parseFeedBaseUrl(appUpdateYml: string): string | null {
 }
 
 /**
+ * A full release version, anchored at both ends (SC-24): the value comes off
+ * the network and is interpolated into a URL that is handed to the OS browser,
+ * so `1.2.3/../x`, `1.2.3?evil` or `1.2.3#` must not pass.
+ */
+export const SAFE_VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
+
+/**
+ * Direct .dmg URL for the arch, taken from the file list of a signature
+ * verified manifest instead of guessed. Only plain file names qualify.
+ */
+export function macDownloadUrlFromManifest(
+  feedBaseUrl: string | null,
+  files: readonly { url: string }[],
+  version: string,
+  arch: string,
+): string {
+  const fallback = macDownloadUrl(feedBaseUrl, version, arch);
+  if (fallback === SITE_DOWNLOAD_URL) return fallback;
+  const dmg = files.find((f) => /^[\w.-]+\.dmg$/.test(f.url) && f.url.endsWith(`-${arch}.dmg`));
+  return dmg ? `${feedBaseUrl}/${dmg.url}` : fallback;
+}
+
+/**
  * Direct .dmg URL for a macOS release, mirroring
  * `artifactName: ${productName}-${version}-${arch}.${ext}` in
  * `electron-builder.yml`. Falls back to the download page whenever the feed
@@ -33,6 +56,6 @@ export function parseFeedBaseUrl(appUpdateYml: string): string | null {
 export function macDownloadUrl(feedBaseUrl: string | null, version: string, arch: string): string {
   if (feedBaseUrl == null) return SITE_DOWNLOAD_URL;
   if (arch !== 'arm64' && arch !== 'x64') return SITE_DOWNLOAD_URL;
-  if (!/^\d+\.\d+\.\d+/.test(version)) return SITE_DOWNLOAD_URL;
+  if (!SAFE_VERSION.test(version)) return SITE_DOWNLOAD_URL;
   return `${feedBaseUrl}/Plasma-${version}-${arch}.dmg`;
 }

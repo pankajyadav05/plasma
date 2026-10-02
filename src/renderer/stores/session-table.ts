@@ -13,9 +13,10 @@ import {
   queueInsert,
   queueRowDeletes,
   revertPendingEdits as revertPendingEditsAction,
+  tabsWithEdits,
   updatePendingInsert as updatePendingInsertAction,
 } from './session-pending-edits';
-import type { PendingEditsError } from './session-pending-edits';
+import type { PendingEditsByTab, PendingEditsError } from './session-pending-edits';
 import {
   activeTab,
   columnMetaFor,
@@ -32,7 +33,7 @@ import {
   runTableDataQuery,
 } from './session-table-query';
 import { isPreviewTab } from './session-tabs';
-import type { PendingEdit, QueryTab, SliceCreator } from './session-types';
+import type { QueryTab, SliceCreator } from './session-types';
 
 // Debounce handle for column-width drag persistence. During a drag we
 // rewrite the tab's columnWidths on every pointermove — we only want
@@ -41,7 +42,8 @@ let columnWidthPersistTimer: ReturnType<typeof setTimeout> | null = null;
 
 export interface TableSlice {
   // ── Pending edits (buffered inline-edit tray) ──
-  pendingEdits: PendingEdit[];
+  /** Staged grid edits per tab id (R-01/R-02). */
+  pendingEditsByTab: PendingEditsByTab;
   pendingEditsBusy: boolean;
   /** Last commit failure: Postgres message + the edits whose statement failed. */
   pendingEditsError: PendingEditsError | null;
@@ -94,12 +96,14 @@ export interface TableSlice {
   updatePendingInsert(id: string, column: string, value: string | null): void;
   discardPendingEdit(id: string): void;
   // Pending edits (buffered inline-edit tray)
-  commitPendingEdits(opts?: { confirmed?: boolean }): Promise<void>;
-  revertPendingEdits(): Promise<void>;
+  /** Commits ONLY the edits of `tabId` (default: the active tab). */
+  commitPendingEdits(opts?: { confirmed?: boolean; tabId?: string }): Promise<void>;
+  /** Discards the edits of `tabId` (default: the active tab). */
+  revertPendingEdits(opts?: { tabId?: string }): Promise<void>;
 }
 
 export const createTableSlice: SliceCreator<TableSlice> = (set, get) => ({
-  pendingEdits: [],
+  pendingEditsByTab: {},
   pendingEditsBusy: false,
   pendingEditsError: null,
 
@@ -132,7 +136,7 @@ export const createTableSlice: SliceCreator<TableSlice> = (set, get) => ({
     const tab: QueryTab = { ...baseTab, ...persistedPatch, preview };
     // A single-click open replaces the current untouched preview tab in
     // place (TablePlus / VS Code preview tabs, VF17).
-    const editedTabs = new Set(state.pendingEdits.map((e) => e.tabId));
+    const editedTabs = tabsWithEdits(state.pendingEditsByTab);
     const previewIdx =
       preview && !opts?.newTab ? state.tabs.findIndex((t) => isPreviewTab(t, editedTabs)) : -1;
     const nextTabs =
@@ -411,7 +415,7 @@ export const createTableSlice: SliceCreator<TableSlice> = (set, get) => ({
     await commitPendingEditsAction(set, get, { runTableDataQuery, runTableCountQuery }, opts);
   },
 
-  async revertPendingEdits() {
-    await revertPendingEditsAction(set, get, { runTableDataQuery });
+  async revertPendingEdits(opts) {
+    await revertPendingEditsAction(set, get, { runTableDataQuery }, opts);
   },
 });

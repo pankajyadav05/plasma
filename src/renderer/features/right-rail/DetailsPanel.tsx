@@ -7,8 +7,14 @@ import { cleanIpcError } from '@/lib/errors';
 import { ipc } from '@/lib/ipc';
 import { readableTypeName } from '@/lib/pg-types';
 import { quoteIdent } from '@/lib/table-query';
-import { useActiveTab, useSession } from '@/stores/session';
-import { editKind, pkValuesFromRow, rowKeyOf, tablePkNames } from '@/stores/session-pending-edits';
+import { useActiveTabSansSql, useSession } from '@/stores/session';
+import {
+  editKind,
+  editsOf,
+  pkValuesFromRow,
+  rowKeyOf,
+  tablePkNames,
+} from '@/stores/session-pending-edits';
 import { useWorkbench } from '@/stores/workbench';
 import type { ColumnMeta } from '@shared/protocol';
 import { Braces, Check, Copy, Pencil, SlidersHorizontal } from 'lucide-react';
@@ -40,7 +46,7 @@ import {
  * only it knows how display rows map to result rows (sort / paging).
  */
 export function DetailsPanel() {
-  const tab = useActiveTab();
+  const tab = useActiveTabSansSql();
   const inspected = useWorkbench((s) => s.inspectedRow);
   const [query, setQuery] = useState('');
   const [copiedRow, setCopiedRow] = useState(false);
@@ -164,11 +170,11 @@ interface RowEditing {
  * pending (queued, uncommitted) values already recorded for it.
  */
 function useRowEditing(row: unknown[] | null, columns: ColumnMeta[] | null): RowEditing | null {
-  const tab = useActiveTab();
+  const tab = useActiveTabSansSql();
   const editMode = useSession((s) => s.editMode);
   const readOnly = useSession((s) => Boolean(s.activeConfig?.readOnly));
   const schema = useSession((s) => s.schema);
-  const pendingEdits = useSession((s) => s.pendingEdits);
+  const pendingEdits = useSession((s) => editsOf(s.pendingEditsByTab, tab?.id));
 
   return useMemo(() => {
     if (!row || !columns || !tab || tab.kind !== 'table' || !editMode || readOnly) return null;

@@ -19,7 +19,7 @@ type Set_ = (partial: any, ...args: any[]) => void;
 // biome-ignore lint/suspicious/noExplicitAny: slice composed into SessionState
 type Get = () => any;
 
-type ColumnPart = Pick<SchemaInfo, 'columns' | 'foreignKeys'>;
+type ColumnPart = Pick<SchemaInfo, 'columns' | 'foreignKeys' | 'indexes'>;
 
 /** Schema the sidebar shows first: `public` when present, else the first one. */
 export function defaultSchemaName(info: Pick<SchemaInfo, 'schemas'> | null): string | null {
@@ -40,6 +40,10 @@ export function mergeColumns(base: SchemaInfo, part: ColumnPart, schemas: string
       ...(base.foreignKeys ?? []).filter((f) => !replaced.has(f.schema)),
       ...(part.foreignKeys ?? []).filter((f) => replaced.has(f.schema)),
     ],
+    indexes: [
+      ...(base.indexes ?? []).filter((x) => !replaced.has(x.schema)),
+      ...(part.indexes ?? []).filter((x) => replaced.has(x.schema)),
+    ],
   };
 }
 
@@ -54,6 +58,7 @@ export function withObjects(objects: Partial<SchemaInfo>, columns: ColumnPart): 
     extensions: objects.extensions ?? [],
     columns: columns.columns ?? [],
     foreignKeys: columns.foreignKeys ?? [],
+    indexes: columns.indexes ?? [],
   };
 }
 

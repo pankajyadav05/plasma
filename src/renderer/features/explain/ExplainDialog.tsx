@@ -39,7 +39,7 @@ export function ExplainDialog({
   const runId = useRef(0);
   const analyzing = useRef(false);
   const readOnly = useSession((s) => Boolean(s.activeConfig?.readOnly));
-  const confirmUserSql = useSession((s) => s.confirmUserSql);
+  const confirmUserSql = useSession((s) => s.confirmUserSqlDetailed);
   const writes = looksLikeWrite(sql);
 
   const run = useCallback(
@@ -51,11 +51,15 @@ export function ExplainDialog({
           setError('This connection is read-only, so ANALYZE is off for data-changing statements.');
           return;
         }
-        const ok = await confirmUserSql(sql, {
+        const outcome = await confirmUserSql(sql, {
           force: true,
           summary: 'EXPLAIN ANALYZE (rolled back)',
         });
-        if (!ok || id !== runId.current) return;
+        if (!outcome.ok) {
+          if (outcome.reason === 'refused' && id === runId.current) setError(outcome.message);
+          return;
+        }
+        if (id !== runId.current) return;
       }
       setLoading(true);
       analyzing.current = analyze;

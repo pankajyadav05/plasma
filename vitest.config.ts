@@ -23,7 +23,7 @@ export default defineConfig({
     },
   },
   test: {
-    include: ['src/**/*.test.ts'],
+    include: ['src/**/*.test.ts', 'site/lib/**/*.test.ts'],
     environment: 'node',
     reporters: 'default',
     setupFiles: [fileURLToPath(new URL('./test/setup.ts', import.meta.url))],

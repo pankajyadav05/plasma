@@ -14,12 +14,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { ipc } from '@/lib/ipc';
 import { useSession } from '@/stores/session';
-import type { SchemaInfo, Settings } from '@shared/protocol';
+import type { SchemaInfo, SchemaSnapshotMeta } from '@shared/protocol';
 import { Camera, Check, Copy, Trash2 } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
-
-type Snapshot = Settings['schemaSnapshots'][number];
+import { buildMigration, computeDiff, summary } from './schema-diff';
 
 const LIVE_KEY = '__live__';
 
@@ -29,9 +29,9 @@ const LIVE_KEY = '__live__';
  * (or one snapshot vs the live schema) to diff. Output is a compact
  * change list AND a copy-paste-ready ALTER TABLE migration script.
  *
- * The diff is intentionally column-level only for v0.1 — we don't
- * detect renamed columns (would need user hints) or constraint changes
- * beyond NULLability. Both are TODOs once the basic flow is proven out.
+ * The diff covers relations (tables, views, materialized views, foreign
+ * tables) and column-level changes; renamed columns need user hints and are
+ * seen as drop + add. See `schema-diff.ts` for the SQL generation.
  */
 export function SchemaDiffDialog({
   open,
@@ -42,14 +42,20 @@ export function SchemaDiffDialog({
 }) {
   const liveSchema = useSession((s) => s.schema);
   const activeConfig = useSession((s) => s.activeConfig);
-  const snapshots = useSession((s) => s.settings.schemaSnapshots ?? []);
-  const updateSettings = useSession((s) => s.updateSettings);
+  // Snapshots live in their own store (R-18): the list is metadata, and a
+  // snapshot's schema is fetched only once it is picked in a selector.
+  const [snapshots, setSnapshots] = useState<SchemaSnapshotMeta[]>([]);
+  const [loaded, setLoaded] = useState<Record<string, SchemaInfo | null>>({});
   const ensureAllSchemaColumns = useSession((s) => s.ensureAllSchemaColumns);
 
   // Columns load per schema on demand (F16); a diff needs all of them.
   useEffect(() => {
     if (open) void ensureAllSchemaColumns();
   }, [open, ensureAllSchemaColumns]);
+
+  useEffect(() => {
+    if (open) void ipc.schemaSnapshots.list().then(setSnapshots);
+  }, [open]);
 
   const [snapshotName, setSnapshotName] = useState('');
   const [leftId, setLeftId] = useState<string>(LIVE_KEY);
@@ -70,11 +76,22 @@ export function SchemaDiffDialog({
       out.push({
         id: s.id,
         label: `${s.name} · ${s.connectionName} · ${new Date(s.createdAt).toLocaleString()}`,
-        schema: s.schema,
+        schema: loaded[s.id] ?? null,
       });
     }
     return out;
-  }, [liveSchema, snapshots, activeConfig]);
+  }, [liveSchema, snapshots, activeConfig, loaded]);
+
+  // Fetch the schema of a snapshot the first time it is selected.
+  useEffect(() => {
+    for (const id of [leftId, rightId]) {
+      if (!id || id === LIVE_KEY || id in loaded) continue;
+      setLoaded((prev) => ({ ...prev, [id]: null }));
+      void ipc.schemaSnapshots
+        .get(id)
+        .then((schema) => setLoaded((prev) => ({ ...prev, [id]: schema })));
+    }
+  }, [leftId, rightId, loaded]);
 
   const left = sources.find((s) => s.id === leftId)?.schema ?? null;
   const right = sources.find((s) => s.id === rightId)?.schema ?? null;
@@ -83,31 +100,29 @@ export function SchemaDiffDialog({
 
   const takeSnapshot = async () => {
     if (!liveSchema) return;
+    // A snapshot must be complete: columns load per schema on demand.
+    await ensureAllSchemaColumns();
+    const complete = useSession.getState().schema ?? liveSchema;
     const name = snapshotName.trim() || `snapshot-${snapshots.length + 1}`;
-    const entry: Snapshot = {
-      id: freshId(),
+    const meta = await ipc.schemaSnapshots.save({
       connectionId: activeConfig?.id ?? null,
       connectionName: activeConfig?.name ?? 'unknown',
       name,
-      schema: liveSchema,
-      createdAt: Date.now(),
-    };
-    // Cap at 50 — older snapshots fall off the back to keep the settings
-    // payload bounded.
-    const next = [entry, ...snapshots].slice(0, 50);
+      schema: complete,
+    });
     setSnapshotName('');
-    await updateSettings({ schemaSnapshots: next });
+    setLoaded((prev) => ({ ...prev, [meta.id]: complete }));
+    setSnapshots(await ipc.schemaSnapshots.list());
   };
 
   const deleteSnapshot = async (id: string) => {
-    await updateSettings({
-      schemaSnapshots: snapshots.filter((s) => s.id !== id),
-    });
+    await ipc.schemaSnapshots.delete(id);
+    setSnapshots((prev) => prev.filter((s) => s.id !== id));
     if (leftId === id) setLeftId(LIVE_KEY);
     if (rightId === id) setRightId('');
   };
 
-  const migration = diff ? buildMigration(diff) : '';
+  const migration = diff ? buildMigration(diff, right) : '';
 
   const handleCopy = () => {
     if (!migration) return;
@@ -235,165 +250,4 @@ export function SchemaDiffDialog({
       </DialogContent>
     </Dialog>
   );
-}
-
-// ─── diff core ────────────────────────────────────────────────────────
-
-interface ColRef {
-  schema: string;
-  table: string;
-  name: string;
-  dataType: string;
-  isNullable: boolean;
-}
-
-interface SchemaDiff {
-  addedTables: Array<{ schema: string; name: string }>;
-  droppedTables: Array<{ schema: string; name: string }>;
-  changes: Array<{
-    schema: string;
-    table: string;
-    addedCols: ColRef[];
-    droppedCols: ColRef[];
-    typeChanges: Array<{ name: string; from: string; to: string }>;
-    nullabilityChanges: Array<{ name: string; from: boolean; to: boolean }>;
-  }>;
-}
-
-function computeDiff(a: SchemaInfo, b: SchemaInfo): SchemaDiff {
-  const aTables = new Map(a.tables.map((t) => [`${t.schema}.${t.name}`, t]));
-  const bTables = new Map(b.tables.map((t) => [`${t.schema}.${t.name}`, t]));
-
-  const addedTables: Array<{ schema: string; name: string }> = [];
-  const droppedTables: Array<{ schema: string; name: string }> = [];
-  for (const k of bTables.keys()) {
-    if (!aTables.has(k)) {
-      const t = bTables.get(k);
-      if (t) addedTables.push({ schema: t.schema, name: t.name });
-    }
-  }
-  for (const k of aTables.keys()) {
-    if (!bTables.has(k)) {
-      const t = aTables.get(k);
-      if (t) droppedTables.push({ schema: t.schema, name: t.name });
-    }
-  }
-
-  const aColsByTable = groupCols(a);
-  const bColsByTable = groupCols(b);
-  const changes: SchemaDiff['changes'] = [];
-
-  for (const k of new Set([...aColsByTable.keys(), ...bColsByTable.keys()])) {
-    if (!aTables.has(k) || !bTables.has(k)) continue; // table-level change handled above
-    const aCols = aColsByTable.get(k) ?? [];
-    const bCols = bColsByTable.get(k) ?? [];
-    const aByName = new Map(aCols.map((c) => [c.name, c]));
-    const bByName = new Map(bCols.map((c) => [c.name, c]));
-    const addedCols: ColRef[] = [];
-    const droppedCols: ColRef[] = [];
-    const typeChanges: Array<{ name: string; from: string; to: string }> = [];
-    const nullabilityChanges: Array<{ name: string; from: boolean; to: boolean }> = [];
-    for (const col of bCols) {
-      if (!aByName.has(col.name)) addedCols.push(col);
-    }
-    for (const col of aCols) {
-      const newer = bByName.get(col.name);
-      if (!newer) droppedCols.push(col);
-      else {
-        if (newer.dataType !== col.dataType) {
-          typeChanges.push({ name: col.name, from: col.dataType, to: newer.dataType });
-        }
-        if (newer.isNullable !== col.isNullable) {
-          nullabilityChanges.push({
-            name: col.name,
-            from: col.isNullable,
-            to: newer.isNullable,
-          });
-        }
-      }
-    }
-    if (
-      addedCols.length === 0 &&
-      droppedCols.length === 0 &&
-      typeChanges.length === 0 &&
-      nullabilityChanges.length === 0
-    ) {
-      continue;
-    }
-    const [schemaName, tableName] = k.split('.');
-    changes.push({
-      schema: schemaName,
-      table: tableName,
-      addedCols,
-      droppedCols,
-      typeChanges,
-      nullabilityChanges,
-    });
-  }
-
-  return { addedTables, droppedTables, changes };
-}
-
-function groupCols(s: SchemaInfo): Map<string, ColRef[]> {
-  const m = new Map<string, ColRef[]>();
-  for (const c of s.columns) {
-    const key = `${c.schema}.${c.table}`;
-    const arr = m.get(key) ?? [];
-    arr.push({
-      schema: c.schema,
-      table: c.table,
-      name: c.name,
-      dataType: c.dataType,
-      isNullable: c.isNullable,
-    });
-    m.set(key, arr);
-  }
-  return m;
-}
-
-function summary(d: SchemaDiff): string {
-  const parts: string[] = [];
-  if (d.addedTables.length) parts.push(`+${d.addedTables.length} tables`);
-  if (d.droppedTables.length) parts.push(`-${d.droppedTables.length} tables`);
-  if (d.changes.length) parts.push(`${d.changes.length} altered`);
-  return parts.length ? parts.join(' · ') : 'no changes';
-}
-
-function buildMigration(d: SchemaDiff): string {
-  const lines: string[] = [];
-  for (const t of d.addedTables) {
-    lines.push(`-- TODO: CREATE TABLE "${t.schema}"."${t.name}" (...);`);
-  }
-  for (const t of d.droppedTables) {
-    lines.push(`DROP TABLE "${t.schema}"."${t.name}";`);
-  }
-  for (const c of d.changes) {
-    for (const a of c.addedCols) {
-      const nullable = a.isNullable ? '' : ' NOT NULL';
-      lines.push(
-        `ALTER TABLE "${c.schema}"."${c.table}" ADD COLUMN "${a.name}" ${a.dataType}${nullable};`,
-      );
-    }
-    for (const dCol of c.droppedCols) {
-      lines.push(`ALTER TABLE "${c.schema}"."${c.table}" DROP COLUMN "${dCol.name}";`);
-    }
-    for (const tc of c.typeChanges) {
-      lines.push(
-        `ALTER TABLE "${c.schema}"."${c.table}" ALTER COLUMN "${tc.name}" TYPE ${tc.to}; -- was ${tc.from}`,
-      );
-    }
-    for (const nc of c.nullabilityChanges) {
-      lines.push(
-        `ALTER TABLE "${c.schema}"."${c.table}" ALTER COLUMN "${nc.name}" ${nc.to ? 'DROP NOT NULL' : 'SET NOT NULL'};`,
-      );
-    }
-  }
-  return lines.length ? lines.join('\n') : '-- no changes';
-}
-
-function freshId(): string {
-  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
-    return crypto.randomUUID();
-  }
-  return `snap-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }

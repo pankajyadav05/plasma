@@ -50,7 +50,7 @@ function reset() {
     connectionState: 'connected',
     connectionGen: 1,
     activeConfig: { id: 'c1', engine: 'postgres' } as never,
-    pendingEdits: [],
+    pendingEditsByTab: {},
     closeTabsRequest: null,
     canvasMode: 'database',
     rightPanelMode: 'details',

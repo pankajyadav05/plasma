@@ -2,7 +2,7 @@ import { Button } from '@/components/ui/button';
 import { Popover, PopoverAnchor, PopoverContent } from '@/components/ui/popover';
 import { cn } from '@/lib/cn';
 import { readableTypeName } from '@/lib/pg-types';
-import { useActiveTab, useSession } from '@/stores/session';
+import { useActiveTabSansSql, useSession } from '@/stores/session';
 import { ChevronRight, Copy, GitBranch, Search } from 'lucide-react';
 import { useMemo, useState } from 'react';
 
@@ -36,7 +36,7 @@ export function CellDetailDialog({
   onOpenChange: (open: boolean) => void;
 }) {
   const [copied, setCopied] = useState(false);
-  const tab = useActiveTab();
+  const tab = useActiveTabSansSql();
   const schema = useSession((s) => s.schema);
   const openForeignRow = useSession((s) => s.openForeignRow);
 

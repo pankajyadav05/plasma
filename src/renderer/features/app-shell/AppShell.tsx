@@ -1,49 +1,82 @@
-import { BackupDialog } from '@/features/backup/BackupDialog';
-import { RestoreDialog } from '@/features/backup/RestoreDialog';
-import { ChartBody } from '@/features/chart/ChartDialog';
-import { CodegenDialog } from '@/features/codegen/CodegenDialog';
 import { CommandPalette } from '@/features/command-palette/CommandPalette';
-import { ConnectionDialog } from '@/features/connection-manager/ConnectionDialog';
 import { DeleteConfirmDialog } from '@/features/connection-manager/DeleteConfirmDialog';
 import { PendingEditsGateDialog } from '@/features/connection-manager/PendingEditsGateDialog';
 import { ProdGateDialog } from '@/features/connection-manager/ProdGateDialog';
-import { DbSearchDialog } from '@/features/db-search/DbSearchDialog';
 import { CloseTabsDialog } from '@/features/editor/CloseTabsDialog';
 import { EditorResizer } from '@/features/editor/EditorResizer';
 import { RunningPlaceholder } from '@/features/editor/RunningPlaceholder';
 import { SqlCanvas } from '@/features/editor/SqlCanvas';
 import { TabStrip } from '@/features/editor/TabStrip';
-import { ErDiagramView } from '@/features/er-diagram/ErDiagramView';
-import { HistoryCanvas } from '@/features/history/HistoryCanvas';
-import { ShortcutCheatSheet } from '@/features/keymap/ShortcutCheatSheet';
 import { runCommand, selectTabAt } from '@/features/keymap/commands';
-import { MonitorCanvas } from '@/features/monitor/MonitorCanvas';
-import { NotebookDialog } from '@/features/notebook/NotebookDialog';
-import { DeleteIndexDialog } from '@/features/opensearch/DeleteIndexDialog';
-import { NewIndexDialog } from '@/features/opensearch/NewIndexDialog';
-import { OsCanvas } from '@/features/opensearch/OsCanvas';
-import { RedisCanvas } from '@/features/redis/RedisCanvas';
 import { FilterRow } from '@/features/result-grid/FilterRow';
 import { ResultFooter } from '@/features/result-grid/ResultFooter';
 import { ResultGrid } from '@/features/result-grid/ResultGrid';
 import { ResultMessagesPanel, ResultTabs } from '@/features/result-grid/ResultTabs';
 import { RightRail } from '@/features/right-rail/RightRail';
-import { RolesDialog } from '@/features/roles/RolesDialog';
-import { SchemaDiffDialog } from '@/features/schema-diff/SchemaDiffDialog';
-import { SettingsCanvas } from '@/features/settings/SettingsCanvas';
 import { Sidebar } from '@/features/sidebar/Sidebar';
-import { StructureDialogsHost } from '@/features/structure/StructureDialogsHost';
+import { LazyOnOpen, lazyNamed } from '@/lib/lazy';
 import { PaneTabContext } from '@/stores/pane-context';
 import { type PaneId, activeIn, isSplit } from '@/stores/pane-state';
 import { usePanes } from '@/stores/panes';
 import { useActiveTabSelect, useSession } from '@/stores/session';
 import { type Overlay, useWorkbench } from '@/stores/workbench';
 import { type KeyId, matchGlobalBinding, selectTabIndex } from '@shared/keymap';
-import { useEffect, useRef } from 'react';
+import { Suspense, useEffect, useRef } from 'react';
 import { DisconnectedHome } from './DisconnectedHome';
 import { IconRail } from './IconRail';
 import { SidebarResizer } from './SidebarResizer';
 import { TopBar } from './TopBar';
+
+// Heavy feature modules load on demand so the first-load chunk stays small.
+const ConnectionDialog = lazyNamed(
+  () => import('@/features/connection-manager/ConnectionDialog'),
+  'ConnectionDialog',
+);
+const BackupDialog = lazyNamed(() => import('@/features/backup/BackupDialog'), 'BackupDialog');
+const RestoreDialog = lazyNamed(() => import('@/features/backup/RestoreDialog'), 'RestoreDialog');
+const ChartBody = lazyNamed(() => import('@/features/chart/ChartDialog'), 'ChartBody');
+const CodegenDialog = lazyNamed(() => import('@/features/codegen/CodegenDialog'), 'CodegenDialog');
+const DbSearchDialog = lazyNamed(
+  () => import('@/features/db-search/DbSearchDialog'),
+  'DbSearchDialog',
+);
+const ErDiagramView = lazyNamed(
+  () => import('@/features/er-diagram/ErDiagramView'),
+  'ErDiagramView',
+);
+const HistoryCanvas = lazyNamed(() => import('@/features/history/HistoryCanvas'), 'HistoryCanvas');
+const MonitorCanvas = lazyNamed(() => import('@/features/monitor/MonitorCanvas'), 'MonitorCanvas');
+const NotebookDialog = lazyNamed(
+  () => import('@/features/notebook/NotebookDialog'),
+  'NotebookDialog',
+);
+const DeleteIndexDialog = lazyNamed(
+  () => import('@/features/opensearch/DeleteIndexDialog'),
+  'DeleteIndexDialog',
+);
+const NewIndexDialog = lazyNamed(
+  () => import('@/features/opensearch/NewIndexDialog'),
+  'NewIndexDialog',
+);
+const OsCanvas = lazyNamed(() => import('@/features/opensearch/OsCanvas'), 'OsCanvas');
+const RedisCanvas = lazyNamed(() => import('@/features/redis/RedisCanvas'), 'RedisCanvas');
+const RolesDialog = lazyNamed(() => import('@/features/roles/RolesDialog'), 'RolesDialog');
+const SchemaDiffDialog = lazyNamed(
+  () => import('@/features/schema-diff/SchemaDiffDialog'),
+  'SchemaDiffDialog',
+);
+const SettingsCanvas = lazyNamed(
+  () => import('@/features/settings/SettingsCanvas'),
+  'SettingsCanvas',
+);
+const StructureDialogsHost = lazyNamed(
+  () => import('@/features/structure/StructureDialogsHost'),
+  'StructureDialogsHost',
+);
+const ShortcutCheatSheet = lazyNamed(
+  () => import('@/features/keymap/ShortcutCheatSheet'),
+  'ShortcutCheatSheet',
+);
 
 /**
  * AppShell decides which top-level layout to render:
@@ -126,7 +159,13 @@ export function AppShell() {
 
         {disconnected ? (
           <div className="flex min-h-0 flex-1 flex-col">
-            {settingsWhileDisconnected ? <SettingsCanvas /> : <DisconnectedHome />}
+            {settingsWhileDisconnected ? (
+              <Suspense fallback={null}>
+                <SettingsCanvas />
+              </Suspense>
+            ) : (
+              <DisconnectedHome />
+            )}
           </div>
         ) : (
           <ConnectedShell />
@@ -134,23 +173,47 @@ export function AppShell() {
       </div>
 
       {/* Overlays */}
-      {dialogOpen && <ConnectionDialog />}
+      {dialogOpen && (
+        <Suspense fallback={null}>
+          <ConnectionDialog />
+        </Suspense>
+      )}
       <CommandPalette />
       <DeleteConfirmDialog />
       <ProdGateDialog />
       <PendingEditsGateDialog />
-      <NewIndexDialog />
-      <StructureDialogsHost />
-      <DeleteIndexDialog />
       <CloseTabsDialog />
-      <CodegenDialog {...overlayProps('codegen')} />
-      <SchemaDiffDialog {...overlayProps('schemaDiff')} />
-      <NotebookDialog {...overlayProps('notebook')} />
-      <ShortcutCheatSheet {...overlayProps('cheatSheet')} />
-      <BackupDialog {...overlayProps('backup')} />
-      <RestoreDialog {...overlayProps('restore')} />
-      <RolesDialog {...overlayProps('roles')} />
-      <DbSearchDialog {...overlayProps('dbSearch')} />
+      {/* Store-gated dialogs: lazy chunks that load right after first paint. */}
+      <Suspense fallback={null}>
+        <NewIndexDialog />
+        <StructureDialogsHost />
+        <DeleteIndexDialog />
+      </Suspense>
+      {/* Overlay dialogs: the chunk is requested the first time one opens. */}
+      <LazyOnOpen open={overlay === 'codegen'}>
+        <CodegenDialog {...overlayProps('codegen')} />
+      </LazyOnOpen>
+      <LazyOnOpen open={overlay === 'schemaDiff'}>
+        <SchemaDiffDialog {...overlayProps('schemaDiff')} />
+      </LazyOnOpen>
+      <LazyOnOpen open={overlay === 'notebook'}>
+        <NotebookDialog {...overlayProps('notebook')} />
+      </LazyOnOpen>
+      <LazyOnOpen open={overlay === 'cheatSheet'}>
+        <ShortcutCheatSheet {...overlayProps('cheatSheet')} />
+      </LazyOnOpen>
+      <LazyOnOpen open={overlay === 'backup'}>
+        <BackupDialog {...overlayProps('backup')} />
+      </LazyOnOpen>
+      <LazyOnOpen open={overlay === 'restore'}>
+        <RestoreDialog {...overlayProps('restore')} />
+      </LazyOnOpen>
+      <LazyOnOpen open={overlay === 'roles'}>
+        <RolesDialog {...overlayProps('roles')} />
+      </LazyOnOpen>
+      <LazyOnOpen open={overlay === 'dbSearch'}>
+        <DbSearchDialog {...overlayProps('dbSearch')} />
+      </LazyOnOpen>
     </>
   );
 }
@@ -200,15 +263,17 @@ function ConnectedShell() {
         </>
       )}
 
-      {canvasMode === 'settings' ? (
-        <SettingsCanvas />
-      ) : canvasMode === 'history' ? (
-        <HistoryCanvas />
-      ) : canvasMode === 'monitor' ? (
-        <MonitorCanvas />
-      ) : (
-        <EngineCanvas />
-      )}
+      <Suspense fallback={<main className="min-w-0 flex-1 bg-[var(--wb-content)]" />}>
+        {canvasMode === 'settings' ? (
+          <SettingsCanvas />
+        ) : canvasMode === 'history' ? (
+          <HistoryCanvas />
+        ) : canvasMode === 'monitor' ? (
+          <MonitorCanvas />
+        ) : (
+          <EngineCanvas />
+        )}
+      </Suspense>
 
       {/* RightRail only makes sense for relational (Postgres) databases —
           Query / Role / RLS are scoped to a table or active SQL query.
@@ -329,7 +394,11 @@ function PaneCanvas({ pane }: { pane?: PaneId } = {}) {
   return (
     <main className="flex min-h-0 min-w-0 flex-1 flex-col bg-[var(--wb-content)]">
       <TabStrip pane={pane} />
-      {isDiagram && <ErDiagramView />}
+      {isDiagram && (
+        <Suspense fallback={null}>
+          <ErDiagramView />
+        </Suspense>
+      )}
       {showEditor && <SqlCanvas expanded={!hasResults} />}
       {showEditor && hasResults && <EditorResizer />}
       {isTableData && <FilterRow />}
@@ -367,11 +436,13 @@ function ResultBody() {
     return (
       <div className="min-h-0 flex-1 overflow-auto bg-[var(--wb-content)] p-4">
         {result && result.columns.length > 0 ? (
-          <ChartBody
-            key={`${tab.id}-${tab.activeResultIndex}-${result.durationMs}`}
-            result={result}
-            tall
-          />
+          <Suspense fallback={null}>
+            <ChartBody
+              key={`${tab.id}-${tab.activeResultIndex}-${result.durationMs}`}
+              result={result}
+              tall
+            />
+          </Suspense>
         ) : (
           <div className="grid h-full place-items-center text-[13px] text-[var(--wb-text-2)]">
             Nothing to chart — run a query that returns rows.

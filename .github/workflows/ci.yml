@@ -42,3 +42,143 @@ jobs:
 
       - name: Test
         run: pnpm run test
+
+  lint:
+    name: Lint (Biome)
+    runs-on: ubuntu-latest
+    env:
+      ELECTRON_SKIP_BINARY_DOWNLOAD: 1
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Lint
+        run: pnpm run lint
+
+  # The opt-in PLASMA_LIVE_* suites run against real servers. Each test file
+  # reads its own variable (grep PLASMA_LIVE src/): PG takes a connection URL,
+  # Redis and OpenSearch take the server URL. The Redis suite FLUSHALLs, so
+  # the service container is throwaway by construction.
+  live-tests:
+    name: Live driver tests (Postgres, Redis, OpenSearch)
+    runs-on: ubuntu-latest
+    env:
+      ELECTRON_SKIP_BINARY_DOWNLOAD: 1
+      PLASMA_LIVE_PG: postgres://postgres:postgres@127.0.0.1:5432/postgres
+      PLASMA_LIVE_REDIS: redis://127.0.0.1:6379
+      PLASMA_LIVE_OS: http://127.0.0.1:9200
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+      opensearch:
+        image: opensearchproject/opensearch:2.17.1
+        env:
+          discovery.type: single-node
+          DISABLE_SECURITY_PLUGIN: "true"
+          DISABLE_INSTALL_DEMO_CONFIG: "true"
+          OPENSEARCH_JAVA_OPTS: -Xms512m -Xmx512m
+        ports:
+          - 9200:9200
+        options: >-
+          --health-cmd "curl -fs http://localhost:9200/_cluster/health || exit 1"
+          --health-interval 10s
+          --health-timeout 10s
+          --health-retries 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # pg-admin.live.test.ts shells out to pg_dump / pg_restore / psql.
+      - name: Install Postgres client tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client
+      - name: Wait for OpenSearch
+        run: |
+          for i in $(seq 1 60); do
+            curl -fs http://127.0.0.1:9200/_cluster/health && exit 0
+            sleep 2
+          done
+          echo "::error::OpenSearch did not become healthy"
+          exit 1
+      - name: Live tests
+        run: npx vitest run
+
+  # `pnpm install` is where Windows and macOS releases used to break (native
+  # rebuilds, postinstall spawning .cmd files). Run it for real on both, with
+  # CI unset for the postinstall step so the Electron-binary path executes too.
+  install-smoke:
+    name: Install smoke (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install
+        run: pnpm install --frozen-lockfile
+      - name: Run postinstall as a developer would (CI unset)
+        shell: bash
+        run: env -u CI node scripts/postinstall.mjs
+      - name: better-sqlite3 prebuild loads
+        run: node -e "const D=require('better-sqlite3');const d=new D(':memory:');console.log(d.prepare('select sqlite_version() v').get())"
+      - name: Build
+        run: pnpm run build
+
+  site:
+    name: Site typecheck
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: site
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # Same install Vercel runs (site/vercel.json).
+      - run: pnpm install --frozen-lockfile --ignore-workspace
+      - run: pnpm exec tsc --noEmit

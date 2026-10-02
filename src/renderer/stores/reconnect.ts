@@ -1,6 +1,7 @@
 import { ipc } from '@/lib/ipc';
 import { create } from 'zustand';
 import { useSession } from './session';
+import { pendingEditCount } from './session-pending-edits';
 
 /**
  * Auto-connect / auto-reconnect state machine.
@@ -62,7 +63,7 @@ export const useReconnect = create<ReconnectState>((set, get) => {
     const autoOn = useSession.getState().settings.autoReconnect;
     // Buffered grid edits need a human decision before a new session
     // exists (the connect gate asks) — never auto-connect over them.
-    const blocked = useSession.getState().pendingEdits.length > 0;
+    const blocked = pendingEditCount(useSession.getState().pendingEditsByTab) > 0;
     if (!autoOn || blocked || attempt >= RECONNECT_DELAYS_MS.length) {
       clearTimer();
       set({
@@ -142,7 +143,7 @@ let lastUnsaved = '';
 useSession.subscribe((state) => {
   const next = {
     openTransaction: state.txnState !== 'none',
-    pendingEdits: state.pendingEdits.length,
+    pendingEdits: pendingEditCount(state.pendingEditsByTab),
     runningQuery: (state.tabs ?? []).some((t) => t.queryRunState === 'running'),
   };
   const key = `${next.openTransaction}:${next.pendingEdits}:${next.runningQuery}`;

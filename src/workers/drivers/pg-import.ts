@@ -130,6 +130,26 @@ class RowError extends Error {
 
 class CancelledError extends Error {}
 
+const SET_STATEMENT =
+  /^((?:\s|--[^\n]*\n|\/\*[\s\S]*?\*\/)*)set\s+(?!local\b|transaction\b|session\s+characteristics\b)(?:session\s+)?/i;
+const SET_CONFIG_SESSION =
+  /(\bset_config\s*\(\s*'(?:[^']|'')*'\s*,\s*(?:'(?:[^']|'')*'|[^,()]+)\s*,\s*)false(\s*\))/gi;
+
+/**
+ * P1-9: pg_dump headers set session state (`SET search_path`,
+ * `statement_timeout`, `set_config('search_path', '', false)`). The import
+ * runs in one transaction, but a plain SET survives COMMIT and would leave
+ * the user's live session without its search_path / timeout. Make them
+ * transaction-local: they apply for the rest of the import and vanish at
+ * COMMIT / ROLLBACK, exactly like the user's own settings were before.
+ */
+export function localizeSessionSettings(statement: string): string {
+  if (/\bset_config\b/i.test(statement)) {
+    return statement.replace(SET_CONFIG_SESSION, '$1true$2');
+  }
+  return statement.replace(SET_STATEMENT, '$1SET LOCAL ');
+}
+
 export interface ImportHooks {
   isCancelled(): boolean;
   onProgress(p: {
@@ -148,11 +168,27 @@ function sampleOf(cells: readonly Cell[]): string {
   return text.length > 240 ? `${text.slice(0, 240)}…` : text;
 }
 
+/** UTF-8 byte-order mark: Excel, PowerShell and Plasma's own CSV export write one (P1-8). */
+const BOM = '\uFEFF';
+
+/** Drop a leading BOM so it never lands in the first header / value / statement. */
+export async function* withoutBom(chunks: AsyncIterable<string>): AsyncGenerator<string> {
+  let first = true;
+  for await (const chunk of chunks) {
+    if (first) {
+      first = false;
+      yield chunk.startsWith(BOM) ? chunk.slice(1) : chunk;
+    } else {
+      yield chunk;
+    }
+  }
+}
+
 /** Yield the file as text chunks; `bytes()` reports how far the read got. */
 function readChunks(filePath: string) {
   const stream = createReadStream(filePath, { encoding: 'utf8', highWaterMark: CHUNK_BYTES });
   return {
-    chunks: stream as AsyncIterable<string>,
+    chunks: withoutBom(stream as AsyncIterable<string>),
     bytes: () => stream.bytesRead,
     destroy: () => stream.destroy(),
   };
@@ -197,9 +233,10 @@ export async function runImport(
   const targets = job.columns.map((c) => c.target);
   const batchSize = rowsPerBatch(targets.length, job.batchRows);
   let pending: Cell[][] = [];
-  let pendingFirstRow = 1;
+  /** File line (CSV) or record number (JSON) of each pending row, for error messages. */
+  let pendingLines: number[] = [];
 
-  const insertBatch = async (rows: Cell[][], firstRow: number): Promise<void> => {
+  const insertBatch = async (rows: Cell[][], lines: number[]): Promise<void> => {
     await client.query('SAVEPOINT plasma_import_batch');
     try {
       await client.query({
@@ -211,6 +248,8 @@ export async function runImport(
       await client.query('ROLLBACK TO SAVEPOINT plasma_import_batch');
       // Find the first bad row: replay one by one, each in its own savepoint.
       for (let i = 0; i < rows.length; i++) {
+        // The replay can take long on a big batch: stay cancellable (P2-17).
+        checkCancel();
         const row = rows[i] as Cell[];
         await client.query('SAVEPOINT plasma_import_row');
         try {
@@ -220,7 +259,7 @@ export async function runImport(
           });
           await client.query('RELEASE SAVEPOINT plasma_import_row');
         } catch (rowErr) {
-          throw new RowError(errorText(rowErr), firstRow + i, sampleOf(row));
+          throw new RowError(errorText(rowErr), lines[i], sampleOf(row));
         }
       }
       throw batchErr;
@@ -231,16 +270,17 @@ export async function runImport(
   const flush = async (): Promise<void> => {
     if (pending.length === 0) return;
     const rows = pending;
-    const first = pendingFirstRow;
+    const lines = pendingLines;
     pending = [];
-    await insertBatch(rows, first);
+    pendingLines = [];
+    await insertBatch(rows, lines);
     checkCancel();
     progress();
   };
 
-  const addRow = async (cells: Cell[]): Promise<void> => {
-    if (pending.length === 0) pendingFirstRow = rowsRead;
+  const addRow = async (cells: Cell[], line: number): Promise<void> => {
     pending.push(cells);
+    pendingLines.push(line);
     if (pending.length >= batchSize) await flush();
   };
 
@@ -254,22 +294,26 @@ export async function runImport(
       nullString: csv.nullString,
     });
     let skipHeader = csv.header;
-    const handle = async (rows: Cell[][]) => {
-      for (const r of rows) {
+    const handle = async (rows: Cell[][], lines: number[]) => {
+      for (const [i, r] of rows.entries()) {
         if (skipHeader) {
           skipHeader = false;
           continue;
         }
         rowsRead++;
-        await addRow(mapCsvRow(r, job.columns));
+        // The real file line, so "row 1041" matches what an editor shows
+        // (the header and multi-line quoted fields included).
+        await addRow(mapCsvRow(r, job.columns), lines[i] ?? rowsRead);
       }
     };
     for await (const chunk of src.chunks) {
-      await handle(parser.push(chunk));
+      const rows = parser.push(chunk);
+      await handle(rows, parser.rowLines);
       checkCancel();
       progress();
     }
-    await handle(parser.end());
+    const tail = parser.end();
+    await handle(tail, parser.rowLines);
   };
 
   const runJson = async (): Promise<void> => {
@@ -283,7 +327,7 @@ export async function runImport(
         } catch (err) {
           throw new RowError(errorText(err), rowsRead, t.slice(0, 240));
         }
-        await addRow(cells);
+        await addRow(cells, rowsRead);
       }
     };
     if (job.format === 'ndjson') {
@@ -327,7 +371,8 @@ export async function runImport(
       const unsupported = unsupportedStatementReason(text);
       if (unsupported) throw new RowError(unsupported, (statements ?? 0) + 1, text.slice(0, 240));
       try {
-        const res = await client.query(text);
+        // P1-9: a dump's SET / set_config() must not outlive the import.
+        const res = await client.query(localizeSessionSettings(text));
         rowsImported += res.rowCount ?? 0;
       } catch (err) {
         throw new RowError(errorText(err), (statements ?? 0) + 1, text.slice(0, 240));
@@ -340,7 +385,10 @@ export async function runImport(
       const parts = splitSqlStatementRanges(buffer);
       // The last statement may continue in the next chunk; keep it.
       const last = parts.pop();
-      for (const p of parts) await exec(p.text);
+      for (const p of parts) {
+        checkCancel();
+        await exec(p.text);
+      }
       buffer = last ? buffer.slice(last.start) : buffer;
       checkCancel();
       progress();
@@ -370,7 +418,9 @@ export async function runImport(
     return { jobId: job.jobId, ok: true, rowsRead, rowsImported, statements };
   } catch (err) {
     src.destroy();
-    if (err instanceof CancelledError) {
+    // A server-side cancel (pg_cancel_backend from importCancel) arrives as a
+    // statement error; the user asked for it, so report a cancel.
+    if (err instanceof CancelledError || hooks.isCancelled()) {
       return {
         jobId: job.jobId,
         ok: false,

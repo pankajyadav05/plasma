@@ -69,6 +69,46 @@ describe('redisCommandNeedsConfirm', () => {
   });
 });
 
+describe('command-policy gaps (P2-11)', () => {
+  it.each([
+    ['SYNC'],
+    ['PSYNC', '?', '-1'],
+    ['READONLY'],
+    ['READWRITE'],
+    ['CLIENT', 'NO-TOUCH', 'on'],
+    ['CLIENT', 'CACHING', 'yes'],
+  ])('refuses %s', (...parts) => {
+    expect(classifyRedisCommand(parts).mode).toBe('refuse');
+    expect(isRedisReadCommand(parts)).toBe(false);
+  });
+
+  it.each([
+    ['EVAL', 'return redis.call("FLUSHALL")', '0'],
+    ['EVALSHA', 'abc', '0'],
+    ['FCALL', 'f', '0'],
+    ['SCRIPT', 'LOAD', 'return 1'],
+    ['FUNCTION', 'LOAD', 'code'],
+  ])('treats %s as a destructive write', (...parts) => {
+    const v = classifyRedisCommand(parts);
+    expect(v.access).toBe('write');
+    expect(v.risk).toBe('destructive');
+    expect(redisCommandNeedsConfirm(v, false)).toBe(true);
+  });
+
+  it('no longer treats TOUCH as a read; ordinary reads still are', () => {
+    expect(isRedisReadCommand(['TOUCH', 'k'])).toBe(false);
+    for (const cmd of [
+      ['HVALS', 'h'],
+      ['KEYS', '*'],
+      ['LINDEX', 'l', '0'],
+      ['XINFO', 'STREAM', 's'],
+      ['JSON.GET', 'k'],
+    ]) {
+      expect(isRedisReadCommand(cmd)).toBe(true);
+    }
+  });
+});
+
 describe('tokenizeRedisCommand (R17)', () => {
   it('handles quotes, escapes and empty arguments', () => {
     expect(tokenizeRedisCommand('SET k ""')).toEqual(['SET', 'k', '']);

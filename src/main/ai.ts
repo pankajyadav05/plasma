@@ -15,6 +15,7 @@ export {
   buildOpenRouterBody,
   capAiToolJson,
   isAiRowDataAllowed,
+  isAiSchemaAllowed,
   isReadOnlyRedisCommand,
   isReadOnlySql,
   serializeAiToolRows,
@@ -70,9 +71,29 @@ const inflight = new Map<string, AbortController>();
 export type AiChatOptions = {
   /** When false (default), tools that egress row data are not offered. */
   allowRowData?: boolean;
+  /**
+   * SC-20: schema names / sample keys / cluster summaries are sent as the
+   * system prompt only when allowed for the connection (default: no).
+   */
+  allowSchema?: boolean;
+  /**
+   * SC-05: re-checked immediately before EVERY tool execution. Returns a
+   * refusal message when the active connection changed or the row-data
+   * opt-in was revoked since the chat started; null when the call may run.
+   */
+  toolGuard?: () => string | null;
   /** Injectable fetch for regression tests that capture the request body. */
   fetchImpl?: typeof fetch;
 };
+
+/** Names of the tools offered for `engine` (a model may only call these). */
+export function offeredToolNames(engine: ConnectionEngine): Set<string> {
+  return new Set(
+    (toolsForEngine(engine) as ReadonlyArray<{ function: { name: string } }>).map(
+      (t) => t.function.name,
+    ),
+  );
+}
 
 export type AiToolExecutor = (name: string, args: Record<string, unknown>) => Promise<string>;
 
@@ -238,11 +259,12 @@ async function pump(
     | { role: 'tool'; tool_call_id: string; content: string };
 
   const engine = req.engine ?? 'postgres';
+  const allowSchema = options.allowSchema === true;
   const messages: InternalMsg[] = buildMessages(
     req.messages,
     engine,
-    req.schema,
-    req.engineContext,
+    allowSchema ? req.schema : null,
+    allowSchema ? req.engineContext : undefined,
   );
   const model = req.model?.trim() ? req.model : defaultModel;
   // U06: only offer row-data tools when the active connection opted in.
@@ -256,12 +278,13 @@ async function pump(
       // Stream the final round (when we want text streaming for UX).
       // For tool-call rounds we still stream so partial deltas appear
       // for any text the model emits before/after tool calls.
+      const offeredTools =
+        toolExecutor && allowRowData && !isLastAllowedRound && tools.length > 0 ? tools : null;
       const body = buildOpenRouterBody({
         model,
         messages,
         maxTokens: req.maxTokens,
-        tools:
-          toolExecutor && allowRowData && !isLastAllowedRound && tools.length > 0 ? tools : null,
+        tools: offeredTools,
         stream: true,
       });
 
@@ -340,11 +363,20 @@ async function pump(
               finishReason = choice.finish_reason;
             }
           } catch (err) {
-            logger.warn('[plasma-ai] could not parse SSE chunk:', payload, err);
+            // The payload is model output and may quote database rows: log its size only (SC-27).
+            logger.warn('[plasma-ai] could not parse SSE chunk, length', payload.length, err);
           }
         }
       }
 
+      // SC-05: a model (or provider) can return tool_calls nobody offered;
+      // those are dropped, never executed.
+      const offered = offeredTools ? offeredToolNames(engine) : new Set<string>();
+      for (const [idx, c] of [...toolCalls.entries()]) {
+        if (!offered.has(c.name)) toolCalls.delete(idx);
+      }
+
+      if (controller.signal.aborted) return;
       if (toolCalls.size === 0 || finishReason !== 'tool_calls' || !toolExecutor) {
         // Final turn — done.
         send({ kind: 'done', requestId: req.requestId });
@@ -368,6 +400,8 @@ async function pump(
       });
 
       for (const call of calls) {
+        // SC-05: Stop must also stop tool calls that are still queued.
+        if (controller.signal.aborted) return;
         let parsedArgs: Record<string, unknown>;
         try {
           parsedArgs = JSON.parse(call.arguments || '{}');
@@ -376,12 +410,16 @@ async function pump(
         }
         let result: string;
         try {
-          result = await toolExecutor(call.name, parsedArgs);
+          const refusal = options.toolGuard?.() ?? null;
+          result = refusal
+            ? JSON.stringify({ error: `rejected: ${refusal}` })
+            : await toolExecutor(call.name, parsedArgs);
         } catch (err) {
           result = JSON.stringify({
             error: err instanceof Error ? err.message : String(err),
           });
         }
+        if (controller.signal.aborted) return;
         messages.push({ role: 'tool', tool_call_id: call.id, content: result });
       }
       // Cosmetic delta so the user sees something happened between rounds.

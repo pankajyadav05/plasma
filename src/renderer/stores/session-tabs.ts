@@ -1,6 +1,7 @@
 import { ipc } from '@/lib/ipc';
 import type { Filter, TableSort } from '@/lib/table-query';
 import type { ConnectionEngine } from '@shared/protocol';
+import { editsOf, pendingEditCount, withoutTabEdits } from './session-pending-edits';
 import { DEFAULT_SETTINGS } from './session-settings';
 import { createEmptyTab, createTableTab, patchActiveTab, patchTabById } from './session-tab-model';
 import { loadTableTab } from './session-table-query';
@@ -298,7 +299,7 @@ export interface TabsSlice {
   /** Close tabs immediately, no dirty check. */
   closeTabsNow(ids: string[]): void;
   /** Pending "close tabs with unsaved SQL?" confirmation (D1). */
-  closeTabsRequest: { ids: string[]; dirtyTitles: string[] } | null;
+  closeTabsRequest: { ids: string[]; dirtyTitles: string[]; editCount?: number } | null;
   tabsConnectionId: string | null;
 }
 
@@ -367,7 +368,12 @@ export const createTabsSlice: SliceCreator<TabsSlice> = (set, get) => ({
     if (remaining.length === 0) {
       // Never leave the strip empty — a fresh scratch tab takes over.
       const fresh = createEmptyTab(state.settings.defaultPageSize);
-      set({ tabs: [fresh], activeTabId: fresh.id, closeTabsRequest: null });
+      set({
+        tabs: [fresh],
+        activeTabId: fresh.id,
+        closeTabsRequest: null,
+        pendingEditsByTab: withoutTabEdits(state.pendingEditsByTab, drop),
+      });
       return;
     }
     let nextActive = state.activeTabId;
@@ -378,17 +384,40 @@ export const createTabsSlice: SliceCreator<TabsSlice> = (set, get) => ({
       const before = [...state.tabs.slice(0, idx)].reverse().find((t) => !drop.has(t.id));
       nextActive = (after ?? before ?? remaining[0]!).id;
     }
-    set({ tabs: remaining, activeTabId: nextActive });
+    // R-02: a closed tab's staged edits go with it — they can no longer be
+    // seen, so they must never be committed later by another tab's Commit.
+    set({
+      tabs: remaining,
+      activeTabId: nextActive,
+      pendingEditsByTab: withoutTabEdits(state.pendingEditsByTab, drop),
+    });
   },
 
   requestCloseTabs(ids) {
     const state = get();
-    const dirty = state.tabs.filter((t) => ids.includes(t.id) && isTabDirty(t));
+    // Unsaved SQL, or staged grid edits that closing would discard (R-02).
+    const dirty = state.tabs.filter(
+      (t) =>
+        ids.includes(t.id) && (isTabDirty(t) || editsOf(state.pendingEditsByTab, t.id).length > 0),
+    );
     if (dirty.length === 0) {
       get().closeTabsNow(ids);
       return;
     }
-    set({ closeTabsRequest: { ids, dirtyTitles: dirty.map((t) => t.title) } });
+    const editCount = pendingEditCount(
+      Object.fromEntries(
+        ids
+          .map((id) => [id, editsOf(state.pendingEditsByTab, id)] as const)
+          .filter(([, l]) => l.length),
+      ),
+    );
+    set({
+      closeTabsRequest: {
+        ids,
+        dirtyTitles: dirty.map((t) => t.title),
+        ...(editCount > 0 ? { editCount } : {}),
+      },
+    });
   },
 
   confirmCloseTabs() {
@@ -540,7 +569,15 @@ export function adoptConnectionTabs(
 ): void {
   const state = get();
   const connId = state.activeConfig?.id ?? null;
-  if (connId && state.tabsConnectionId === connId) return;
+  if (connId && state.tabsConnectionId === connId) {
+    // R-07: same connection, new session. The live tabs stay, but their
+    // results were cleared — reload the one on screen (others reload when
+    // they are selected).
+    if (state.tabs.some((t) => t.id === state.activeTabId && t.kind === 'table')) {
+      get().setActiveTab(state.activeTabId);
+    }
+    return;
+  }
   const pageSize = state.settings.defaultPageSize;
   // Settings → "Restore tabs on launch" (restoreWorkspace, default on).
   const restore = state.settings.restoreWorkspace !== false;

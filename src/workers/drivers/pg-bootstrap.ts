@@ -3,8 +3,10 @@ import { splitSqlStatements } from '@shared/sql-statements';
 /**
  * C28: statements a connection runs right after it is established
  * (`SET search_path…`, `SET ROLE…`, `SET TIME ZONE…`). They run on the
- * primary session only — the one that carries user queries — so a `SET ROLE`
- * doesn't leak to the aux connection Plasma uses for its own lookups.
+ * primary session and on the aux session (AI tool queries, lookups,
+ * introspection), so a `SET ROLE analyst_ro` limits what the AI path can
+ * read too (SC-14). A role chosen later in the Session role panel is
+ * deliberately primary-only.
  * The first failure aborts the connect with the statement that caused it.
  */
 export async function runBootstrapSql(

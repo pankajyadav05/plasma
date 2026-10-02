@@ -1,6 +1,6 @@
 import { isConnectionLostError } from '@shared/connection-loss';
 import type { ConnectionConfig, ConnectionEngine, WorkerRequest } from '@shared/protocol';
-import { isReadOnlyRedisCommand } from './ai-policy';
+import { isRedisReadCommand } from '@shared/redis-command-policy';
 
 /**
  * U27 — transparent session recovery after a transport loss.
@@ -132,25 +132,160 @@ const POLICY_BY_KIND: Partial<Record<WorkerRequest['kind'], RecoveryPolicy>> = {
 type PolicyRequest = { kind: WorkerRequest['kind'] } & Record<string, unknown>;
 
 /**
- * C5 / F1: SQL that can be re-run on a fresh session without changing
- * anything — a single plain read. Anything that might write, lock, call a
- * side-effecting function or depend on session state is not replayed.
+ * Words that take a parenthesis without being function calls: clause
+ * keywords, constructors and special forms.
+ */
+const SYNTAX_BEFORE_PAREN = new Set(
+  (
+    'select from where and or not in any all some exists as on using join left right inner outer ' +
+    'cross full natural lateral union intersect except values with recursive over filter within ' +
+    'group by order having limit offset fetch when then else case end between like ilike similar ' +
+    'is distinct array row cast extract coalesce nullif greatest least rollup cube grouping sets ' +
+    'window partition rows range table only collate escape explain verbose costs buffers format ' +
+    'summary timing settings wal show current_timestamp current_time localtime localtimestamp ' +
+    'numeric decimal varchar char character timestamp timestamptz time timetz interval bit varbit float'
+  ).split(' '),
+);
+
+/**
+ * Functions with no side effects (immutable / stable catalog or pure
+ * computation). Anything else — user functions, nextval, pg_notify,
+ * set_config, advisory locks, lo_* — blocks a replay (SC-04).
+ */
+const SAFE_FUNCTIONS = new Set(
+  (
+    'count sum avg min max bool_and bool_or every array_agg string_agg json_agg jsonb_agg ' +
+    'json_object_agg jsonb_object_agg stddev variance corr percentile_cont percentile_disc mode ' +
+    'lower upper length char_length character_length octet_length bit_length substr substring trim ' +
+    'ltrim rtrim btrim replace concat concat_ws position strpos split_part initcap reverse lpad rpad ' +
+    'repeat translate regexp_replace regexp_match regexp_matches regexp_split_to_array ' +
+    'regexp_split_to_table ascii chr md5 encode decode format quote_ident quote_literal quote_nullable ' +
+    'round ceil ceiling floor trunc abs sign mod power sqrt exp ln log div width_bucket ' +
+    'to_char to_date to_timestamp to_number date_trunc date_part make_date make_time make_timestamp ' +
+    'make_interval age now timezone isfinite justify_days justify_hours justify_interval ' +
+    'jsonb_typeof json_typeof jsonb_array_length json_array_length jsonb_extract_path ' +
+    'jsonb_extract_path_text json_extract_path json_extract_path_text jsonb_object_keys json_object_keys ' +
+    'jsonb_each jsonb_each_text json_each json_each_text jsonb_array_elements json_array_elements ' +
+    'jsonb_array_elements_text json_array_elements_text jsonb_build_object json_build_object ' +
+    'jsonb_build_array json_build_array jsonb_set jsonb_strip_nulls jsonb_pretty to_json to_jsonb ' +
+    'row_to_json array_to_json to_tsvector to_tsquery plainto_tsquery ts_rank ' +
+    'generate_series unnest array_length array_upper array_lower cardinality array_position ' +
+    'array_to_string string_to_array array_cat array_append array_prepend array_remove ' +
+    'row_number rank dense_rank percent_rank cume_dist lag lead first_value last_value nth_value ntile ' +
+    'current_setting current_database current_schema current_schemas current_user session_user version ' +
+    'pg_typeof pg_size_pretty pg_total_relation_size pg_relation_size pg_table_size pg_indexes_size ' +
+    'pg_database_size to_regclass to_regtype obj_description col_description pg_get_viewdef ' +
+    'pg_get_indexdef pg_get_constraintdef pg_get_expr pg_get_userbyid format_type ' +
+    'has_table_privilege has_schema_privilege has_database_privilege has_column_privilege ' +
+    'inet_server_addr inet_client_addr host network masklen text int4 int8 numeric float8 ' +
+    'bool uuid date oid regclass name'
+  ).split(' '),
+);
+
+/** Blank out comments and quoted text so only structure remains. null = malformed. */
+function stripSqlLiterals(sql: string): string | null {
+  let out = '';
+  const n = sql.length;
+  let i = 0;
+  while (i < n) {
+    const c = sql[i] as string;
+    const next = sql[i + 1];
+    if (c === '-' && next === '-') {
+      while (i < n && sql[i] !== '\n') i++;
+      out += ' ';
+    } else if (c === '/' && next === '*') {
+      let depth = 1;
+      i += 2;
+      while (i < n && depth > 0) {
+        if (sql[i] === '/' && sql[i + 1] === '*') {
+          depth++;
+          i += 2;
+        } else if (sql[i] === '*' && sql[i + 1] === '/') {
+          depth--;
+          i += 2;
+        } else i++;
+      }
+      if (depth > 0) return null;
+      out += ' ';
+    } else if (c === "'") {
+      const escapes = /[eE]$/.test(out) && !/[\w$]/.test(out.slice(-2, -1) || ' ');
+      i++;
+      for (;;) {
+        if (i >= n) return null;
+        if (escapes && sql[i] === '\\') i += 2;
+        else if (sql[i] === "'" && sql[i + 1] === "'") i += 2;
+        else if (sql[i] === "'") {
+          i++;
+          break;
+        } else i++;
+      }
+      out += "''";
+    } else if (c === '"') {
+      i++;
+      for (;;) {
+        if (i >= n) return null;
+        if (sql[i] === '"' && sql[i + 1] === '"') i += 2;
+        else if (sql[i] === '"') {
+          i++;
+          break;
+        } else i++;
+      }
+      out += '"q"';
+    } else if (c === '$') {
+      const m = /^\$([A-Za-z_][\w]*)?\$/.exec(sql.slice(i));
+      if (m && !/[\w$]$/.test(out)) {
+        const end = sql.indexOf(m[0], i + m[0].length);
+        if (end < 0) return null;
+        i = end + m[0].length;
+        out += "''";
+      } else {
+        out += c;
+        i++;
+      }
+    } else {
+      out += c;
+      i++;
+    }
+  }
+  return out;
+}
+
+/**
+ * C5 / F1 / SC-04: SQL that is *proven* safe to re-run on a fresh session:
+ * a single SHOW, EXPLAIN without ANALYZE, or plain SELECT / VALUES / TABLE
+ * / WITH whose only function calls are on an allow-list of side-effect-free
+ * functions. A deny-list can't prove that (`SELECT charge_customer(42)`),
+ * so anything unknown — user functions, nextval, pg_notify — is not
+ * replayed and the user is told instead.
  */
 export function isReplaySafeSql(sql: string): boolean {
-  const stripped = sql
-    .replace(/\/\*[\s\S]*?\*\//g, ' ')
-    .replace(/--[^\n]*/g, ' ')
-    .trim()
-    .replace(/;\s*$/, '');
+  const stripped0 = stripSqlLiterals(sql);
+  if (stripped0 === null) return false;
+  const stripped = stripped0.trim().replace(/;\s*$/, '');
   if (!stripped || stripped.includes(';')) return false;
   const lower = stripped.toLowerCase();
   if (!/^(select|show|table|values|with|explain)\b/.test(lower)) return false;
-  if (/^explain\b[^;]*\banalyze\b/.test(lower)) return false;
+  if (/^explain\b/.test(lower) && /\banalyze\b|\banalyse\b/.test(lower)) return false;
   if (
-    /\b(insert|update|delete|merge|truncate|drop|alter|create|grant|revoke|copy|call|do|lock|into|for\s+(update|share|no\s+key\s+update|key\s+share)|nextval|setval|pg_terminate_backend|pg_cancel_backend|pg_advisory\w*|pg_reload_conf|pg_rotate_logfile|set_config|lo_\w+|dblink\w*|pg_sleep\w*)\b/.test(
+    /\b(insert|update|delete|merge|truncate|drop|alter|create|grant|revoke|copy|call|do|lock|into|for\s+(update|share|no\s+key\s+update|key\s+share)|set)\b/.test(
       lower,
     )
   ) {
+    return false;
+  }
+  // Every `name(` / `schema.name(` must be syntax or an allow-listed function.
+  const call = /((?:[a-z_][\w$]*|"q")\s*\.\s*)?([a-z_][\w$]*|"q")\s*\(/g;
+  for (let m = call.exec(lower); m; m = call.exec(lower)) {
+    const qualifier = m[1]?.replace(/[\s.]/g, '');
+    const name = m[2] as string;
+    if (name === '"q"') return false;
+    if (qualifier) {
+      if (qualifier !== 'pg_catalog' || !SAFE_FUNCTIONS.has(name)) return false;
+      continue;
+    }
+    if (SYNTAX_BEFORE_PAREN.has(name) || SAFE_FUNCTIONS.has(name)) continue;
+    // `... AS alias(col, col)` is a column alias list, not a call.
+    if (/\bas\s+$/.test(lower.slice(0, m.index))) continue;
     return false;
   }
   return true;
@@ -158,13 +293,20 @@ export function isReplaySafeSql(sql: string): boolean {
 
 export function recoveryPolicy(kind: WorkerRequest['kind'], req?: PolicyRequest): RecoveryPolicy {
   switch (kind) {
-    case 'query':
     case 'sidebandQuery':
+      // Plasma's own lookups with a timeout run inside BEGIN READ ONLY on
+      // the server, so a hidden write errors instead of repeating.
+      if (typeof req?.timeoutMs === 'number' && req.timeoutMs > 0) return 'retry';
+      return typeof req?.sql === 'string' && isReplaySafeSql(req.sql) ? 'retry' : 'reconnect-only';
+    case 'query':
       // C5: user SQL is replayed only when it is provably a plain read.
       return typeof req?.sql === 'string' && isReplaySafeSql(req.sql) ? 'retry' : 'reconnect-only';
+    case 'explain':
+      // EXPLAIN ANALYZE executes the statement (nextval, triggers...).
+      return req?.analyze === true ? 'reconnect-only' : 'retry';
     case 'redisCommand': {
       const parts = Array.isArray(req?.parts) ? req.parts.map((p) => String(p)) : [];
-      return parts.length > 0 && isReadOnlyRedisCommand(parts) ? 'retry' : 'reconnect-only';
+      return parts.length > 0 && isRedisReadCommand(parts) ? 'retry' : 'reconnect-only';
     }
   }
   return POLICY_BY_KIND[kind] ?? 'retry';

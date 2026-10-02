@@ -51,6 +51,11 @@ export type CsvOptions = {
   /** How SQL NULL is written: an empty field or the literal `NULL`. */
   nullAs: 'empty' | 'NULL';
   lineEnding: 'lf' | 'crlf';
+  /**
+   * Prefix cells that start with `= + - @ TAB CR` with `'` so spreadsheets
+   * don't run them as formulas (SC-15). On unless explicitly `false`.
+   */
+  formulaGuard?: boolean;
 };
 
 export const DEFAULT_CSV_OPTIONS: CsvOptions = {
@@ -63,6 +68,15 @@ export const DEFAULT_CSV_OPTIONS: CsvOptions = {
 
 function eol(opts: CsvOptions): string {
   return opts.lineEnding === 'lf' ? '\n' : '\r\n';
+}
+
+const FORMULA_START = /^[=+\-@\t\r]/;
+/** Plain numbers (Postgres numeric / int8 arrive as strings) are not formulas. */
+const PLAIN_NUMBER = /^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/;
+
+/** Neutralise a leading formula character (SC-15). */
+export function guardFormula(str: string): string {
+  return FORMULA_START.test(str) && !PLAIN_NUMBER.test(str) ? `'${str}` : str;
 }
 
 export function csvEscape(value: unknown, opts: CsvOptions = DEFAULT_CSV_OPTIONS): string {
@@ -79,6 +93,7 @@ export function csvEscape(value: unknown, opts: CsvOptions = DEFAULT_CSV_OPTIONS
   } else {
     str = String(value);
   }
+  if (typeof value === 'string' && opts.formulaGuard !== false) str = guardFormula(str);
   const q = opts.quote;
   if (str.includes(opts.delimiter) || str.includes(q) || /[\r\n]/.test(str)) {
     return `${q}${str.split(q).join(q + q)}${q}`;
@@ -100,15 +115,41 @@ export function formatCsvRow(
   return row.map((v) => csvEscape(v, opts)).join(opts.delimiter);
 }
 
+/**
+ * Object keys for a result's columns: a repeated name (`SELECT 1 a, 2 a`)
+ * becomes `a`, `a_2`, `a_3` instead of the later column overwriting the
+ * earlier one (P2-4).
+ */
+export function uniqueColumnKeys(columns: readonly Pick<ColumnMeta, 'name'>[]): string[] {
+  const used = new Set<string>();
+  return columns.map((col) => {
+    let key = col.name;
+    for (let n = 2; used.has(key); n++) key = `${col.name}_${n}`;
+    used.add(key);
+    return key;
+  });
+}
+
 export function rowToObject(
   columns: readonly ColumnMeta[],
   row: readonly unknown[],
 ): Record<string, unknown> {
   const obj: Record<string, unknown> = {};
-  columns.forEach((col, i) => {
-    obj[col.name] = row[i];
+  const keys = uniqueColumnKeys(columns);
+  keys.forEach((key, i) => {
+    obj[key] = row[i];
   });
   return obj;
+}
+
+/**
+ * JSON.stringify would write NaN / ±Infinity as `null` (a silent data
+ * change) and throw on bigint; keep them as strings (P2-4).
+ */
+export function jsonReplacer(_key: string, value: unknown): unknown {
+  if (typeof value === 'number' && !Number.isFinite(value)) return String(value);
+  if (typeof value === 'bigint') return value.toString();
+  return value;
 }
 
 function quoteText(str: string): string {
@@ -198,7 +239,10 @@ export function createExportStreamer(
       writeRows(rows) {
         for (const row of rows) {
           const prefix = rowIndex === 0 ? '  ' : ',\n  ';
-          const json = JSON.stringify(rowToObject(columns, row), null, 2).replace(/\n/g, '\n  ');
+          const json = JSON.stringify(rowToObject(columns, row), jsonReplacer, 2).replace(
+            /\n/g,
+            '\n  ',
+          );
           void sink(prefix + json);
           rowIndex++;
         }

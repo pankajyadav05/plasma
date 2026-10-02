@@ -22,6 +22,28 @@ export function isAiRowDataAllowed(
 }
 
 /**
+ * SC-20: schema names, sample Redis keys and cluster summaries go to the AI
+ * provider as the system prompt. Allowed unless the user turned the global
+ * "send schema" setting off; prod-tagged connections additionally need the
+ * explicit per-connection opt-in (the same switch as row data).
+ */
+export function isAiSchemaAllowed(
+  connectionId: string | null | undefined,
+  settings: {
+    aiSendSchema?: boolean;
+    connectionTags?: Record<string, string>;
+    connectionAiRowData?: Record<string, boolean>;
+  },
+): boolean {
+  if (!connectionId) return false;
+  if (settings.aiSendSchema === false) return false;
+  if (settings.connectionTags?.[connectionId] === 'prod') {
+    return settings.connectionAiRowData?.[connectionId] === true;
+  }
+  return true;
+}
+
+/**
  * Serialize tool rows with row + byte caps. Always labels truncation so
  * the model (and any captured OpenRouter body) can see the policy.
  */

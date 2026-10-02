@@ -1,5 +1,6 @@
 import { getDb } from './db';
-import { type HistoryListOpts, buildHistoryListQuery, redactSqlSecrets } from './history-query';
+import { type HistoryListOpts, buildHistoryListQuery } from './history-query';
+import { redactErrorText, redactSqlSecrets } from './redact';
 
 /**
  * Query history — records every executed query (success or failure)
@@ -60,7 +61,12 @@ export function recordHistory(entry: Omit<HistoryEntry, 'id'>): void {
       `INSERT INTO query_history
          (connection_id, sql, row_count, duration_ms, error, executed_at)
          VALUES (@connectionId, @sql, @rowCount, @durationMs, @error, @executedAt)`,
-    ).run({ ...entry, sql: redactSqlSecrets(entry.sql) });
+    ).run({
+      ...entry,
+      sql: redactSqlSecrets(entry.sql),
+      // Error text can quote the statement and echo row values (SC-27).
+      error: entry.error == null ? null : redactErrorText(entry.error),
+    });
     // Prune if we're over the cap
     db.prepare(
       `DELETE FROM query_history

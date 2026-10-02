@@ -28,6 +28,11 @@ const NOT_EXTENSION_MEMBER = (classId: string, oidExpr: string) =>
 
 const KIND_MAP = { r: 'table', v: 'view', m: 'matview', f: 'foreign', p: 'partitioned' } as const;
 
+const FK_ACTION_MAP: Record<
+  string,
+  'NO ACTION' | 'RESTRICT' | 'CASCADE' | 'SET NULL' | 'SET DEFAULT'
+> = { a: 'NO ACTION', r: 'RESTRICT', c: 'CASCADE', n: 'SET NULL', d: 'SET DEFAULT' };
+
 const TYPE_KIND_MAP = { e: 'enum', c: 'composite', d: 'domain', r: 'range' } as const;
 
 export async function introspectPostgres(
@@ -215,6 +220,8 @@ export async function introspectPostgres(
       is_pk: boolean;
       is_nullable: boolean;
       has_default: boolean;
+      default_expr: string | null;
+      identity: string | null;
     }>(
       `SELECT n.nspname AS schema,
               c.relname  AS "table",
@@ -223,10 +230,13 @@ export async function introspectPostgres(
               a.attnum   AS ordinal,
               COALESCE(pk.is_pk, false) AS is_pk,
               NOT a.attnotnull AS is_nullable,
-              a.atthasdef AS has_default
+              a.atthasdef AS has_default,
+              pg_get_expr(ad.adbin, ad.adrelid) AS default_expr,
+              NULLIF(a.attidentity, '') AS identity
        FROM pg_attribute a
        JOIN pg_class c ON c.oid = a.attrelid
        JOIN pg_namespace n ON n.oid = c.relnamespace
+       LEFT JOIN pg_attrdef ad ON ad.adrelid = a.attrelid AND ad.adnum = a.attnum
        LEFT JOIN LATERAL (
          SELECT true AS is_pk
          FROM pg_constraint con
@@ -252,6 +262,8 @@ export async function introspectPostgres(
       isPrimaryKey: r.is_pk,
       isNullable: r.is_nullable,
       hasDefault: r.has_default,
+      defaultExpr: r.default_expr,
+      identity: r.identity === 'a' ? 'always' : r.identity === 'd' ? 'by default' : null,
     }));
 
     // Foreign keys — one row per FK column. `unnest ... WITH ORDINALITY`
@@ -264,13 +276,19 @@ export async function introspectPostgres(
       ref_schema: string;
       ref_table: string;
       ref_column: string;
+      constraint_name: string;
+      on_delete: string;
+      on_update: string;
     }>(
       `SELECT n.nspname   AS schema,
               c.relname   AS "table",
               a.attname   AS column,
               fn.nspname  AS ref_schema,
               fc.relname  AS ref_table,
-              fa.attname  AS ref_column
+              fa.attname  AS ref_column,
+              con.conname AS constraint_name,
+              con.confdeltype::text AS on_delete,
+              con.confupdtype::text AS on_update
        FROM pg_constraint con
        JOIN pg_class     c  ON c.oid  = con.conrelid
        JOIN pg_namespace n  ON n.oid  = c.relnamespace
@@ -293,6 +311,45 @@ export async function introspectPostgres(
       refSchema: r.ref_schema,
       refTable: r.ref_table,
       refColumn: r.ref_column,
+      constraint: r.constraint_name,
+      onDelete: FK_ACTION_MAP[r.on_delete],
+      onUpdate: FK_ACTION_MAP[r.on_update],
+    }));
+
+    // Indexes (R-10): the exact `CREATE INDEX` text, so a schema-diff
+    // migration for a new table can recreate them. Primary keys come with
+    // the table definition and are skipped by the consumer.
+    const indexes = await client.query<{
+      schema: string;
+      table: string;
+      name: string;
+      definition: string;
+      is_unique: boolean;
+      is_primary: boolean;
+    }>(
+      `SELECT n.nspname AS schema,
+              t.relname AS "table",
+              i.relname AS name,
+              pg_get_indexdef(ix.indexrelid) AS definition,
+              ix.indisunique AS is_unique,
+              ix.indisprimary AS is_primary
+       FROM pg_index ix
+       JOIN pg_class i ON i.oid = ix.indexrelid
+       JOIN pg_class t ON t.oid = ix.indrelid
+       JOIN pg_namespace n ON n.oid = t.relnamespace
+       WHERE t.relkind IN ('r', 'p', 'm')
+         AND ${SYSTEM_SCHEMA_FILTER}
+         ${schemaFilter}
+       ORDER BY n.nspname, t.relname, i.relname`,
+      params,
+    );
+    out.indexes = indexes.rows.map((r) => ({
+      schema: r.schema,
+      table: r.table,
+      name: r.name,
+      definition: r.definition,
+      unique: r.is_unique,
+      primary: r.is_primary,
     }));
   }
 

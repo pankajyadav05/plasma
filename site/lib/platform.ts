@@ -1,109 +1,70 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import {
-  DOWNLOAD_URL,
-  MAC_ARM64_SIZE_LABEL,
-  MAC_ARM64_URL,
-  MAC_X64_SIZE_LABEL,
-  MAC_X64_URL,
-  PORTABLE_URL,
-  SIZE_LABEL,
-} from './version';
+import type { DownloadVariant, Os, Releases } from './feed';
+import { useReleases } from './releases-context';
 
-export type Os = 'win' | 'mac';
+/** What the visitor is on. `mobile` covers phones and tablets (no desktop build exists). */
+export type Visitor = 'win' | 'mac' | 'linux' | 'mobile' | 'unknown';
 
-export interface DownloadVariant {
-  key: 'win-installer' | 'win-portable' | 'mac-arm64' | 'mac-x64';
-  label: string;
-  cursor: string;
-  url: string;
-  sizeLabel: string;
-  /** filename portion of the URL — used for terminal-mock display */
-  basename: string;
+interface NavigatorWithUAData extends Navigator {
+  userAgentData?: { platform?: string; mobile?: boolean };
 }
 
-function basenameOf(url: string): string {
-  return url.slice(url.lastIndexOf('/') + 1);
+/** Pure detector, exported for tests. iPadOS reports a Mac platform but has touch points. */
+export function detectVisitor(nav: {
+  platform?: string;
+  userAgent?: string;
+  maxTouchPoints?: number;
+  userAgentData?: { platform?: string; mobile?: boolean };
+}): Visitor {
+  const ua = nav.userAgent ?? '';
+  const uaPlatform = nav.userAgentData?.platform ?? '';
+  if (nav.userAgentData?.mobile || /Android|iPhone|iPad|iPod|Mobile/i.test(ua)) return 'mobile';
+  const isMac = uaPlatform === 'macOS' || /^Mac/i.test(nav.platform ?? '') || /\bMac OS X\b/.test(ua);
+  // iPadOS 13+ masquerades as a Mac but is a touch device.
+  if (isMac && (nav.maxTouchPoints ?? 0) > 1) return 'mobile';
+  if (isMac) return 'mac';
+  if (uaPlatform === 'Windows' || /^Win/i.test(nav.platform ?? '') || /Windows/.test(ua)) return 'win';
+  if (uaPlatform === 'Linux' || /Linux|X11|CrOS/.test(`${nav.platform ?? ''} ${ua}`)) return 'linux';
+  return 'unknown';
 }
 
-const WIN_INSTALLER: DownloadVariant = {
-  key: 'win-installer',
-  label: 'Windows installer',
-  cursor: `win·x64 · ${SIZE_LABEL}`,
-  url: DOWNLOAD_URL,
-  sizeLabel: SIZE_LABEL,
-  basename: basenameOf(DOWNLOAD_URL),
-};
-
-const WIN_PORTABLE: DownloadVariant = {
-  key: 'win-portable',
-  label: 'Portable EXE',
-  cursor: `win·x64 portable · ${SIZE_LABEL}`,
-  url: PORTABLE_URL,
-  sizeLabel: SIZE_LABEL,
-  basename: basenameOf(PORTABLE_URL),
-};
-
-const MAC_ARM64: DownloadVariant = {
-  key: 'mac-arm64',
-  label: 'macOS · Apple Silicon',
-  cursor: `mac·arm64 · ${MAC_ARM64_SIZE_LABEL}`,
-  url: MAC_ARM64_URL,
-  sizeLabel: MAC_ARM64_SIZE_LABEL,
-  basename: basenameOf(MAC_ARM64_URL),
-};
-
-const MAC_X64: DownloadVariant = {
-  key: 'mac-x64',
-  label: 'Intel Mac',
-  cursor: `mac·x64 · ${MAC_X64_SIZE_LABEL}`,
-  url: MAC_X64_URL,
-  sizeLabel: MAC_X64_SIZE_LABEL,
-  basename: basenameOf(MAC_X64_URL),
-};
-
-interface PlatformState {
-  os: Os;
-  primary: DownloadVariant;
+export interface PlatformState {
+  /** Detected visitor; `unknown` until mounted (SSR and no-JS render the neutral state). */
+  visitor: Visitor;
+  /** `mac` when the visitor is on macOS, otherwise `win`: only used to pick keycap glyphs. */
+  os: 'mac' | 'win';
+  /** The visitor's own build, or null (unknown visitor, mobile, or no build for that OS yet). */
+  primary: DownloadVariant | null;
+  /** Every other downloadable variant, across platforms. */
   alternates: DownloadVariant[];
+  releases: Releases;
 }
 
-const WIN_DEFAULT: PlatformState = {
-  os: 'win',
-  primary: WIN_INSTALLER,
-  alternates: [MAC_ARM64, MAC_X64, WIN_PORTABLE],
-};
+const ORDER: Os[] = ['mac', 'win', 'linux'];
 
-const MAC_DEFAULT: PlatformState = {
-  os: 'mac',
-  primary: MAC_ARM64,
-  alternates: [MAC_X64, WIN_INSTALLER, WIN_PORTABLE],
-};
+export function pickPrimary(visitor: Visitor, releases: Releases): DownloadVariant | null {
+  if (visitor === 'unknown' || visitor === 'mobile') return null;
+  return releases[visitor]?.variants[0] ?? null;
+}
 
-/**
- * SSR-safe platform detection. Server and first paint return the Windows
- * default (matches what the static HTML used to ship — no hydration
- * mismatch). After mount, sniff the visitor and re-render with the right
- * primary CTA + alternates list.
- *
- * Apple Silicon is the default on macOS (overwhelming share since 2020);
- * Intel users land on it via the `Intel Mac` sub-link.
- */
 export function usePlatform(): PlatformState {
-  const [state, setState] = useState<PlatformState>(WIN_DEFAULT);
+  const releases = useReleases();
+  const [visitor, setVisitor] = useState<Visitor>('unknown');
 
   useEffect(() => {
     if (typeof navigator === 'undefined') return;
-    const uaPlatform =
-      (navigator as Navigator & { userAgentData?: { platform?: string } })
-        .userAgentData?.platform ?? '';
-    const isMac =
-      uaPlatform === 'macOS' ||
-      /^Mac/i.test(navigator.platform) ||
-      /\bMac OS X\b/.test(navigator.userAgent);
-    setState(isMac ? MAC_DEFAULT : WIN_DEFAULT);
+    setVisitor(detectVisitor(navigator as NavigatorWithUAData));
   }, []);
 
-  return state;
+  const primary = pickPrimary(visitor, releases);
+  const all = ORDER.flatMap((os) => releases[os]?.variants ?? []);
+  return {
+    visitor,
+    os: visitor === 'mac' ? 'mac' : 'win',
+    primary,
+    alternates: all.filter((v) => v !== primary),
+    releases,
+  };
 }

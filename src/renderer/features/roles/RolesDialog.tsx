@@ -74,7 +74,7 @@ export function RolesDialog({
 }: { open: boolean; onOpenChange: (v: boolean) => void }) {
   const activeConfig = useSession((s) => s.activeConfig);
   const schemaInfo = useSession((s) => s.schema);
-  const confirmUserSql = useSession((s) => s.confirmUserSql);
+  const confirmUserSql = useSession((s) => s.confirmUserSqlDetailed);
   const readOnly = activeConfig?.readOnly === true;
 
   const [roles, setRoles] = useState<RoleRow[]>([]);
@@ -206,13 +206,17 @@ export function RolesDialog({
     setApplyError(null);
     setApplied(null);
     const script = statements.map((s) => `${s.display};`).join('\n');
-    const ok = await confirmUserSql(script, {
+    const outcome = await confirmUserSql(script, {
       force: true,
       summary: dropping
         ? `Drop role "${original?.name}"`
         : `Apply ${statements.length} role / privilege change${statements.length === 1 ? '' : 's'}`,
     });
-    if (!ok) return;
+    if (!outcome.ok) {
+      // R-09: a safe-mode refusal is shown, not swallowed.
+      if (outcome.reason === 'refused') setApplyError(outcome.message);
+      return;
+    }
     setApplying(true);
     let done = 0;
     try {

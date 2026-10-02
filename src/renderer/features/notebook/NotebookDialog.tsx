@@ -1,4 +1,5 @@
 import { Button } from '@/components/ui/button';
+import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import {
   Dialog,
   DialogClose,
@@ -10,7 +11,9 @@ import { IconButton } from '@/components/ui/workbench';
 import { cn } from '@/lib/cn';
 import { cleanIpcError } from '@/lib/errors';
 import { ipc } from '@/lib/ipc';
+import { pickDisplayResult, runStatements } from '@/lib/run-statements';
 import { useSession } from '@/stores/session';
+import { useWorkbench } from '@/stores/workbench';
 import type { QueryResult } from '@shared/protocol';
 import {
   BookText,
@@ -18,15 +21,19 @@ import {
   ChevronUp,
   Copy,
   Download,
+  ExternalLink,
+  Eye,
   FileCode,
   Hash,
   Loader2,
+  Pencil,
   Play,
   Plus,
   Trash2,
   X,
 } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { MarkdownView } from './MarkdownView';
 import {
   type NotebookCellKind,
   type StoredCell,
@@ -39,8 +46,12 @@ type CellKind = NotebookCellKind;
 
 interface Cell extends StoredCell {
   result?: QueryResult;
+  /** Statements in the cell's last run (a multi-statement cell shows its last result). */
+  statements?: number;
   error?: string;
   running?: boolean;
+  /** Markdown cells: rendered (true) or the raw text editor (false). */
+  preview?: boolean;
 }
 
 function storage(): Storage | null {
@@ -53,7 +64,13 @@ function storage(): Storage | null {
 
 function loadCells(connectionId: string | undefined): Cell[] {
   const s = storage();
-  return s ? loadDraft(s, connectionId) : [];
+  // Saved notes open rendered; new empty ones open in the editor.
+  return s
+    ? loadDraft(s, connectionId).map((c) => ({
+        ...c,
+        preview: c.kind === 'md' && c.content.trim().length > 0,
+      }))
+    : [];
 }
 
 function freshId(): string {
@@ -88,6 +105,8 @@ export function NotebookDialog({
   }));
   const cells = draft.cells;
   const contentRef = useRef<HTMLDivElement>(null);
+  const [confirmClear, setConfirmClear] = useState(false);
+  // R-09: a safe-mode refusal is shown on the cell instead of doing nothing.
 
   const setCells = useCallback((fn: (prev: Cell[]) => Cell[]) => {
     setDraft((d) => ({ ...d, cells: fn(d.cells) }));
@@ -139,19 +158,46 @@ export function NotebookDialog({
   const runCell = async (id: string) => {
     const cell = cells.find((c) => c.id === id);
     if (!cell || cell.kind !== 'sql' || !cell.content.trim()) return;
-    // A7: notebook SQL goes through the same prod-tag confirmation as the
-    // editor (read-only connections are enforced by the server).
-    if (!(await useSession.getState().confirmUserSql(cell.content))) return;
-    updateCell(id, { running: true, error: undefined, result: undefined });
-    try {
-      const result = await ipc.query.run(cell.content);
-      updateCell(id, { running: false, result });
-    } catch (err) {
-      updateCell(id, {
-        running: false,
-        error: cleanIpcError(err instanceof Error ? err.message : String(err)),
-      });
+    // A7: notebook SQL goes through the same prod-tag / safe-mode gate as
+    // the editor (read-only connections are enforced by the server).
+    const outcome = await useSession.getState().confirmUserSqlDetailed(cell.content);
+    if (!outcome.ok) {
+      if (outcome.reason === 'refused') updateCell(id, { error: outcome.message });
+      return;
     }
+    updateCell(id, { running: true, error: undefined, result: undefined, statements: undefined });
+    // R-12: same pipeline as the editor — statement splitting, unsupported
+    // statement check, the editor's row limit, stop if the connection changes.
+    const startGen = useSession.getState().connectionGen;
+    const out = await runStatements(cell.content, {
+      rowLimit: useWorkbench.getState().rowLimit,
+      run: (sql, maxRows) =>
+        maxRows === undefined ? ipc.query.run(sql) : ipc.query.run(sql, undefined, { maxRows }),
+      shouldStop: () => useSession.getState().connectionGen !== startGen,
+    });
+    const last = out.results[out.results.length - 1];
+    if (last?.txnState && useSession.getState().connectionGen === startGen) {
+      useSession.setState({ txnState: last.txnState });
+    }
+    const tag =
+      out.error && out.error.total > 1
+        ? ` (statement ${out.error.statementIndex + 1} of ${out.error.total})`
+        : '';
+    updateCell(id, {
+      running: false,
+      result: pickDisplayResult(out.results),
+      statements: out.results.length,
+      error: out.error ? `${cleanIpcError(out.error.message)}${tag}` : undefined,
+    });
+  };
+
+  /** "Open in a tab": the cell's SQL in a new editor tab, run there with the full grid. */
+  const openInTab = (id: string) => {
+    const cell = cells.find((c) => c.id === id);
+    if (!cell || !cell.content.trim()) return;
+    useSession.getState().openSqlInNewTab(cell.content);
+    onOpenChange(false);
+    void useSession.getState().runQuery({ all: true });
   };
 
   const exportMarkdown = () => {
@@ -172,9 +218,10 @@ export function NotebookDialog({
     URL.revokeObjectURL(url);
   };
 
+  // R-11: Clear wipes an auto-saved draft with no undo — always ask first.
   const clear = () => {
     if (cells.length === 0) return;
-    setCells(() => []);
+    setConfirmClear(true);
   };
 
   // F34: don't land focus (and a focus ring) on the Copy button. Focus the
@@ -274,6 +321,8 @@ export function NotebookDialog({
                 total={cells.length}
                 onChange={(content) => updateCell(cell.id, { content })}
                 onRun={() => void runCell(cell.id)}
+                onOpenInTab={() => openInTab(cell.id)}
+                onTogglePreview={() => updateCell(cell.id, { preview: !cell.preview })}
                 onRemove={() => removeCell(cell.id)}
                 onMoveUp={() => moveCell(cell.id, -1)}
                 onMoveDown={() => moveCell(cell.id, 1)}
@@ -295,6 +344,18 @@ export function NotebookDialog({
           </div>
         </div>
       </DialogContent>
+      <ConfirmDialog
+        open={confirmClear}
+        onOpenChange={setConfirmClear}
+        title={`Clear ${cells.length} cell${cells.length === 1 ? '' : 's'}?`}
+        description="This removes every cell from the notebook for this connection. It cannot be undone."
+        confirmLabel="Clear notebook"
+        variant="destructive"
+        onConfirm={() => {
+          setCells(() => []);
+          setConfirmClear(false);
+        }}
+      />
     </Dialog>
   );
 }
@@ -305,6 +366,8 @@ function CellView({
   total,
   onChange,
   onRun,
+  onOpenInTab,
+  onTogglePreview,
   onRemove,
   onMoveUp,
   onMoveDown,
@@ -315,6 +378,8 @@ function CellView({
   total: number;
   onChange: (s: string) => void;
   onRun: () => void;
+  onOpenInTab: () => void;
+  onTogglePreview: () => void;
   onRemove: () => void;
   onMoveUp: () => void;
   onMoveDown: () => void;
@@ -343,6 +408,18 @@ function CellView({
               <Play className="fill-current" />
             )}
             Run
+          </Button>
+        )}
+        {!isSql && (
+          <Button
+            variant="ghost"
+            size="xs"
+            onClick={onTogglePreview}
+            disabled={!cell.preview && !cell.content.trim()}
+            title={cell.preview ? 'Edit this note' : 'Preview the rendered note'}
+          >
+            {cell.preview ? <Pencil /> : <Eye />}
+            {cell.preview ? 'Edit' : 'Preview'}
           </Button>
         )}
         <Button
@@ -375,25 +452,31 @@ function CellView({
           <Trash2 />
         </Button>
       </div>
-      <textarea
-        value={cell.content}
-        onChange={(e) => onChange(e.target.value)}
-        rows={Math.max(3, Math.min(20, cell.content.split('\n').length + 1))}
-        aria-label={`Cell ${index + 1} (${isSql ? 'SQL' : 'Markdown'})`}
-        placeholder={
-          isSql ? 'SELECT 1;' : '# Heading\n\nMarkdown text. Cell renders as plain text for now.'
-        }
-        className={cn(
-          'block w-full resize-none border-0 bg-[var(--wb-content)] px-3 py-2 text-[var(--wb-text)] outline-none placeholder:text-[var(--wb-text-3)]',
-          isSql ? 'font-mono text-[12px]' : 'text-[13px] leading-relaxed',
-        )}
-      />
+      {!isSql && cell.preview ? (
+        <MarkdownView source={cell.content} />
+      ) : (
+        <textarea
+          value={cell.content}
+          onChange={(e) => onChange(e.target.value)}
+          rows={Math.max(3, Math.min(20, cell.content.split('\n').length + 1))}
+          aria-label={`Cell ${index + 1} (${isSql ? 'SQL' : 'Markdown'})`}
+          placeholder={
+            isSql ? 'SELECT 1;' : '# Heading\n\nMarkdown: **bold**, *italic*, `code`, lists, links.'
+          }
+          className={cn(
+            'block w-full resize-none border-0 bg-[var(--wb-content)] px-3 py-2 text-[var(--wb-text)] outline-none placeholder:text-[var(--wb-text-3)]',
+            isSql ? 'font-mono text-[12px]' : 'text-[13px] leading-relaxed',
+          )}
+        />
+      )}
       {isSql && cell.error && (
         <div className="border-t border-destructive/40 bg-destructive/10 px-3 py-2 font-mono text-[12px] text-destructive">
           {cell.error}
         </div>
       )}
-      {isSql && cell.result && <CellResult result={cell.result} />}
+      {isSql && cell.result && (
+        <CellResult result={cell.result} statements={cell.statements} onOpenInTab={onOpenInTab} />
+      )}
       <div className="flex items-center gap-1 border-t border-[var(--wb-separator)] px-2 py-1">
         <span className="text-[12px] text-[var(--wb-text-3)]">Add below</span>
         <Button variant="ghost" size="xs" onClick={() => onAddBelow('md')}>
@@ -409,7 +492,15 @@ function CellView({
   );
 }
 
-function CellResult({ result }: { result: QueryResult }) {
+function CellResult({
+  result,
+  statements,
+  onOpenInTab,
+}: {
+  result: QueryResult;
+  statements?: number;
+  onOpenInTab: () => void;
+}) {
   const rows = result.rows.slice(0, 50);
   return (
     <div className="overflow-x-auto border-t border-[var(--wb-separator)] bg-[var(--wb-content)]">
@@ -443,9 +534,25 @@ function CellResult({ result }: { result: QueryResult }) {
           ))}
         </tbody>
       </table>
-      {result.rows.length > 50 && (
-        <div className="border-t border-[var(--wb-separator)] bg-[var(--wb-sidebar)] px-2 py-1 text-[12px] text-[var(--wb-text-2)]">
-          Showing first 50 of {result.rowCount.toLocaleString()} rows. Open in a tab to see all.
+      {(result.rows.length > 50 || result.truncated || (statements ?? 1) > 1) && (
+        <div className="flex items-center gap-2 border-t border-[var(--wb-separator)] bg-[var(--wb-sidebar)] px-2 py-1 text-[12px] text-[var(--wb-text-2)]">
+          <span className="min-w-0 flex-1 truncate">
+            {(statements ?? 1) > 1 ? `Last of ${statements} results. ` : ''}
+            {result.rows.length > 50
+              ? `Showing first 50 of ${result.rowCount.toLocaleString()} rows.`
+              : result.truncated
+                ? 'Result hit the row limit.'
+                : ''}
+          </span>
+          <Button
+            variant="ghost"
+            size="xs"
+            onClick={onOpenInTab}
+            title="Run this cell in a new editor tab"
+          >
+            <ExternalLink />
+            Open in a tab
+          </Button>
         </div>
       )}
     </div>

@@ -12,13 +12,26 @@ export class ExportCancelledError extends Error {
   }
 }
 
+/** Thrown for any failure to create / write / finalize the destination file. */
+export class ExportFileError extends Error {
+  override readonly name = 'ExportFileError';
+  constructor(cause: unknown) {
+    const detail = cause instanceof Error ? cause.message : String(cause);
+    super(`Could not write the export file: ${detail}`);
+    this.cause = cause;
+  }
+}
+
 async function writeChunk(
   stream: ReturnType<typeof createWriteStream>,
   chunk: string,
+  failure: () => Error | null,
 ): Promise<void> {
+  const failed = failure();
+  if (failed) throw failed;
   return new Promise((resolve, reject) => {
     stream.write(chunk, (err) => {
-      if (err) reject(err);
+      if (err) reject(new ExportFileError(err));
       else resolve();
     });
   });
@@ -47,13 +60,20 @@ export async function writeExportFile(opts: {
 }): Promise<{ rowCount: number; bytesWritten: number }> {
   const tempPath = `${opts.filePath}.${process.pid}-${Date.now()}.partial`;
   const stream = createWriteStream(tempPath, { encoding: 'utf8' });
+  // P0-1: Node also emits 'error' on the stream (ENOENT, EACCES, ENOSPC...).
+  // Without a listener that is an uncaught exception and kills the worker.
+  let streamError: Error | null = null;
+  stream.on('error', (err) => {
+    streamError ??= new ExportFileError(err);
+  });
+  const failure = () => streamError;
   let bytesWritten = 0;
   let rowCount = 0;
   let pending: Promise<void> = Promise.resolve();
 
   const sink = (chunk: string) => {
     bytesWritten += Buffer.byteLength(chunk, 'utf8');
-    pending = pending.then(() => writeChunk(stream, chunk));
+    pending = pending.then(() => writeChunk(stream, chunk, failure));
   };
 
   const streamer = createExportStreamer(opts.format, opts.columns, sink, {
@@ -74,13 +94,20 @@ export async function writeExportFile(opts: {
 
     streamer.end();
     await pending;
+    if (streamError) throw streamError;
     stream.end();
-    await finished(stream);
-    await rename(tempPath, opts.filePath);
+    await finished(stream).catch((err) => {
+      throw streamError ?? new ExportFileError(err);
+    });
+    await rename(tempPath, opts.filePath).catch((err) => {
+      throw new ExportFileError(err);
+    });
   } catch (err) {
     stream.destroy();
     await rm(tempPath, { force: true }).catch(() => {});
-    throw err;
+    // A rejected `pending` chain can still be rejected after we leave; keep it handled.
+    pending.catch(() => {});
+    throw streamError && !(err instanceof ExportCancelledError) ? streamError : err;
   }
 
   return { rowCount, bytesWritten };
@@ -114,4 +141,29 @@ export async function writeExportRows(opts: {
     isCancelled: opts.isCancelled,
     onProgress: opts.onProgress,
   });
+}
+
+/**
+ * Export a pulled-from-the-server cursor stream (P1-3). This owns the
+ * generator: it is always closed here, so a failure on the first write or
+ * a cancel at the first check can no longer leave the server cursor open
+ * and wedge the connection behind it.
+ */
+export async function writeExportFromQueryStream(
+  stream: AsyncGenerator<{ columns: readonly ColumnMeta[]; rows: unknown[][] }, void, void>,
+  opts: Omit<Parameters<typeof writeExportFile>[0], 'columns' | 'batches'>,
+): Promise<{ rowCount: number; bytesWritten: number }> {
+  try {
+    const first = await stream.next();
+    return await writeExportFile({
+      ...opts,
+      columns: first.done ? [] : first.value.columns,
+      batches: (async function* () {
+        if (!first.done) yield first.value.rows;
+        for await (const batch of stream) yield batch.rows;
+      })(),
+    });
+  } finally {
+    await stream.return(undefined).catch(() => {});
+  }
 }

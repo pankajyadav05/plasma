@@ -5,8 +5,16 @@ import { app, ipcMain, shell } from 'electron';
 import electronUpdater, { type UpdateInfo, type ProgressInfo } from 'electron-updater';
 import { logger } from './logger';
 import { type MacSignatureKind, classifyMacAppSignature } from './mac-signature';
-import { macDownloadUrl, parseFeedBaseUrl } from './update-feed';
+import { macDownloadUrl, macDownloadUrlFromManifest, parseFeedBaseUrl } from './update-feed';
 import { type WindowRef, readPublisherName, resolveWindow, updatePolicy } from './update-policy';
+import {
+  type FeedVerification,
+  type ParsedManifest,
+  checkDownloadedFile,
+  manifestNameFor,
+  verifyFeed,
+} from './update-signing';
+import { SIGNED_UPDATES_REQUIRED_FROM, UPDATE_SIGNING_PUBLIC_KEY } from './update-signing-key';
 
 const { autoUpdater } = electronUpdater;
 
@@ -26,6 +34,13 @@ const { autoUpdater } = electronUpdater;
  * signature the updater switches to manual mode: still poll and report new
  * versions, but never download 110 MB Squirrel will throw away, and hand
  * the user the .dmg instead. See docs/mac-auto-update.md.
+ *
+ * Signed manifests (SC-01, docs/release.md): when a public key is embedded
+ * (`update-signing-key.ts`), nothing is downloaded or offered until the
+ * feed's `<manifest>.sig` verifies and agrees with what electron-updater
+ * parsed, and the downloaded file is re-hashed against the signed sha512
+ * before it can be installed. A missing `.sig` is tolerated (with a warning)
+ * only for updates below `SIGNED_UPDATES_REQUIRED_FROM`.
  *
  * Status flow surfaced to the renderer:
  *
@@ -89,6 +104,28 @@ function packagedPublisherName(): string | null {
 
 let feedBase: string | null | undefined;
 
+/** Signed manifest that vouched for the update currently being handled. */
+let verifiedManifest: ParsedManifest | null = null;
+/** Latest verdict for the update in flight; a stale async check must not win. */
+let verifyToken = 0;
+/** Outcome of the signature check for the update in flight. */
+let trust: 'pending' | 'signed' | 'legacy' | 'refused' = 'pending';
+
+const fetchText = async (url: string) => {
+  const res = await fetch(url, {
+    headers: { 'cache-control': 'no-cache' },
+    signal: AbortSignal.timeout(15_000),
+  });
+  return { ok: res.ok, status: res.status, text: () => res.text() };
+};
+
+function refuse(reason: string): void {
+  logger.error(`[updater] update refused: ${reason}`);
+  verifiedManifest = null;
+  trust = 'refused';
+  broadcast({ kind: 'error', message: `Update refused: ${reason}` });
+}
+
 /**
  * Feed base URL out of the packaged `app-update.yml` — the bucket this build
  * was published to, and therefore where its .dmg sits. Read once, lazily; a
@@ -150,9 +187,20 @@ export function initUpdater(window: WindowSource): void {
     );
   }
 
-  autoUpdater.autoDownload = policy.autoDownload && canSelfInstall; // pull installer in the background
+  const signing = UPDATE_SIGNING_PUBLIC_KEY != null;
+  const wantsDownload = policy.autoDownload && canSelfInstall;
+  const wantsInstallOnQuit = policy.autoInstallOnAppQuit && canSelfInstall;
+  // With signed manifests the download starts only after the manifest has been
+  // verified (see `update-available`), and install-on-quit is armed only once
+  // the downloaded file has been re-hashed. Without a key, behave as before.
+  autoUpdater.autoDownload = wantsDownload && !signing; // pull installer in the background
   // Silent install-on-quit only when the installer's signature is checked.
-  autoUpdater.autoInstallOnAppQuit = policy.autoInstallOnAppQuit && canSelfInstall;
+  autoUpdater.autoInstallOnAppQuit = wantsInstallOnQuit && !signing;
+  if (!signing) {
+    logger.warn(
+      '[updater] no update-signing public key embedded (src/main/update-signing-key.ts) — update manifests are NOT verified',
+    );
+  }
   autoUpdater.allowPrerelease = false;
   autoUpdater.allowDowngrade = false;
   if (!policy.signatureVerified) {
@@ -178,11 +226,50 @@ export function initUpdater(window: WindowSource): void {
   });
 
   autoUpdater.on('update-available', (info: UpdateInfo) => {
+    if (signing) {
+      const token = ++verifyToken;
+      verifiedManifest = null;
+      trust = 'pending';
+      void verifyFeed({
+        feedBase: feedBaseUrl(),
+        manifestName: manifestNameFor(process.platform, process.arch),
+        offered: info,
+        publicKey: UPDATE_SIGNING_PUBLIC_KEY,
+        requiredFrom: SIGNED_UPDATES_REQUIRED_FROM,
+        fetchText,
+      }).then((verdict: FeedVerification) => {
+        if (token !== verifyToken) return; // a newer check superseded this one
+        if (verdict.status === 'refused') return refuse(verdict.reason);
+        if (verdict.status === 'unsigned-allowed') {
+          logger.warn(
+            `[updater] ${verdict.reason}; accepting ${info.version} because it predates ${SIGNED_UPDATES_REQUIRED_FROM}`,
+          );
+          trust = 'legacy';
+        } else if (verdict.status === 'verified') {
+          trust = 'signed';
+          verifiedManifest = verdict.manifest;
+          logger.info(`[updater] manifest signature verified for ${info.version}`);
+        }
+        offerUpdate(info, verdict.status === 'verified' ? verdict.manifest : null);
+        if (wantsDownload) {
+          autoUpdater.downloadUpdate().catch((err: unknown) => {
+            logger.warn('[updater] download failed', err);
+          });
+        }
+      });
+      return;
+    }
+    offerUpdate(info, null);
+  });
+
+  function offerUpdate(info: UpdateInfo, signed: ParsedManifest | null): void {
     if (!canSelfInstall) {
       broadcast({
         kind: 'available-manual',
         version: info.version,
-        downloadUrl: macDownloadUrl(feedBaseUrl(), info.version, process.arch),
+        downloadUrl: signed
+          ? macDownloadUrlFromManifest(feedBaseUrl(), signed.files, info.version, process.arch)
+          : macDownloadUrl(feedBaseUrl(), info.version, process.arch),
       });
       return;
     }
@@ -193,7 +280,7 @@ export function initUpdater(window: WindowSource): void {
           ? info.releaseNotes.map((n) => n.note ?? '').join('\n')
           : null;
     broadcast({ kind: 'available', version: info.version, releaseNotes });
-  });
+  }
 
   autoUpdater.on('download-progress', (p: ProgressInfo) => {
     broadcast({
@@ -205,7 +292,31 @@ export function initUpdater(window: WindowSource): void {
     });
   });
 
-  autoUpdater.on('update-downloaded', (info: UpdateInfo) => {
+  autoUpdater.on('update-downloaded', (info: UpdateInfo & { downloadedFile?: string }) => {
+    if (signing && trust !== 'signed' && trust !== 'legacy') {
+      // Never verified (or refused): a download that slipped through is not installable.
+      logger.warn(`[updater] ignoring a downloaded update, trust=${trust}`);
+      return;
+    }
+    if (signing && verifiedManifest != null) {
+      const signed = verifiedManifest;
+      const token = verifyToken;
+      void checkDownloadedFile(info.downloadedFile ?? '', signed).then((problem) => {
+        if (token !== verifyToken) return;
+        if (problem != null) return refuse(problem);
+        autoUpdater.autoInstallOnAppQuit = wantsInstallOnQuit;
+        announceDownloaded(info);
+      });
+      return;
+    }
+    if (signing) {
+      // Unsigned-but-allowed legacy update: download completes, install stays manual.
+      logger.warn('[updater] downloaded an update whose manifest was not signed (legacy feed)');
+    }
+    announceDownloaded(info);
+  });
+
+  function announceDownloaded(info: UpdateInfo): void {
     const releaseNotes =
       typeof info.releaseNotes === 'string'
         ? info.releaseNotes
@@ -213,7 +324,7 @@ export function initUpdater(window: WindowSource): void {
           ? info.releaseNotes.map((n) => n.note ?? '').join('\n')
           : null;
     broadcast({ kind: 'downloaded', version: info.version, releaseNotes });
-  });
+  }
 
   autoUpdater.on('error', (err) => {
     broadcast({ kind: 'error', message: err?.message ?? String(err) });

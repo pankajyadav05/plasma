@@ -9,7 +9,7 @@
  *
  * Does:
  *   1. Bumps package.json version (in-place, preserves formatting)
- *   2. Patches site/lib/version.ts (VERSION + asset URLs) via shared sync
+ *   2. Patches site/lib/version.ts (PACKAGE_VERSION; download links come from the update feed at site build time) via shared sync
  *   3. Stages both files with git
  *
  * Does NOT:

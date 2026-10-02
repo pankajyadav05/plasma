@@ -110,6 +110,26 @@ export function withDefaults(settings: Partial<Settings>): Settings {
   return merged as Settings;
 }
 
+/**
+ * Merge a settings write's response into the live mirror: only the keys the
+ * write touched, plus server-derived `has…` flags (API-key presence), come
+ * from the response; everything else keeps its current (possibly optimistic)
+ * value.
+ */
+export function mergeResponse(
+  current: Settings,
+  response: Settings,
+  touched: readonly string[],
+): Settings {
+  const out = { ...current } as Record<string, unknown>;
+  const src = response as unknown as Record<string, unknown>;
+  for (const k of Object.keys(src)) {
+    if (touched.includes(k) || /^has[A-Z]/.test(k)) out[k] = src[k];
+  }
+  for (const k of touched) if (!(k in src)) delete out[k];
+  return out as unknown as Settings;
+}
+
 export interface SettingsSlice {
   // ── settings ──
   settings: Settings;
@@ -165,7 +185,12 @@ export const createSettingsSlice: SliceCreator<SettingsSlice> = (set, get) => ({
 
   async updateSettings(patch) {
     try {
-      const next = withDefaults(await ipc.settings.set(patch));
+      const response = withDefaults(await ipc.settings.set(patch));
+      // R-17: take only what this write touched (plus server-derived flags)
+      // from the response. Optimistic writers (saved queries, sidebar width,
+      // favourites…) may have changed other keys while this one was in
+      // flight; replacing the whole mirror would roll those back.
+      const next = mergeResponse(get().settings, response, Object.keys(patch));
       set({ settings: next });
       applyTheme(next.theme, next.themeName);
       applyFonts(next.fontSans, next.fontMono);

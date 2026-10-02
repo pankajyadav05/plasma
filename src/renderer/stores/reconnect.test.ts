@@ -8,7 +8,7 @@ type FakeSession = {
   connectionError: string | null;
   connectionActionGate: unknown;
   activeConfig: { id: string } | null;
-  pendingEdits: unknown[];
+  pendingEditsByTab: Record<string, unknown[]>;
   settings: { autoReconnect: boolean };
   connectSaved: (id: string) => Promise<void>;
 };
@@ -28,7 +28,7 @@ const fakeSession = create<FakeSession>(() => ({
   connectionError: null,
   connectionActionGate: null,
   activeConfig: null,
-  pendingEdits: [],
+  pendingEditsByTab: {},
   settings: { autoReconnect: true },
   connectSaved,
 }));
@@ -48,7 +48,7 @@ describe('reconnect machine', () => {
       connectionError: null,
       connectionActionGate: null,
       activeConfig: null,
-      pendingEdits: [],
+      pendingEditsByTab: {},
       settings: { autoReconnect: true },
     });
     useReconnect.getState().cancel();
@@ -101,7 +101,7 @@ describe('reconnect machine', () => {
   });
 
   it('never auto-connects over pending grid edits', async () => {
-    fakeSession.setState({ pendingEdits: [{}] });
+    fakeSession.setState({ pendingEditsByTab: { t: [{}] } });
     useReconnect.getState().start(target, 'lost');
     expect(useReconnect.getState().phase).toBe('failed');
     expect(useReconnect.getState().lastError).toMatch(/Unsaved edits/);

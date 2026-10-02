@@ -29,3 +29,21 @@ describe('pg type parsers', () => {
     expect(parsePgText(3802, '{"a":1}')).toEqual({ a: 1 });
   });
 });
+
+describe('json big integers (P2-4)', () => {
+  it('keeps integers beyond 2^53 exact, as text', () => {
+    expect(parsePgText(3802, '{"id": 12345678901234567890, "n": 5, "f": 1.5}')).toEqual({
+      id: '12345678901234567890',
+      n: 5,
+      f: 1.5,
+    });
+    expect(parsePgText(114, '[9007199254740993]')).toEqual(['9007199254740993']);
+  });
+
+  it('leaves safe integers and strings alone', () => {
+    expect(parsePgText(3802, '{"a": 9007199254740991, "s": "12345678901234567890"}')).toEqual({
+      a: 9007199254740991,
+      s: '12345678901234567890',
+    });
+  });
+});

@@ -5,7 +5,7 @@ import { cn } from '@/lib/cn';
 import { kbd } from '@/lib/platform';
 import { useReconnect } from '@/stores/reconnect';
 import { useActiveTabSelect, useSession } from '@/stores/session';
-import { summarizeEdits } from '@/stores/session-pending-edits';
+import { editsOf, summarizeEdits } from '@/stores/session-pending-edits';
 import type { ConnectionEngine, SavedConnection } from '@shared/protocol';
 import {
   Activity,
@@ -148,12 +148,17 @@ function LeftClusters({ postgres }: { postgres: boolean }) {
 
 /** Discard · Preview · Commit for buffered grid edits. */
 function ChangesCluster() {
-  const edits = useSession((s) => s.pendingEdits);
+  // Edits are per tab: the toolbar shows / commits / discards the ACTIVE tab's.
+  const edits = useSession((s) => editsOf(s.pendingEditsByTab, s.activeTabId));
   const busy = useSession((s) => s.pendingEditsBusy);
   const commit = useSession((s) => s.commitPendingEdits);
   const revert = useSession((s) => s.revertPendingEdits);
   // Commit failures live in the store (the grid points at the failing cell).
-  const error = useSession((s) => s.pendingEditsError?.message ?? null);
+  const error = useSession((s) =>
+    !s.pendingEditsError?.tabId || s.pendingEditsError.tabId === s.activeTabId
+      ? (s.pendingEditsError?.message ?? null)
+      : null,
+  );
   const has = edits.length > 0;
 
   const onCommit = async () => {

@@ -4,7 +4,6 @@ import { useEffect, useState } from 'react';
 import { GITHUB_URL, GithubIcon } from '@/components/github-icon';
 import { Wordmark } from '@/components/wordmark';
 import { usePlatform } from '@/lib/platform';
-import { VERSION } from '@/lib/version';
 
 const links = [
   { href: '#workbench', label: 'Workbench' },
@@ -16,7 +15,7 @@ const links = [
 
 export function Topbar() {
   const [scrolled, setScrolled] = useState(false);
-  const { primary } = usePlatform();
+  const { primary, releases } = usePlatform();
 
   useEffect(() => {
     const on = () => setScrolled(window.scrollY > 8);
@@ -34,7 +33,7 @@ export function Topbar() {
       <div className="wrap flex h-16 items-center justify-between gap-6">
         <a href="#top" className="group flex items-baseline gap-3 rounded-sm" aria-label="Plasma, back to top">
           <Wordmark className="text-[26px]" />
-          <span className="label hidden translate-y-[-2px] text-ink-2 sm:inline">v{VERSION}</span>
+          <span className="label hidden translate-y-[-2px] text-ink-2 sm:inline">{releases.latestVersion ? `v${releases.latestVersion}` : ''}</span>
         </a>
 
         <nav aria-label="Primary" className="hidden md:block">
@@ -53,6 +52,32 @@ export function Topbar() {
         </nav>
 
         <div className="flex items-center gap-2 sm:gap-3">
+          <details className="group/menu relative md:hidden">
+            <summary
+              aria-label="Menu"
+              className="mono grid h-10 cursor-pointer list-none place-items-center rounded-full px-3 text-[12px] font-medium uppercase tracking-[0.06em] text-ink-2 hover:bg-ink/[0.06] hover:text-ink [&::-webkit-details-marker]:hidden"
+            >
+              Menu
+            </summary>
+            <nav
+              aria-label="Primary (mobile)"
+              className="absolute right-0 top-12 z-50 w-48 rounded-[14px] border border-rule bg-paper p-2 shadow-[0_20px_40px_-20px_rgba(22,21,15,0.35)]"
+            >
+              <ul>
+                {links.map((l) => (
+                  <li key={l.href}>
+                    <a
+                      href={l.href}
+                      className="block rounded-lg px-3 py-2.5 text-[15px] font-medium text-ink-2 hover:bg-ink/[0.06] hover:text-ink"
+                      onClick={(e) => e.currentTarget.closest('details')?.removeAttribute('open')}
+                    >
+                      {l.label}
+                    </a>
+                  </li>
+                ))}
+              </ul>
+            </nav>
+          </details>
           <a
             href={GITHUB_URL}
             aria-label="Plasma on GitHub"
@@ -61,7 +86,7 @@ export function Topbar() {
             <GithubIcon className="h-[19px] w-[19px]" />
           </a>
           <a
-            href={primary.url}
+            href={primary?.url ?? '#download'}
             className="inline-flex h-10 items-center rounded-full bg-signal px-5 text-[15px] font-bold text-signal-ink transition-[transform,background-color] duration-200 hover:bg-[#b83a22] active:scale-[0.97]"
           >
             Download

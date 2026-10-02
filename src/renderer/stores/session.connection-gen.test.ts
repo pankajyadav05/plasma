@@ -35,6 +35,7 @@ vi.mock('@/lib/ipc', () => ({
 }));
 
 import { useSession } from './session';
+import { editsOf, pendingEditCount } from './session-pending-edits';
 
 function baseTab(id: string) {
   const pageSize = useSession.getState().settings.defaultPageSize;
@@ -97,7 +98,7 @@ function resetStore(connectionGen = 1) {
     },
     connectionState: 'connected',
     connectionGen,
-    pendingEdits: [],
+    pendingEditsByTab: {},
     pendingEditsBusy: false,
     editMode: true,
     txnState: 'none',
@@ -151,13 +152,13 @@ afterEach(() => {
 describe('U01 connection generation + pending edits', () => {
   it('stamps connectionGen on queued edits', async () => {
     await useSession.getState().updateCell(0, 1, 'new@b.co');
-    const edits = useSession.getState().pendingEdits;
+    const edits = editsOf(useSession.getState().pendingEditsByTab, 'tab-a');
     expect(edits).toHaveLength(1);
     expect(edits[0].connectionGen).toBe(1);
     expect(edits[0].column).toBe('email');
   });
 
-  it('preserves pending edits when the origin tab is closed', async () => {
+  it('drops pending edits with the origin tab when it is closed (R-02)', async () => {
     await useSession.getState().updateCell(0, 1, 'new@b.co');
     // Add a second tab so closeTab does not reset the only tab.
     useSession.setState((s) => ({
@@ -175,9 +176,7 @@ describe('U01 connection generation + pending edits', () => {
     }));
     useSession.getState().closeTab('tab-a');
     expect(useSession.getState().tabs.find((t) => t.id === 'tab-a')).toBeUndefined();
-    expect(useSession.getState().pendingEdits).toHaveLength(1);
-    expect(useSession.getState().pendingEdits[0].tabId).toBe('tab-a');
-    expect(useSession.getState().pendingEdits[0].connectionGen).toBe(1);
+    expect(pendingEditCount(useSession.getState().pendingEditsByTab)).toBe(0);
   });
 
   it('blocks disconnect while pending edits exist', async () => {
@@ -185,7 +184,7 @@ describe('U01 connection generation + pending edits', () => {
     await useSession.getState().disconnect();
     expect(connDisconnect).not.toHaveBeenCalled();
     expect(useSession.getState().connectionActionGate).toEqual({ kind: 'disconnect' });
-    expect(useSession.getState().pendingEdits).toHaveLength(1);
+    expect(pendingEditCount(useSession.getState().pendingEditsByTab)).toBe(1);
   });
 
   it('blocks connectSaved while pending edits exist', async () => {
@@ -212,7 +211,7 @@ describe('U01 connection generation + pending edits', () => {
       durationMs: 1,
     });
     await useSession.getState().resolveConnectionAction('discard');
-    expect(useSession.getState().pendingEdits).toHaveLength(0);
+    expect(pendingEditCount(useSession.getState().pendingEditsByTab)).toBe(0);
     expect(connDisconnect).toHaveBeenCalledOnce();
     expect(useSession.getState().connectionActionGate).toBeNull();
     expect(useSession.getState().connectionGen).toBe(0);
@@ -247,7 +246,7 @@ describe('U01 connection generation + pending edits', () => {
     // Must NOT have issued BEGIN/COMMIT via query.run
     const sqlCalls = queryRun.mock.calls.map((c) => c[0]);
     expect(sqlCalls.some((s) => typeof s === 'string' && /^BEGIN/i.test(s))).toBe(false);
-    expect(useSession.getState().pendingEdits).toHaveLength(0);
+    expect(pendingEditCount(useSession.getState().pendingEditsByTab)).toBe(0);
   });
 
   it('drops in-flight SQL results after connectionGen changes', async () => {
@@ -291,7 +290,7 @@ describe('U01 connection generation + pending edits', () => {
     expect(tab?.queryError).toMatch(/connection changed/);
   });
 
-  it('adopts a recovered generation and refuses edits staged before the drop (U27)', async () => {
+  it('adopts a recovered generation and re-targets the staged edits to it (U27 / R-04)', async () => {
     await useSession.getState().updateCell(0, 1, 'new@b.co');
     useSession.setState({ txnState: 'active' });
 
@@ -307,8 +306,11 @@ describe('U01 connection generation + pending edits', () => {
     expect(useSession.getState().connectionState).toBe('connected');
     // The server-side transaction did not survive the reconnect.
     expect(useSession.getState().txnState).toBe('none');
-    // Edits stamped with the old generation must not be written blind.
-    await expect(useSession.getState().commitPendingEdits()).rejects.toThrow(/previous connection/);
-    expect(commitEditBatch).not.toHaveBeenCalled();
+    // Same connection, new server session: the edits are re-stamped, so
+    // Commit works instead of dying behind a generation mismatch.
+    commitEditBatch.mockResolvedValue({ state: 'none', applied: 1 });
+    await useSession.getState().commitPendingEdits();
+    expect(commitEditBatch).toHaveBeenCalledOnce();
+    expect(commitEditBatch.mock.calls[0][0].connectionGen).toBe(5);
   });
 });

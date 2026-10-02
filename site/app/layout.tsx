@@ -2,7 +2,9 @@ import type { Metadata, Viewport } from 'next';
 import { Archivo, Martian_Mono } from 'next/font/google';
 import './globals.css';
 
-import { DOWNLOAD_URL, VERSION } from '@/lib/version';
+import { ReleasesProvider } from '@/lib/releases-context';
+import { PACKAGE_VERSION, getReleases } from '@/lib/version';
+import { RELEASES_PAGE, type Releases } from '@/lib/feed';
 
 const archivo = Archivo({
   subsets: ['latin'],
@@ -32,15 +34,34 @@ export const metadata: Metadata = {
     title: TITLE,
     description: DESCRIPTION,
     url: SITE,
-    images: [{ url: '/og.png', width: 1200, height: 630 }],
+    images: [
+      {
+        url: '/og.png',
+        width: 1200,
+        height: 630,
+        alt: 'Plasma, a calm desktop client for Postgres, Redis and OpenSearch',
+      },
+    ],
   },
   twitter: {
     card: 'summary_large_image',
     title: TITLE,
     description: DESCRIPTION,
-    images: ['/og.png'],
+    images: [
+      {
+        url: '/og.png',
+        alt: 'Plasma, a calm desktop client for Postgres, Redis and OpenSearch',
+      },
+    ],
   },
-  icons: { icon: '/favicon.svg' },
+  icons: {
+    icon: [
+      { url: '/favicon.svg', type: 'image/svg+xml' },
+      { url: '/favicon-32.png', sizes: '32x32', type: 'image/png' },
+    ],
+    apple: [{ url: '/apple-touch-icon.png', sizes: '180x180' }],
+  },
+  manifest: '/manifest.webmanifest',
 };
 
 export const viewport: Viewport = {
@@ -48,23 +69,33 @@ export const viewport: Viewport = {
   colorScheme: 'light',
 };
 
-const jsonLd = {
-  '@context': 'https://schema.org',
-  '@type': 'SoftwareApplication',
-  name: 'Plasma',
-  applicationCategory: 'DeveloperApplication',
-  applicationSubCategory: 'Database Client',
-  operatingSystem: 'macOS, Windows 10, Windows 11',
-  softwareVersion: VERSION,
-  description: DESCRIPTION,
-  url: SITE,
-  downloadUrl: DOWNLOAD_URL,
-  offers: { '@type': 'Offer', price: '0', priceCurrency: 'USD' },
-  license: 'https://www.apache.org/licenses/LICENSE-2.0',
-  author: { '@type': 'Person', name: 'Pankaj Yadav' },
-};
+const OS_NAME = { mac: 'macOS', win: 'Windows', linux: 'Linux' } as const;
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
+/** Structured data from what is actually published: no platform without a build, no unverified file. */
+function buildJsonLd(releases: Releases) {
+  const platforms = (['mac', 'win', 'linux'] as const).filter((os) => releases[os]);
+  const firstFile = platforms.map((os) => releases[os]?.variants[0]?.url).find(Boolean);
+  return {
+    '@context': 'https://schema.org',
+    '@type': 'SoftwareApplication',
+    name: 'Plasma',
+    applicationCategory: 'DeveloperApplication',
+    applicationSubCategory: 'Database Client',
+    ...(platforms.length > 0 && { operatingSystem: platforms.map((os) => OS_NAME[os]).join(', ') }),
+    softwareVersion: releases.latestVersion ?? PACKAGE_VERSION,
+    description: DESCRIPTION,
+    url: SITE,
+    // A file the build HEAD-checked, else the releases page. Never a guessed URL.
+    downloadUrl: firstFile ?? RELEASES_PAGE,
+    offers: { '@type': 'Offer', price: '0', priceCurrency: 'USD' },
+    license: 'https://www.apache.org/licenses/LICENSE-2.0',
+    author: { '@type': 'Person', name: 'Pankaj Yadav' },
+  };
+}
+
+export default async function RootLayout({ children }: { children: React.ReactNode }) {
+  const releases = await getReleases();
+  const jsonLd = buildJsonLd(releases);
   return (
     <html lang="en" className={`${archivo.variable} ${martian.variable}`}>
       <head>
@@ -77,7 +108,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <a href="#main" className="skip-link">
           Skip to content
         </a>
-        {children}
+        <ReleasesProvider releases={releases}>{children}</ReleasesProvider>
       </body>
     </html>
   );
