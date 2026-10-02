@@ -156,7 +156,16 @@ jobs:
           node-version: 22
           cache: pnpm
       - name: Install
-        run: pnpm install --frozen-lockfile
+        shell: bash
+        # On failure, surface the tail of the log as annotations (readable
+        # without repo-admin access, unlike job logs).
+        run: |
+          set -o pipefail
+          if ! pnpm install --frozen-lockfile --reporter=append-only 2>&1 | tee install.log; then
+            tail -n 60 install.log | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}' > tail.txt
+            echo "::error title=pnpm install failed::$(cat tail.txt)"
+            exit 1
+          fi
       - name: Run postinstall as a developer would (CI unset)
         shell: bash
         run: env -u CI node scripts/postinstall.mjs

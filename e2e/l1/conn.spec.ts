@@ -52,10 +52,8 @@ test('E-CONN-01 connect + introspect lists seed tables with PK flags', async () 
 });
 
 test('E-CONN-04 Test Connection must not replace live session (U02)', async () => {
-  // Catching test for U02: today ConnectionTest uses kind:'connect' and
-  // tears down the live worker session. Expected to fail until main routes
-  // through testConnect / runIsolatedTestConnect.
-  test.fail(true, 'U02: ConnectionTest still uses kind connect (disconnectAll)');
+  // U02 regression guard: Test Connection runs isolated and must leave the
+  // live session (and its open transaction) untouched.
 
   const cfgA = pgConfig({ id: 'e2e-conn-04-a', name: 'live-A' });
   const cfgB = pgConfig({ id: 'e2e-conn-04-b', name: 'probe-B' });
