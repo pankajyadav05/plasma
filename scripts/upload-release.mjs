@@ -21,6 +21,7 @@
  *
  * Usage:
  *   pnpm run release:upload
+ *   pnpm run release:mac      # dist:mac + upload --mac-only (no Windows build)
  *   pnpm run release:verify   # no credentials needed; read-only check
  */
 
@@ -55,6 +56,9 @@ if (existsSync(envPath)) {
 // `--verify-only` skips the uploads and just asserts that the public feed
 // serves this version — usable without R2 credentials (read-only HTTP).
 const verifyOnly = process.argv.includes('--verify-only');
+// `--mac-only` publishes just the macOS build: the Windows artifacts and
+// latest.yml are left as they are (Windows users stay on the previous version).
+const macOnly = process.argv.includes('--mac-only');
 
 const accessKeyId = process.env.R2_ACCESS_KEY_ID;
 const secretAccessKey = process.env.R2_SECRET_ACCESS_KEY;
@@ -133,14 +137,23 @@ const artifacts = [
   { name: 'latest-mac.yml', contentType: 'text/yaml' },
 ];
 
+if (macOnly) {
+  const isWindows = (name) => name.endsWith('.exe') || name.includes('.exe.') || name === 'latest.yml';
+  for (const a of artifacts) {
+    // The update feed and both architectures' DMG + ZIP must be there.
+    a.required = !isWindows(a.name) && !a.name.endsWith('.blockmap');
+  }
+  artifacts.splice(0, artifacts.length, ...artifacts.filter((a) => !isWindows(a.name)));
+}
+
 const releaseDir = resolve(root, 'release');
 const requiredMissing = artifacts.filter(
   (a) => a.required && !existsSync(resolve(releaseDir, a.name)),
 );
 if (!verifyOnly && requiredMissing.length > 0) {
-  console.error('[upload] missing required Windows artifacts in release/:');
+  console.error(`[upload] missing required ${macOnly ? 'macOS' : 'Windows'} artifacts in release/:`);
   for (const m of requiredMissing) console.error(`  - ${m.name}`);
-  console.error('[upload] run `pnpm run dist:win` first');
+  console.error(`[upload] run \`pnpm run ${macOnly ? 'dist:mac' : 'dist:win'}\` first`);
   process.exit(1);
 }
 
@@ -148,7 +161,7 @@ const optionalMissing = artifacts.filter(
   (a) => !a.required && !existsSync(resolve(releaseDir, a.name)),
 );
 if (!verifyOnly && optionalMissing.length > 0) {
-  console.log('[upload] skipping missing Mac artifacts (Windows-only upload?):');
+  console.log(`[upload] skipping missing optional artifacts${macOnly ? '' : ' (Windows-only upload?)'}:`);
   for (const m of optionalMissing) console.log(`  - ${m.name}`);
 }
 
@@ -319,8 +332,8 @@ async function verifyManifest(name) {
 // Windows manifest always. Mac manifest whenever it was part of this
 // publish, or always in --verify-only mode (CI publishes both platforms;
 // a Windows-only local ship deliberately leaves latest-mac.yml behind).
-const manifests = ['latest.yml'];
-if (verifyOnly || toUpload.some((a) => a.name === 'latest-mac.yml')) {
+const manifests = macOnly ? [] : ['latest.yml'];
+if (verifyOnly || macOnly || toUpload.some((a) => a.name === 'latest-mac.yml')) {
   manifests.push('latest-mac.yml');
 }
 

@@ -25,6 +25,7 @@
     "release:upload": "node scripts/upload-release.mjs",
     "release:verify": "node scripts/upload-release.mjs --verify-only",
     "release:ship": "pnpm run dist:win && pnpm run release:upload",
+    "release:mac": "pnpm run dist:mac && node scripts/upload-release.mjs --mac-only",
     "ship:patch": "node scripts/ship.mjs patch",
     "ship:minor": "node scripts/ship.mjs minor",
     "ship:major": "node scripts/ship.mjs major",

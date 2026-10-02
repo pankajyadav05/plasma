@@ -1,9 +1,8 @@
 name: Release
 
+# Releases are built and published locally (pnpm release:mac / release:ship).
+# This workflow only runs when started by hand from the Actions tab.
 on:
-  push:
-    tags:
-      - 'v*'
   workflow_dispatch:
 
 permissions:
