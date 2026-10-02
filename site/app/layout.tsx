@@ -1,59 +1,51 @@
 import type { Metadata, Viewport } from 'next';
-import { Bricolage_Grotesque, Geist, JetBrains_Mono } from 'next/font/google';
+import { Archivo, Martian_Mono } from 'next/font/google';
 import './globals.css';
 
-import { Cursor } from '@/components/cursor';
-import { ExplainEasterEgg } from '@/components/easter-egg';
-import { SmoothScroll } from '@/components/smooth-scroll';
 import { DOWNLOAD_URL, VERSION } from '@/lib/version';
 
-const bricolage = Bricolage_Grotesque({
+const archivo = Archivo({
   subsets: ['latin'],
-  axes: ['wdth', 'opsz'],
-  variable: '--font-bricolage',
+  axes: ['wdth'],
+  variable: '--font-archivo',
   display: 'swap',
 });
-const geist = Geist({
+const martian = Martian_Mono({
   subsets: ['latin'],
-  variable: '--font-geist',
-  display: 'swap',
-});
-const jbmono = JetBrains_Mono({
-  subsets: ['latin'],
-  weight: ['400', '500', '700'],
-  variable: '--font-mono-loaded',
+  weight: ['400', '500'],
+  variable: '--font-martian',
   display: 'swap',
 });
 
-const TITLE = 'Plasma — a precision client for Postgres, Redis & OpenSearch.';
+const TITLE = 'Plasma: a calm desktop client for Postgres, Redis & OpenSearch';
 const DESCRIPTION =
-  'A desktop database client built like a measurement instrument. Schema-aware autocomplete, AI with engine-aware tool use, EXPLAIN tree, redis-cli, OpenSearch Discover, nine themes. Apache 2.0.';
+  'Plasma is an open-source desktop client for Postgres, Redis and OpenSearch. Native-feeling, keyboard-first, and careful with production. Apache-2.0.';
+const SITE = 'https://plasma.codifyit.dev';
 
 export const metadata: Metadata = {
-  metadataBase: new URL('https://plasma.sh'),
+  metadataBase: new URL(SITE),
   title: TITLE,
   description: DESCRIPTION,
-  alternates: { canonical: 'https://plasma.sh' },
+  alternates: { canonical: SITE },
   openGraph: {
     type: 'website',
     title: TITLE,
     description: DESCRIPTION,
-    url: 'https://plasma.sh',
-    images: [{ url: '/og.svg', width: 1200, height: 630 }],
+    url: SITE,
+    images: [{ url: '/og.png', width: 1200, height: 630 }],
   },
   twitter: {
     card: 'summary_large_image',
-    title: 'Plasma — precision database client',
-    description:
-      'Postgres, Redis & OpenSearch in one instrument-grade client. AI with engine-aware tool use.',
-    images: ['/og.svg'],
+    title: TITLE,
+    description: DESCRIPTION,
+    images: ['/og.png'],
   },
   icons: { icon: '/favicon.svg' },
 };
 
 export const viewport: Viewport = {
-  themeColor: '#07080a',
-  colorScheme: 'dark',
+  themeColor: '#F3F0E8',
+  colorScheme: 'light',
 };
 
 const jsonLd = {
@@ -62,10 +54,10 @@ const jsonLd = {
   name: 'Plasma',
   applicationCategory: 'DeveloperApplication',
   applicationSubCategory: 'Database Client',
-  operatingSystem: 'macOS 12+, Windows 10, Windows 11',
+  operatingSystem: 'macOS, Windows 10, Windows 11',
   softwareVersion: VERSION,
   description: DESCRIPTION,
-  url: 'https://plasma.sh',
+  url: SITE,
   downloadUrl: DOWNLOAD_URL,
   offers: { '@type': 'Offer', price: '0', priceCurrency: 'USD' },
   license: 'https://www.apache.org/licenses/LICENSE-2.0',
@@ -74,21 +66,18 @@ const jsonLd = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html
-      lang="en"
-      className={`${bricolage.variable} ${geist.variable} ${jbmono.variable}`}
-      suppressHydrationWarning
-    >
+    <html lang="en" className={`${archivo.variable} ${martian.variable}`}>
       <head>
         <script
           type="application/ld+json"
           dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
         />
       </head>
-      <body className="grain min-h-screen">
-        <Cursor />
-        <ExplainEasterEgg />
-        <SmoothScroll>{children}</SmoothScroll>
+      <body>
+        <a href="#main" className="skip-link">
+          Skip to content
+        </a>
+        {children}
       </body>
     </html>
   );

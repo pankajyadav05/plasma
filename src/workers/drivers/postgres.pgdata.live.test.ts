@@ -44,6 +44,17 @@ suite('postgres driver (live): txn state, edits, explain, types', () => {
     await driver.disconnect();
   });
 
+  it('names user-defined column types instead of oid:NNNN', async () => {
+    await driver.query('DROP TYPE IF EXISTS plasma_live_mood');
+    await driver.query("CREATE TYPE plasma_live_mood AS ENUM ('ok', 'sad')");
+    try {
+      const r = await driver.query("SELECT 'ok'::plasma_live_mood AS m, 1 AS n");
+      expect(r.columns.map((c) => c.dataTypeName)).toEqual(['plasma_live_mood', 'int4']);
+    } finally {
+      await driver.query('DROP TYPE plasma_live_mood');
+    }
+  });
+
   it('reports the affected row count for INSERT / UPDATE / DELETE', async () => {
     let r = await driver.query("INSERT INTO plasma_live_t VALUES (10, 'x'), (11, 'y'), (12, 'z')");
     expect([r.command, r.rowCount]).toEqual(['INSERT', 3]);

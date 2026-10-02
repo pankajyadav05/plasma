@@ -1,0 +1,97 @@
+{
+  "captured": "2026-10-02",
+  "method": "Real Plasma Electron app (built from this repo, out/), launched with Playwright _electron at device scale factor 2, window 1440x900 CSS px, isolated empty userData, light appearance, default Plasma coral palette. Illustrative data: fictional shop (Postgres 16.2 throwaway cluster, Redis 7.2.5, OpenSearch 2.17.1). Screenshots are PNG window captures converted to WebP quality 92; dialogs cropped where noted; no editing or recolouring.",
+  "files": {
+    "pg-workbench.webp": {
+      "width": 2880,
+      "height": 1800,
+      "bytes": 207538,
+      "shows": "Postgres workbench: the orders table in the data grid, sidebar listing the shop tables, row 13 selected so the Details panel shows its fields (status shown with its enum type name, order_status), connected status capsule on top.",
+      "capture": "Full window, orders table opened by double-click in the sidebar, right sidebar shown, one cell clicked. Retaken after the enum type-name fix, from a rebuilt app and a freshly seeded throwaway database."
+    },
+    "pg-editor.webp": {
+      "width": 2880,
+      "height": 1800,
+      "bytes": 168832,
+      "shows": "SQL editor with a three-statement script (revenue by country JOIN/aggregate, best sellers, status counts), run with Run all statements; result tabs Result 1-3 shown.",
+      "capture": "Script pasted into the query tab, executed via command palette 'Run all statements', Result 1 tab selected."
+    },
+    "pg-structure.webp": {
+      "width": 2880,
+      "height": 1800,
+      "bytes": 175446,
+      "shows": "Structure view of the orders table with one staged change (a column comment on total) and the Preview SQL panel showing the generated BEGIN/COMMENT ON COLUMN/COMMIT.",
+      "capture": "Orders tab > Structure, typed into the Comment field of column total and blurred; change was never applied."
+    },
+    "pg-er.webp": {
+      "width": 2880,
+      "height": 1800,
+      "bytes": 141200,
+      "shows": "ER diagram of the public schema (customers, products, orders, order_items, payments) with foreign-key relationships, fitted.",
+      "capture": "Command palette 'Show diagram', then Fit to screen; right sidebar hidden."
+    },
+    "pg-import.webp": {
+      "width": 1920,
+      "height": 1440,
+      "bytes": 122030,
+      "shows": "Import data dialog on a 48-row CSV (new_customers.csv): existing table public.customers selected, columns mapped, first rows previewed.",
+      "capture": "File chosen by stubbing the native open dialog to return /tmp/new_customers.csv; Existing table > public.customers; signed_up mapped to created_at. Cropped to the dialog plus margin; import was not run."
+    },
+    "pg-roles.webp": {
+      "width": 2120,
+      "height": 1600,
+      "bytes": 52668,
+      "shows": "Roles and privileges dialog with scratch role analyst selected, Table privileges tab showing SELECT grants on customers, order_items, orders, products.",
+      "capture": "Command palette 'Roles and privileges', analyst selected, Table privileges tab. Cropped to the dialog plus margin."
+    },
+    "pg-search.webp": {
+      "width": 1920,
+      "height": 1580,
+      "bytes": 188670,
+      "shows": "Search in database for 'Okafor': results grouped by table (13 rows in customers, 4 rows in orders notes) with matches highlighted.",
+      "capture": "Command palette 'Search in database', term typed, Enter. Cropped to the dialog plus margin."
+    },
+    "pg-split.webp": {
+      "width": 2880,
+      "height": 1800,
+      "bytes": 270286,
+      "shows": "Split panes: a join query with results on the left, the orders table on the right.",
+      "capture": "Query run in query-1, orders opened, command palette 'Split pane right'; right sidebar hidden."
+    },
+    "pg-explain.webp": {
+      "width": 1952,
+      "height": 1248,
+      "bytes": 75312,
+      "shows": "Query plan with timing (EXPLAIN ANALYZE) for a join/aggregate: Sort > Aggregate > Hash Join > Seq Scans, with planning/execution totals.",
+      "capture": "Run dropdown > Explain > Run with ANALYZE. Cropped to the dialog plus margin."
+    },
+    "guard-confirm.webp": {
+      "width": 1200,
+      "height": 600,
+      "bytes": 16032,
+      "shows": "Safe mode confirmation 'Run this statement?' shown for DROP TABLE orders; under the default confirm-dangerous level.",
+      "capture": "DROP TABLE orders; typed and run via palette, dialog captured and then Cancel clicked (orders still has 1,500 rows). Cropped to the dialog plus margin."
+    },
+    "palette.webp": {
+      "width": 2880,
+      "height": 1800,
+      "bytes": 148970,
+      "shows": "Command palette opened with 'sh' typed: connections (shop, shop-cache, shop-search) and actions with shortcuts, over the orders table.",
+      "capture": "Ctrl+K, typed 'sh'. Full window."
+    },
+    "redis.webp": {
+      "width": 2880,
+      "height": 1800,
+      "bytes": 168780,
+      "shows": "Redis connection (shop-cache, Redis 7.2.5): key tree in the sidebar (cart, events, leaderboard, rate, session) and a session hash open with its fields, TTL, and Details panel.",
+      "capture": "Connected via home card, rate/cart groups collapsed, first hash key opened, email field clicked. Full window."
+    },
+    "opensearch.webp": {
+      "width": 2880,
+      "height": 1800,
+      "bytes": 399718,
+      "shows": "OpenSearch connection (shop-search, 2.17.1): products index searched with category:Outdoor AND rating:[4.5 TO *], 27 hits, one document selected in the Details panel.",
+      "capture": "Index > Open search, query_string entered and run, row 3 clicked. Full window."
+    }
+  }
+}

@@ -1,85 +1,54 @@
-'use client';
+import { HeroCta } from '@/components/hero-cta';
+import { HeroPlate } from '@/components/hero-plate';
+import type { Captures } from '@/lib/captures';
 
-import { ArrowUpRight } from 'lucide-react';
-import { DownloadCTA } from '@/components/DownloadCTA';
-import { Magnetic } from '@/components/magnetic';
-import { Oscilloscope } from '@/components/oscilloscope';
+const LINES = ['One calm', 'workbench', 'for your data.'];
 
-/**
- * Hero is one screen: a live oscilloscope canvas behind the wordmark.
- * The signal warps when the cursor moves — proximity to the trace = more
- * amplitude + chromatic split. The wordmark sits over it in heavy display
- * Bricolage. Below: tagline + two CTAs. Top/bottom: instrument tags.
- */
-export function Hero() {
+export function Hero({ captures }: { captures: Captures }) {
   return (
-    <section
-      id="top"
-      className="relative h-screen min-h-[820px] overflow-hidden border-b border-line-strong"
-    >
-      <Oscilloscope variant="hero" />
+    <section id="top" aria-labelledby="hero-title" className="relative pt-10 pb-28 md:pt-16 md:pb-40">
+      <div className="wrap">
+        <p className="label h-fade flex flex-wrap gap-x-3" style={{ '--d': '0ms' } as React.CSSProperties}>
+          <span>Plate 00</span>
+          <span className="text-ink-3">·</span>
+          <span>Desktop client for Postgres, Redis &amp; OpenSearch</span>
+        </p>
 
-      {/* Subtle vignette so the wordmark holds against the trace */}
-      <div
-        aria-hidden
-        className="absolute inset-0 pointer-events-none z-[1]"
-        style={{
-          background:
-            'radial-gradient(60% 60% at 50% 55%, transparent 0%, color-mix(in srgb, var(--bg) 30%, transparent) 50%, var(--bg) 100%)',
-        }}
-      />
+        <h1 id="hero-title" className="display t-hero mt-8 md:mt-10">
+          {LINES.map((l, i) => (
+            <span key={l} className="h-line">
+              <span style={{ '--i': i } as React.CSSProperties}>
+                {l.endsWith('.') ? (
+                  <>
+                    {l.slice(0, -1)}
+                    <span className="text-signal">.</span>
+                  </>
+                ) : (
+                  l
+                )}
+              </span>
+            </span>
+          ))}
+        </h1>
 
-      {/* Centerpiece */}
-      <div className="relative z-10 h-full grid place-items-center px-4 md:px-8">
-        <div className="text-center max-w-[1280px]">
-          <h1
-            className="font-display text-fg leading-[0.86]"
-            style={{
-              fontSize: 'clamp(96px, 22vw, 380px)',
-              fontVariationSettings: '"opsz" 96, "wdth" 200, "wght" 800',
-              letterSpacing: '-0.055em',
-            }}
-          >
-            plasma<span className="text-plasma glow-plasma">.</span>
-          </h1>
-
-          <p
-            className="mt-8 mx-auto text-fg/85 max-w-[44ch] font-sans"
-            style={{ fontSize: 'clamp(18px, 1.8vw, 24px)', lineHeight: 1.4 }}
-          >
-            A precision client for{' '}
-            <span className="text-plasma">Postgres</span>,{' '}
-            <span className="text-ox">Redis</span> &{' '}
-            <span className="text-volt">OpenSearch</span>.
-            <br className="hidden md:inline" />
-            Built like a measurement instrument.
+        <div
+          className="h-fade mt-12 grid gap-10 border-t border-rule pt-8 md:mt-16 lg:grid-cols-12 lg:gap-8"
+          style={{ '--d': '520ms' } as React.CSSProperties}
+        >
+          <p className="lede lg:col-span-6">
+            Plasma is an open-source desktop client for Postgres, Redis and OpenSearch. Native-feeling,
+            keyboard-first, and careful with production.
           </p>
-
-          <div className="mt-12 flex flex-col items-center gap-5">
-            <div className="flex justify-center flex-wrap gap-3 items-center">
-              <DownloadCTA size="md" alternates />
-              <Magnetic strength={0.18}>
-                <a
-                  href="https://github.com/pankajyadav05/plasma"
-                  data-cursor="source · github"
-                  className="inline-flex items-center gap-3 px-7 py-4 border border-line-strong text-fg/85 font-mono text-[11px] uppercase tracking-[0.3em] hover:border-plasma hover:text-plasma transition-colors"
-                >
-                  Read source
-                  <ArrowUpRight className="h-3.5 w-3.5" />
-                </a>
-              </Magnetic>
-            </div>
+          <div className="lg:col-span-5 lg:col-start-8">
+            <HeroCta />
+            <p className="label mt-8 normal-case tracking-[0.02em] text-ink-2">
+              Apache-2.0 · macOS (Apple Silicon &amp; Intel) · Windows x64
+            </p>
           </div>
         </div>
       </div>
 
-      {/* Bottom rail */}
-      <div className="absolute z-10 left-4 right-4 md:left-8 md:right-8 bottom-6 flex items-center justify-between label">
-        <span>SCROLL ↓ TO READ DATASHEET</span>
-        <span className="hidden md:inline label-plasma">
-          TYPE <span className="label-strong">EXPLAIN</span> ANYWHERE ↗
-        </span>
-      </div>
+      <HeroPlate captures={captures} />
     </section>
   );
 }

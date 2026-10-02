@@ -1,37 +1,29 @@
-import { TopNav } from '@/components/nav';
-import { Atlas } from '@/components/sections/Atlas';
-import { Day } from '@/components/sections/Day';
-import { ExplainTheatre } from '@/components/sections/ExplainTheatre';
+import { Topbar } from '@/components/topbar';
+import { Download } from '@/components/sections/Download';
+import { Engines } from '@/components/sections/Engines';
 import { FAQ } from '@/components/sections/FAQ';
 import { Footer } from '@/components/sections/Footer';
+import { Guardrails } from '@/components/sections/Guardrails';
 import { Hero } from '@/components/sections/Hero';
-import { Open } from '@/components/sections/Open';
-import { Pillars } from '@/components/sections/Pillars';
-import { PrivacyDiff } from '@/components/sections/PrivacyDiff';
-import { Roadmap } from '@/components/sections/Roadmap';
-import { Showcase } from '@/components/sections/Showcase';
-import { Specs } from '@/components/sections/Specs';
-import { Vault } from '@/components/sections/Vault';
-import { Versus } from '@/components/sections/Versus';
+import { Local } from '@/components/sections/Local';
+import { Shortcuts } from '@/components/sections/Shortcuts';
+import { Workbench } from '@/components/sections/Workbench';
+import { getCaptures } from '@/lib/captures';
 
 export default function Page() {
+  const captures = getCaptures();
   return (
     <>
-      <TopNav />
-      <main>
-        <Hero />
-        <Specs />
-        <Showcase />
-        <ExplainTheatre />
-        <Day />
-        <Pillars />
-        <Vault />
-        <PrivacyDiff />
-        <Atlas />
-        <Versus />
-        <Roadmap />
+      <Topbar />
+      <main id="main">
+        <Hero captures={captures} />
+        <Workbench captures={captures} />
+        <Engines captures={captures} />
+        <Guardrails />
+        <Shortcuts />
+        <Local />
+        <Download />
         <FAQ />
-        <Open />
       </main>
       <Footer />
     </>

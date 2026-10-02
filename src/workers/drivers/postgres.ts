@@ -208,6 +208,48 @@ export class PostgresDriver {
     return this.txnState === 'active' ? 'T' : this.txnState === 'error' ? 'E' : 'I';
   }
 
+  /**
+   * Names for type OIDs with no fixed number (enums, domains, composites,
+   * extension types). Per connection: the same OID means another type in
+   * another database, so the map is dropped on teardown.
+   */
+  private customTypeNames = new Map<number, string>();
+
+  /**
+   * Replace `oid:NNNN` column type names with the server's own name
+   * (`order_status`, `public.money_amount`…). Looked up on the aux
+   * connection so it never runs inside the user's transaction; any failure
+   * leaves the placeholder, which the renderer still shows.
+   */
+  private async resolveColumnTypeNames(columns: QueryResult['columns']): Promise<void> {
+    const unknown = [
+      ...new Set(
+        columns
+          .filter(
+            (c) => c.dataTypeName?.startsWith('oid:') && !this.customTypeNames.has(c.dataTypeID),
+          )
+          .map((c) => c.dataTypeID),
+      ),
+    ];
+    if (unknown.length > 0) {
+      try {
+        const res = await this.withAux((client) =>
+          client.query<{ oid: number; name: string }>(
+            'SELECT oid::int AS oid, format_type(oid, NULL) AS name FROM pg_type WHERE oid = ANY($1::oid[])',
+            [unknown],
+          ),
+        );
+        for (const r of res.rows) this.customTypeNames.set(Number(r.oid), r.name);
+      } catch {
+        return;
+      }
+    }
+    for (const c of columns) {
+      const name = this.customTypeNames.get(c.dataTypeID);
+      if (name && c.dataTypeName?.startsWith('oid:')) c.dataTypeName = name;
+    }
+  }
+
   private withAux<T>(fn: (client: ClientT) => Promise<T>): Promise<T> {
     const run = this.auxChain.then(async () => fn(await this.requireClient('aux')));
     this.auxChain = run.catch(() => {});
@@ -273,6 +315,7 @@ export class PostgresDriver {
     this.primary = null;
     this.control = null;
     this.aux = null;
+    this.customTypeNames.clear();
 
     for (const client of clients) {
       if (!client) continue;
@@ -576,6 +619,7 @@ export class PostgresDriver {
             dataTypeID: f.dataTypeID,
             dataTypeName: pgTypeName(f.dataTypeID),
           }));
+          await this.resolveColumnTypeNames(columns);
         }
         if (batch.command) {
           command = batch.command;
@@ -681,6 +725,7 @@ export class PostgresDriver {
             dataTypeID: f.dataTypeID,
             dataTypeName: pgTypeName(f.dataTypeID),
           }));
+          await this.resolveColumnTypeNames(columns);
         }
         // Always yield the first batch so an empty result still exports
         // its header / column list.
