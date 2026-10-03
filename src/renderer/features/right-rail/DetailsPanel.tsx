@@ -1,6 +1,8 @@
 import { Button } from '@/components/ui/button';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { IconButton, MenuItem } from '@/components/ui/workbench';
+import { usePresentation } from '@/features/presentation/presentation';
+import { isRevealed, revealKey, useReveal } from '@/features/presentation/reveal-store';
 import { ReferencedBy } from '@/features/result-grid/ReferencedBy';
 import { SidebarSearch } from '@/features/sidebar/sidebar-parts';
 import { cn } from '@/lib/cn';
@@ -17,9 +19,10 @@ import {
   tablePkNames,
 } from '@/stores/session-pending-edits';
 import { useWorkbench } from '@/stores/workbench';
+import { type SensitiveKind, maskValue } from '@shared/masking';
 import type { ColumnMeta } from '@shared/protocol';
 import { engineCaps } from '@shared/sql-dialect';
-import { Braces, Check, Copy, Pencil, SlidersHorizontal } from 'lucide-react';
+import { Braces, Check, Copy, Eye, Pencil, SlidersHorizontal } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   type FieldEditorKind,
@@ -57,6 +60,7 @@ export function DetailsPanel() {
   const current = inspected && tab && inspected.tabId === tab.id ? inspected : null;
   const engine = useSession((s) => s.activeConfig?.engine ?? 'postgres');
   const editable = useRowEditing(current?.row ?? null, current?.columns ?? null);
+  const masking = useDetailsMasking(current);
 
   const fields = useMemo(() => {
     if (!current) return [];
@@ -70,7 +74,7 @@ export function DetailsPanel() {
     if (!current) return;
     const obj: Record<string, unknown> = {};
     current.columns.forEach((c, i) => {
-      obj[c.name] = current.row[i];
+      obj[c.name] = masking.isHidden(i) ? masking.maskedText(i, current.row[i]) : current.row[i];
     });
     void navigator.clipboard?.writeText(JSON.stringify(obj, null, 2)).then(() => {
       setCopiedRow(true);
@@ -124,7 +128,10 @@ export function DetailsPanel() {
                   value={value}
                   columnIndex={index}
                   selected={index === current.columnIndex}
-                  editing={editable}
+                  editing={masking.isHidden(index) ? null : editable}
+                  hidden={masking.isHidden(index)}
+                  maskedText={masking.isHidden(index) ? masking.maskedText(index, value) : null}
+                  onReveal={() => masking.reveal(index)}
                 />
               ))
             )}
@@ -154,6 +161,37 @@ export function DetailsPanel() {
       </div>
     </div>
   );
+}
+
+/**
+ * Presentation mode for the inspected row: the grid says which columns are
+ * sensitive (`maskedColumns`); a revealed cell shows its real value for a
+ * few seconds, shared with the grid through the reveal store.
+ */
+function useDetailsMasking(
+  current: {
+    tabId: string;
+    columns: ColumnMeta[];
+    maskedColumns?: Record<number, SensitiveKind>;
+    resultRowIndex?: number;
+  } | null,
+) {
+  const { active, style } = usePresentation();
+  const revealed = useReveal((s) => s.revealed);
+  return useMemo(() => {
+    const masked = active ? (current?.maskedColumns ?? {}) : {};
+    const key = (i: number) => revealKey(current?.tabId ?? '', current?.resultRowIndex ?? -1, i);
+    return {
+      isHidden: (i: number) => i in masked && !isRevealed(revealed, key(i)),
+      maskedText: (i: number, value: unknown): string | null => {
+        if (value === null || value === undefined) return null;
+        const col = current?.columns[i];
+        const text = displayText(value, col?.dataTypeName);
+        return (maskValue(text, masked[i] ?? 'custom', style) as string) ?? null;
+      },
+      reveal: (i: number) => useReveal.getState().reveal(key(i)),
+    };
+  }, [active, style, current, revealed]);
 }
 
 /** Per-engine / per-view hint under "No row selected" (VF28). */
@@ -213,12 +251,19 @@ function FieldRow({
   columnIndex,
   selected,
   editing,
+  hidden,
+  maskedText,
+  onReveal,
 }: {
   col: ColumnMeta;
   value: unknown;
   columnIndex: number;
   selected: boolean;
   editing: RowEditing | null;
+  /** Presentation mode: the value is masked until revealed. */
+  hidden: boolean;
+  maskedText: string | null;
+  onReveal: () => void;
 }) {
   const [copied, setCopied] = useState(false);
   const [open, setOpen] = useState(false);
@@ -228,15 +273,17 @@ function FieldRow({
   const shown: unknown = isPending ? pendingValue : value;
   const isNullish = shown === null || shown === undefined;
   const isEmpty = shown === '';
-  const text = displayText(shown, col.dataTypeName);
+  const text = hidden && maskedText !== null ? maskedText : displayText(shown, col.dataTypeName);
   const multiline = text.includes('\n') || text.length > 80;
 
   const copy = () => {
-    const raw = isNullish
-      ? ''
-      : typeof shown === 'object'
-        ? displayText(shown, col.dataTypeName)
-        : String(shown);
+    const raw = hidden
+      ? (maskedText ?? '')
+      : isNullish
+        ? ''
+        : typeof shown === 'object'
+          ? displayText(shown, col.dataTypeName)
+          : String(shown);
     void navigator.clipboard?.writeText(raw).then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), 1000);
@@ -261,6 +308,17 @@ function FieldRow({
           <span className="shrink-0 text-[11px] font-medium text-[var(--wb-accent)]">edited</span>
         )}
         <div className="flex-1" />
+        {hidden && !isNullish && !isEmpty && (
+          <IconButton
+            variant="plain"
+            label={`Reveal ${col.name}`}
+            title="Reveal for 10 seconds"
+            onClick={onReveal}
+            className="h-5 w-5 [&_svg]:h-3 [&_svg]:w-3"
+          >
+            <Eye />
+          </IconButton>
+        )}
         {editing && !open && (
           <IconButton
             variant="plain"

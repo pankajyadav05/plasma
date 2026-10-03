@@ -1,19 +1,23 @@
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { MenuItem } from '@/components/ui/workbench';
+import { setColumnMaskRule } from '@/features/presentation/presentation';
 import { defaultOperatorFor } from '@/lib/pg-types';
 import type { Filter, FilterOp } from '@/lib/table-query';
 import { useSession } from '@/stores/session';
+import type { ColumnMask } from '@shared/masking';
 import type { ColumnMeta } from '@shared/protocol';
 import {
   ArrowDownAZ,
   ArrowUpAZ,
   ChevronDown,
   Copy,
+  Eye,
   EyeOff,
   Filter as FilterIcon,
   MoveHorizontal,
   Pin,
   PinOff,
+  ShieldAlert,
   X,
 } from 'lucide-react';
 import { useState } from 'react';
@@ -37,6 +41,8 @@ interface Props {
   onFreezeUpTo?: () => void;
   /** Unpin all columns (offered while any column is pinned). */
   onUnfreezeAll?: () => void;
+  /** Why the column is masked in presentation mode, or null when it is shown. */
+  masked?: ColumnMask | null;
 }
 
 function freshId(): string {
@@ -56,9 +62,19 @@ export function ColumnHeaderMenu({
   onAutoFit,
   onFreezeUpTo,
   onUnfreezeAll,
+  masked = null,
 }: Props) {
   const [open, setOpen] = useState(false);
   const addFilter = useSession((s) => s.addFilter);
+  const hasRule = useSession((s) => {
+    const r = s.activeConfig?.id ? s.settings.maskRules?.[s.activeConfig.id] : undefined;
+    const key = column.name.trim().toLowerCase();
+    return Boolean(
+      r &&
+        (r.sensitive.some((n) => n.toLowerCase() === key) ||
+          r.plain.some((n) => n.toLowerCase() === key)),
+    );
+  });
 
   const close = () => setOpen(false);
 
@@ -185,6 +201,38 @@ export function ColumnHeaderMenu({
             close();
           }}
         />
+        <Separator />
+        {masked ? (
+          <MenuItem
+            icon={<Eye className="h-3.5 w-3.5" />}
+            label="Not sensitive: stop masking"
+            hint="this connection"
+            onClick={() => {
+              setColumnMaskRule(column.name, 'plain');
+              close();
+            }}
+          />
+        ) : (
+          <MenuItem
+            icon={<ShieldAlert className="h-3.5 w-3.5" />}
+            label="Mark as sensitive"
+            hint="this connection"
+            onClick={() => {
+              setColumnMaskRule(column.name, 'sensitive');
+              close();
+            }}
+          />
+        )}
+        {(masked?.reason === 'rule' || hasRule) && (
+          <MenuItem
+            icon={<X className="h-3.5 w-3.5" />}
+            label="Reset masking to automatic"
+            onClick={() => {
+              setColumnMaskRule(column.name, 'reset');
+              close();
+            }}
+          />
+        )}
         <Separator />
         <MenuItem
           icon={<Copy className="h-3.5 w-3.5" />}

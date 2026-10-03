@@ -1,5 +1,6 @@
 import type { ColumnStat } from '@/features/result-grid/column-stats';
 import type { EditorCaret } from '@/lib/sql-split';
+import type { SensitiveKind } from '@shared/masking';
 import type { ColumnMeta } from '@shared/protocol';
 import { create } from 'zustand';
 
@@ -32,6 +33,10 @@ export interface InspectedRow {
   columnIndex: number;
   columns: ColumnMeta[];
   row: unknown[];
+  /** Presentation mode: sensitive columns (by index) whose values the pane must mask. */
+  maskedColumns?: Record<number, SensitiveKind>;
+  /** Index of the row in the result's rows (reveal key shared with the grid). */
+  resultRowIndex?: number;
 }
 
 /** Quick stats of the grid's selected cell range, shown in the result footer. */

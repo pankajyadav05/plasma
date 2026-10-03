@@ -1,3 +1,4 @@
+import type { ImportPickedFile } from '@shared/protocol';
 import { create } from 'zustand';
 
 /**
@@ -8,10 +9,21 @@ import { create } from 'zustand';
 interface DialogsState {
   createTable: { schema: string } | null;
   createView: { schema: string } | null;
-  importInto: { schema: string; table: string | null } | null;
+  importInto: {
+    schema: string;
+    table: string | null;
+    /** Pre-picked file (the `plasma import` command line). */
+    file?: ImportPickedFile;
+    /** Suggested name for a new table. */
+    newName?: string;
+  } | null;
   openCreateTable(schema: string): void;
   openCreateView(schema: string): void;
-  openImport(schema: string, table: string | null): void;
+  openImport(
+    schema: string,
+    table: string | null,
+    prefill?: { file?: ImportPickedFile; newName?: string },
+  ): void;
   close(): void;
 }
 
@@ -21,7 +33,7 @@ export const useStructureDialogs = create<DialogsState>((set) => ({
   importInto: null,
   openCreateTable: (schema) => set({ createTable: { schema }, createView: null, importInto: null }),
   openCreateView: (schema) => set({ createView: { schema }, createTable: null, importInto: null }),
-  openImport: (schema, table) =>
-    set({ importInto: { schema, table }, createTable: null, createView: null }),
+  openImport: (schema, table, prefill) =>
+    set({ importInto: { schema, table, ...prefill }, createTable: null, createView: null }),
   close: () => set({ createTable: null, createView: null, importInto: null }),
 }));

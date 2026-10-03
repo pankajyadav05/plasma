@@ -51,6 +51,30 @@ export async function loadRelationCreateScript(
     const script = rows.map((r) => `${text(r[1]).trim().replace(/;\s*$/, '')};`).join('\n\n');
     return script || `-- ${name} was not found`;
   }
+  if (engine === 'clickhouse') {
+    const rows = await run(
+      `SHOW CREATE ${kind === 'view' || kind === 'matview' ? 'VIEW' : 'TABLE'} ${dialectFor('clickhouse').qualify(schema, name)}`,
+      [],
+    );
+    const ddl = text(rows[0]?.[0]).trim();
+    return ddl ? `${ddl.replace(/;\s*$/, '')};` : `-- ${name} was not found`;
+  }
+  if (engine === 'duckdb') {
+    // Attached catalogs show as `catalog.schema`; the session's own is plain.
+    const dot = schema.indexOf('.');
+    const catalog = dot >= 0 ? schema.slice(0, dot) : null;
+    const schemaName = dot >= 0 ? schema.slice(dot + 1) : schema;
+    const rows = await run(
+      `SELECT sql FROM (
+         SELECT sql, database_name, schema_name, view_name AS n FROM duckdb_views()
+         UNION ALL
+         SELECT sql, database_name, schema_name, table_name AS n FROM duckdb_tables()
+       ) WHERE n = $1 AND schema_name = $2 AND database_name = COALESCE($3, current_database())`,
+      [name, schemaName, catalog],
+    );
+    const ddl = text(rows[0]?.[0]).trim();
+    return ddl ? `${ddl.replace(/;\s*$/, '')};` : `-- ${name} was not found`;
+  }
   if (engine === 'mysql') {
     const rows = await run(
       `SHOW CREATE ${kind === 'view' ? 'VIEW' : 'TABLE'} ${dialectFor('mysql').qualify(schema, name)}`,

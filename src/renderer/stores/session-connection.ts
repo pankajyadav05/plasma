@@ -349,7 +349,14 @@ async function loadEngineOverview(
     const schema = get().schema;
     if (schema && schema.schemas.length > 0) {
       // Postgres opens on `public`; MySQL's "schemas" are databases, so open the connected one.
-      const preferred = engine === 'mysql' ? get().activeConfig?.database : 'public';
+      const preferred =
+        engine === 'mysql'
+          ? get().activeConfig?.database
+          : engine === 'clickhouse'
+            ? get().activeConfig?.database || 'default'
+            : engine === 'duckdb'
+              ? 'main'
+              : 'public';
       const first = schema.schemas.find((s) => s.name === preferred) ?? schema.schemas[0];
       set({ expandedSchemas: new Set([first.name]), currentSchema: first.name });
     }

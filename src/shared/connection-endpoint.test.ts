@@ -21,4 +21,8 @@ describe('sshUnsupportedReason', () => {
     expect(sshUnsupportedReason({ engine: 'redis', host: 'cache.internal' })).toBeNull();
     expect(sshUnsupportedReason({ engine: 'postgres', host: '/var/run/postgresql' })).toBeNull();
   });
+  it('refuses a tunnel for local DuckDB files but allows ClickHouse', () => {
+    expect(sshUnsupportedReason({ engine: 'duckdb', host: 'local' })).toMatch(/nothing to tunnel/);
+    expect(sshUnsupportedReason({ engine: 'clickhouse', host: 'ch.internal' })).toBeNull();
+  });
 });

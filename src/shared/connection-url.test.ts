@@ -55,6 +55,16 @@ describe('parseConnectionUrl (C28)', () => {
       user: 'u',
     });
     expect(parseConnectionUrl('mariadb://h:3307/d')).toMatchObject({ engine: 'mysql', port: 3307 });
+    expect(parseConnectionUrl('clickhouse://u:p@h/analytics?sslmode=verify-full')).toMatchObject({
+      engine: 'clickhouse',
+      port: 8123,
+      database: 'analytics',
+      ssl: true,
+    });
+    expect(parseConnectionUrl('clickhouse://h:8443/')).toMatchObject({
+      engine: 'clickhouse',
+      port: 8443,
+    });
     expect(() => parseConnectionUrl('postgres://h/db?sslmode=bogus')).toThrow(/sslmode/);
   });
 });

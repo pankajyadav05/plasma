@@ -1,5 +1,7 @@
 import { Button } from '@/components/ui/button';
 import { FixWithAi } from '@/features/ai/FixWithAi';
+import { useGridMasking } from '@/features/presentation/presentation';
+import { revealKey, useReveal } from '@/features/presentation/reveal-store';
 import { cn } from '@/lib/cn';
 import { commandDetail, commandTitle } from '@/lib/command-summary';
 import { cleanIpcError } from '@/lib/errors';
@@ -197,7 +199,10 @@ export function ResultGrid() {
   const setSelectedRows = useSession((s) => s.setSelectedRows);
   const setColumnWidth = useSession((s) => s.setColumnWidth);
   const editMode = useSession((s) => s.editMode);
-  const connectionReadOnly = useSession((s) => Boolean(s.activeConfig?.readOnly));
+  // Engines without row edits (ClickHouse, DuckDB) are read-only here, like a read-only connection.
+  const connectionReadOnly = useSession(
+    (s) => Boolean(s.activeConfig?.readOnly) || !engineCaps(s.activeConfig?.engine).rowEdits,
+  );
   const updateCell = useSession((s) => s.updateCell);
   const deleteRows = useSession((s) => s.deleteRows);
   const duplicateRow = useSession((s) => s.duplicateRow);
@@ -412,6 +417,19 @@ export function ResultGrid() {
     [columns],
   );
 
+  // Presentation mode: sensitive columns are masked for display, copy and the
+  // Details pane; `cellText` stays the raw value for keys, edits and filters.
+  const gm = useGridMasking(tabId ?? '', columns, tab?.queryResult?.rows);
+  /** What a cell shows (and copies): masked while hidden, the raw text otherwise. */
+  const shownText = useCallback(
+    (entry: GridRow | undefined, col: number): string | null | undefined => {
+      const t = cellText(entry, col);
+      if (!entry || entry.status === 'inserted' || entry.editedCols.has(col)) return t;
+      return gm.show(t, entry.originalIndex, col);
+    },
+    [cellText, gm],
+  );
+
   // Publish the selected row for the right-sidebar Details pane. Only the
   // grid knows how the selected display row maps back to result data.
   const setInspectedRow = useWorkbench((s) => s.setInspectedRow);
@@ -432,8 +450,12 @@ export function ResultGrid() {
       columnIndex: selCol,
       columns: queryResult.columns,
       row: pagedRow.row,
+      maskedColumns: gm.active
+        ? Object.fromEntries([...gm.masked].map(([i, m]) => [i, m.kind]))
+        : undefined,
+      resultRowIndex: pagedRow.originalIndex,
     });
-  }, [tabId, queryResult, page, pageSize, selRow, selCol, displayRows, setInspectedRow]);
+  }, [tabId, queryResult, page, pageSize, selRow, selCol, displayRows, setInspectedRow, gm]);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const [scrollTop, setScrollTop] = useState(0);
@@ -545,12 +567,12 @@ export function ResultGrid() {
     const out: Array<Cell> = [];
     displayRows.forEach((entry, visibleRow) => {
       entry.row.forEach((_cell, col) => {
-        const str = cellText(entry, col);
+        const str = shownText(entry, col);
         if (str?.toLowerCase().includes(q)) out.push({ row: visibleRow, col });
       });
     });
     return out;
-  }, [searchQuery, displayRows, cellText]);
+  }, [searchQuery, displayRows, shownText]);
 
   const matchSet = useMemo(() => {
     const s = new Set<string>();
@@ -686,24 +708,25 @@ export function ResultGrid() {
         tabId,
         rows: last - range.r0 + 1,
         cells: (last - range.r0 + 1) * cols.length,
-        stats: computeColumnStats(cols, range.r0, last, (r, c) => cellText(displayRows[r], c)),
+        stats: computeColumnStats(cols, range.r0, last, (r, c) => shownText(displayRows[r], c)),
       });
     }, 120);
     return () => clearTimeout(timer);
-  }, [tabId, range, columns, visibleColIdx, displayRows, cellText, setSelectionStats]);
+  }, [tabId, range, columns, visibleColIdx, displayRows, shownText, setSelectionStats]);
   useEffect(() => () => setSelectionStats(null), [setSelectionStats]);
 
   /** Columns "all text columns" searches: visible ones with a text-like type. */
   const textColumnIdx = useMemo(
-    () => visibleColIdx.filter((c) => isTextLikeType(columns?.[c]?.dataTypeName)),
-    [visibleColIdx, columns],
+    () =>
+      visibleColIdx.filter((c) => isTextLikeType(columns?.[c]?.dataTypeName) && !gm.masked.has(c)),
+    [visibleColIdx, columns, gm.masked],
   );
   const findColumn = anchor ? (columns?.[anchor.col]?.name ?? null) : null;
   const buildFindPlan = useCallback(
     (opts: FindReplaceOptions, scope: 'column' | 'text-columns'): FindReplacePlan => {
       const cols =
         scope === 'column'
-          ? anchor && smartKinds[anchor.col] !== 'bytea'
+          ? anchor && smartKinds[anchor.col] !== 'bytea' && !gm.masked.has(anchor.col)
             ? [anchor.col]
             : []
           : textColumnIdx;
@@ -714,7 +737,7 @@ export function ResultGrid() {
       });
       return planFindReplace(cells, opts);
     },
-    [anchor, smartKinds, textColumnIdx, displayRows, cellText],
+    [anchor, smartKinds, textColumnIdx, displayRows, cellText, gm.masked],
   );
 
   // F2: keep the active cell in view after keyboard moves / find jumps.
@@ -805,6 +828,12 @@ export function ResultGrid() {
   const beginEdit = (cell: Cell, initial?: string) => {
     const entry = displayRows[cell.row];
     if (!canEditEntry(entry)) return false;
+    if (entry && entry.status !== 'inserted' && gm.isHidden(entry.originalIndex, cell.col)) {
+      setGridNote(
+        'This column is masked in presentation mode. Click its eye icon to reveal the cell, then edit it.',
+      );
+      return false;
+    }
     const text = cellText(entry, cell.col);
     // Structured types open their popover editor on the current value; a
     // typed character only seeds the plain inline editor.
@@ -825,6 +854,8 @@ export function ResultGrid() {
     }
     if (entry.status === 'deleted')
       throw new Error('this row is marked for deletion — restore it first');
+    if (gm.isHidden(entry.originalIndex, cell.col))
+      throw new Error('this cell is masked in presentation mode — reveal it before editing');
     await updateCell(entry.originalIndex, cell.col, value);
   };
 
@@ -940,12 +971,14 @@ export function ResultGrid() {
     }
     if (!anchor) return;
     if (!range) {
-      const text = cellText(displayRows[anchor.row], anchor.col);
+      const text = shownText(displayRows[anchor.row], anchor.col);
       copyText(text ?? 'NULL');
       return;
     }
     const cols = visibleColumns.slice(range.p0, range.p1 + 1).map((c) => c.originalIndex);
-    const rows = displayRows.slice(range.r0, range.r1 + 1).map((e) => e.row);
+    const rows = displayRows
+      .slice(range.r0, range.r1 + 1)
+      .map((e) => (e.status === 'inserted' ? e.row : gm.maskRow(e.row, e.originalIndex)));
     copyText(formatRows('tsv', columns, rows, cols));
   };
 
@@ -961,8 +994,12 @@ export function ResultGrid() {
     if (!target) return;
     const rows =
       target.rows === 'checked'
-        ? targetRows().map((e) => e.row)
-        : displayRows.slice(target.rows.r0, target.rows.r1 + 1).map((e) => e.row);
+        ? targetRows().map((e) =>
+            e.status === 'inserted' ? e.row : gm.maskRow(e.row, e.originalIndex),
+          )
+        : displayRows
+            .slice(target.rows.r0, target.rows.r1 + 1)
+            .map((e) => (e.status === 'inserted' ? e.row : gm.maskRow(e.row, e.originalIndex)));
     const table =
       tab.kind === 'table' && tab.tableName
         ? { schema: tab.tableSchema, name: tab.tableName }
@@ -1000,6 +1037,10 @@ export function ResultGrid() {
         const entry = displayRows[w.row];
         const colMeta = columns?.[w.col];
         if (!entry || !colMeta || entry.status === 'deleted') {
+          skipped++;
+          continue;
+        }
+        if (entry.status !== 'inserted' && gm.isHidden(entry.originalIndex, w.col)) {
           skipped++;
           continue;
         }
@@ -1162,7 +1203,7 @@ export function ResultGrid() {
       return ctx.measureText(text).width;
     };
     const texts = displayRows.map((entry) => {
-      const t = cellText(entry, origIdx);
+      const t = shownText(entry, origIdx);
       return t === null
         ? 'NULL'
         : t === undefined
@@ -1201,7 +1242,9 @@ export function ResultGrid() {
       value:
         entry.editedCols.has(cell.col) || entry.insert
           ? cellText(entry, cell.col)
-          : entry.row[cell.col],
+          : gm.isHidden(entry.originalIndex, cell.col)
+            ? shownText(entry, cell.col)
+            : entry.row[cell.col],
       anchorRect: td?.getBoundingClientRect() ?? new DOMRect(0, 0, 0, 0),
     });
   };
@@ -1217,7 +1260,7 @@ export function ResultGrid() {
       tabTitle: tab.title,
       rowNumber: tab.page * tab.pageSize + row + 1,
       columns: tab.queryResult.columns,
-      row: entry.row,
+      row: entry.status === 'inserted' ? entry.row : gm.maskRow(entry.row, entry.originalIndex),
     });
   };
 
@@ -1667,7 +1710,26 @@ export function ResultGrid() {
         );
       }
     }
-    if (tab.kind === 'table' && entry.originalIndex >= 0) {
+    if (gm.active && gm.masked.has(cell.col) && entry.status !== 'inserted') {
+      const hidden = gm.isHidden(entry.originalIndex, cell.col);
+      out.push(
+        { kind: 'separator' },
+        {
+          kind: 'item',
+          label: hidden ? 'Reveal value (10 s)' : 'Mask value again',
+          icon: <Eye />,
+          onSelect: () =>
+            hidden
+              ? gm.reveal(entry.originalIndex, cell.col)
+              : useReveal.getState().hide(revealKey(tabId ?? '', entry.originalIndex, cell.col)),
+        },
+      );
+    }
+    if (
+      tab.kind === 'table' &&
+      entry.originalIndex >= 0 &&
+      !(entry.status !== 'inserted' && gm.isHidden(entry.originalIndex, cell.col))
+    ) {
       out.push(
         { kind: 'separator' },
         {
@@ -1991,6 +2053,7 @@ export function ResultGrid() {
                         }}
                         onTogglePin={() => toggleStickyColumn(col.name)}
                         onHide={() => void toggleColumnHidden(col.name)}
+                        masked={gm.masked.get(origIdx) ?? null}
                         onAutoFit={() => autoFitColumn(origIdx)}
                         onFreezeUpTo={() => freezeUpTo(col.name)}
                         onUnfreezeAll={stickySet.size > 0 ? clearStickyColumns : undefined}
@@ -2103,6 +2166,8 @@ export function ResultGrid() {
                 </td>
                 {visibleColumns.map(({ col, originalIndex: origIdx }, pos) => {
                   const text = cellText(entry, origIdx);
+                  const hidden = !inserted && gm.isHidden(entry.originalIndex, origIdx);
+                  const shown = hidden ? shownText(entry, origIdx) : text;
                   const cellSelected = rowSelected && anchor?.col === origIdx;
                   const cellInRange = inRange(visibleRow, origIdx);
                   const isEditing = editingCell?.row === visibleRow && editingCell?.col === origIdx;
@@ -2113,7 +2178,9 @@ export function ResultGrid() {
                   const isActiveMatch =
                     isMatch && activeMatch?.row === visibleRow && activeMatch?.col === origIdx;
                   const fk = fkByColumn.get(colName);
-                  const hasFk = Boolean(fk && text !== null && text !== undefined && !inserted);
+                  const hasFk = Boolean(
+                    fk && text !== null && text !== undefined && !inserted && !hidden,
+                  );
                   const edited = entry.editedCols.has(origIdx);
                   const editId = entry.editIdByCol.get(origIdx);
                   const cellFailed = editId !== undefined && failedIds.has(editId);
@@ -2198,7 +2265,7 @@ export function ResultGrid() {
                         cellFailed && FAILED_OUTLINE,
                         // Make room for the FK arrow so long values don't
                         // slide underneath the button.
-                        hasFk && !isEditing && 'pr-7',
+                        (hasFk || hidden) && !isEditing && 'pr-7',
                       )}
                       style={stickyStyle(stickySet, stickyLefts, origIdx, colName, 3)}
                       title={
@@ -2208,9 +2275,32 @@ export function ResultGrid() {
                             ? `Commit failed: ${pendingEditsError?.message ?? ''}`
                             : edited
                               ? `Pending change — was ${cellTitle(cellToText(tab.queryResult?.rows[entry.originalIndex]?.[origIdx], col.dataTypeName))}`
-                              : cellTitle(text)
+                              : hidden
+                                ? 'Masked (presentation mode)'
+                                : cellTitle(text)
                       }
                     >
+                      {hidden &&
+                        !isEditing &&
+                        text !== null &&
+                        text !== undefined &&
+                        text !== '' && (
+                          <button
+                            type="button"
+                            tabIndex={-1}
+                            onMouseDown={(e) => e.stopPropagation()}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              gm.reveal(entry.originalIndex, origIdx);
+                            }}
+                            className="absolute right-1 top-1/2 grid h-[18px] w-[18px] -translate-y-1/2 cursor-pointer place-items-center rounded-[4px] bg-[var(--wb-control)] text-[var(--wb-text-2)] transition-all duration-150 hover:bg-[var(--wb-control-hover)] hover:text-[var(--wb-text)]"
+                            aria-label={`Reveal ${colName} for 10 seconds`}
+                            title="Reveal for 10 seconds"
+                            data-testid="mask-reveal"
+                          >
+                            <Eye className="h-3 w-3" />
+                          </button>
+                        )}
                       {hasFk && !isEditing && (
                         <button
                           type="button"
@@ -2267,7 +2357,7 @@ export function ResultGrid() {
                           }}
                         />
                       ) : (
-                        formatCell(text, inserted)
+                        formatCell(shown, inserted)
                       )}
                     </td>
                   );

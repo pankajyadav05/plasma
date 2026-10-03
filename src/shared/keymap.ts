@@ -32,6 +32,7 @@ export type KeyId =
   | 'prevPane'
   | 'selectTab'
   | 'toggleRightSidebar'
+  | 'presentationMode'
   | 'settings'
   | 'commitEdits'
   | 'saveFileAs'
@@ -204,6 +205,13 @@ export const KEYMAP: readonly KeyBinding[] = [
     id: 'toggleRightSidebar',
     chord: { key: 'b', mod: true, shift: true },
     label: 'Toggle right sidebar (Details)',
+    category: 'View',
+    scope: 'global',
+  },
+  {
+    id: 'presentationMode',
+    chord: { key: 'm', mod: true, shift: true },
+    label: 'Presentation mode (mask sensitive data)',
     category: 'View',
     scope: 'global',
   },
@@ -637,6 +645,7 @@ export const EDITOR_PASSTHROUGH: ReadonlySet<KeyId> = new Set<KeyId>([
   'toggleSidebar',
   'toggleEditor',
   'toggleRightSidebar',
+  'presentationMode',
   'newTab',
   'closeTab',
   'nextTab',

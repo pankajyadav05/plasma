@@ -234,3 +234,44 @@ describe('prod gate outside the editor (A7/F8)', () => {
     await expect(p).resolves.toBe(true);
   });
 });
+
+describe('ClickHouse mutation gate', () => {
+  beforeEach(() => {
+    queryRun.mockReset();
+    queryRun.mockResolvedValue(sampleResult);
+    resetStore();
+    useSession.setState((s) => ({
+      activeConfig: s.activeConfig ? { ...s.activeConfig, engine: 'clickhouse' } : s.activeConfig,
+      settings: {
+        ...s.settings,
+        connectionTags: {},
+        connectionSafeMode: {},
+        safeModeDefault: 'off',
+      },
+      tabs: s.tabs.map((t) => ({ ...t, sql: 'ALTER TABLE events UPDATE score = 1 WHERE id = 2' })),
+    }));
+  });
+
+  it('asks before an ALTER … UPDATE even when safe mode is off and nothing is tagged prod', async () => {
+    await useSession.getState().runQuery();
+    expect(useSession.getState().prodGate?.reason).toBe('safe-mode');
+    expect(useSession.getState().prodGate?.sql).toMatch(/^ALTER TABLE events UPDATE/);
+    expect(queryRun).not.toHaveBeenCalled();
+  });
+
+  it('runs reads without asking', async () => {
+    useSession.setState((s) => ({ tabs: s.tabs.map((t) => ({ ...t, sql: 'SELECT 1' })) }));
+    await useSession.getState().runQuery();
+    expect(useSession.getState().prodGate).toBeNull();
+    expect(queryRun).toHaveBeenCalled();
+  });
+
+  it('does not add the prompt to other engines', async () => {
+    useSession.setState((s) => ({
+      activeConfig: s.activeConfig ? { ...s.activeConfig, engine: 'postgres' } : s.activeConfig,
+      tabs: s.tabs.map((t) => ({ ...t, sql: 'ALTER TABLE events UPDATE score = 1' })),
+    }));
+    await useSession.getState().runQuery();
+    expect(useSession.getState().prodGate).toBeNull();
+  });
+});

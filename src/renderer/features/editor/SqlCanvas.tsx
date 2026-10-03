@@ -8,6 +8,7 @@ import { useActiveTab, useSession } from '@/stores/session';
 import { ensureVariablesReady } from '@/stores/session-variables';
 import { ROW_LIMIT_CHOICES, useWorkbench } from '@/stores/workbench';
 import { MAX_RESULT_ROWS } from '@shared/result-bounds';
+import { engineCaps } from '@shared/sql-dialect';
 import {
   ChevronDown,
   FolderOpen,
@@ -218,6 +219,7 @@ function EditorActionBar({
   const wordWrap = useWorkbench((s) => s.wordWrap);
   const fontSize = useSession((s) => s.settings.editorFontSize);
   const readOnlyConn = useSession((s) => s.activeConfig?.readOnly === true);
+  const engine = useSession((s) => s.activeConfig?.engine);
   const safeRunBusy = useSession(
     (s) => s.safeRun != null && ['running', 'review', 'finishing'].includes(s.safeRun.phase),
   );
@@ -392,7 +394,7 @@ function EditorActionBar({
         </>
       )}
 
-      {!isTable && !running && (
+      {!isTable && !running && engineCaps(engine).safeRun && (
         <Pill
           onClick={() => runCommand('safeRun')}
           disabled={!canRun || readOnlyConn || safeRunBusy}

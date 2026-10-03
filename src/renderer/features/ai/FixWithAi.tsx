@@ -1,4 +1,5 @@
 import { Pill } from '@/components/ui/workbench';
+import { markAiApplied } from '@/lib/ai-applied';
 import { aiSchemaAllowed, runAiTask, schemaForTask } from '@/lib/ai-task';
 import { cn } from '@/lib/cn';
 import { cleanIpcError } from '@/lib/errors';
@@ -61,6 +62,7 @@ export function FixWithAi({
       // The statement moved or was edited: keep the work, in a new tab.
       s.addTab();
       s.setSql(fixed);
+      markAiApplied(useSession.getState().activeTabId, fixed);
       setApplied('The statement changed in the editor, so the fix was opened in a new tab.');
       return;
     }
@@ -69,6 +71,7 @@ export function FixWithAi({
         t.id === tabId ? { ...t, sql: next, queryErrorRange: null, queryRunningRange: null } : t,
       ),
     }));
+    markAiApplied(tabId, fixed);
     setApplied('Applied to the editor. Review it, then run.');
   };
 

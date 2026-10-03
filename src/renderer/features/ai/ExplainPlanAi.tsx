@@ -1,4 +1,5 @@
 import { Pill } from '@/components/ui/workbench';
+import { markAiApplied } from '@/lib/ai-applied';
 import { aiSchemaAllowed, runAiTask, schemaForTask } from '@/lib/ai-task';
 import { cleanIpcError } from '@/lib/errors';
 import { useSession } from '@/stores/session';
@@ -79,6 +80,7 @@ function Explained({ result, onOpened }: { result: PlanExplanation; onOpened: ()
   const open = (sql: string) => {
     addTab();
     setSql(`${sql};`);
+    markAiApplied(useSession.getState().activeTabId, sql);
     onOpened();
   };
 

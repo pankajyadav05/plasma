@@ -10,6 +10,8 @@ import {
   type WorkerResponse,
 } from '@shared/protocol';
 import { dialectFor } from '@shared/sql-dialect';
+import { ClickhouseDriver } from './drivers/clickhouse';
+import { DuckdbDriver } from './drivers/duckdb';
 import { MysqlDriver } from './drivers/mysql';
 import { OpenSearchDriver } from './drivers/opensearch';
 import { PostgresDriver } from './drivers/postgres';
@@ -45,12 +47,16 @@ const redis = new RedisDriver();
 const os = new OpenSearchDriver();
 const sqlite = new SqliteDriver();
 const mysql = new MysqlDriver();
+const clickhouse = new ClickhouseDriver();
+const duckdb = new DuckdbDriver();
 
 /** The active driver for SQL-workbench requests (query, edits, txn, export…). */
 function sqlDriver(): SqlEngineDriver | null {
   if (activeEngine === 'postgres') return pg;
   if (activeEngine === 'sqlite') return sqlite;
   if (activeEngine === 'mysql') return mysql;
+  if (activeEngine === 'clickhouse') return clickhouse;
+  if (activeEngine === 'duckdb') return duckdb;
   return null;
 }
 
@@ -81,6 +87,11 @@ pg.setNoticeListener((notice: PgNotice) => {
   send({ kind: 'pgNotice', id: 'notice-event', notice });
 });
 
+// LISTEN/NOTIFY tail (dedicated listener connection) → main → renderer.
+pg.setNotificationListener((notification) => {
+  send({ kind: 'pgNotification', id: 'pg-notification-event', notification });
+});
+
 function unsupported(id: string, op: string): void {
   send({
     kind: 'error',
@@ -96,6 +107,8 @@ async function disconnectAll(): Promise<void> {
     os.disconnect(),
     sqlite.disconnect(),
     mysql.disconnect(),
+    clickhouse.disconnect(),
+    duckdb.disconnect(),
   ]);
   activeEngine = null;
   // Keep connectionGen as-is until the next connect bumps it — stale
@@ -149,12 +162,18 @@ process.parentPort.on('message', async (evt: Electron.MessageEvent) => {
             serverVersion = await sqlite.connect(req.config, req.statementTimeoutMs);
           } else if (engine === 'mysql') {
             serverVersion = await mysql.connect(req.config, req.statementTimeoutMs);
+          } else if (engine === 'clickhouse') {
+            serverVersion = await clickhouse.connect(req.config, req.statementTimeoutMs);
+          } else if (engine === 'duckdb') {
+            serverVersion = await duckdb.connect(req.config, req.statementTimeoutMs);
           }
           activeEngine = engine;
           connectionGen += 1;
           if (engine === 'postgres') pg.setConnectionGen(connectionGen);
           else if (engine === 'sqlite') sqlite.setConnectionGen(connectionGen);
           else if (engine === 'mysql') mysql.setConnectionGen(connectionGen);
+          else if (engine === 'clickhouse') clickhouse.setConnectionGen(connectionGen);
+          else if (engine === 'duckdb') duckdb.setConnectionGen(connectionGen);
           send({
             kind: 'connected',
             id: req.id,
@@ -178,6 +197,10 @@ process.parentPort.on('message', async (evt: Electron.MessageEvent) => {
             await sqlite.setStatementTimeout(req.timeoutMs);
           } else if (activeEngine === 'mysql') {
             await mysql.setStatementTimeout(req.timeoutMs);
+          } else if (activeEngine === 'clickhouse') {
+            await clickhouse.setStatementTimeout(req.timeoutMs);
+          } else if (activeEngine === 'duckdb') {
+            await duckdb.setStatementTimeout(req.timeoutMs);
           }
           send({ kind: 'statementTimeoutSet', id: req.id });
           break;
@@ -263,6 +286,24 @@ process.parentPort.on('message', async (evt: Electron.MessageEvent) => {
             });
             send({ kind: 'queryResult', id: req.id, result });
           }
+          break;
+        }
+        case 'pgListen': {
+          if (activeEngine !== 'postgres') return unsupported(req.id, 'pgListen');
+          await pg.listen(req.channel);
+          send({ kind: 'pgListenAck', id: req.id });
+          break;
+        }
+        case 'pgUnlisten': {
+          if (activeEngine !== 'postgres') return unsupported(req.id, 'pgUnlisten');
+          await pg.unlisten(req.channel);
+          send({ kind: 'pgListenAck', id: req.id });
+          break;
+        }
+        case 'pgNotify': {
+          if (activeEngine !== 'postgres') return unsupported(req.id, 'pgNotify');
+          await pg.notify(req.channel, req.payload);
+          send({ kind: 'pgListenAck', id: req.id });
           break;
         }
         case 'aiQuery': {

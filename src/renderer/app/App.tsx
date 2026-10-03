@@ -1,11 +1,17 @@
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { AppShell } from '@/features/app-shell/AppShell';
 import { HostKeyDialog } from '@/features/connection-manager/HostKeyDialog';
+import { DataFilesDialogs } from '@/features/data-files/DataFilesDialogs';
 import { type CommandId, runCommand } from '@/features/keymap/commands';
+import { WorkspaceDialogs } from '@/features/workspace/WorkspaceDialogs';
 import { routeAiTaskEvent } from '@/lib/ai-task';
+import { handleDroppedDataFiles } from '@/stores/data-files';
 import { useReconnect } from '@/stores/reconnect';
 import { useSession } from '@/stores/session';
-import { ConnectionRecovered } from '@shared/protocol';
+import { useWorkspace } from '@/stores/workspace';
+import type { LaunchAction } from '@shared/deep-link';
+import { ConnectionRecovered, type DataFilePickResult } from '@shared/protocol';
+import type { WorkspaceSnapshot } from '@shared/workspace';
 import { useEffect } from 'react';
 
 type EventChannel = Parameters<Window['plasmaEvents']['on']>[0];
@@ -35,6 +41,8 @@ const MENU_COMMANDS: ReadonlyArray<readonly [EventChannel, CommandId]> = [
   ['plasma:menu:dbSearch', 'dbSearch'],
   ['plasma:menu:erDiagram', 'erDiagram'],
   ['plasma:menu:splitPane', 'splitPane'],
+  ['plasma:menu:openWorkspace', 'openWorkspace'],
+  ['plasma:menu:openDataFile', 'openDataFile'],
 ];
 
 export function App() {
@@ -43,6 +51,12 @@ export function App() {
       const session = useSession.getState();
       await session.loadSettings();
       await session.loadSavedConnections();
+      // D1/D2: the open workspace, and links / launcher requests that arrived
+      // while the window was still loading (e.g. the app was started by one).
+      await useWorkspace.getState().load();
+      for (const action of await window.plasma.deepLink.takePending()) {
+        await useWorkspace.getState().handleLaunch(action);
+      }
 
       const { savedConnections, connectionState, settings } = useSession.getState();
       if (savedConnections.length === 0 && connectionState === 'idle') {
@@ -67,6 +81,15 @@ export function App() {
       ...MENU_COMMANDS.map(([channel, id]) =>
         window.plasmaEvents.on(channel, () => runCommand(id)),
       ),
+      window.plasmaEvents.on('plasma:workspace:changed', (...args: unknown[]) => {
+        useWorkspace.getState().setSnapshot((args[0] ?? null) as WorkspaceSnapshot | null);
+      }),
+      window.plasmaEvents.on('plasma:datafile:dropped', (...args: unknown[]) => {
+        handleDroppedDataFiles(args[0] as DataFilePickResult);
+      }),
+      window.plasmaEvents.on('plasma:launch:action', (...args: unknown[]) => {
+        void useWorkspace.getState().handleLaunch(args[0] as LaunchAction);
+      }),
       // AI streaming deltas. Cast on receipt — preload sends raw IPC
       // payloads typed as unknown[] through the generic on() facade.
       window.plasmaEvents.on('plasma:ai:event', (...args: unknown[]) => {
@@ -119,6 +142,8 @@ export function App() {
     <ErrorBoundary>
       <AppShell />
       <HostKeyDialog />
+      <WorkspaceDialogs />
+      <DataFilesDialogs />
     </ErrorBoundary>
   );
 }

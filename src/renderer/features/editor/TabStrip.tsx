@@ -49,6 +49,7 @@ const TAB_ICON: Record<TabKind, LucideIcon> = {
   'os-sql': SquareTerminal,
   'os-console': Terminal,
   'er-diagram': Network,
+  'pg-listen': Radio,
 };
 
 /** Drag payload for moving a tab between panes. */

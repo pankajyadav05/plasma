@@ -25,7 +25,7 @@ import { cleanIpcError } from '@/lib/errors';
 import { ipc } from '@/lib/ipc';
 import { buildDeleteSql, buildInsertSql, buildUpdateSql } from '@/lib/table-query';
 import type { ColumnMeta, SchemaInfo } from '@shared/protocol';
-import { POSTGRES_DIALECT, type SqlDialect, dialectFor } from '@shared/sql-dialect';
+import { POSTGRES_DIALECT, type SqlDialect, dialectFor, engineCaps } from '@shared/sql-dialect';
 import { effectiveSafeMode } from './safe-mode';
 import { evaluateGate } from './session-prod-gate';
 import type { PendingEdit, QueryTab } from './session-types';
@@ -415,6 +415,9 @@ function requireTableTarget(get: Get): TableTarget | null {
   const state = get();
   if (!state.editMode) throw new Error('edit mode is off');
   if (state.activeConfig?.readOnly) throw new Error('read-only connection — writes are disabled');
+  if (!engineCaps(state.activeConfig?.engine).rowEdits) {
+    throw new Error('rows cannot be edited for this engine — write SQL in the editor instead');
+  }
   if (effectiveSafeMode(state.settings, state.activeConfig?.id) === 'read-only') {
     throw new Error('safe mode is read-only for this connection — editing rows is disabled');
   }

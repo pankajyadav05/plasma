@@ -2,6 +2,7 @@ import { mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import Database from 'better-sqlite3';
 import { app } from 'electron';
+import { ensureAuditTable } from './audit-log';
 import { logger } from './logger';
 import { ensureSchemaSnapshotsTable, migrateSettingsSnapshots } from './schema-snapshots';
 import { ensureSecretsTable, migratePlaintextSettingsSecrets } from './vault';
@@ -129,6 +130,8 @@ function migrate(d: Database.Database): void {
   ensureExtraColumn(d);
   // R-18: snapshots get their own table; move any left in settings by older builds.
   ensureSchemaSnapshotsTable(d);
+  // D4: append-only audit log for Prod connections (additive, no version bump).
+  ensureAuditTable(d);
   const moved = migrateSettingsSnapshots(d);
   if (moved > 0) logger.info('[plasma] moved', moved, 'schema snapshots out of settings');
 }

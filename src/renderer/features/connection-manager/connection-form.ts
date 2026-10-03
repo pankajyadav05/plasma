@@ -68,9 +68,12 @@ export function validateConnectionForm(input: ConnectionFormInput): FormErrors {
 
   if (!config.name.trim()) errors.name = 'Name is required';
 
-  if (engine === 'sqlite') {
+  if (engine === 'sqlite' || engine === 'duckdb') {
     // A file, not a host: nothing else on the form applies.
-    if (!config.database.trim()) errors.database = 'Choose or create a database file';
+    if (!config.database.trim()) {
+      errors.database =
+        engine === 'duckdb' ? 'Choose a DuckDB file' : 'Choose or create a database file';
+    }
     return errors;
   }
 

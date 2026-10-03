@@ -1,3 +1,4 @@
+import { maskResultForClipboard } from '@/features/presentation/presentation';
 import { type CsvOptions, exportMime, formatResultString } from '@shared/export-format';
 import type { QueryResult } from '@shared/protocol';
 import { isSingleSqlStatement, looksLikeWriteSql } from '@shared/sql-statements';
@@ -105,14 +106,14 @@ export async function copyResultToClipboard(
   format: ExportFormat,
   opts?: ExportOptions,
 ): Promise<void> {
-  await navigator.clipboard.writeText(formatResult(result, format, opts));
+  await navigator.clipboard.writeText(formatResult(maskResultForClipboard(result), format, opts));
 }
 
 /** Clipboard-only table formats (no file download counterpart). */
 export type ClipboardFormat = 'markdown' | 'html' | 'tsv';
 
 export async function copyResultAs(result: QueryResult, format: ClipboardFormat): Promise<void> {
-  await navigator.clipboard.writeText(formatResultAs(result, format));
+  await navigator.clipboard.writeText(formatResultAs(maskResultForClipboard(result), format));
 }
 
 export function formatResultAs(result: QueryResult, format: ClipboardFormat): string {

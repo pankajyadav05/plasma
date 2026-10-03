@@ -272,6 +272,8 @@ export interface TabsSlice {
   activeTabId: string;
   /** Open (or focus) an ER diagram tab for a schema or a set of `schema.table` ids. */
   openErDiagram(scope: { schema?: string; tables?: string[] }): void;
+  /** Open (or focus) the Postgres LISTEN/NOTIFY tail. */
+  openPgListen(): void;
   // Tab management
   addTab(): void;
   closeTab(id: string): void;
@@ -330,6 +332,20 @@ export const createTabsSlice: SliceCreator<TabsSlice> = (set, get) => ({
       kind: 'er-diagram',
       erScope: { schema: scope.schema, tables: scope.tables },
       erScopeKey: key,
+    };
+    set({ tabs: [...state.tabs, tab], activeTabId: tab.id });
+  },
+
+  openPgListen() {
+    const state = get();
+    const existing = state.tabs.find((t) => t.kind === 'pg-listen');
+    if (existing) {
+      get().setActiveTab(existing.id);
+      return;
+    }
+    const tab: QueryTab = {
+      ...createEmptyTab(state.settings.defaultPageSize, 'Notifications'),
+      kind: 'pg-listen',
     };
     set({ tabs: [...state.tabs, tab], activeTabId: tab.id });
   },

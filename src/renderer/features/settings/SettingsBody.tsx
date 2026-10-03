@@ -22,6 +22,7 @@ import { LINT_RULES, LINT_RULE_IDS } from '@shared/pg-migration-lint';
 import type { Settings } from '@shared/protocol';
 import { Download, Loader2, RotateCw } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { CliToolField } from './CliToolField';
 
 type ThemeName = Settings['themeName'];
 type SafeMode = Settings['safeModeDefault'];
@@ -62,7 +63,11 @@ export const SETTINGS_SECTIONS: ReadonlyArray<{
     keywords: 'page size rows alternating zebra count estimate csv export delimiter null',
   },
   { id: 'appearance', label: 'Fonts & themes', keywords: 'theme palette dark light mode font' },
-  { id: 'security', label: 'Security', keywords: 'safe mode read-only confirm timeout' },
+  {
+    id: 'security',
+    label: 'Security',
+    keywords: 'safe mode read-only confirm timeout presentation mask pii audit retention',
+  },
   { id: 'ai', label: 'AI', keywords: 'openrouter api key model assistant' },
   { id: 'keymap', label: 'Keymap', keywords: 'shortcuts keyboard bindings' },
   { id: 'advanced', label: 'Advanced', keywords: 'transaction updates version about' },
@@ -663,6 +668,61 @@ function SecuritySection() {
           width="w-[160px]"
         />
       </Row>
+      <CheckRow
+        id="presentation-mode"
+        label="Presentation mode"
+        text="Mask sensitive data on screen"
+        hint="Hides emails, phones, card numbers, IPs and columns named like password, token or address in the grid, details, cell viewer, clipboard and AI context, and the host name in the title and capsule. Display only: nothing stored changes."
+        checked={settings.presentationMode === true}
+        onChange={(v) => void updateSettings({ presentationMode: v })}
+      />
+      <Row
+        label="Masking style"
+        htmlFor="mask-style"
+        hint="Passwords, tokens and secrets are always fully masked."
+      >
+        <Choice
+          id="mask-style"
+          value={settings.maskStyle ?? 'initial'}
+          onChange={(v) => void updateSettings({ maskStyle: v as Settings['maskStyle'] })}
+          options={[
+            { value: 'initial', label: 'First letter  (a•••@example.com)' },
+            { value: 'last4', label: 'Last four  (•••• 4242)' },
+            { value: 'full', label: 'Everything  (•••)' },
+          ]}
+          width="w-[260px]"
+        />
+      </Row>
+      <CheckRow
+        id="audit-all"
+        label="Audit log"
+        text="Record every connection, not only Prod"
+        hint="Statements run on Prod-tagged connections are always appended to a local, hash-chained audit log (History → Audit)."
+        checked={settings.auditAllConnections === true}
+        onChange={(v) => void updateSettings({ auditAllConnections: v })}
+      />
+      <Row
+        label="Audit retention"
+        htmlFor="audit-retention"
+        hint="Older audit entries are deleted. The remaining log still verifies."
+      >
+        <Choice
+          id="audit-retention"
+          value={String(settings.auditRetentionDays ?? 90)}
+          onChange={(v) => void updateSettings({ auditRetentionDays: Number(v) })}
+          options={[
+            ...([30, 90, 180, 365, 1095].includes(settings.auditRetentionDays ?? 90)
+              ? []
+              : [settings.auditRetentionDays ?? 90]),
+            30,
+            90,
+            180,
+            365,
+            1095,
+          ].map((n) => ({ value: String(n), label: `${n} days` }))}
+          width="w-[160px]"
+        />
+      </Row>
     </Rows>
   );
 }
@@ -807,6 +867,14 @@ function AdvancedSection() {
           hint="Folder with pg_dump, pg_restore and psql for backup and restore. Leave empty to use PATH."
         >
           <PgBinDirField id="pg-bin-dir" />
+        </Row>
+        <Row
+          label="Command line"
+          hint={
+            'Adds "plasma open <url | file.sqlite | folder>" and "plasma import <file> --into <url> --table <name>" to your terminal.'
+          }
+        >
+          <CliToolField />
         </Row>
       </Rows>
       <SubHeading>About</SubHeading>

@@ -58,6 +58,14 @@ export function appMenuTemplate(
       submenu: [
         ...keyItem('newTab', 'New Query Tab'),
         ...keyItem('openFile', 'Open SQL File…'),
+        {
+          label: 'Open Workspace Folder…',
+          click: () => sendToFocusedWindow('plasma:menu:openWorkspace'),
+        },
+        {
+          label: 'Open Data File…',
+          click: () => sendToFocusedWindow('plasma:menu:openDataFile'),
+        },
         { type: 'separator' },
         ...keyItem('commitEdits', 'Save'),
         ...keyItem('saveFileAs', 'Save SQL As…'),

@@ -18,6 +18,12 @@ allowBuilds:
   cpu-features: false
 ignoredOptionalDependencies:
   - cpu-features
+# DuckDB ships one optional package per platform (@duckdb/node-bindings-<os>-<cpu>).
+# A macOS runner packages both arm64 and x64, so every platform's binding is
+# installed; electron-builder.yml keeps only the target's in each artifact.
+supportedArchitectures:
+  os: [current, darwin, linux, win32]
+  cpu: [current, x64, arm64]
 overrides:
   # @electron/rebuild bundles a node-abi that predates Electron 44's ABI.
   node-abi@^4: ^4.35.0

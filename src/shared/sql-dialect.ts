@@ -17,13 +17,25 @@ import type { ConnectionEngine } from './protocol';
  * so SQL builders stay engine-neutral about parameters.
  */
 
-export type SqlEngine = 'postgres' | 'sqlite' | 'mysql';
+export type SqlEngine = 'postgres' | 'sqlite' | 'mysql' | 'clickhouse' | 'duckdb';
 
-export const SQL_ENGINES: readonly SqlEngine[] = ['postgres', 'sqlite', 'mysql'];
+export const SQL_ENGINES: readonly SqlEngine[] = [
+  'postgres',
+  'sqlite',
+  'mysql',
+  'clickhouse',
+  'duckdb',
+];
 
 /** True for engines driven through the SQL workbench. */
 export function isSqlEngine(engine: string | null | undefined): engine is SqlEngine {
-  return engine === 'postgres' || engine === 'sqlite' || engine === 'mysql';
+  return (
+    engine === 'postgres' ||
+    engine === 'sqlite' ||
+    engine === 'mysql' ||
+    engine === 'clickhouse' ||
+    engine === 'duckdb'
+  );
 }
 
 export interface EngineCapabilities {
@@ -63,6 +75,12 @@ export interface EngineCapabilities {
   sideband: boolean;
   /** SSH tunnel supported. */
   ssh: boolean;
+  /** Grid edits, row insert / delete (table tabs are read-only without it). */
+  rowEdits: boolean;
+  /** Per-column profile (type, null %, distinct estimate, min / max) in the structure view. */
+  columnProfile: boolean;
+  /** Writes run as asynchronous mutations (ClickHouse `ALTER … UPDATE`); the editor warns. */
+  asyncMutations: boolean;
 }
 
 const PG_CAPS: EngineCapabilities = {
@@ -84,6 +102,9 @@ const PG_CAPS: EngineCapabilities = {
   pgExtras: true,
   sideband: true,
   ssh: true,
+  rowEdits: true,
+  columnProfile: false,
+  asyncMutations: false,
 };
 
 const SQLITE_CAPS: EngineCapabilities = {
@@ -140,6 +161,54 @@ const NO_CAPS: EngineCapabilities = {
   pgExtras: false,
   sideband: false,
   ssh: true,
+  // Redis / OpenSearch gate their own writes; the flag is about SQL grid edits.
+  rowEdits: true,
+  columnProfile: false,
+  asyncMutations: false,
+};
+
+const CLICKHOUSE_CAPS: EngineCapabilities = {
+  ...PG_CAPS,
+  activity: false,
+  roles: false,
+  pgBackup: false,
+  fileBackup: false,
+  er: false,
+  health: false,
+  safeRun: false,
+  explain: true,
+  explainAnalyze: false,
+  schemaSwitcher: false,
+  structureEditor: false,
+  importFile: false,
+  pgExtras: false,
+  sideband: true,
+  ssh: true,
+  rowEdits: false,
+  columnProfile: false,
+  asyncMutations: true,
+};
+
+const DUCKDB_CAPS: EngineCapabilities = {
+  ...PG_CAPS,
+  activity: false,
+  roles: false,
+  pgBackup: false,
+  fileBackup: false,
+  er: false,
+  health: false,
+  safeRun: false,
+  explain: false,
+  explainAnalyze: false,
+  schemaSwitcher: false,
+  structureEditor: false,
+  importFile: false,
+  pgExtras: false,
+  sideband: false,
+  ssh: false,
+  rowEdits: false,
+  columnProfile: true,
+  asyncMutations: false,
 };
 
 /** Capabilities of `engine`; `null`/unknown means Postgres (the legacy default). */
@@ -153,6 +222,10 @@ export function engineCaps(
       return SQLITE_CAPS;
     case 'mysql':
       return MYSQL_CAPS;
+    case 'clickhouse':
+      return CLICKHOUSE_CAPS;
+    case 'duckdb':
+      return DUCKDB_CAPS;
     default:
       return NO_CAPS;
   }
@@ -165,6 +238,8 @@ export const ENGINE_NAMES: Record<ConnectionEngine, string> = {
   opensearch: 'OpenSearch',
   sqlite: 'SQLite',
   mysql: 'MySQL',
+  clickhouse: 'ClickHouse',
+  duckdb: 'DuckDB',
 };
 
 export const ENGINE_DEFAULT_PORTS: Record<ConnectionEngine, number> = {
@@ -173,6 +248,8 @@ export const ENGINE_DEFAULT_PORTS: Record<ConnectionEngine, number> = {
   opensearch: 9200,
   sqlite: 1,
   mysql: 3306,
+  clickhouse: 8123,
+  duckdb: 1,
 };
 
 export type LikeOp = 'LIKE' | 'ILIKE' | 'NOT LIKE' | 'NOT ILIKE';
@@ -326,14 +403,97 @@ const MYSQL: SqlDialect = {
     `EXPLAIN ${analyze ? 'ANALYZE ' : 'FORMAT=JSON '}${stripTrailingSemicolon(sql)}`,
 };
 
+function clickhouseText(text: string): string {
+  return `'${text.replace(/[\\'\0\n\r\t]/g, (ch) => {
+    switch (ch) {
+      case '\\':
+        return '\\\\';
+      case "'":
+        return "\\'";
+      case '\0':
+        return '\\0';
+      case '\n':
+        return '\\n';
+      case '\r':
+        return '\\r';
+      default:
+        return '\\t';
+    }
+  })}'`;
+}
+
+const CLICKHOUSE: SqlDialect = {
+  engine: 'clickhouse',
+  caps: CLICKHOUSE_CAPS,
+  quoteIdent: (name) => `\`${name.replace(/[\\`]/g, (c) => `\\${c}`)}\``,
+  qualify(schema, table) {
+    return schema ? `${this.quoteIdent(schema)}.${this.quoteIdent(table)}` : this.quoteIdent(table);
+  },
+  quoteText: clickhouseText,
+  literal(value) {
+    if (value === null || value === undefined) return 'NULL';
+    if (typeof value === 'number') return numberOrText(value, clickhouseText);
+    if (typeof value === 'boolean') return value ? 'true' : 'false';
+    if (typeof value === 'bigint') return value.toString();
+    if (value instanceof Date)
+      return clickhouseText(value.toISOString().replace('T', ' ').replace('Z', ''));
+    // Arrays are ClickHouse array literals, so `IN $1` works with a list.
+    if (Array.isArray(value)) return `[${value.map((v) => CLICKHOUSE.literal(v)).join(', ')}]`;
+    if (typeof value === 'object') return clickhouseText(JSON.stringify(value));
+    return clickhouseText(String(value));
+  },
+  textCast: (expr) => `toString(${expr})`,
+  // LIKE patterns use backslash escapes natively; ILIKE is case-insensitive.
+  likePredicate: (col, op, ph) => `${CLICKHOUSE.textCast(col)} ${op} ${ph}`,
+  insertDefaults: (target) => `INSERT INTO ${target} () VALUES ()`,
+  rowLocator: null,
+  estimatedCount: (schema, table) => ({
+    sql: 'SELECT total_rows AS estimate FROM system.tables WHERE database = $1 AND name = $2',
+    params: [schema, table],
+  }),
+  explain: (sql) => `EXPLAIN ${stripTrailingSemicolon(sql)}`,
+};
+
+const DUCKDB: SqlDialect = {
+  engine: 'duckdb',
+  caps: DUCKDB_CAPS,
+  quoteIdent: (name) => `"${name.replace(/"/g, '""')}"`,
+  // Attached catalogs show up as `catalog.schema` in the schema slot.
+  qualify(schema, table) {
+    const parts = schema ? [...schema.split('.'), table] : [table];
+    return parts.map((p) => DUCKDB.quoteIdent(p)).join('.');
+  },
+  quoteText: singleQuoted,
+  literal(value) {
+    if (value === null || value === undefined) return 'NULL';
+    if (typeof value === 'number') return numberOrText(value, singleQuoted);
+    if (typeof value === 'boolean') return value ? 'TRUE' : 'FALSE';
+    if (typeof value === 'bigint') return value.toString();
+    if (value instanceof Date) return singleQuoted(value.toISOString());
+    if (typeof value === 'object') return singleQuoted(JSON.stringify(value));
+    return singleQuoted(String(value));
+  },
+  textCast: (expr) => `CAST(${expr} AS VARCHAR)`,
+  // DuckDB's LIKE has no default escape character; the builders escape with a backslash.
+  likePredicate: (col, op, ph) => `${DUCKDB.textCast(col)} ${op} ${ph} ESCAPE '\\'`,
+  insertDefaults: (target) => `INSERT INTO ${target} DEFAULT VALUES`,
+  rowLocator: null,
+  estimatedCount: () => null,
+  explain: (sql, analyze) => `EXPLAIN ${analyze ? 'ANALYZE ' : ''}${stripTrailingSemicolon(sql)}`,
+};
+
 export const POSTGRES_DIALECT: SqlDialect = POSTGRES;
 export const SQLITE_DIALECT: SqlDialect = SQLITE;
 export const MYSQL_DIALECT: SqlDialect = MYSQL;
+export const CLICKHOUSE_DIALECT: SqlDialect = CLICKHOUSE;
+export const DUCKDB_DIALECT: SqlDialect = DUCKDB;
 
 /** Dialect of a SQL engine; non-SQL engines and `null` fall back to Postgres. */
 export function dialectFor(engine: ConnectionEngine | string | null | undefined): SqlDialect {
   if (engine === 'sqlite') return SQLITE;
   if (engine === 'mysql') return MYSQL;
+  if (engine === 'clickhouse') return CLICKHOUSE;
+  if (engine === 'duckdb') return DUCKDB;
   return POSTGRES;
 }
 
@@ -343,12 +503,13 @@ export function dialectFor(engine: ConnectionEngine | string | null | undefined)
  * Rewrite `$n` placeholders to positional `?` markers (SQLite, MySQL) and
  * return the parameter list in marker order, repeating a value used twice.
  * `$n` inside string literals, quoted identifiers and comments is untouched.
- * `backslashEscapes` (MySQL) makes `\\'` inside a string an escaped quote.
+ * `backslashEscapes` (MySQL, ClickHouse) makes `\\'` inside a string an escaped quote.
+ * `inline` renders each value as a SQL literal in place of a marker (ClickHouse).
  */
 export function translatePlaceholders(
   sql: string,
   params: readonly unknown[] = [],
-  opts: { backslashEscapes?: boolean } = {},
+  opts: { backslashEscapes?: boolean; inline?: (value: unknown) => string } = {},
 ): { sql: string; params: unknown[] } {
   let out = '';
   const ordered: unknown[] = [];
@@ -391,8 +552,13 @@ export function translatePlaceholders(
       if (n < 1 || n > params.length) {
         throw new Error(`placeholder $${n} has no bound value (${params.length} given)`);
       }
-      ordered.push(params[n - 1]);
-      out += '?';
+      if (opts.inline) {
+        // No bind markers (ClickHouse over HTTP): the value is rendered in place.
+        out += opts.inline(params[n - 1]);
+      } else {
+        ordered.push(params[n - 1]);
+        out += '?';
+      }
       i = j;
       continue;
     }

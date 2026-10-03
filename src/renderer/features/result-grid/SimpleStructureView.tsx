@@ -3,8 +3,9 @@ import { Pill } from '@/components/ui/workbench';
 import { cleanIpcError } from '@/lib/errors';
 import { ipc } from '@/lib/ipc';
 import { useActiveTab, useSession } from '@/stores/session';
-import { dialectFor } from '@shared/sql-dialect';
-import { useMemo, useState } from 'react';
+import { dialectFor, engineCaps } from '@shared/sql-dialect';
+import { Fragment, useMemo, useState } from 'react';
+import { type ColumnProfile, parseSummarize, summarizeSql } from './column-profile';
 
 /** Column types are typed by the user; keep them to what a type name can contain. */
 const TYPE_RE = /^[A-Za-z][A-Za-z0-9_ ]*(\(\s*\d+\s*(,\s*\d+\s*)?\))?( unsigned)?$/i;
@@ -63,16 +64,21 @@ export function buildRenameTableSql(
 }
 
 /**
- * Read-only structure view for SQLite / MySQL tables (columns, keys, foreign
- * keys, indexes, triggers) with the two safe ALTERs: add a column and rename.
- * Every change shows its SQL first and goes through the same prod / safe-mode
- * gate as a query typed in the editor.
+ * Read-only structure view for SQLite / MySQL / ClickHouse / DuckDB tables
+ * (columns, keys, foreign keys, indexes, triggers, engine facts such as the
+ * ClickHouse sorting key or the file behind a DuckDB view). Where rows can be
+ * edited it also offers the two safe ALTERs: add a column and rename; every
+ * change shows its SQL first and goes through the same prod / safe-mode gate
+ * as a query typed in the editor. DuckDB adds a column profile.
  */
 export function SimpleStructureView() {
   const tab = useActiveTab();
   const schemaInfo = useSession((s) => s.schema);
   const engine = useSession((s) => s.activeConfig?.engine);
-  const readOnly = useSession((s) => Boolean(s.activeConfig?.readOnly));
+  const readOnly = useSession(
+    (s) => Boolean(s.activeConfig?.readOnly) || !engineCaps(s.activeConfig?.engine).rowEdits,
+  );
+  const canProfile = useSession((s) => engineCaps(s.activeConfig?.engine).columnProfile);
   const refreshSchema = useSession((s) => s.refreshSchema);
   const confirm = useSession((s) => s.confirmUserSqlDetailed);
   const schema = tab?.kind === 'table' ? (tab.tableSchema ?? '') : '';
@@ -106,6 +112,11 @@ export function SimpleStructureView() {
   const [renaming, setRenaming] = useState<{ from: string | null; to: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [profile, setProfile] = useState<{
+    rows: ColumnProfile[];
+    ms: number;
+  } | null>(null);
+  const [profiling, setProfiling] = useState(false);
 
   const preview = useMemo(() => {
     try {
@@ -120,6 +131,20 @@ export function SimpleStructureView() {
     }
     return null;
   }, [engine, schema, table, draft, renaming]);
+
+  const runProfile = async () => {
+    setError(null);
+    setProfiling(true);
+    try {
+      const started = Date.now();
+      const res = await ipc.query.run(summarizeSql(schema, table), undefined, { internal: true });
+      setProfile({ rows: parseSummarize(res), ms: Date.now() - started });
+    } catch (err) {
+      setError(cleanIpcError(err instanceof Error ? err.message : String(err)));
+    } finally {
+      setProfiling(false);
+    }
+  };
 
   const apply = async (build: () => string) => {
     setError(null);
@@ -159,6 +184,20 @@ export function SimpleStructureView() {
         )}
       </div>
 
+      {meta?.details && meta.details.length > 0 && (
+        <dl
+          className="mb-4 grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 rounded-[8px] bg-[var(--wb-sidebar)] p-3 text-[12px]"
+          data-testid="structure-details"
+        >
+          {meta.details.map((d) => (
+            <Fragment key={d.label}>
+              <dt className="font-semibold text-[var(--wb-text-2)]">{d.label}</dt>
+              <dd className="min-w-0 break-words font-mono text-[var(--wb-text)]">{d.value}</dd>
+            </Fragment>
+          ))}
+        </dl>
+      )}
+
       <table className="mb-4 w-full border-collapse">
         <thead>
           <tr className="border-b border-[var(--wb-separator)]">
@@ -193,6 +232,58 @@ export function SimpleStructureView() {
           ))}
         </tbody>
       </table>
+
+      {canProfile && (
+        <div className="mb-4" data-testid="column-profile">
+          <div className="mb-1 flex items-center gap-2">
+            <span className="text-[11px] font-semibold text-[var(--wb-text-2)]">
+              Column profile
+            </span>
+            <Pill disabled={profiling} onClick={() => void runProfile()}>
+              {profiling ? 'Profiling…' : profile ? 'Refresh' : 'Profile columns'}
+            </Pill>
+            {profile && (
+              <span className="text-[11px] text-[var(--wb-text-3)]">
+                {profile.ms} ms · distinct counts are estimates
+              </span>
+            )}
+          </div>
+          {profile && (
+            <table className="w-full border-collapse">
+              <thead>
+                <tr className="border-b border-[var(--wb-separator)]">
+                  <th className={head}>Column</th>
+                  <th className={head}>Type</th>
+                  <th className={`${head} text-right`}>Null %</th>
+                  <th className={`${head} text-right`}>Distinct ≈</th>
+                  <th className={head}>Min</th>
+                  <th className={head}>Max</th>
+                </tr>
+              </thead>
+              <tbody>
+                {profile.rows.map((p) => (
+                  <tr key={p.column} className="border-b border-[var(--wb-separator)]/50">
+                    <td className={`${cell} font-mono`}>{p.column}</td>
+                    <td className={`${cell} font-mono text-[var(--wb-text-2)]`}>{p.type}</td>
+                    <td className={`${cell} text-right tabular-nums`}>
+                      {p.nullPercent === null ? '' : `${p.nullPercent}%`}
+                    </td>
+                    <td className={`${cell} text-right tabular-nums`}>
+                      {p.distinct === null ? '' : p.distinct.toLocaleString()}
+                    </td>
+                    <td className={`${cell} max-w-[200px] truncate font-mono`} title={p.min ?? ''}>
+                      {p.min ?? ''}
+                    </td>
+                    <td className={`${cell} max-w-[200px] truncate font-mono`} title={p.max ?? ''}>
+                      {p.max ?? ''}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
 
       {fks.length > 0 && (
         <Section title="Foreign keys">

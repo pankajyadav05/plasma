@@ -34,6 +34,7 @@ export type WorkerBroadcast = Extract<
   | { kind: 'redisPubsub' }
   | { kind: 'queryChunk' }
   | { kind: 'pgNotice' }
+  | { kind: 'pgNotification' }
   | { kind: 'importProgress' }
   | { kind: 'exportProgress' }
 >;
@@ -253,6 +254,7 @@ export class WorkerSupervisor {
         data.kind === 'redisPubsub' ||
         data.kind === 'queryChunk' ||
         data.kind === 'pgNotice' ||
+        data.kind === 'pgNotification' ||
         data.kind === 'importProgress' ||
         data.kind === 'exportProgress'
       ) {

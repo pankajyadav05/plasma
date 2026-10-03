@@ -32,6 +32,7 @@ export function sshUnsupportedReason(config: {
 }): string | null {
   if (config.engine === 'opensearch') return 'SSH tunnels are not available for OpenSearch.';
   if (config.engine === 'sqlite') return 'SQLite opens a local file — there is nothing to tunnel.';
+  if (config.engine === 'duckdb') return 'DuckDB opens local files — there is nothing to tunnel.';
   if (config.engine !== 'redis') return null;
   switch (redisEndpointKind(config.host)) {
     case 'unix':

@@ -39,6 +39,7 @@ export type QueryRunState = 'idle' | 'running';
  *  - os-sql        → OpenSearch SQL plugin canvas
  *  - os-console    → OpenSearch Dev Tools console (raw REST, O14)
  *  - er-diagram    → entity-relationship diagram of a schema / table selection
+ *  - pg-listen     → Postgres LISTEN/NOTIFY tail
  */
 export type TabKind =
   | 'sql'
@@ -53,7 +54,8 @@ export type TabKind =
   | 'os-index'
   | 'os-sql'
   | 'os-console'
-  | 'er-diagram';
+  | 'er-diagram'
+  | 'pg-listen';
 export type TableViewMode = 'data' | 'structure' | 'definition';
 export type EntityKind =
   | 'table'

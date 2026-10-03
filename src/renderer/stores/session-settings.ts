@@ -108,6 +108,11 @@ export const DEFAULT_SETTINGS: Settings = {
   savedQueries: {},
   snippets: [],
   variableHistory: {},
+  presentationMode: false,
+  maskStyle: 'initial',
+  maskRules: {},
+  auditAllConnections: false,
+  auditRetentionDays: 90,
   windowBounds: null,
 };
 

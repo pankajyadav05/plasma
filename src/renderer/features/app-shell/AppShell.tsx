@@ -48,6 +48,7 @@ const DbSearchDialog = lazyNamed(
   () => import('@/features/db-search/DbSearchDialog'),
   'DbSearchDialog',
 );
+const PgListenView = lazyNamed(() => import('@/features/live-tail/PgListenView'), 'PgListenView');
 const ErDiagramView = lazyNamed(
   () => import('@/features/er-diagram/ErDiagramView'),
   'ErDiagramView',
@@ -403,17 +404,23 @@ function PaneCanvas({ pane }: { pane?: PaneId } = {}) {
   // take the rest. ⌘J hides the editor while there are results to show.
   const isSqlTab = kind === 'sql';
   const isDiagram = kind === 'er-diagram';
+  const isListen = kind === 'pg-listen';
   // Safe Run: the review replaces the result grid while one exists for this tab.
   const safeRunHere = useSession((s) => s.safeRun != null && s.safeRun.tabId === tabId) && isSqlTab;
   const hasResults = hasResultOrError || running || safeRunHere;
   const showEditor = isSqlTab && (!editorHidden || !hasResults);
-  const showGrid = !isDiagram && (!isSqlTab || hasResults);
+  const showGrid = !isDiagram && !isListen && (!isSqlTab || hasResults);
   return (
     <main className="flex min-h-0 min-w-0 flex-1 flex-col bg-[var(--wb-content)]">
       <TabStrip pane={pane} />
       {isDiagram && (
         <Suspense fallback={null}>
           <ErDiagramView />
+        </Suspense>
+      )}
+      {isListen && tabId && (
+        <Suspense fallback={null}>
+          <PgListenView tabId={tabId} />
         </Suspense>
       )}
       {showEditor && <SqlCanvas expanded={!hasResults} />}

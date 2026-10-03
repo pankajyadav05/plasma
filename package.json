@@ -47,6 +47,8 @@
     "gen:update-key": "node scripts/gen-update-key.mjs"
   },
   "dependencies": {
+    "@clickhouse/client": "^1.23.1",
+    "@duckdb/node-api": "1.5.6-r.1",
     "@opensearch-project/opensearch": "^3.6.0",
     "better-sqlite3": "^13.0.3",
     "electron-log": "^5.2.3",
@@ -117,6 +119,19 @@
     "ignoredOptionalDependencies": [
       "cpu-features"
     ],
+    "supportedArchitectures": {
+      "os": [
+        "current",
+        "darwin",
+        "linux",
+        "win32"
+      ],
+      "cpu": [
+        "current",
+        "x64",
+        "arm64"
+      ]
+    },
     "overrides": {
       "node-abi@^4": "^4.35.0",
       "js-yaml@^4": "^4.3.2"

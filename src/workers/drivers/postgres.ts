@@ -38,6 +38,7 @@ import pg from 'pg';
 import Cursor from 'pg-cursor';
 import { runBootstrapSql } from './pg-bootstrap';
 import { type ImportHooks, applyDdl, runImport } from './pg-import';
+import { PgListener } from './pg-listener';
 import { enforceReadOnlySession } from './pg-readonly';
 import { type CappedRead, finishSafeRun, rollbackSafeRun, startSafeRun } from './pg-safe-run';
 import {
@@ -227,6 +228,54 @@ export class PostgresDriver {
     this.probeTimeoutMs = liveness?.probeTimeoutMs ?? LIVENESS_PROBE_TIMEOUT_MS;
     this.closeTimeoutMs = liveness?.closeTimeoutMs ?? CURSOR_CLOSE_TIMEOUT_MS;
     this.cancelTimeoutMs = liveness?.cancelTimeoutMs ?? CANCEL_TIMEOUT_MS;
+  }
+
+  /** Config of the live session, kept so the LISTEN/NOTIFY tail can dial its own connection. */
+  private listenConfig: ConnectionConfig | null = null;
+  /** LISTEN/NOTIFY tail on a dedicated connection — never the primary. */
+  private readonly listener = new PgListener(async () => {
+    const config = this.listenConfig;
+    if (!config) throw new Error('not connected');
+    let ssl: PlasmaTlsOptions | false = buildNodeTlsOptions(config) ?? false;
+    const mode = resolveTls(config)?.mode;
+    const dial = async () => {
+      const client = new Client(this.clientOpts(config, 'plasma-listen', ssl));
+      client.on('error', () => {});
+      try {
+        await client.connect();
+      } catch (err) {
+        await client.end().catch(() => undefined);
+        throw err;
+      }
+      return client;
+    };
+    try {
+      return await dial();
+    } catch (err) {
+      if (mode !== 'prefer' || !/does not support ssl/i.test(errorMessage(err))) throw err;
+      ssl = false;
+      return await dial();
+    }
+  });
+
+  setNotificationListener(fn: Parameters<PgListener['setListener']>[0]): void {
+    this.listener.setListener(fn);
+  }
+
+  listen(channel: string): Promise<void> {
+    if (!this.primary) throw new Error('not connected');
+    return this.listener.listen(channel);
+  }
+
+  unlisten(channel: string): Promise<void> {
+    return this.listener.unlisten(channel);
+  }
+
+  /** `pg_notify` on the aux session, so an open transaction on the primary never holds it back. */
+  async notify(channel: string, payload: string): Promise<void> {
+    await this.withAux(async (client) => {
+      await client.query('SELECT pg_notify($1, $2)', [channel, payload]);
+    });
   }
 
   /** Subscribe to NOTICE / RAISE NOTICE events from the primary client. */
@@ -473,6 +522,7 @@ export class PostgresDriver {
     // Hang up any previous clients first
     await this.disconnect();
     this.readOnlySession = config.readOnly === true;
+    this.listenConfig = config;
 
     if (statementTimeoutMs !== undefined) {
       this.statementTimeoutMs = Math.max(0, Math.floor(statementTimeoutMs));
@@ -586,7 +636,7 @@ export class PostgresDriver {
     this.primary = null;
     this.control = null;
     this.aux = null;
-    await Promise.allSettled([p?.end(), c?.end(), a?.end()]);
+    await Promise.allSettled([p?.end(), c?.end(), a?.end(), this.listener.close()]);
   }
 
   /**

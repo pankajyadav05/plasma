@@ -1,4 +1,11 @@
 import { z } from 'zod';
+import type {
+  AuditEntry,
+  AuditExportRequest,
+  AuditExportResult,
+  AuditListOpts,
+  AuditVerifyResult,
+} from './audit';
 import { CONNECTION_LOST } from './connection-loss';
 import type {
   AdminStartResult,
@@ -7,6 +14,7 @@ import type {
   RestoreRequest,
   ToolInfo,
 } from './pg-backup';
+import { PgNotification } from './pg-listen';
 
 /**
  * IPC protocol — the single source of truth for the shape of messages
@@ -51,8 +59,21 @@ export type AppMeta = z.infer<typeof AppMeta>;
  *                  the file read-only
  *   - mysql      : like postgres (host, port, database, user, password,
  *                  ssl/tls); also serves MariaDB
+ *   - clickhouse : HTTP(S) interface: host, port (8123 / 8443), database,
+ *                  user, password, ssl/tls
+ *   - duckdb     : database = absolute path of a .duckdb file, or ':memory:'
+ *                  for a session over data files (`duckdb.files`); host/port
+ *                  are placeholders ('local', 1)
  */
-export const ConnectionEngine = z.enum(['postgres', 'redis', 'opensearch', 'sqlite', 'mysql']);
+export const ConnectionEngine = z.enum([
+  'postgres',
+  'redis',
+  'opensearch',
+  'sqlite',
+  'mysql',
+  'clickhouse',
+  'duckdb',
+]);
 export type ConnectionEngine = z.infer<typeof ConnectionEngine>;
 /**
  * libpq-style TLS modes (C4/C9). `disable` is the same as `ssl: false`.
@@ -109,6 +130,40 @@ export const OpenSearchOptions = z.object({
 });
 export type OpenSearchOptions = z.infer<typeof OpenSearchOptions>;
 
+/**
+ * DuckDB session options. `files` are data files (CSV / Parquet / JSON) that
+ * become views; main only lets through paths the user picked or dropped.
+ * `attachConnectionIds` name saved Postgres connections to attach read-only;
+ * main resolves them into `attach` (the renderer's own `attach` is discarded).
+ */
+export const DuckdbAttach = z.object({
+  /** Catalog name the attachment gets in DuckDB. */
+  alias: z.string().min(1),
+  host: z.string().min(1),
+  port: z.number().int().positive().max(65535),
+  database: z.string(),
+  user: z.string(),
+  /** Only ever filled in by main; it goes into a DuckDB secret, never into SQL text. */
+  password: z.string(),
+  /** libpq sslmode. */
+  sslmode: z.enum(['disable', 'prefer', 'require', 'verify-ca', 'verify-full']).optional(),
+  /** CA file for verify-ca / verify-full. */
+  sslrootcert: z.string().optional(),
+});
+export type DuckdbAttach = z.infer<typeof DuckdbAttach>;
+export const DuckdbOptions = z.object({
+  files: z.array(z.string().min(1)).max(64).default([]),
+  attachConnectionIds: z.array(z.string().min(1)).max(8).optional(),
+  attach: z.array(DuckdbAttach).max(8).optional(),
+});
+export type DuckdbOptions = z.infer<typeof DuckdbOptions>;
+
+/** Data files main accepted (validated + allowlisted) and why it refused the rest. */
+export interface DataFilePickResult {
+  files: string[];
+  problems: string[];
+}
+
 export const ConnectionConfig = z.object({
   id: z.string(),
   name: z.string().min(1),
@@ -130,6 +185,8 @@ export const ConnectionConfig = z.object({
   bootstrapSql: z.string().optional(),
   /** OpenSearch auth + endpoints (O12). */
   opensearch: OpenSearchOptions.optional(),
+  /** DuckDB data-file session options. */
+  duckdb: DuckdbOptions.optional(),
 });
 export type ConnectionConfig = Omit<z.infer<typeof ConnectionConfig>, 'readOnly'> & {
   readOnly?: boolean;
@@ -897,6 +954,11 @@ export const SchemaInfo = z.object({
        * through it.
        */
       implicitRowid: z.string().optional(),
+      /**
+       * Engine-specific facts shown in the structure view (ClickHouse engine,
+       * sorting / partition key, TTL; DuckDB source file and format).
+       */
+      details: z.array(z.object({ label: z.string(), value: z.string() })).optional(),
     }),
   ),
   columns: z.array(
@@ -1271,6 +1333,15 @@ export const WorkerRequest = z.discriminatedUnion('kind', [
     sql: z.string(),
     params: z.array(z.unknown()).optional(),
   }),
+  // LISTEN/NOTIFY tail: a dedicated listener connection, never the primary.
+  z.object({ kind: z.literal('pgListen'), id: z.string(), channel: z.string().min(1) }),
+  z.object({ kind: z.literal('pgUnlisten'), id: z.string(), channel: z.string().min(1) }),
+  z.object({
+    kind: z.literal('pgNotify'),
+    id: z.string(),
+    channel: z.string().min(1),
+    payload: z.string().default(''),
+  }),
   // Apply PG statement_timeout on primary + aux (U20). 0 disables.
   z.object({
     kind: z.literal('setStatementTimeout'),
@@ -1586,6 +1657,9 @@ export const WorkerResponse = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('osFieldStats'), id: z.string(), stats: z.array(OsFieldStats) }),
   z.object({ kind: z.literal('osResponse'), id: z.string(), response: OsRawResponse }),
   z.object({ kind: z.literal('pgNotice'), id: z.string(), notice: PgNotice }),
+  /** LISTEN/NOTIFY broadcast — not request-correlated (sentinel id). */
+  z.object({ kind: z.literal('pgNotification'), id: z.string(), notification: PgNotification }),
+  z.object({ kind: z.literal('pgListenAck'), id: z.string() }),
   z.object({
     kind: z.literal('exportDone'),
     id: z.string(),
@@ -1935,6 +2009,24 @@ export const SettingsShape = z.object({
   snippets: z.array(UserSnippetShape).default([]),
   /** Per-variable recent values for the Variables bar, newest first. */
   variableHistory: z.record(z.string(), z.array(z.string())).default({}),
+  /** Presentation mode: mask sensitive columns on screen, in the clipboard and in AI context. */
+  presentationMode: z.boolean().catch(false).default(false),
+  maskStyle: z.enum(['initial', 'last4', 'full']).catch('initial').default('initial'),
+  /** Per-connection column overrides for the masking detectors (lower-case names). */
+  maskRules: z
+    .record(
+      z.string(),
+      z.object({
+        sensitive: z.array(z.string().max(200)).max(500).default([]),
+        plain: z.array(z.string().max(200)).max(500).default([]),
+      }),
+    )
+    .catch({})
+    .default({}),
+  /** Audit every statement on every connection, not only Prod-tagged ones. */
+  auditAllConnections: z.boolean().catch(false).default(false),
+  /** Days the local audit log keeps rows. */
+  auditRetentionDays: z.number().int().min(1).max(3650).catch(90).default(90),
   windowBounds: z
     .object({
       x: z.number().optional(),
@@ -2073,6 +2165,12 @@ export const IpcChannel = {
   ConnectionPickSqlite: 'plasma:conn:pickSqlite',
   /** Copy the open SQLite database to a file through the backup API. */
   SqliteBackupCopy: 'plasma:sqlite:backupCopy',
+  /** Native picker for DuckDB data files / a .duckdb database; main validates + allowlists. */
+  DataFilePick: 'plasma:datafile:pick',
+  /** Preload → main: paths of files dropped on the window (main validates and allowlists). */
+  DataFileDrop: 'plasma:datafile:drop',
+  /** Push: validated data-file paths from a window drop. Payload `DataFilePickResult`. */
+  DataFilesDroppedEvent: 'plasma:datafile:dropped',
   /**
    * Push: an SSH bastion presented a host key that is unknown or changed.
    * Payload is `SshHostKeyPrompt`; answer with `SshHostKeyRespond` (C8).
@@ -2158,6 +2256,12 @@ export const IpcChannel = {
   HistoryLatest: 'plasma:history:latest',
   HistoryClear: 'plasma:history:clear',
   HistoryDelete: 'plasma:history:delete',
+  AuditList: 'plasma:audit:list',
+  AuditVerify: 'plasma:audit:verify',
+  AuditExport: 'plasma:audit:export',
+  PgListen: 'plasma:pg:listen',
+  PgUnlisten: 'plasma:pg:unlisten',
+  PgNotify: 'plasma:pg:notify',
   /** Schema-diff snapshots live in their own table, not in settings (R-18). */
   SchemaSnapshotList: 'plasma:schemaSnapshot:list',
   SchemaSnapshotGet: 'plasma:schemaSnapshot:get',
@@ -2258,6 +2362,12 @@ export interface PlasmaAPI {
     pickSqliteFile(mode: 'open' | 'create'): Promise<string | null>;
     /** "Export database file copy": SQLite backup API to a chosen file. Null when cancelled. */
     sqliteBackupCopy(): Promise<{ filePath: string; bytes: number } | null>;
+    /**
+     * Native picker for DuckDB: `files` = CSV / TSV / Parquet / JSON data files
+     * (a .duckdb file is accepted too), `database` = one .duckdb file. Main
+     * validates and allowlists what comes back. Null when cancelled.
+     */
+    pickDataFiles(target: 'files' | 'database'): Promise<DataFilePickResult | null>;
     /** Answer a `plasma:ssh:hostKeyPrompt` push (C8). */
     respondHostKey(requestId: string, accept: boolean): Promise<void>;
   };
@@ -2287,7 +2397,7 @@ export interface PlasmaAPI {
     run(
       sql: string,
       params?: unknown[],
-      opts?: { internal?: boolean; maxRows?: number },
+      opts?: { internal?: boolean; maxRows?: number; auditSource?: 'ai' },
     ): Promise<QueryResult>;
     /**
      * Commit grid edits in one transaction (SAVEPOINT inside an open user
@@ -2410,6 +2520,20 @@ export interface PlasmaAPI {
     /** Pretty-print a SQL string. Falls back to the input on parse errors. */
     format(sql: string): Promise<string>;
   };
+  audit: {
+    list(opts?: AuditListOpts): Promise<AuditEntry[]>;
+    /** Replay the hash chain and report the first row that does not match. */
+    verify(): Promise<AuditVerifyResult>;
+    /** Save the filtered log to a file chosen in a native dialog. */
+    export(req: AuditExportRequest): Promise<AuditExportResult>;
+  };
+  pgListen: {
+    /** Subscribe on the dedicated listener connection; messages arrive on `plasma:pg:notification`. */
+    start(channel: string): Promise<void>;
+    stop(channel: string): Promise<void>;
+    /** SELECT pg_notify(channel, payload) — a write, so safe mode applies. */
+    notify(channel: string, payload: string): Promise<void>;
+  };
   history: {
     list(opts?: HistoryListOpts): Promise<HistoryEntry[]>;
     /** Most recent entry for ⌘↑ recall (empty editor). */
@@ -2493,4 +2617,10 @@ export interface PlasmaAPI {
     /** Read the most recent status snapshot (no network). */
     status(): Promise<UpdateStatus>;
   };
+  /** D1: team workspaces (`.plasma/` folders). */
+  workspace: import('./workspace').WorkspaceApi;
+  /** D2: plasma:// links and launcher requests that arrived from outside. */
+  deepLink: import('./deep-link').DeepLinkApi;
+  /** CLI companion: the `plasma` launcher. */
+  cli: import('./deep-link').CliApi;
 }

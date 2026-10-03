@@ -41,6 +41,7 @@ const WRITE_KINDS = new Set<string>([
   'osDeleteIndex',
   'adminRestore',
   'safeRunStart', // holds an open write transaction
+  'pgNotify', // pg_notify wakes every listener
 ]);
 
 /** Reads (or session plumbing) whose names would trip the fallback pattern. */
@@ -58,6 +59,8 @@ const READ_KINDS = new Set<string>([
   'osCancel',
   'redisSubscribe',
   'redisUnsubscribe',
+  'pgListen', // LISTEN on its own connection; changes nothing
+  'pgUnlisten',
   'importCancel', // stops a job; writes nothing
   'exportCancel', // stops a file export
   'cancelAux', // cancels a read on the aux connection

@@ -7,6 +7,7 @@ import type { ConnectionConfig, ConnectionEngine, TlsMode } from './protocol';
  *   redis://user:pass@host:6379/0      rediss:// = TLS
  *   https://user:pass@search.example.com:9200   (OpenSearch; http:// = no TLS)
  *   mysql://user:pass@host:3306/db?sslmode=verify-full   (MySQL / MariaDB)
+ *   clickhouse://user:pass@host:8123/db?sslmode=verify-full   (ClickHouse over HTTP(S))
  */
 
 const DEFAULT_PORT: Record<ConnectionEngine, number> = {
@@ -15,6 +16,8 @@ const DEFAULT_PORT: Record<ConnectionEngine, number> = {
   opensearch: 9200,
   sqlite: 1,
   mysql: 3306,
+  clickhouse: 8123,
+  duckdb: 1,
 };
 
 const SSL_MODES: readonly TlsMode[] = ['disable', 'prefer', 'require', 'verify-ca', 'verify-full'];
@@ -32,6 +35,8 @@ function engineForScheme(scheme: string): { engine: ConnectionEngine; tls: boole
     case 'mysql':
     case 'mariadb':
       return { engine: 'mysql', tls: false };
+    case 'clickhouse':
+      return { engine: 'clickhouse', tls: false };
     case 'redis':
       return { engine: 'redis', tls: false };
     case 'rediss':
@@ -70,8 +75,9 @@ export function parseConnectionUrl(input: string): ParsedConnectionUrl {
 
   let database = '';
   if (kind.engine === 'postgres') database = path || params.get('dbname') || '';
-  else if (kind.engine === 'mysql') database = path || params.get('database') || '';
-  else if (kind.engine === 'redis') database = path || params.get('db') || '0';
+  else if (kind.engine === 'mysql' || kind.engine === 'clickhouse') {
+    database = path || params.get('database') || '';
+  } else if (kind.engine === 'redis') database = path || params.get('db') || '0';
 
   let ssl = kind.tls;
   let tls: ParsedConnectionUrl['tls'];
@@ -117,13 +123,15 @@ export function formatConnectionUrl(
       ? 'postgres'
       : engine === 'mysql'
         ? 'mysql'
-        : engine === 'redis'
-          ? config.ssl
-            ? 'rediss'
-            : 'redis'
-          : config.ssl
-            ? 'https'
-            : 'http';
+        : engine === 'clickhouse'
+          ? 'clickhouse'
+          : engine === 'redis'
+            ? config.ssl
+              ? 'rediss'
+              : 'redis'
+            : config.ssl
+              ? 'https'
+              : 'http';
   const user = config.user ? encodeURIComponent(config.user) : '';
   const pass =
     opts.includePassword && config.password ? `:${encodeURIComponent(config.password)}` : '';
@@ -132,7 +140,7 @@ export function formatConnectionUrl(
   const path =
     engine === 'opensearch' || !config.database ? '' : `/${encodeURIComponent(config.database)}`;
   let query = '';
-  if (engine === 'postgres' || engine === 'mysql') {
+  if (engine === 'postgres' || engine === 'mysql' || engine === 'clickhouse') {
     const mode = !config.ssl
       ? 'disable'
       : config.tls?.mode === 'insecure'

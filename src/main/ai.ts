@@ -6,6 +6,7 @@ import type {
   ConnectionEngine,
   SchemaInfo,
 } from '@shared/protocol';
+import { isSqlEngine } from '@shared/sql-dialect';
 import type { BrowserWindow } from 'electron';
 import { buildOpenRouterBody } from './ai-policy';
 import { logger } from './logger';
@@ -188,7 +189,7 @@ const TOOLS_OPENSEARCH = [
 ] as const;
 
 function toolsForEngine(engine: ConnectionEngine): readonly unknown[] {
-  if (engine === 'postgres' || engine === 'sqlite' || engine === 'mysql') return TOOLS_POSTGRES;
+  if (isSqlEngine(engine)) return TOOLS_POSTGRES;
   if (engine === 'redis') return TOOLS_REDIS;
   return TOOLS_OPENSEARCH;
 }
@@ -466,6 +467,8 @@ function buildMessages(
     postgres: 'Postgres',
     sqlite: 'SQLite',
     mysql: 'MySQL/MariaDB',
+    clickhouse: 'ClickHouse',
+    duckdb: 'DuckDB',
   };
   if (sqlFlavour[engine] && schema) {
     const ddl = compactSchema(schema);

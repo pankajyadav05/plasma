@@ -10,6 +10,7 @@ import {
 import { cn } from '@/lib/cn';
 import { useSession } from '@/stores/session';
 import type { RedisBulkDeleteResult, RedisKeyMeta, RedisValueType } from '@shared/protocol';
+import { keyeventPattern } from '@shared/redis-keyspace';
 import {
   Activity,
   CheckSquare,
@@ -302,6 +303,11 @@ export function RedisSidebar() {
               icon={<Radio />}
               label="Pub/sub subscribe…"
               onClick={() => runMenu(() => setPubsubOpen(true))}
+            />
+            <MenuItem
+              icon={<Radio />}
+              label="Keyspace events tail"
+              onClick={() => runMenu(() => openRedisPubsub(keyeventPattern(db), true))}
             />
             <div className="my-1 h-px bg-[var(--wb-separator)]" />
             {TYPE_FILTERS.map((t) => (

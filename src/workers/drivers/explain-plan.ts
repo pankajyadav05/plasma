@@ -29,6 +29,31 @@ export function sqlitePlanToJson(rows: readonly SqlitePlanRow[]): unknown {
   return [{ Plan: root }];
 }
 
+/**
+ * ClickHouse `EXPLAIN` text (one node per line, children indented by two
+ * spaces) → a plan tree. `ReadFromMergeTree (db.table)` becomes a node with
+ * its relation, so the viewer can show what is scanned.
+ */
+export function clickhousePlanToJson(lines: readonly string[]): unknown {
+  const root: ExplainNode = { 'Node Type': 'Query plan', Plans: [] };
+  const stack: Array<{ depth: number; node: ExplainNode }> = [{ depth: -1, node: root }];
+  for (const raw of lines) {
+    if (!raw.trim()) continue;
+    const depth = Math.floor((raw.length - raw.trimStart().length) / 2);
+    const text = raw.trim();
+    const node: ExplainNode = { 'Node Type': text };
+    const scan = /^ReadFrom\w+\s*\(([^)]+)\)/.exec(text);
+    if (scan) node['Relation Name'] = (scan[1] as string).trim();
+    while (stack.length > 1 && (stack[stack.length - 1] as { depth: number }).depth >= depth) {
+      stack.pop();
+    }
+    const parent = (stack[stack.length - 1] as { node: ExplainNode }).node;
+    parent.Plans = [...(parent.Plans ?? []), node];
+    stack.push({ depth, node });
+  }
+  return [{ Plan: root }];
+}
+
 type Json = Record<string, unknown>;
 
 function isObj(v: unknown): v is Json {

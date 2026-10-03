@@ -29,12 +29,29 @@ files:
 extraResources:
   - from: resources/icon.png
     to: icon.png
+  # The `plasma` command-line launcher (Settings -> Install command-line tool
+  # links it into PATH). Shipped as plain scripts, outside the asar.
+  - from: bin/plasma
+    to: bin/plasma
+  - from: bin/plasma.cmd
+    to: bin/plasma.cmd
+
+# plasma:// deep links: macOS Info.plist CFBundleURLTypes, the Windows registry
+# entry written by the installer, and the Linux .desktop MimeType
+# (x-scheme-handler/plasma, see linux.mimeTypes below).
+protocols:
+  - name: Plasma
+    schemes:
+      - plasma
 
 # better-sqlite3 ships prebuilt N-API .node binaries (prebuilds/<os>-<arch>.node)
 # — they must NOT live inside the asar archive because Node's native loader
 # can't dlopen from inside asar.
 asarUnpack:
   - "**/node_modules/better-sqlite3/prebuilds/*.node"
+  # DuckDB: the binding is a .node that loads libduckdb next to it (.so / .dylib /
+  # .dll), so the whole per-platform package must live outside the asar.
+  - "**/node_modules/@duckdb/node-bindings-*/**"
 
 # No native rebuild at package time. better-sqlite3 13 ships N-API prebuilds
 # for every platform/arch and loads them first; N-API binaries run in Electron
@@ -62,6 +79,8 @@ win:
     - out/**/*
     - package.json
     - "!**/node_modules/better-sqlite3/prebuilds/{darwin,linux,linuxmusl}-*.node"
+    - "!**/node_modules/@duckdb/node-bindings-{darwin,linux}-*/**"
+    - "!**/node_modules/@duckdb/node-bindings-win32-arm64/**"
   target:
     - target: nsis
       arch:
@@ -132,6 +151,7 @@ mac:
     - out/**/*
     - package.json
     - "!**/node_modules/better-sqlite3/prebuilds/{win32,linux,linuxmusl}-*.node"
+    - "!**/node_modules/@duckdb/node-bindings-{win32,linux}-*/**"
   target:
     - target: dmg
       arch:
@@ -158,6 +178,9 @@ linux:
     - package.json
     - "!**/node_modules/better-sqlite3/prebuilds/{darwin,win32,linuxmusl}-*.node"
     - "!**/node_modules/better-sqlite3/prebuilds/linux-arm64.node"
+    - "!**/node_modules/@duckdb/node-bindings-{darwin,win32}-*/**"
+    - "!**/node_modules/@duckdb/node-bindings-linux-arm64*/**"
+    - "!**/node_modules/@duckdb/node-bindings-linux-x64-musl/**"
   target:
     - target: AppImage
       arch:
@@ -170,6 +193,10 @@ linux:
   maintainer: Plasma <noreply@plasma.sh>
   artifactName: ${productName}-${version}-${arch}.${ext}
   executableName: plasma
+  # x-scheme-handler/plasma in the generated .desktop file, so the desktop
+  # routes plasma:// links to the app (Exec already ends in %U).
+  mimeTypes:
+    - x-scheme-handler/plasma
 
 appImage:
   artifactName: ${productName}-${version}-${arch}.${ext}

@@ -1,6 +1,8 @@
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { effectiveSafeMode } from '@/stores/safe-mode';
 import { useSession } from '@/stores/session';
+import { CLICKHOUSE_MUTATION_WARNING, clickhouseMutation } from '@shared/clickhouse-mutation';
+import { engineCaps } from '@shared/sql-dialect';
 
 /**
  * Renders a confirm dialog when runQuery has stashed a destructive
@@ -14,6 +16,10 @@ export function ProdGateDialog() {
   const cancelProdGate = useSession((s) => s.cancelProdGate);
   const isCommit = gate?.kind === 'commitEdits';
   const safeMode = gate?.reason === 'safe-mode';
+  const mutation =
+    gate !== null &&
+    engineCaps(activeConfig?.engine).asyncMutations &&
+    clickhouseMutation(gate.sql) !== null;
   const readOnlyLevel = useSession(
     (s) => effectiveSafeMode(s.settings, s.activeConfig?.id) === 'read-only',
   );
@@ -25,16 +31,26 @@ export function ProdGateDialog() {
         if (!o) cancelProdGate();
       }}
       title={
-        safeMode
-          ? isCommit
-            ? 'Commit changes?'
-            : 'Run this statement?'
-          : isCommit
-            ? 'Commit changes to production?'
-            : 'Run destructive query on production?'
+        mutation
+          ? 'Run an asynchronous mutation?'
+          : safeMode
+            ? isCommit
+              ? 'Commit changes?'
+              : 'Run this statement?'
+            : isCommit
+              ? 'Commit changes to production?'
+              : 'Run destructive query on production?'
       }
       description={
-        safeMode && readOnlyLevel ? (
+        mutation ? (
+          <span>
+            {CLICKHOUSE_MUTATION_WARNING} Running it on{' '}
+            <span className="font-mono font-semibold">
+              {activeConfig?.name ?? 'this connection'}
+            </span>
+            .
+          </span>
+        ) : safeMode && readOnlyLevel ? (
           <span>
             Safe mode is read-only on{' '}
             <span className="font-mono font-semibold">

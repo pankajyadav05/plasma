@@ -26,6 +26,7 @@ import {
   type ConnectionRecovered,
   ConnectionSshConfig,
   type ConnectionTestResult,
+  type DataFilePickResult,
   ExplainRequest,
   ExportSaveRequest,
   type ExportSaveResult,
@@ -66,11 +67,20 @@ import {
   setAiToolExecutor,
   startAiChat,
 } from './ai';
+import { type AuditDeps, recordAuditStatements, registerAuditIpc } from './audit-ipc';
 import {
   ConnectionRecovery,
   type RecoveredSession,
   type RetainedSession,
 } from './connection-recovery';
+import {
+  DATA_FILE_DIALOG_FILTERS,
+  acceptDataFiles,
+  assertDuckdbConfigAllowed,
+  buildDuckdbAttachments,
+  isEphemeralDuckdbSession,
+  sanitizeDuckdbOptions,
+} from './data-files';
 import { closeDb, getDb } from './db';
 import { registerE2EHooks } from './e2e-hooks';
 import {
@@ -91,6 +101,8 @@ import {
 } from './opensearch-ipc';
 import { cancelAllJobs, cancelJob, detectTools, startJob } from './pg-admin';
 import { materializeAdminTls, planAdminTls } from './pg-admin-tls';
+import { registerPgListenIpc } from './pg-listen-ipc';
+import { maskRowsForAi } from './presentation-mask';
 import { describePsqlProblem, scanPsqlScript } from './psql-script-guard';
 import { assertAllowedOnReadOnly } from './read-only-guard';
 import {
@@ -149,6 +161,12 @@ import {
 import { guardIpcSenders, installWebSecurity } from './web-security';
 import { applyThemeToWindow, createMainWindow, rendererEntry, resolveIconPath } from './window';
 import { WorkerSupervisor } from './worker-supervisor';
+import {
+  createWorkspaceRuntime,
+  handleStartupArgv,
+  registerLaunchHandlers,
+  registerWorkspaceIpc,
+} from './workspace-ipc';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -174,6 +192,19 @@ let activeEngine: ConnectionEngine | null = null;
  * requires; scoped to the live session and dropped on disconnect.
  */
 let retainedSession: RetainedSession | null = null;
+/** Who the audit log records statements for (the retained session, if any). */
+const auditDeps: AuditDeps = {
+  session: () =>
+    retainedSession
+      ? {
+          id: retainedSession.id,
+          name: retainedSession.config.name,
+          user: retainedSession.config.user,
+          engine: retainedSession.config.engine,
+        }
+      : null,
+  window: () => mainWindow,
+};
 /**
  * C11: bumped whenever the user starts a connect or disconnect, so a
  * transparent recovery that is still in flight can tell it is stale.
@@ -208,6 +239,12 @@ if (!hasInstanceLock) {
     mainWindow.focus();
   });
 }
+
+// D1/D2: workspaces, plasma:// links and the `plasma` launcher's arguments
+// (open-url, second-instance argv). Registered before `ready` so a link that
+// started the app is not missed.
+const workspaceRuntime = createWorkspaceRuntime(() => mainWindow);
+registerLaunchHandlers(workspaceRuntime, hasInstanceLock);
 
 app
   .whenReady()
@@ -264,6 +301,8 @@ app
         mainWindow?.webContents.send('plasma:redis:pubsub', evt.message);
       } else if (evt.kind === 'queryChunk') {
         mainWindow?.webContents.send('plasma:query:chunk', evt);
+      } else if (evt.kind === 'pgNotification') {
+        mainWindow?.webContents.send('plasma:pg:notification', evt.notification);
       } else if (evt.kind === 'pgNotice') {
         mainWindow?.webContents.send('plasma:pg:notice', evt.notice);
       } else if (evt.kind === 'importProgress') {
@@ -309,7 +348,7 @@ app
           const res = await callWorker({ kind: 'aiQuery', sql }, 'queryResult');
           return serializeAiToolRows({
             columns: res.result.columns.map((c) => c.name),
-            rows: res.result.rows,
+            rows: maskRowsForAi(activeConnectionId, res.result.columns, res.result.rows),
             rowCount: res.result.rowCount,
           });
         } catch (err) {
@@ -406,6 +445,8 @@ app
     attachWindowGuards(mainWindow);
     buildAppMenu();
     registerIpcHandlers();
+    registerWorkspaceIpc(workspaceRuntime, () => mainWindow);
+    handleStartupArgv(workspaceRuntime);
     // C33: the updater follows whichever window is current (macOS reopen).
     initUpdater(() => mainWindow);
 
@@ -607,6 +648,13 @@ function parseConnectionConfig(raw: unknown): ConnectionConfigType {
         saved?.engine === 'sqlite' ? saved.database : null,
       );
     }
+    if (parsed.data.engine === 'duckdb') {
+      const saved = vaultList().find((c) => c.id === parsed.data.id);
+      // Only main fills in `attach` (it carries a password); anything the renderer sent is dropped.
+      const config = { ...parsed.data, duckdb: sanitizeDuckdbOptions(parsed.data.duckdb) };
+      assertDuckdbConfigAllowed(config, saved?.engine === 'duckdb' ? saved.database : null);
+      return config;
+    }
     return parsed.data;
   }
   const first = parsed.error.issues[0];
@@ -691,6 +739,19 @@ async function establishSession(config: ConnectionConfigType) {
     if (ssh) closeTunnel(config.id);
 
     let effective: ConnectionConfigType = { ...withFiles, readOnly: config.readOnly ?? false };
+    if (config.engine === 'duckdb' && config.duckdb?.attachConnectionIds?.length) {
+      // Saved Postgres connections to attach read-only: resolved here, in main, with their stored passwords.
+      effective = {
+        ...effective,
+        duckdb: {
+          files: config.duckdb.files,
+          attach: buildDuckdbAttachments(config.duckdb.attachConnectionIds, {
+            load: (id) => vaultGetFull(id),
+            sshFor: (id) => getFullSshConfig(id, settings.connectionSsh) !== null,
+          }),
+        },
+      };
+    }
     if (ssh) {
       const refusal = sshUnsupportedReason(config);
       if (refusal) throw new Error(refusal);
@@ -799,6 +860,7 @@ function attachWindowGuards(win: BrowserWindow): void {
   // worker and tunnel connected behind it.
   win.on('closed', () => {
     if (mainWindow === win) mainWindow = null;
+    workspaceRuntime.launch.rendererGone();
     unsavedState = { openTransaction: false, pendingEdits: 0 };
     closeConfirmed = false;
     if (!retainedSession && !activeConnectionId) return;
@@ -828,13 +890,21 @@ function registerIpcHandlers() {
     IpcChannel.ConnectionConnect,
     (_e, rawConfig: unknown): Promise<ConnectionInfo> =>
       serializeSessionChange(async () => {
+        const requested = parseConnectionConfig(rawConfig);
+        // D1: a team-workspace profile is rebuilt from its `.plasma/` file and the
+        // vault in main — nothing the renderer sent but the id is trusted — and it
+        // is never copied into the personal connection list.
+        const workspaceConfig = workspaceRuntime.connectConfigFor(requested.id);
         // Blank password = keep the saved one (C17: the renderer never has it).
-        const config = withStoredPassword(parseConnectionConfig(rawConfig));
+        const config = workspaceConfig ?? withStoredPassword(requested);
         const res = await establishSession(config);
-        try {
-          vaultSave(config);
-        } catch (err) {
-          logger.error('[plasma] vault save failed (non-fatal):', err);
+        // A session over data files is not a saved connection.
+        if (!workspaceConfig && !isEphemeralDuckdbSession(config)) {
+          try {
+            vaultSave(config);
+          } catch (err) {
+            logger.error('[plasma] vault save failed (non-fatal):', err);
+          }
         }
         return {
           serverVersion: res.serverVersion,
@@ -953,6 +1023,35 @@ function registerIpcHandlers() {
       return picked;
     },
   );
+
+  // DuckDB "Open data file…" / database picker. Main validates and allowlists
+  // the paths; the renderer only ever sees what passed.
+  ipcMain.handle(
+    IpcChannel.DataFilePick,
+    async (e, rawTarget: unknown): Promise<DataFilePickResult | null> => {
+      const win = BrowserWindow.fromWebContents(e.sender);
+      const database = rawTarget === 'database';
+      const opts = {
+        title: database ? 'Open a DuckDB database' : 'Open data files',
+        filters: database ? DATA_FILE_DIALOG_FILTERS.database : DATA_FILE_DIALOG_FILTERS.files,
+        properties: database
+          ? ['openFile' as const, 'showHiddenFiles' as const]
+          : ['openFile' as const, 'multiSelections' as const, 'showHiddenFiles' as const],
+      };
+      const r = win ? await dialog.showOpenDialog(win, opts) : await dialog.showOpenDialog(opts);
+      if (r.canceled || r.filePaths.length === 0) return null;
+      const { accepted, problems } = acceptDataFiles(r.filePaths);
+      return { files: accepted, problems };
+    },
+  );
+
+  // Files dropped on the window: the preload read the paths, main validates them.
+  ipcMain.on(IpcChannel.DataFileDrop, (e, paths: unknown) => {
+    if (!mainWindow || e.sender !== mainWindow.webContents) return;
+    const { accepted, problems } = acceptDataFiles(paths);
+    const payload: DataFilePickResult = { files: accepted, problems };
+    mainWindow.webContents.send(IpcChannel.DataFilesDroppedEvent, payload);
+  });
 
   // "Export database file copy": the worker runs SQLite's backup API; main
   // only chooses where the copy goes.
@@ -1082,6 +1181,7 @@ function registerIpcHandlers() {
     let params: unknown[] | undefined;
     let internal = false;
     let maxRows: number | undefined;
+    let auditSource: 'editor' | 'ai' = 'editor';
     if (typeof payload === 'string') {
       sql = payload;
     } else if (payload && typeof payload === 'object' && 'sql' in payload) {
@@ -1090,6 +1190,7 @@ function registerIpcHandlers() {
       sql = p.sql;
       params = Array.isArray(p.params) ? p.params : undefined;
       internal = p.internal === true;
+      if ((p as { auditSource?: unknown }).auditSource === 'ai') auditSource = 'ai';
       maxRows = parseRowLimit((p as { maxRows?: unknown }).maxRows);
     } else {
       throw new Error('invalid query payload');
@@ -1117,6 +1218,15 @@ function registerIpcHandlers() {
         } catch (err) {
           logger.error('[plasma] history write failed (non-fatal):', err);
         }
+        recordAuditStatements(auditDeps, [
+          {
+            sql,
+            source: auditSource,
+            affectedRows: res.result.rowCount,
+            durationMs: res.result.durationMs,
+            ts: executedAt,
+          },
+        ]);
       }
       return res.result;
     } catch (err) {
@@ -1136,6 +1246,15 @@ function registerIpcHandlers() {
         } catch (histErr) {
           logger.error('[plasma] history write failed (non-fatal):', histErr);
         }
+        recordAuditStatements(auditDeps, [
+          {
+            sql,
+            source: auditSource,
+            error: message,
+            ts: executedAt,
+            durationMs: Date.now() - executedAt,
+          },
+        ]);
       }
       throw err;
     }
@@ -1179,16 +1298,57 @@ function registerIpcHandlers() {
       if (retainedSession?.config.readOnly === true) {
         throw new Error('This connection is read-only — edits cannot be committed.');
       }
-      const res = await callWorker(
-        { kind: 'commitEditBatch', connectionGen: req.connectionGen, updates: req.updates },
-        'editBatchResult',
+      const startedAt = Date.now();
+      let res: Awaited<ReturnType<typeof callWorker<'editBatchResult'>>>;
+      try {
+        res = await callWorker(
+          { kind: 'commitEditBatch', connectionGen: req.connectionGen, updates: req.updates },
+          'editBatchResult',
+        );
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        recordAuditStatements(
+          auditDeps,
+          req.updates.map((u) => ({
+            sql: u.sql,
+            source: 'grid-commit' as const,
+            error: message,
+            ts: startedAt,
+            durationMs: Date.now() - startedAt,
+          })),
+        );
+        throw err;
+      }
+      recordAuditStatements(
+        auditDeps,
+        req.updates.map((u) => ({
+          sql: u.sql,
+          source: 'grid-commit' as const,
+          affectedRows: 1,
+          ts: startedAt,
+          durationMs: Date.now() - startedAt,
+        })),
       );
       return { state: res.state, applied: res.applied };
     },
   );
 
   // Structure editing, create table and import (see import-ipc.ts).
+  registerAuditIpc(auditDeps);
+  registerPgListenIpc({
+    callWorker,
+    onNotify: (channel, payload, error, durationMs) =>
+      recordAuditStatements(auditDeps, [
+        {
+          sql: `SELECT pg_notify('${channel.replace(/'/g, "''")}', '${payload.replace(/'/g, "''")}')`,
+          source: 'notify',
+          error,
+          durationMs,
+        },
+      ]),
+  });
   registerImportIpc({
+    audit: (statements) => recordAuditStatements(auditDeps, statements),
     window: () => mainWindow,
     isReadOnly: () => retainedSession?.config.readOnly === true,
     callWorker,
@@ -1263,6 +1423,15 @@ function registerIpcHandlers() {
         } catch (err) {
           logger.error('[plasma] history write failed (non-fatal):', err);
         }
+        recordAuditStatements(auditDeps, [
+          {
+            sql: ran.sql,
+            source: 'safe-run',
+            affectedRows: ran.affected,
+            ts: ran.executedAt,
+            durationMs: Date.now() - ran.executedAt,
+          },
+        ]);
       }
       return res.outcome;
     },

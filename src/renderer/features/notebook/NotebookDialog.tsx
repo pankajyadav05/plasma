@@ -14,6 +14,7 @@ import { ipc } from '@/lib/ipc';
 import { pickDisplayResult, runStatements } from '@/lib/run-statements';
 import { useSession } from '@/stores/session';
 import { useWorkbench } from '@/stores/workbench';
+import { useWorkspace } from '@/stores/workspace';
 import type { QueryResult } from '@shared/protocol';
 import {
   BookText,
@@ -30,6 +31,7 @@ import {
   Play,
   Plus,
   Trash2,
+  Users,
   X,
 } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -124,6 +126,41 @@ export function NotebookDialog({
   }, [draft, open]);
 
   const hasContent = hasCellContent(cells);
+  const workspaceOpen = useWorkspace((w) => w.snapshot !== null);
+  const saveToWorkspace = async () => {
+    const link = useWorkspace.getState().notebookLink;
+    const firstHeading = cells.find((c) => c.kind === 'md' && c.content.trim())?.content;
+    const name =
+      link?.name ??
+      (firstHeading
+        ?.split('\n')[0]
+        ?.replace(/^#+\s*/, '')
+        .trim() ||
+        `${activeConfig?.name ?? 'Notebook'} notebook`);
+    const nb = {
+      name,
+      cells: cells.map((c) => ({ id: c.id, kind: c.kind, content: c.content })),
+    };
+    const write = (overwrite: boolean) =>
+      ipc.workspace.writeNotebook(nb, link?.file ?? null, link?.rev ?? null, overwrite);
+    const res = await write(false);
+    if (!res.ok) {
+      useWorkspace.setState({
+        conflict: {
+          what: name,
+          overwrite: async () => {
+            const forced = await write(true);
+            if (forced.ok && forced.file) {
+              useWorkspace.setState({ notebookLink: { file: forced.file, rev: forced.rev, name } });
+            }
+          },
+        },
+      });
+      return;
+    }
+    if (res.file) useWorkspace.setState({ notebookLink: { file: res.file, rev: res.rev, name } });
+    useWorkspace.setState({ snapshot: await ipc.workspace.current() });
+  };
 
   const addCell = (kind: CellKind, idx?: number) => {
     setCells((prev) => {
@@ -274,6 +311,18 @@ export function NotebookDialog({
               <Download />
               Save
             </Button>
+            {workspaceOpen && (
+              <Button
+                variant="ghost"
+                size="xs"
+                onClick={() => void saveToWorkspace()}
+                disabled={!hasContent}
+                title="Save to the open team workspace (.plasma/notebooks)"
+              >
+                <Users />
+                Workspace
+              </Button>
+            )}
             <Button
               variant="ghost"
               size="xs"

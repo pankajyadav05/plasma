@@ -124,3 +124,50 @@ describe('assertAllowedOnReadOnly (C1)', () => {
     ok({ kind: 'osSql', query: 'SELECT 1' });
   });
 });
+
+describe('assertAllowedOnReadOnly for DuckDB and ClickHouse', () => {
+  it('screens DuckDB statements that reach outside the session', () => {
+    for (const sql of [
+      "COPY t TO '/tmp/x.csv'",
+      "ATTACH 'x.db' AS x",
+      'SET enable_external_access = true',
+    ]) {
+      expect(() => assertAllowedOnReadOnly({ kind: 'query', sql }, 'duckdb'), sql).toThrow(
+        ReadOnlyViolationError,
+      );
+    }
+    expect(() =>
+      assertAllowedOnReadOnly({ kind: 'query', sql: 'SELECT * FROM sales' }, 'duckdb'),
+    ).not.toThrow();
+  });
+
+  it('screens ClickHouse attempts to change readonly, on every SQL-carrying request', () => {
+    for (const kind of ['query', 'sidebandQuery', 'aiQuery', 'exportQuery']) {
+      expect(
+        () => assertAllowedOnReadOnly({ kind, sql: 'SET readonly = 0' }, 'clickhouse'),
+        kind,
+      ).toThrow(ReadOnlyViolationError);
+    }
+    expect(() =>
+      assertAllowedOnReadOnly({ kind: 'query', sql: 'SELECT 1' }, 'clickhouse'),
+    ).not.toThrow();
+  });
+
+  it('still refuses grid edits on a read-only session of either engine', () => {
+    for (const engine of ['duckdb', 'clickhouse']) {
+      expect(() =>
+        assertAllowedOnReadOnly({ kind: 'commitEditBatch', connectionGen: 1, updates: [] }, engine),
+      ).toThrow(ReadOnlyViolationError);
+    }
+  });
+});
+
+describe('assertAllowedOnReadOnly for the LISTEN/NOTIFY tail', () => {
+  it('lets a read-only session listen but refuses NOTIFY', () => {
+    expect(() => assertAllowedOnReadOnly({ kind: 'pgListen', channel: 'c' })).not.toThrow();
+    expect(() => assertAllowedOnReadOnly({ kind: 'pgUnlisten', channel: 'c' })).not.toThrow();
+    expect(() => assertAllowedOnReadOnly({ kind: 'pgNotify', channel: 'c', payload: '' })).toThrow(
+      ReadOnlyViolationError,
+    );
+  });
+});

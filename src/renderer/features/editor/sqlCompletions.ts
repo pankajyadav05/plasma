@@ -1,4 +1,5 @@
 import { useSession } from '@/stores/session';
+import { useWorkspace } from '@/stores/workspace';
 import type { SchemaInfo } from '@shared/protocol';
 import { mergeSnippets, previewBody } from '@shared/snippets';
 import type * as MonacoType from 'monaco-editor';
@@ -226,7 +227,9 @@ function registerSnippetCompletions(monaco: typeof MonacoType): void {
         startColumn: word.startColumn,
         endColumn: word.endColumn,
       };
-      const user = useSession.getState().settings.snippets ?? [];
+      // Snippets shared by an open team workspace come along with the user's own.
+      const shared = useWorkspace.getState().snapshot?.snippets ?? [];
+      const user = [...(useSession.getState().settings.snippets ?? []), ...shared];
       return {
         suggestions: mergeSnippets(user).map((sn) => ({
           label: { label: sn.prefix, description: sn.name },

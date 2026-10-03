@@ -79,6 +79,12 @@ jobs:
       PLASMA_MYSQL_PORT: 3306
       PLASMA_MYSQL_USER: root
       PLASMA_MYSQL_PASSWORD: mysql
+      # clickhouse.live.test.ts creates and drops its own database on this server.
+      PLASMA_LIVE_CLICKHOUSE: "1"
+      PLASMA_CLICKHOUSE_HOST: 127.0.0.1
+      PLASMA_CLICKHOUSE_PORT: 8123
+      PLASMA_CLICKHOUSE_USER: default
+      PLASMA_CLICKHOUSE_PASSWORD: clickhouse
     services:
       postgres:
         image: postgres:16
@@ -110,6 +116,19 @@ jobs:
           - 3306:3306
         options: >-
           --health-cmd "mysqladmin ping -h 127.0.0.1 -pmysql"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 30
+      clickhouse:
+        image: clickhouse/clickhouse-server:24.8
+        env:
+          CLICKHOUSE_USER: default
+          CLICKHOUSE_PASSWORD: clickhouse
+          CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+        ports:
+          - 8123:8123
+        options: >-
+          --health-cmd "wget -q --spider http://127.0.0.1:8123/ping"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 30

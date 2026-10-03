@@ -103,3 +103,32 @@ describe('isNumericTypeName across engines', () => {
     expect(isNumericTypeName('TEXT')).toBe(false);
   });
 });
+
+describe('ClickHouse and DuckDB type names', () => {
+  it('knows numeric and temporal types through Nullable / LowCardinality wrappers', async () => {
+    const { isNumericTypeName, isTemporalTypeName } = await import('./column-stats');
+    for (const t of [
+      'UInt64',
+      'Nullable(Int32)',
+      'Float64',
+      'Decimal(10, 2)',
+      'Nullable(Decimal64(4))',
+      'hugeint',
+      'ubigint',
+    ]) {
+      expect(isNumericTypeName(t), t).toBe(true);
+    }
+    for (const t of [
+      'String',
+      'Nullable(String)',
+      'LowCardinality(String)',
+      'Array(Int32)',
+      'varchar',
+    ]) {
+      expect(isNumericTypeName(t), t).toBe(false);
+    }
+    for (const t of ['DateTime', 'Nullable(DateTime64(3))', 'Date32', 'timestamp_ms']) {
+      expect(isTemporalTypeName(t), t).toBe(true);
+    }
+  });
+});

@@ -379,3 +379,53 @@ describe('dialect-aware builders', async () => {
     expect(() => buildEstimatedCountSql('main', 't', SQLITE_DIALECT)).toThrow();
   });
 });
+
+describe('ClickHouse and DuckDB table tabs', async () => {
+  const { CLICKHOUSE_DIALECT, DUCKDB_DIALECT } = await import('@shared/sql-dialect');
+  const base = {
+    schema: 'analytics',
+    table: 'events',
+    allColumns: ['id', 'name'],
+    hiddenColumns: new Set<string>(),
+    sort: [{ column: 'name', direction: 'desc' as const }],
+    page: 1,
+    pageSize: 25,
+  };
+
+  it('pages and filters a ClickHouse table with toString() and backticks', () => {
+    const { sql, params } = buildDataSql({
+      ...base,
+      dialect: CLICKHOUSE_DIALECT,
+      filters: [{ id: '1', column: 'name', op: 'ILIKE', value: 'ada' }],
+    });
+    expect(sql).toContain('FROM `analytics`.`events`');
+    expect(sql).toContain('toString(`name`) ILIKE $1');
+    expect(sql).toContain('ORDER BY `name` DESC');
+    expect(sql).toContain('LIMIT 25 OFFSET 25');
+    expect(params).toEqual(['%ada%']);
+    const est = buildEstimatedCountSql('analytics', 'events', CLICKHOUSE_DIALECT);
+    expect(est.sql).toContain('system.tables');
+    expect(est.params).toEqual(['analytics', 'events']);
+  });
+
+  it('pages a DuckDB view and addresses an attached catalog', () => {
+    const { sql } = buildDataSql({
+      ...base,
+      schema: 'main',
+      table: 'Sales 2024',
+      dialect: DUCKDB_DIALECT,
+      filters: [{ id: '1', column: 'name', op: 'ILIKE', value: 'x' }],
+    });
+    expect(sql).toContain('FROM "main"."Sales 2024"');
+    expect(sql).toContain(`CAST("name" AS VARCHAR) ILIKE $1 ESCAPE '\\'`);
+    expect(
+      buildCountSql({
+        schema: 'pg_prod.public',
+        table: 'users',
+        filters: [],
+        dialect: DUCKDB_DIALECT,
+      }).sql,
+    ).toBe('SELECT COUNT(*) FROM "pg_prod"."public"."users"');
+    expect(() => buildEstimatedCountSql('main', 't', DUCKDB_DIALECT)).toThrow();
+  });
+});

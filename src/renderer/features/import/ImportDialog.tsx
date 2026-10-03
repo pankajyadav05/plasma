@@ -69,7 +69,15 @@ export function ImportDialog() {
   const close = useStructureDialogs((s) => s.close);
   return (
     <Dialog open={target !== null} onOpenChange={(o) => !o && close()}>
-      {target && <ImportBody schema={target.schema} table={target.table} onClose={close} />}
+      {target && (
+        <ImportBody
+          schema={target.schema}
+          table={target.table}
+          initialFile={target.file}
+          initialNewName={target.newName}
+          onClose={close}
+        />
+      )}
     </Dialog>
   );
 }
@@ -79,25 +87,31 @@ type Mode = 'existing' | 'new';
 function ImportBody({
   schema,
   table: initialTable,
+  initialFile,
+  initialNewName,
   onClose,
 }: {
   schema: string;
   table: string | null;
+  initialFile?: ImportPickedFile;
+  initialNewName?: string;
   onClose: () => void;
 }) {
   const info = useSession((s) => s.schema);
   const readOnly = useSession((s) => Boolean(s.activeConfig?.readOnly));
   const openTable = useSession((s) => s.openTable);
 
-  const [file, setFile] = useState<ImportPickedFile | null>(null);
-  const [format, setFormat] = useState<ImportFormat>('csv');
+  const [file, setFile] = useState<ImportPickedFile | null>(initialFile ?? null);
+  const [format, setFormat] = useState<ImportFormat>(initialFile?.format ?? 'csv');
   const [csvOver, setCsvOver] = useState<Partial<ImportCsvOptions>>({});
   const [preview, setPreview] = useState<ImportPreview | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [lintBlocked, setLintBlocked] = useState(false);
   const [mode, setMode] = useState<Mode>(initialTable ? 'existing' : 'new');
   const [tableKey, setTableKey] = useState(initialTable ? `${schema}.${initialTable}` : '');
-  const [newName, setNewName] = useState('');
+  const [newName, setNewName] = useState(
+    initialNewName ?? (initialFile ? tableNameFromFile(initialFile.name) : ''),
+  );
   const [targetCols, setTargetCols] = useState<TableColumn[]>([]);
   const [targets, setTargets] = useState<(string | null)[]>([]);
   const [newCols, setNewCols] = useState<NewTableColumn[]>([]);

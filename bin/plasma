@@ -1,0 +1,116 @@
+#!/bin/sh
+# plasma — command-line companion for the Plasma desktop app.
+#
+#   plasma open <connection-url | file.sqlite | folder>
+#   plasma import <file.csv> --into <connection-url> --table <name>
+#
+# It hands the request to the running app (single-instance forwarding) or
+# starts it. Nothing is parsed or trusted here beyond building arguments;
+# the app validates everything again.
+
+# Set by "Install command-line tool" for AppImage installs; otherwise empty.
+PLASMA_APP="${PLASMA_APP:-}"
+
+usage() {
+  cat >&2 <<USAGE
+Usage:
+  plasma open <connection-url | file.sqlite | folder | plasma://link>
+  plasma import <file> --into <connection-url> --table <name>
+  plasma --help
+USAGE
+}
+
+# Follow symlinks to the real script location (readlink -f is not on old macOS).
+resolve_self() {
+  p="$1"
+  while [ -L "$p" ]; do
+    l=$(readlink "$p")
+    case "$l" in
+      /*) p="$l" ;;
+      *) p="$(dirname "$p")/$l" ;;
+    esac
+  done
+  d=$(cd "$(dirname "$p")" && pwd -P)
+  printf '%s/%s\n' "$d" "$(basename "$p")"
+}
+
+find_app() {
+  if [ -n "$PLASMA_APP" ] && [ -x "$PLASMA_APP" ]; then
+    printf '%s\n' "$PLASMA_APP"
+    return 0
+  fi
+  self=$(resolve_self "$0")
+  dir=$(dirname "$self")
+  for c in \
+    "$dir/../../MacOS/Plasma" \
+    "$dir/../../plasma" \
+    "$dir/../../Plasma" \
+    "/Applications/Plasma.app/Contents/MacOS/Plasma" \
+    "/opt/Plasma/plasma" \
+    "/usr/bin/plasma-app"; do
+    if [ -x "$c" ]; then
+      printf '%s\n' "$c"
+      return 0
+    fi
+  done
+  return 1
+}
+
+abs_path() {
+  case "$1" in
+    /*) printf '%s\n' "$1" ;;
+    *) printf '%s/%s\n' "$(pwd)" "$1" ;;
+  esac
+}
+
+launch() {
+  app=$(find_app) || {
+    echo "plasma: cannot find the Plasma app. Set PLASMA_APP=/path/to/Plasma." >&2
+    exit 1
+  }
+  # Detached, so the terminal comes back. A running instance receives these
+  # arguments through its single-instance lock.
+  nohup "$app" "$@" >/dev/null 2>&1 &
+}
+
+cmd="$1"
+[ $# -gt 0 ] && shift
+
+case "$cmd" in
+  open)
+    [ $# -eq 1 ] || { usage; exit 2; }
+    target="$1"
+    case "$target" in
+      *://*) ;;
+      *) target=$(abs_path "$target") ;;
+    esac
+    launch "--plasma-open=$target"
+    ;;
+  import)
+    file=""
+    into=""
+    table=""
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --into) into="$2"; shift 2 || { usage; exit 2; } ;;
+        --into=*) into="${1#--into=}"; shift ;;
+        --table) table="$2"; shift 2 || { usage; exit 2; } ;;
+        --table=*) table="${1#--table=}"; shift ;;
+        -*) echo "plasma: unknown option $1" >&2; usage; exit 2 ;;
+        *) if [ -z "$file" ]; then file="$1"; shift; else usage; exit 2; fi ;;
+      esac
+    done
+    if [ -z "$file" ] || [ -z "$into" ] || [ -z "$table" ]; then usage; exit 2; fi
+    [ -f "$file" ] || { echo "plasma: no such file: $file" >&2; exit 1; }
+    launch "--plasma-import=$(abs_path "$file")" "--plasma-into=$into" "--plasma-table=$table"
+    ;;
+  -h | --help | help | "")
+    usage
+    [ -n "$cmd" ] || exit 2
+    ;;
+  *)
+    echo "plasma: unknown command '$cmd'" >&2
+    usage
+    exit 2
+    ;;
+esac

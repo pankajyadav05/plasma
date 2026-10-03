@@ -5,13 +5,17 @@ import {
   saveSqlFile,
 } from '@/features/editor/sql-files';
 import { useMigrationDialog } from '@/features/migration/migration-dialog-store';
+import { pickAndOpenDataFiles, useDataFiles } from '@/stores/data-files';
 import { isSplit, paneTabIds } from '@/stores/pane-state';
 import { usePanes } from '@/stores/panes';
 import { activeTab, useSession } from '@/stores/session';
 import { editsOf } from '@/stores/session-pending-edits';
 import { useWorkbench } from '@/stores/workbench';
+import { useWorkspace } from '@/stores/workspace';
+import { isDataFileSession } from '@shared/data-files';
 import type { KeyId } from '@shared/keymap';
 import type { ConnectionEngine } from '@shared/protocol';
+import { keyeventPattern } from '@shared/redis-keyspace';
 import { type EngineCapabilities, engineCaps } from '@shared/sql-dialect';
 
 /**
@@ -24,6 +28,10 @@ export type CommandId =
   | KeyId
   | 'toggleTheme'
   | 'newConnection'
+  | 'openWorkspace'
+  | 'openDataFile'
+  | 'attachPostgres'
+  | 'openConnectionString'
   | 'disconnect'
   | 'monitor'
   | 'exportJson'
@@ -34,6 +42,8 @@ export type CommandId =
   | 'checkMigration'
   | 'dbSearch'
   | 'erDiagram'
+  | 'pgListen'
+  | 'redisKeyspace'
   | 'splitPane'
   | 'closePane';
 
@@ -61,6 +71,7 @@ const POSTGRES_ONLY: ReadonlySet<CommandId> = new Set<CommandId>([
   'checkMigration',
   'dbSearch',
   'erDiagram',
+  'pgListen',
   'splitPane',
   'closePane',
   'nextPane',
@@ -85,6 +96,7 @@ const COMMAND_CAPABILITY: Partial<Record<CommandId, keyof EngineCapabilities>> =
   roles: 'roles',
   safeRun: 'safeRun',
   erDiagram: 'er',
+  pgListen: 'pgExtras',
   dbSearch: 'pgExtras',
   schemaDiff: 'pgExtras',
   checkMigration: 'pgExtras',
@@ -109,6 +121,8 @@ export function commandAvailable(
 ): boolean {
   if (NEEDS_CONNECTION.has(id) && !connected) return false;
   if (id === 'sqliteBackup') return connected && engineCaps(engine).fileBackup;
+  if (id === 'redisKeyspace') return connected && engine === 'redis';
+  if (id === 'attachPostgres') return connected && isDataFileSession(session().activeConfig);
   if (POSTGRES_ONLY.has(id)) {
     if (engine === null) return false;
     const caps = engineCaps(engine);
@@ -175,6 +189,8 @@ function setFontSize(next: (current: number) => number) {
 export async function saveActiveSqlTab(saveAs: boolean): Promise<void> {
   const tab = activeTab(session());
   if (!tab || tab.kind !== 'sql') return;
+  // A query opened from a team workspace saves back to its .plasma/ file.
+  if (!saveAs && (await useWorkspace.getState().saveLinkedTab(tab.id))) return;
   const name = await saveSqlFile(
     tab.id,
     tab.sql,
@@ -221,6 +237,17 @@ export function runCommand(id: CommandId): boolean {
       return true;
     case 'toggleEditor':
       s.toggleEditor();
+      return true;
+    case 'presentationMode':
+      void s.updateSettings({ presentationMode: !s.settings.presentationMode });
+      return true;
+    case 'pgListen':
+      s.setCanvasMode('database');
+      s.openPgListen();
+      return true;
+    case 'redisKeyspace':
+      s.setCanvasMode('database');
+      s.openRedisPubsub(keyeventPattern(s.redisDb ?? 0), true);
       return true;
     case 'toggleRightSidebar':
       if (s.canvasMode !== 'database') return false;
@@ -373,6 +400,18 @@ export function runCommand(id: CommandId): boolean {
       return true;
     case 'newConnection':
       s.openDialog();
+      return true;
+    case 'openWorkspace':
+      void useWorkspace.getState().openDialog();
+      return true;
+    case 'openDataFile':
+      void pickAndOpenDataFiles();
+      return true;
+    case 'attachPostgres':
+      useDataFiles.setState({ attachOpen: true });
+      return true;
+    case 'openConnectionString':
+      useWorkspace.setState({ connectionStringOpen: true });
       return true;
     case 'disconnect':
       void s.disconnect();

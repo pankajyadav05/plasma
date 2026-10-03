@@ -1,5 +1,6 @@
 import { Button } from '@/components/ui/button';
 import { Segmented } from '@/components/ui/workbench';
+import { usePresenting } from '@/features/presentation/presentation';
 import { cn } from '@/lib/cn';
 import { ENGINE_ICON, ENGINE_LABEL } from '@/lib/engine-meta';
 import { lazyNamed } from '@/lib/lazy';
@@ -9,6 +10,7 @@ import { engineCaps } from '@shared/sql-dialect';
 import { Copy, Pencil, Plus } from 'lucide-react';
 import { Suspense } from 'react';
 import { groupConnections } from '../connection-manager/connection-groups';
+import { WorkspaceSection } from '../workspace/WorkspaceSection';
 import { EntityList } from './EntityList';
 import { HistoryList } from './HistoryList';
 import { SavedQueriesList } from './SavedQueriesList';
@@ -59,6 +61,7 @@ export function Sidebar() {
           <EntityList />
         )}
       </div>
+      <WorkspaceSection />
     </div>
   );
 }
@@ -86,6 +89,7 @@ function SidebarModeSwitch() {
  * hover, plus an explicit "Add connection" CTA at the bottom.
  */
 function SavedConnectionsList() {
+  const presenting = usePresenting();
   const savedConnections = useSession((s) => s.savedConnections);
   const connectionState = useSession((s) => s.connectionState);
   const connectSaved = useSession((s) => s.connectSaved);
@@ -128,9 +132,11 @@ function SavedConnectionsList() {
                       }}
                       disabled={connecting}
                       title={
-                        engine === 'sqlite'
-                          ? `Open ${c.database}`
-                          : `Connect to ${c.host}:${c.port}${engine === 'postgres' || engine === 'mysql' ? `/${c.database}` : ''}`
+                        presenting
+                          ? `Connect to ${c.name}`
+                          : engine === 'sqlite' || engine === 'duckdb'
+                            ? `Open ${c.database}`
+                            : `Connect to ${c.host}:${c.port}${engine === 'postgres' || engine === 'mysql' || engine === 'clickhouse' ? `/${c.database}` : ''}`
                       }
                       className={cn(
                         'flex min-w-0 flex-1 items-center gap-2 px-2 text-left text-[13px] transition-colors',

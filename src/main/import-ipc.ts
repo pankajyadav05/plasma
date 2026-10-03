@@ -21,6 +21,17 @@ type DistributiveOmit<T, K extends keyof T> = T extends unknown ? Omit<T, K> : n
 export interface ImportIpcDeps {
   window: () => BrowserWindow | null;
   isReadOnly: () => boolean;
+  /** Record executed statements in the local audit log (no-op unless the connection is audited). */
+  audit?: (
+    statements: Array<{
+      sql: string;
+      source: 'structure' | 'import';
+      error?: string | null;
+      affectedRows?: number | null;
+      durationMs?: number | null;
+      ts?: number;
+    }>,
+  ) => void;
   callWorker: <K extends WorkerResponse['kind']>(
     req: DistributiveOmit<WorkerRequest, 'id'>,
     expected: K,
@@ -54,6 +65,11 @@ async function readHead(path: string, bytes: number): Promise<{ text: string; si
  */
 const pickedPaths = new Set<string>();
 
+/** A data file named on the launcher's command line counts as picked (D2). */
+export function allowImportPath(path: string): void {
+  pickedPaths.add(path);
+}
+
 function assertPicked(path: string): void {
   if (!pickedPaths.has(path)) throw new Error('Pick the file to import first.');
 }
@@ -62,7 +78,32 @@ export function registerImportIpc(deps: ImportIpcDeps): void {
   ipcMain.handle(IpcChannel.StructureApply, async (_e, raw: unknown): Promise<DdlApplyResult> => {
     const req = DdlApplyRequest.parse(raw);
     if (deps.isReadOnly()) throw new Error(READ_ONLY_MESSAGE);
+    const startedAt = Date.now();
     const res = await deps.callWorker({ kind: 'applyDdl', request: req }, 'ddlResult');
+    if (deps.audit) {
+      const all = [...req.transactional, ...req.concurrent];
+      const result = res.result;
+      const ran = result.error ? Math.min(result.error.index, all.length) : all.length;
+      deps.audit([
+        ...all.slice(0, ran).map((sql) => ({
+          sql,
+          source: 'structure' as const,
+          ts: startedAt,
+          durationMs: Date.now() - startedAt,
+        })),
+        ...(result.error
+          ? [
+              {
+                sql: result.error.statement,
+                source: 'structure' as const,
+                error: result.error.message,
+                ts: startedAt,
+                durationMs: Date.now() - startedAt,
+              },
+            ]
+          : []),
+      ]);
+    }
     return res.result;
   });
 
@@ -95,7 +136,19 @@ export function registerImportIpc(deps: ImportIpcDeps): void {
     const job = ImportJobSpec.parse(raw);
     if (deps.isReadOnly()) throw new Error(READ_ONLY_MESSAGE);
     assertPicked(job.filePath);
+    const startedAt = Date.now();
     const res = await deps.callWorker({ kind: 'importRun', job }, 'importResult');
+    const r = res.result;
+    deps.audit?.([
+      {
+        sql: `IMPORT ${job.format.toUpperCase()} ${basename(job.filePath)} INTO ${job.schema}.${job.table}`,
+        source: 'import',
+        error: r.ok ? null : (r.error?.message ?? (r.cancelled ? 'cancelled' : 'import failed')),
+        affectedRows: r.rowsImported,
+        ts: startedAt,
+        durationMs: Date.now() - startedAt,
+      },
+    ]);
     return res.result;
   });
 

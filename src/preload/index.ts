@@ -1,5 +1,6 @@
 import { IpcChannel, type PlasmaAPI, type Platform } from '@shared/protocol';
-import { contextBridge, ipcRenderer } from 'electron';
+import { WorkspaceChannel } from '@shared/workspace';
+import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import { type EventChannel, eventChannels } from './event-channels';
 
 /**
@@ -24,6 +25,7 @@ const api: PlasmaAPI = {
     pickFile: (title) => ipcRenderer.invoke(IpcChannel.ConnectionPickFile, title),
     pickSqliteFile: (mode) => ipcRenderer.invoke(IpcChannel.ConnectionPickSqlite, mode),
     sqliteBackupCopy: () => ipcRenderer.invoke(IpcChannel.SqliteBackupCopy),
+    pickDataFiles: (target) => ipcRenderer.invoke(IpcChannel.DataFilePick, target),
     respondHostKey: (requestId, accept) =>
       ipcRenderer.invoke(IpcChannel.SshHostKeyRespond, { requestId, accept }),
   },
@@ -43,6 +45,7 @@ const api: PlasmaAPI = {
             params,
             internal: opts?.internal === true,
             maxRows: opts?.maxRows,
+            auditSource: opts?.auditSource,
           })
         : ipcRenderer.invoke(IpcChannel.QueryRun, sql),
     commitEditBatch: (req) => ipcRenderer.invoke(IpcChannel.QueryCommitEditBatch, req),
@@ -115,6 +118,16 @@ const api: PlasmaAPI = {
   sql: {
     format: (sql) => ipcRenderer.invoke(IpcChannel.FormatSql, sql),
   },
+  audit: {
+    list: (opts) => ipcRenderer.invoke(IpcChannel.AuditList, opts ?? {}),
+    verify: () => ipcRenderer.invoke(IpcChannel.AuditVerify),
+    export: (req) => ipcRenderer.invoke(IpcChannel.AuditExport, req),
+  },
+  pgListen: {
+    start: (channel) => ipcRenderer.invoke(IpcChannel.PgListen, { channel }),
+    stop: (channel) => ipcRenderer.invoke(IpcChannel.PgUnlisten, { channel }),
+    notify: (channel, payload) => ipcRenderer.invoke(IpcChannel.PgNotify, { channel, payload }),
+  },
   history: {
     list: (opts) => ipcRenderer.invoke(IpcChannel.HistoryList, opts ?? {}),
     latest: (opts) => ipcRenderer.invoke(IpcChannel.HistoryLatest, opts ?? {}),
@@ -152,9 +165,49 @@ const api: PlasmaAPI = {
     install: () => ipcRenderer.invoke(IpcChannel.UpdateInstall),
     status: () => ipcRenderer.invoke(IpcChannel.UpdateStatus),
   },
+  workspace: {
+    openDialog: () => ipcRenderer.invoke(WorkspaceChannel.OpenDialog),
+    openRecent: (path) => ipcRenderer.invoke(WorkspaceChannel.OpenRecent, path),
+    close: () => ipcRenderer.invoke(WorkspaceChannel.Close),
+    current: () => ipcRenderer.invoke(WorkspaceChannel.Current),
+    recents: () => ipcRenderer.invoke(WorkspaceChannel.Recents),
+    forgetRecent: (path) => ipcRenderer.invoke(WorkspaceChannel.ForgetRecent, path),
+    writeQuery: (req) => ipcRenderer.invoke(WorkspaceChannel.WriteQuery, req),
+    deleteQuery: (path) => ipcRenderer.invoke(WorkspaceChannel.DeleteQuery, path),
+    writeSnippets: (snippets, baseRev, overwrite) =>
+      ipcRenderer.invoke(WorkspaceChannel.WriteSnippets, snippets, baseRev, overwrite),
+    writeNotebook: (nb, file, baseRev, overwrite) =>
+      ipcRenderer.invoke(WorkspaceChannel.WriteNotebook, nb, file, baseRev, overwrite),
+    readNotebook: (file) => ipcRenderer.invoke(WorkspaceChannel.ReadNotebook, file),
+    profileConfig: (id) => ipcRenderer.invoke(WorkspaceChannel.ProfileConfig, id),
+    setPassword: (id, password) => ipcRenderer.invoke(WorkspaceChannel.SetPassword, id, password),
+  },
+  deepLink: {
+    takePending: () => ipcRenderer.invoke(WorkspaceChannel.LaunchTake),
+  },
+  cli: {
+    status: () => ipcRenderer.invoke(WorkspaceChannel.CliStatus),
+    install: () => ipcRenderer.invoke(WorkspaceChannel.CliInstall),
+  },
 };
 
 contextBridge.exposeInMainWorld('plasma', api);
+
+// Dropping data files on the window: the paths are read here, in the preload
+// (webUtils is the only trustworthy source — the page cannot forge a File with
+// a path), and main validates them before the renderer ever sees them.
+window.addEventListener('dragover', (e) => {
+  if (e.dataTransfer?.types.includes('Files')) e.preventDefault();
+});
+window.addEventListener('drop', (e) => {
+  const files = e.dataTransfer?.files;
+  if (!e.isTrusted || !files || files.length === 0) return;
+  e.preventDefault();
+  const paths = Array.from(files)
+    .map((f) => webUtils.getPathForFile(f))
+    .filter((p) => p.length > 0);
+  if (paths.length > 0) ipcRenderer.send(IpcChannel.DataFileDrop, paths.slice(0, 64));
+});
 
 // Expose a thin subscription layer for main-process → renderer menu events
 // (separate from invoke-based RPC). Renderer components listen via

@@ -1,9 +1,10 @@
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { ViewTitle, ViewToolbar } from '@/components/ui/view-parts';
-import { IconButton, Pill } from '@/components/ui/workbench';
+import { IconButton, Pill, Segmented } from '@/components/ui/workbench';
 import { useSession } from '@/stores/session';
 import { Trash2, X } from 'lucide-react';
 import { useState } from 'react';
+import { AuditLog } from './AuditLog';
 import { HistoryBrowser } from './HistoryBrowser';
 
 /**
@@ -19,16 +20,37 @@ export function HistoryCanvas() {
   const setCanvasMode = useSession((s) => s.setCanvasMode);
 
   const [confirmClear, setConfirmClear] = useState(false);
+  const [view, setView] = useState<'queries' | 'audit'>('queries');
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-[var(--wb-content)]">
       <ViewToolbar>
-        <ViewTitle title="Query history" meta="Click an entry to open it in a new SQL tab" />
+        <ViewTitle
+          title={view === 'audit' ? 'Audit log' : 'Query history'}
+          meta={
+            view === 'audit'
+              ? 'Append-only record of statements run on audited connections'
+              : 'Click an entry to open it in a new SQL tab'
+          }
+        />
+        <Segmented
+          ariaLabel="History view"
+          variant="track"
+          size="sm"
+          value={view}
+          onChange={setView}
+          options={[
+            { value: 'queries', label: 'Queries' },
+            { value: 'audit', label: 'Audit' },
+          ]}
+        />
         <div className="flex-1" />
-        <Pill onClick={() => setConfirmClear(true)} disabled={history.length === 0}>
-          <Trash2 />
-          Clear…
-        </Pill>
+        {view === 'queries' && (
+          <Pill onClick={() => setConfirmClear(true)} disabled={history.length === 0}>
+            <Trash2 />
+            Clear…
+          </Pill>
+        )}
         <IconButton
           variant="plain"
           label="Close history"
@@ -39,7 +61,11 @@ export function HistoryCanvas() {
         </IconButton>
       </ViewToolbar>
 
-      <HistoryBrowser onReuse={(sql) => reuseHistoryQuery(sql)} />
+      {view === 'audit' ? (
+        <AuditLog />
+      ) : (
+        <HistoryBrowser onReuse={(sql) => reuseHistoryQuery(sql)} />
+      )}
 
       <ConfirmDialog
         open={confirmClear}

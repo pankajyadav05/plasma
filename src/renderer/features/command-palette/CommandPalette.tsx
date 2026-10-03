@@ -88,6 +88,21 @@ const ACTIONS: ReadonlyArray<{ id: CommandId; label: string; keywords?: string[]
     label: 'Show diagram',
     keywords: ['er', 'erd', 'relationships', 'schema', 'foreign keys'],
   },
+  {
+    id: 'presentationMode',
+    label: 'Toggle presentation mode',
+    keywords: ['mask', 'pii', 'hide', 'redact', 'screenshot', 'demo', 'sensitive'],
+  },
+  {
+    id: 'pgListen',
+    label: 'Listen to notifications (LISTEN/NOTIFY)',
+    keywords: ['listen', 'notify', 'channel', 'pubsub', 'tail', 'postgres'],
+  },
+  {
+    id: 'redisKeyspace',
+    label: 'Tail keyspace events',
+    keywords: ['redis', 'keyevent', 'notifications', 'expired', 'tail', 'live'],
+  },
   { id: 'splitPane', label: 'Split pane right', keywords: ['editor', 'side by side'] },
   { id: 'closePane', label: 'Close split pane', keywords: ['editor'] },
   { id: 'nextPane', label: 'Focus next pane', keywords: ['editor', 'split'] },
@@ -102,6 +117,26 @@ const ACTIONS: ReadonlyArray<{ id: CommandId; label: string; keywords?: string[]
   { id: 'settings', label: 'Settings', keywords: ['preferences'] },
   { id: 'cheatSheet', label: 'Keyboard shortcuts', keywords: ['keys', 'help'] },
   { id: 'newConnection', label: 'New connection' },
+  {
+    id: 'openConnectionString',
+    label: 'Open connection string…',
+    keywords: ['url', 'paste', 'postgres://', 'link', 'plasma://'],
+  },
+  {
+    id: 'openDataFile',
+    label: 'Open data file…',
+    keywords: ['duckdb', 'csv', 'tsv', 'parquet', 'json', 'ndjson', 'file', 'query a file'],
+  },
+  {
+    id: 'attachPostgres',
+    label: 'Attach a Postgres connection to this DuckDB session…',
+    keywords: ['duckdb', 'join', 'postgres', 'live', 'files'],
+  },
+  {
+    id: 'openWorkspace',
+    label: 'Open workspace folder…',
+    keywords: ['team', 'shared', 'git', '.plasma', 'project'],
+  },
   { id: 'disconnect', label: 'Disconnect' },
 ];
 

@@ -42,12 +42,60 @@ const NUMERIC_TYPES = new Set([
   'float',
   'double',
   'number',
+  // DuckDB
+  'hugeint',
+  'uhugeint',
+  'utinyint',
+  'usmallint',
+  'uinteger',
+  'ubigint',
+  // ClickHouse (after stripping Nullable / LowCardinality and lower-casing)
+  'int8',
+  'int16',
+  'int32',
+  'int64',
+  'int128',
+  'int256',
+  'uint8',
+  'uint16',
+  'uint32',
+  'uint64',
+  'uint128',
+  'uint256',
+  'float32',
+  'float64',
+  'decimal32',
+  'decimal64',
+  'decimal128',
+  'decimal256',
 ]);
 
-const TEMPORAL_TYPES = new Set(['date', 'timestamp', 'timestamptz', 'time', 'timetz']);
+const TEMPORAL_TYPES = new Set([
+  'date',
+  'timestamp',
+  'timestamptz',
+  'time',
+  'timetz',
+  // ClickHouse / DuckDB
+  'datetime',
+  'datetime64',
+  'date32',
+  'timestamp_s',
+  'timestamp_ms',
+  'timestamp_ns',
+]);
 
 function baseType(typeName: string | null | undefined): string {
-  return (typeName ?? '')
+  // ClickHouse wraps types: Nullable(Int32), LowCardinality(Nullable(String)).
+  let t = typeName ?? '';
+  for (
+    let m = /^(?:Nullable|LowCardinality)\((.*)\)$/.exec(t);
+    m;
+    m = /^(?:Nullable|LowCardinality)\((.*)\)$/.exec(t)
+  ) {
+    t = m[1] as string;
+  }
+  return t
     .replace(/\(.*\)/, '')
     .toLowerCase()
     .replace(/\s+(unsigned|signed|zerofill)\b/g, '') // MySQL modifiers

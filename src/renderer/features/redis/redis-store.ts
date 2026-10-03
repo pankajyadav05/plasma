@@ -1,3 +1,4 @@
+import { TAIL_SYSTEM_CHANNEL, droppedFromNotice, pushCapped } from '@/features/live-tail/live-tail';
 import { cleanIpcError } from '@/lib/errors';
 import { ipc } from '@/lib/ipc';
 import { useSession } from '@/stores/session';
@@ -59,6 +60,10 @@ export interface PubsubTabState {
   paused: boolean;
   error: string | null;
   seq: number;
+  /** Text filter over channel + message (see live-tail matchesTailFilter). */
+  filter: string;
+  /** Messages lost to the worker's flood control or to the buffer cap. */
+  dropped: number;
 }
 
 export const PUBSUB_MAX_MESSAGES = 2000;
@@ -150,6 +155,8 @@ export const useRedisTabs = create<RedisTabsState>((set, get) => ({
           pattern,
           messages: prev?.messages ?? [],
           seq: prev?.seq ?? 0,
+          filter: prev?.filter ?? '',
+          dropped: prev?.dropped ?? 0,
           paused: false,
           status: 'subscribing',
           error: null,
@@ -214,12 +221,22 @@ function ensurePubsubListener(): void {
     const next: Record<string, PubsubTabState> = { ...state.pubsub };
     for (const [tabId, t] of Object.entries(state.pubsub)) {
       if (t.status !== 'live' || t.paused) continue;
-      if (t.pattern !== msg.pattern) continue;
-      if (!matchesSubscription(t.channel, t.pattern, msg.channel)) continue;
+      // The worker's flood notice is not a channel message: every live tail shows it.
+      const system = msg.channel === TAIL_SYSTEM_CHANNEL;
+      if (!system && t.pattern !== msg.pattern) continue;
+      if (!system && !matchesSubscription(t.channel, t.pattern, msg.channel)) continue;
       const seq = t.seq + 1;
-      const messages = [{ ...msg, seq }, ...t.messages];
-      if (messages.length > PUBSUB_MAX_MESSAGES) messages.length = PUBSUB_MAX_MESSAGES;
-      next[tabId] = { ...t, seq, messages };
+      const { rows: messages, dropped } = pushCapped(
+        t.messages,
+        { ...msg, seq },
+        PUBSUB_MAX_MESSAGES,
+      );
+      next[tabId] = {
+        ...t,
+        seq,
+        messages,
+        dropped: t.dropped + dropped + droppedFromNotice(msg.channel, msg.message),
+      };
       changed = true;
     }
     if (changed) useRedisTabs.setState({ pubsub: next });

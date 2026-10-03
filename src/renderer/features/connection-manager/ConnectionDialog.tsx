@@ -23,8 +23,10 @@ import { describeConnectError } from '@/lib/errors';
 import { ipc } from '@/lib/ipc';
 import { SAFE_MODE_LABEL, SAFE_MODE_LEVELS, type SafeModeLevel } from '@/stores/safe-mode';
 import { useSession } from '@/stores/session';
+import { useConnectionDraft } from '@/stores/workspace';
 import { suggestReadOnlyForTag } from '@shared/connection-readonly';
 import { formatConnectionUrl, parseConnectionUrl } from '@shared/connection-url';
+import { dataFileKind } from '@shared/data-files';
 import type {
   ConnectionConfig,
   ConnectionEngine,
@@ -40,11 +42,13 @@ import {
   Copy,
   Database,
   DatabaseZap,
+  FileSpreadsheet,
   HardDrive,
   Layers,
   Link2,
   Loader2,
   Play,
+  Rows3,
   Save,
   Trash2,
 } from 'lucide-react';
@@ -80,6 +84,8 @@ const ENGINE_DEFAULTS: Record<
   opensearch: { port: 9200, database: '', user: '', ssl: false },
   sqlite: { port: 1, database: '', user: '', ssl: false },
   mysql: { port: 3306, database: '', user: 'root', ssl: false },
+  clickhouse: { port: 8123, database: 'default', user: 'default', ssl: false },
+  duckdb: { port: 1, database: '', user: '', ssl: false },
 };
 
 const ENGINE_DISPLAY: Record<
@@ -91,6 +97,8 @@ const ENGINE_DISPLAY: Record<
   opensearch: { label: 'OpenSearch', subtitle: 'Search · documents', icon: Boxes },
   sqlite: { label: 'SQLite', subtitle: 'Local file · SQL', icon: HardDrive },
   mysql: { label: 'MySQL', subtitle: 'MySQL · MariaDB', icon: DatabaseZap },
+  clickhouse: { label: 'ClickHouse', subtitle: 'Columnar · analytics', icon: Rows3 },
+  duckdb: { label: 'DuckDB', subtitle: 'Local file · analytics', icon: FileSpreadsheet },
 };
 
 /**
@@ -169,7 +177,9 @@ export function ConnectionDialog() {
   const [copied, setCopied] = useState(false);
 
   const engine = (form.engine ?? 'postgres') as ConnectionEngine;
-  const isEditing = Boolean(dialogPrefill);
+  // A deep-link / pasted-URL prefill is a NEW connection, not an edit of a saved one.
+  const draftId = useConnectionDraft((s) => s.draftId);
+  const isEditing = Boolean(dialogPrefill) && dialogPrefill?.id !== draftId;
   const setConnectionTag = useSession((s) => s.setConnectionTag);
   const initialTag = useSession((s) =>
     dialogPrefill ? s.settings.connectionTags?.[dialogPrefill.id] : undefined,
@@ -215,7 +225,7 @@ export function ConnectionDialog() {
     activeConfig && isEditing && activeConfig.id === dialogPrefill?.id,
   );
   const sshSupported = engineCaps(engine).ssh && engine !== 'opensearch';
-  const isFile = engine === 'sqlite';
+  const isFile = engine === 'sqlite' || engine === 'duckdb';
   const tlsMode = formTlsMode(form);
 
   /** Anything the user edits invalidates the last test / errors for that field. */
@@ -401,7 +411,17 @@ export function ConnectionDialog() {
 
   const pickSqlite = async (mode: 'open' | 'create') => {
     try {
-      const path = await ipc.conn.pickSqliteFile(mode);
+      let path: string | null;
+      if (engine === 'duckdb') {
+        const picked = await ipc.conn.pickDataFiles('database');
+        path = picked?.files[0] ?? null;
+        if (picked && !path) throw new Error(picked.problems[0] ?? 'That is not a DuckDB file');
+        if (path && dataFileKind(path) !== 'duckdb') {
+          throw new Error('Choose a .duckdb file, or use Open data file… for CSV and Parquet.');
+        }
+      } else {
+        path = await ipc.conn.pickSqliteFile(mode);
+      }
       if (!path) return;
       setForm((prev) => ({
         ...prev,
@@ -569,7 +589,11 @@ export function ConnectionDialog() {
               </div>
 
               {isFile && (
-                <Field label="Database file" htmlFor="conn-file" error={errors.database}>
+                <Field
+                  label={engine === 'duckdb' ? 'DuckDB file' : 'Database file'}
+                  htmlFor="conn-file"
+                  error={errors.database}
+                >
                   <div className="flex gap-2">
                     <Input
                       id="conn-file"
@@ -580,10 +604,14 @@ export function ConnectionDialog() {
                       className="font-mono"
                     />
                     <Pill onClick={() => void pickSqlite('open')}>Open…</Pill>
-                    <Pill onClick={() => void pickSqlite('create')}>New…</Pill>
+                    {engine === 'sqlite' && (
+                      <Pill onClick={() => void pickSqlite('create')}>New…</Pill>
+                    )}
                   </div>
                   <p className="pt-1 text-[12px] text-[var(--wb-text-2)]">
-                    Turn on Read-only below to open the file without being able to change it.
+                    {engine === 'duckdb'
+                      ? 'Opened read-only. To query CSV, Parquet or JSON files, use Open data file… instead.'
+                      : 'Turn on Read-only below to open the file without being able to change it.'}
                   </p>
                 </Field>
               )}
@@ -633,13 +661,19 @@ export function ConnectionDialog() {
               )}
 
               {/* Engine-specific data field */}
-              {(engine === 'postgres' || engine === 'mysql') && (
+              {(engine === 'postgres' || engine === 'mysql' || engine === 'clickhouse') && (
                 <Field label="Database" htmlFor="conn-db" error={errors.database}>
                   <Input
                     id="conn-db"
                     value={form.database}
                     onChange={(e) => update('database', e.target.value, 'database')}
-                    placeholder={engine === 'mysql' ? '(optional)' : 'postgres'}
+                    placeholder={
+                      engine === 'mysql'
+                        ? '(optional)'
+                        : engine === 'clickhouse'
+                          ? 'default'
+                          : 'postgres'
+                    }
                   />
                 </Field>
               )}

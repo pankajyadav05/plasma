@@ -1,5 +1,6 @@
 import { Button } from '@/components/ui/button';
 import { IconButton, Pill } from '@/components/ui/workbench';
+import { markAiApplied } from '@/lib/ai-applied';
 import { cn } from '@/lib/cn';
 import { type AiTurn, useActiveTab, useSession } from '@/stores/session';
 import { Loader2, Send, Sparkles, Square, Trash2 } from 'lucide-react';
@@ -75,6 +76,7 @@ export function AiPanel() {
     if (!tab) return;
     if (tab.kind === 'table' || tab.sql.trim().length > 0) addTab();
     setSql(code);
+    markAiApplied(useSession.getState().activeTabId, code);
   };
 
   // Runs every statement in the block (buffer mode), still through the

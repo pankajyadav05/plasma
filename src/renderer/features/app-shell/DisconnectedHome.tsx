@@ -1,10 +1,13 @@
 import { Button } from '@/components/ui/button';
+import { hostLabel, usePresenting } from '@/features/presentation/presentation';
 import { ENGINE_ICON } from '@/lib/engine-meta';
+import { pickAndOpenDataFiles } from '@/stores/data-files';
 import { useSession } from '@/stores/session';
 import type { ConnectionEngine, SavedConnection } from '@shared/protocol';
-import { Cog, Copy, type LucideIcon, Pencil, Plus } from 'lucide-react';
+import { Cog, Copy, FileSpreadsheet, type LucideIcon, Pencil, Plus } from 'lucide-react';
 import { Fragment } from 'react';
 import { groupConnections } from '../connection-manager/connection-groups';
+import { WorkspaceHome } from '../workspace/WorkspaceHome';
 
 const ENGINE_META: Record<ConnectionEngine, { label: string; icon: LucideIcon }> = {
   postgres: { label: 'Postgres', icon: ENGINE_ICON.postgres },
@@ -12,6 +15,8 @@ const ENGINE_META: Record<ConnectionEngine, { label: string; icon: LucideIcon }>
   opensearch: { label: 'OpenSearch', icon: ENGINE_ICON.opensearch },
   sqlite: { label: 'SQLite', icon: ENGINE_ICON.sqlite },
   mysql: { label: 'MySQL', icon: ENGINE_ICON.mysql },
+  clickhouse: { label: 'ClickHouse', icon: ENGINE_ICON.clickhouse },
+  duckdb: { label: 'DuckDB', icon: ENGINE_ICON.duckdb },
 };
 
 /**
@@ -19,16 +24,16 @@ const ENGINE_META: Record<ConnectionEngine, { label: string; icon: LucideIcon }>
  * `database`/`user` fields carry different meanings per engine, so we
  * branch instead of dumping all four like the postgres-only flavor did.
  */
-function metaLine(c: SavedConnection): string {
+function metaLine(c: SavedConnection, presenting = false): string {
   const engine = c.engine ?? 'postgres';
-  const hostPort = `${c.host}:${c.port}`;
+  const hostPort = hostLabel(presenting, c.host, c.port);
   if (engine === 'redis') {
     return `${hostPort} · db ${c.database || '0'}${c.user ? ` · ${c.user}` : ''}`;
   }
   if (engine === 'opensearch') {
     return c.user ? `${hostPort} · ${c.user}` : hostPort;
   }
-  if (engine === 'sqlite') return c.database;
+  if (engine === 'sqlite' || engine === 'duckdb') return presenting ? 'database file' : c.database;
   return `${hostPort} · ${c.database} · ${c.user}`;
 }
 
@@ -45,6 +50,7 @@ export function DisconnectedHome() {
   const duplicateSaved = useSession((s) => s.duplicateSaved);
   const openDialog = useSession((s) => s.openDialog);
   const connecting = useSession((s) => s.connectionState === 'connecting');
+  const presenting = usePresenting();
   const setCanvasMode = useSession((s) => s.setCanvasMode);
 
   return (
@@ -108,7 +114,7 @@ export function DisconnectedHome() {
                             </span>
                           </div>
                           <div className="truncate font-mono text-[12px] text-[var(--wb-text-2)]">
-                            {metaLine(c)}
+                            {metaLine(c, presenting)}
                           </div>
                         </div>
                       </button>
@@ -154,6 +160,30 @@ export function DisconnectedHome() {
             </li>
           </ul>
         )}
+        <div
+          className="mt-6 flex items-center gap-3 rounded-[10px] border border-dashed border-[var(--wb-toolbar-group-edge)] p-3"
+          data-testid="open-data-file"
+        >
+          <span className="grid h-8 w-8 shrink-0 place-items-center rounded-[7px] bg-[var(--wb-control)]">
+            <FileSpreadsheet className="h-4 w-4 text-[var(--icon-db)]" />
+          </span>
+          <div className="min-w-0 flex-1">
+            <div className="text-[13px] font-medium text-[var(--wb-text)]">Query a data file</div>
+            <div className="text-[12px] text-[var(--wb-text-2)]">
+              Drop a CSV, TSV, Parquet or JSON file here, or open one. DuckDB makes each file a
+              table you can query with SQL.
+            </div>
+          </div>
+          <Button
+            variant="secondary"
+            size="sm"
+            disabled={connecting}
+            onClick={() => void pickAndOpenDataFiles()}
+          >
+            Open data file…
+          </Button>
+        </div>
+        <WorkspaceHome />
       </div>
     </div>
   );

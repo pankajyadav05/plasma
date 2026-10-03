@@ -1,4 +1,6 @@
 import type { ConnectionConfig, ConnectionEngine } from '@shared/protocol';
+import { ClickhouseDriver } from './drivers/clickhouse';
+import { DuckdbDriver } from './drivers/duckdb';
 import { MysqlDriver } from './drivers/mysql';
 import { OpenSearchDriver } from './drivers/opensearch';
 import { PostgresDriver } from './drivers/postgres';
@@ -19,6 +21,8 @@ const defaultFactories: Record<ConnectionEngine, DriverFactory> = {
   opensearch: () => new OpenSearchDriver(),
   sqlite: () => new SqliteDriver(),
   mysql: () => new MysqlDriver(),
+  clickhouse: () => new ClickhouseDriver(),
+  duckdb: () => new DuckdbDriver(),
 };
 
 /**

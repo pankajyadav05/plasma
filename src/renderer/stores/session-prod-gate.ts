@@ -7,6 +7,8 @@
  * (Notebook, Mock data, Explain ANALYZE) so none of them bypasses the
  * prod-tag confirmation.
  */
+import { clickhouseMutation } from '@shared/clickhouse-mutation';
+import { engineCaps } from '@shared/sql-dialect';
 import { type GateDecision, effectiveSafeMode, safeModeDecision } from './safe-mode';
 import type { SliceCreator } from './session-types';
 
@@ -34,12 +36,17 @@ export function isProdTagged(get: Get): boolean {
  */
 export function evaluateGate(get: Get, sql: string, force = false): GateDecision {
   const state = get();
-  return safeModeDecision({
-    sql,
-    force,
-    prodTagged: isProdTagged(get),
-    level: effectiveSafeMode(state.settings, state.activeConfig?.id),
-  });
+  const level = effectiveSafeMode(state.settings, state.activeConfig?.id);
+  const decision = safeModeDecision({ sql, force, prodTagged: isProdTagged(get), level });
+  // ClickHouse mutations are asynchronous and cannot be undone: always ask first.
+  if (
+    decision.kind === 'run' &&
+    engineCaps(state.activeConfig?.engine).asyncMutations &&
+    clickhouseMutation(sql)
+  ) {
+    return { kind: 'confirm', reason: 'safe-mode', level };
+  }
+  return decision;
 }
 
 /** Stash `sql` and show the confirm dialog for the editor's run (resumed by `confirmProdGate`). */

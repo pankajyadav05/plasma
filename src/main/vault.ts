@@ -168,7 +168,16 @@ interface ConnectionRow {
 }
 
 function asEngine(raw: string | null | undefined): ConnectionEngine {
-  if (raw === 'redis' || raw === 'opensearch' || raw === 'sqlite' || raw === 'mysql') return raw;
+  if (
+    raw === 'redis' ||
+    raw === 'opensearch' ||
+    raw === 'sqlite' ||
+    raw === 'mysql' ||
+    raw === 'clickhouse' ||
+    raw === 'duckdb'
+  ) {
+    return raw;
+  }
   return 'postgres';
 }
 

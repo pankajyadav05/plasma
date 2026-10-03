@@ -1,10 +1,13 @@
 import { type DataColumn, DataTable } from '@/components/ui/data-table';
 import { Badge, EmptyState, ViewFooter, ViewToolbar } from '@/components/ui/view-parts';
 import { IconButton, Pill } from '@/components/ui/workbench';
+import { matchesTailFilter } from '@/features/live-tail/live-tail';
 import { cn } from '@/lib/cn';
 import { useWorkbench } from '@/stores/workbench';
+import { isKeyeventPattern, parseKeyeventChannel } from '@shared/redis-keyspace';
 import { Loader2, Pause, Play, Trash2 } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
+import { KeyspaceBanner } from './KeyspaceBanner';
 import {
   PUBSUB_MAX_MESSAGES,
   type PubsubRow,
@@ -37,7 +40,17 @@ export function RedisPubsubView({ tabId, channel, pattern }: PubsubViewProps) {
   const pubsubStart = useRedisTabs((s) => s.pubsubStart);
   const pubsubStop = useRedisTabs((s) => s.pubsubStop);
   const pubsubPatch = useRedisTabs((s) => s.pubsubPatch);
-  const messages = st?.messages ?? [];
+  const allMessages = st?.messages ?? [];
+  const filter = st?.filter ?? '';
+  const dropped = st?.dropped ?? 0;
+  const keyspace = pattern && isKeyeventPattern(channel);
+  const messages = useMemo(
+    () =>
+      filter
+        ? allMessages.filter((m) => matchesTailFilter(m.channel, m.message, filter))
+        : allMessages,
+    [allMessages, filter],
+  );
   const paused = st?.paused ?? false;
   const status: Status = st?.status ?? 'subscribing';
   const error = st?.error ?? null;
@@ -86,21 +99,29 @@ export function RedisPubsubView({ tabId, channel, pattern }: PubsubViewProps) {
   const columns = useMemo<DataColumn<Row>[]>(
     () => [
       { key: 'time', label: 'time', width: 110, render: (m) => fmtTime(m.timestamp) },
+      keyspace
+        ? {
+            key: 'event',
+            label: 'event',
+            width: 130,
+            render: (m) => parseKeyeventChannel(m.channel)?.event ?? m.channel,
+            titleOf: (m) => m.channel,
+          }
+        : {
+            key: 'channel',
+            label: 'channel',
+            width: 180,
+            render: (m) => m.channel,
+            titleOf: (m) => m.channel,
+          },
       {
-        key: 'channel',
-        label: 'channel',
-        width: 180,
-        render: (m) => m.channel,
-        titleOf: (m) => m.channel,
-      },
-      {
-        key: 'payload',
-        label: 'payload',
+        key: keyspace ? 'key' : 'payload',
+        label: keyspace ? 'key' : 'payload',
         render: (m) => m.message,
         titleOf: (m) => (m.message.length > 400 ? `${m.message.slice(0, 400)}…` : m.message),
       },
     ],
-    [],
+    [keyspace],
   );
 
   const active = status === 'live' || status === 'subscribing';
@@ -109,7 +130,7 @@ export function RedisPubsubView({ tabId, channel, pattern }: PubsubViewProps) {
     else void pubsubStart(tabId, channel, pattern);
   };
   const setPaused = (fn: (v: boolean) => boolean) => pubsubPatch(tabId, { paused: fn(paused) });
-  const setMessages = (m: Row[]) => pubsubPatch(tabId, { messages: m });
+  const clearMessages = () => pubsubPatch(tabId, { messages: [], dropped: 0 });
 
   return (
     <main className="flex min-h-0 min-w-0 flex-1 flex-col bg-[var(--wb-content)]">
@@ -120,6 +141,14 @@ export function RedisPubsubView({ tabId, channel, pattern }: PubsubViewProps) {
         </span>
         <StatusChip status={status} paused={paused} />
         <div className="flex-1" />
+        <input
+          aria-label="Filter messages"
+          className="h-[26px] w-[170px] min-w-0 rounded-[7px] border-0 bg-[var(--wb-field)] px-2.5 font-mono text-[13px] text-[var(--wb-text)] shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--wb-text)_10%,transparent)] outline-none placeholder:text-[var(--wb-text-3)] focus:shadow-[0_0_0_2px_color-mix(in_srgb,var(--wb-accent)_55%,transparent)]"
+          placeholder="filter  (!not  channel:x)"
+          value={filter}
+          onChange={(e) => pubsubPatch(tabId, { filter: e.target.value })}
+          spellCheck={false}
+        />
         <IconButton
           label={paused ? 'Resume' : 'Pause'}
           onClick={() => setPaused((v) => !v)}
@@ -130,8 +159,8 @@ export function RedisPubsubView({ tabId, channel, pattern }: PubsubViewProps) {
         </IconButton>
         <IconButton
           label="Clear messages"
-          onClick={() => setMessages([])}
-          disabled={messages.length === 0}
+          onClick={clearMessages}
+          disabled={allMessages.length === 0}
         >
           <Trash2 />
         </IconButton>
@@ -139,6 +168,8 @@ export function RedisPubsubView({ tabId, channel, pattern }: PubsubViewProps) {
           {active ? 'Unsubscribe' : 'Subscribe'}
         </Pill>
       </ViewToolbar>
+
+      {keyspace && <KeyspaceBanner />}
 
       {error && (
         <div
@@ -162,10 +193,17 @@ export function RedisPubsubView({ tabId, channel, pattern }: PubsubViewProps) {
           <EmptyState
             title="Waiting for messages…"
             hint={
-              <>
-                Publish with <span className="font-mono">PUBLISH {channel} hello</span> to see it
-                here.
-              </>
+              keyspace ? (
+                <>
+                  Change any key, e.g. <span className="font-mono">SET demo 1</span>, to see its
+                  event here.
+                </>
+              ) : (
+                <>
+                  Publish with <span className="font-mono">PUBLISH {channel} hello</span> to see it
+                  here.
+                </>
+              )
             }
           />
         ) : status === 'stopped' ? (
@@ -184,11 +222,20 @@ export function RedisPubsubView({ tabId, channel, pattern }: PubsubViewProps) {
 
       <ViewFooter>
         <span className="tabular-nums">
-          {messages.length.toLocaleString()} {messages.length === 1 ? 'message' : 'messages'}
+          {messages.length.toLocaleString()}
+          {messages.length !== allMessages.length
+            ? ` of ${allMessages.length.toLocaleString()}`
+            : ''}{' '}
+          {allMessages.length === 1 ? 'message' : 'messages'}
         </span>
         <span className="text-[12px] text-[var(--wb-text-3)]">
           · newest first, capped at {MAX_MESSAGES.toLocaleString()}
         </span>
+        {dropped > 0 && (
+          <span className="text-[12px] text-[var(--status-staging)]" data-testid="tail-dropped">
+            · {dropped.toLocaleString()} dropped
+          </span>
+        )}
         <div className="flex-1" />
         {paused && (
           <span className="text-[12px] text-[var(--wb-text-2)]">

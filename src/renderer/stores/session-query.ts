@@ -3,6 +3,7 @@
  * gate, origin-tab publishing), result switching, NOTICE streaming,
  * formatting and the explicit transaction controls.
  */
+import { isAiApplied } from '@/lib/ai-applied';
 import { ipc } from '@/lib/ipc';
 import {
   inlineVariables,
@@ -243,8 +244,14 @@ export const createQuerySlice: SliceCreator<QuerySlice> = (set, get) => ({
           const rowLimit = useWorkbench.getState().rowLimit;
           const unsupported = unsupportedStatementReason(stmt.text);
           if (unsupported) throw new Error(unsupported);
+          const auditSource = isAiApplied(originTabId, stmt.text) ? ('ai' as const) : undefined;
           const result = await runBound(stmt.text, varValues, (sql, params) => {
-            if (rowLimit !== null) return ipc.query.run(sql, params, { maxRows: rowLimit });
+            if (rowLimit !== null || auditSource) {
+              return ipc.query.run(sql, params, {
+                ...(rowLimit !== null ? { maxRows: rowLimit } : {}),
+                ...(auditSource ? { auditSource } : {}),
+              });
+            }
             return params ? ipc.query.run(sql, params) : ipc.query.run(sql);
           });
           // Attach any streamed notices that arrived for this statement

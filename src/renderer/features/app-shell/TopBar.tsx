@@ -1,5 +1,10 @@
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { ToolbarButton, ToolbarDivider, ToolbarGroup } from '@/components/ui/workbench';
+import {
+  hostLabel,
+  usePresentationWindowTitle,
+  usePresenting,
+} from '@/features/presentation/presentation';
 import { PendingEditsTable } from '@/features/result-grid/PendingEditsTable';
 import { cn } from '@/lib/cn';
 import { ENGINE_ICON, databaseLabel, shortServerVersion } from '@/lib/engine-meta';
@@ -24,6 +29,7 @@ import {
   Plus,
   RefreshCw,
   RotateCw,
+  ShieldCheck,
   Undo2,
   X,
 } from 'lucide-react';
@@ -250,17 +256,21 @@ function SessionCluster({ sql }: { sql: boolean }) {
   const addTab = useSession((s) => s.addTab);
   const canvasMode = useSession((s) => s.canvasMode);
   const setCanvasMode = useSession((s) => s.setCanvasMode);
-  const readOnlyConn = Boolean(activeConfig?.readOnly);
+  const readOnlyConn =
+    Boolean(activeConfig?.readOnly) || !engineCaps(activeConfig?.engine).rowEdits;
+  const noRowEdits = !engineCaps(activeConfig?.engine).rowEdits;
 
   return (
     <ToolbarGroup>
       <ToolbarButton
         label={
-          readOnlyConn
-            ? 'Read-only connection — writes are disabled'
-            : editMode
-              ? 'Edit mode — writes enabled. Click to lock.'
-              : 'Safe mode — read only. Click to allow edits.'
+          noRowEdits
+            ? 'Rows are read-only for this engine — write SQL in the editor instead'
+            : readOnlyConn
+              ? 'Read-only connection — writes are disabled'
+              : editMode
+                ? 'Edit mode — writes enabled. Click to lock.'
+                : 'Safe mode — read only. Click to allow edits.'
         }
         disabled={readOnlyConn}
         active={editMode && !readOnlyConn}
@@ -296,6 +306,8 @@ function SessionCluster({ sql }: { sql: boolean }) {
 
 function RightClusters({ connected }: { connected: boolean }) {
   const togglePalette = useSession((s) => s.togglePalette);
+  const presenting = usePresenting();
+  const updateSettings = useSession((s) => s.updateSettings);
   const refreshSchema = useSession((s) => s.refreshSchema);
   const refreshTable = useSession((s) => s.refreshTable);
   const schemaLoading = useSession((s) => s.schemaLoading);
@@ -331,6 +343,15 @@ function RightClusters({ connected }: { connected: boolean }) {
             <Activity />
           </ToolbarButton>
         )}
+        <ToolbarButton
+          label={`${presenting ? 'Turn off' : 'Turn on'} presentation mode (${kbd('⇧M')})`}
+          active={presenting}
+          tone={presenting ? 'accent' : 'default'}
+          onClick={() => void updateSettings({ presentationMode: !presenting })}
+          data-testid="presentation-toggle"
+        >
+          <ShieldCheck />
+        </ToolbarButton>
         <ToolbarButton label={`Open anything (${kbd('K')})`} onClick={togglePalette}>
           <Command />
         </ToolbarButton>
@@ -356,6 +377,8 @@ function RightClusters({ connected }: { connected: boolean }) {
 // ───────────────────────── Status capsule ─────────────────────────
 
 function StatusCapsule() {
+  usePresentationWindowTitle();
+  const presenting = usePresenting();
   const activeConfig = useSession((s) => s.activeConfig);
   const connectionState = useSession((s) => s.connectionState);
   const serverVersion = useSession((s) => s.serverVersion);
@@ -448,7 +471,7 @@ function StatusCapsule() {
               <Sep />
             </>
           )}
-          {drop < 1 && engine !== 'sqlite' && (
+          {drop < 1 && engine !== 'sqlite' && engine !== 'duckdb' && (
             <>
               <Seg
                 title={
@@ -471,10 +494,21 @@ function StatusCapsule() {
               </CapsuleButton>
             }
           />
-          {dbLabel && (
+          {dbLabel && !(engine === 'duckdb' && dbLabel === activeConfig.name) && (
             <>
               <Sep />
-              <Seg title={engine === 'sqlite' ? activeConfig.database : undefined}>{dbLabel}</Seg>
+              <Seg
+                title={
+                  (engine === 'sqlite' || engine === 'duckdb') && !presenting
+                    ? (activeConfig.duckdb?.files ?? [])
+                        .concat(activeConfig.database)
+                        .filter((f) => f && f !== ':memory:')
+                        .join('\n') || activeConfig.database
+                    : undefined
+                }
+              >
+                {presenting && (engine === 'sqlite' || engine === 'duckdb') ? 'database' : dbLabel}
+              </Seg>
             </>
           )}
           {caps.schemaSwitcher && drop < 3 && <SchemaSwitcher />}
@@ -795,6 +829,7 @@ function ConnectionRow({
   const connectSaved = useSession((s) => s.connectSaved);
   const editConnection = useSession((s) => s.editConnection);
   const tag = useSession((s) => s.settings.connectionTags?.[c.id]);
+  const presenting = usePresenting();
   const Icon = ENGINE_ICON[c.engine ?? 'postgres'];
 
   return (
@@ -825,7 +860,7 @@ function ConnectionRow({
             {c.name}
           </span>
           <span className="block truncate font-mono text-[11px] text-[var(--wb-text-2)]">
-            {c.host}:{c.port}
+            {hostLabel(presenting, c.host, c.port)}
             {c.database ? ` / ${c.database}` : ''}
           </span>
         </span>

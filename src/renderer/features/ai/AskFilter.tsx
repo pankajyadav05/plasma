@@ -1,5 +1,6 @@
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Pill } from '@/components/ui/workbench';
+import { markAiApplied } from '@/lib/ai-applied';
 import { aiSchemaAllowed, runAiTask } from '@/lib/ai-task';
 import { cleanIpcError } from '@/lib/errors';
 import { operatorLabel } from '@/lib/pg-types';
@@ -222,6 +223,7 @@ function Suggestion({
             const s = useSession.getState();
             s.addTab();
             s.setSql(query);
+            markAiApplied(useSession.getState().activeTabId, query);
             onApplied();
           }}
           title="Open as a query in a new tab (does not run it)"
