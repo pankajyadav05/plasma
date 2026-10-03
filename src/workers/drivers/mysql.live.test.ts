@@ -106,6 +106,8 @@ live('mysql driver (live)', () => {
   });
 
   it('caps rows and kills the statement', async () => {
+    // MySQL stops recursive CTEs at 1000 levels by default; MariaDB has no such cap.
+    await drv.query('SET SESSION cte_max_recursion_depth = 200000').catch(() => {});
     const r = await drv.query(
       'WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c WHERE x < 100000) SELECT x FROM c',
       [],

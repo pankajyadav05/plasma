@@ -33,7 +33,9 @@ const SUITE_TIMEOUT = 60_000;
 const DROP_ROLE =
   "DO $$ BEGIN IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'h_limited') THEN DROP OWNED BY h_limited; DROP ROLE h_limited; END IF; END $$";
 
-function configFrom(raw: string, user?: string): ConnectionConfig {
+const LIMITED_PASSWORD = 'h-limited-pw';
+
+function configFrom(raw: string, user?: string, password?: string): ConnectionConfig {
   const u = new URL(raw);
   return {
     id: 'live-health',
@@ -43,7 +45,7 @@ function configFrom(raw: string, user?: string): ConnectionConfig {
     port: Number(u.port || 5432),
     database: u.pathname.slice(1) || 'postgres',
     user: user ?? decodeURIComponent(u.username),
-    password: decodeURIComponent(u.password),
+    password: password ?? decodeURIComponent(u.password),
     ssl: false,
   } as ConnectionConfig;
 }
@@ -88,7 +90,7 @@ suite('health advisor (live)', { timeout: SUITE_TIMEOUT }, () => {
       "INSERT INTO h_dead SELECT g, repeat('x', 50) FROM generate_series(1, 20000) g",
       'DELETE FROM h_dead WHERE id <= 15000',
       'ANALYZE h_dup, h_child, h_parent',
-      "CREATE ROLE h_limited LOGIN PASSWORD 'x'",
+      `CREATE ROLE h_limited LOGIN PASSWORD '${LIMITED_PASSWORD}'`,
       'GRANT CONNECT ON DATABASE postgres TO h_limited',
     ]) {
       await owner.query(sql);
@@ -237,7 +239,7 @@ suite('health advisor (live)', { timeout: SUITE_TIMEOUT }, () => {
   });
 
   it('degrades gracefully for a role without monitoring privileges', async () => {
-    await limited.connect(configFrom(url as string, 'h_limited'), 0);
+    await limited.connect(configFrom(url as string, 'h_limited', LIMITED_PASSWORD), 0);
     limited.setConnectionGen(1);
     for (const check of PG_CHECKS) {
       const r = await runPgCheck(check, queryFor(limited));
