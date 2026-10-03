@@ -9,10 +9,7 @@
  * updated_by) stay separate.
  */
 import type { SchemaInfo } from './protocol';
-
-function quoteIdent(name: string): string {
-  return `"${name.replace(/"/g, '""')}"`;
-}
+import { POSTGRES_DIALECT, type SqlDialect } from './sql-dialect';
 
 export type ForeignKeyRow = SchemaInfo['foreignKeys'][number];
 
@@ -122,7 +119,10 @@ export interface IncomingCountRequest {
  * One statement counting the referencing rows of every request (capped):
  * `SELECT (SELECT count(*) FROM (SELECT 1 FROM t WHERE c = $1 LIMIT 1001) s), …`.
  */
-export function buildIncomingCountSql(requests: readonly IncomingCountRequest[]): {
+export function buildIncomingCountSql(
+  requests: readonly IncomingCountRequest[],
+  d: SqlDialect = POSTGRES_DIALECT,
+): {
   sql: string;
   params: string[];
 } {
@@ -131,10 +131,10 @@ export function buildIncomingCountSql(requests: readonly IncomingCountRequest[])
     const where = lookup.match
       .map((m) => {
         params.push(m.value);
-        return `${quoteIdent(m.column)} = $${params.length}`;
+        return `${d.quoteIdent(m.column)} = $${params.length}`;
       })
       .join(' AND ');
-    return `(SELECT count(*) FROM (SELECT 1 FROM ${quoteIdent(group.schema)}.${quoteIdent(group.table)} WHERE ${where} LIMIT ${INCOMING_COUNT_CAP + 1}) s)`;
+    return `(SELECT count(*) FROM (SELECT 1 FROM ${d.qualify(group.schema, group.table)} WHERE ${where} LIMIT ${INCOMING_COUNT_CAP + 1}) s)`;
   });
   return { sql: `SELECT ${parts.join(', ')}`, params };
 }
@@ -182,16 +182,17 @@ export function buildPeekSql(
   refSchema: string,
   refTable: string,
   lookup: FkLookup,
+  d: SqlDialect = POSTGRES_DIALECT,
 ): { sql: string; params: string[] } {
   const params: string[] = [];
   const where = lookup.match
     .map((m) => {
       params.push(m.value);
-      return `${quoteIdent(m.column)} = $${params.length}`;
+      return `${d.quoteIdent(m.column)} = $${params.length}`;
     })
     .join(' AND ');
   return {
-    sql: `SELECT * FROM ${quoteIdent(refSchema)}.${quoteIdent(refTable)} WHERE ${where} LIMIT 1`,
+    sql: `SELECT * FROM ${d.qualify(refSchema, refTable)} WHERE ${where} LIMIT 1`,
     params,
   };
 }

@@ -3,6 +3,7 @@ import { rename, rm } from 'node:fs/promises';
 import { finished } from 'node:stream/promises';
 import { type CsvOptions, type ExportFormat, createExportStreamer } from '@shared/export-format';
 import type { ColumnMeta } from '@shared/protocol';
+import type { SqlDialect } from '@shared/sql-dialect';
 
 /** Thrown when an export is cancelled; main maps it to a quiet "cancelled" result. */
 export class ExportCancelledError extends Error {
@@ -53,6 +54,8 @@ export async function writeExportFile(opts: {
   /** Quoted `schema.table` INSERT target for SQL export. */
   targetTable?: string;
   csv?: CsvOptions;
+  /** SQL dialect for `sql` format (quoting, literals); Postgres when absent. */
+  dialect?: SqlDialect;
   /** Checked between batches; true aborts and removes the partial file (C30). */
   isCancelled?: () => boolean;
   /** Called after every batch is written. */
@@ -79,6 +82,7 @@ export async function writeExportFile(opts: {
   const streamer = createExportStreamer(opts.format, opts.columns, sink, {
     targetTable: opts.targetTable,
     csv: opts.csv,
+    dialect: opts.dialect,
   });
   try {
     streamer.begin();
@@ -122,6 +126,7 @@ export async function writeExportRows(opts: {
   batchSize?: number;
   targetTable?: string;
   csv?: CsvOptions;
+  dialect?: SqlDialect;
   isCancelled?: () => boolean;
   onProgress?: (p: { rowCount: number; bytesWritten: number }) => void;
 }): Promise<{ rowCount: number; bytesWritten: number }> {
@@ -138,6 +143,7 @@ export async function writeExportRows(opts: {
     batches: batches(),
     targetTable: opts.targetTable,
     csv: opts.csv,
+    dialect: opts.dialect,
     isCancelled: opts.isCancelled,
     onProgress: opts.onProgress,
   });

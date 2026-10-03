@@ -47,7 +47,14 @@ describe('parseConnectionUrl (C28)', () => {
 
   it('rejects garbage with a readable message', () => {
     expect(() => parseConnectionUrl('not a url')).toThrow(/Not a connection URL/);
-    expect(() => parseConnectionUrl('mysql://x/y')).toThrow(/Unsupported/);
+    expect(() => parseConnectionUrl('mongodb://x/y')).toThrow(/Unsupported/);
+    expect(parseConnectionUrl('mysql://u:p@h/shop')).toMatchObject({
+      engine: 'mysql',
+      port: 3306,
+      database: 'shop',
+      user: 'u',
+    });
+    expect(parseConnectionUrl('mariadb://h:3307/d')).toMatchObject({ engine: 'mysql', port: 3307 });
     expect(() => parseConnectionUrl('postgres://h/db?sslmode=bogus')).toThrow(/sslmode/);
   });
 });

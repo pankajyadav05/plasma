@@ -1,10 +1,12 @@
 import { Button } from '@/components/ui/button';
 import { Segmented } from '@/components/ui/workbench';
 import { cn } from '@/lib/cn';
+import { ENGINE_ICON, ENGINE_LABEL } from '@/lib/engine-meta';
 import { lazyNamed } from '@/lib/lazy';
 import { useSession } from '@/stores/session';
 import { type SidebarMode, useWorkbench } from '@/stores/workbench';
-import { Circle, Copy, Pencil, Plus } from 'lucide-react';
+import { engineCaps } from '@shared/sql-dialect';
+import { Copy, Pencil, Plus } from 'lucide-react';
 import { Suspense } from 'react';
 import { groupConnections } from '../connection-manager/connection-groups';
 import { EntityList } from './EntityList';
@@ -37,7 +39,7 @@ export function Sidebar() {
 
   return (
     <div className="flex h-full flex-col bg-[var(--wb-sidebar)] text-[var(--wb-text)]">
-      {activeConfig && engine === 'postgres' && <SidebarModeSwitch />}
+      {activeConfig && engineCaps(engine).sql && <SidebarModeSwitch />}
       <div className="min-h-0 flex-1 overflow-hidden">
         {!activeConfig ? (
           <SavedConnectionsList />
@@ -112,12 +114,8 @@ function SavedConnectionsList() {
               )}
               {g.items.map((c) => {
                 const engine = c.engine ?? 'postgres';
-                const engineLabel =
-                  engine === 'redis'
-                    ? 'Redis'
-                    : engine === 'opensearch'
-                      ? 'OpenSearch'
-                      : 'Postgres';
+                const EngineIcon = ENGINE_ICON[engine];
+                const engineLabel = ENGINE_LABEL[engine].replace('PostgreSQL', 'Postgres');
                 return (
                   <div
                     key={c.id}
@@ -129,7 +127,11 @@ function SavedConnectionsList() {
                         if (!connecting) void connectSaved(c.id);
                       }}
                       disabled={connecting}
-                      title={`Connect to ${c.host}:${c.port}${engine === 'postgres' ? `/${c.database}` : ''}`}
+                      title={
+                        engine === 'sqlite'
+                          ? `Open ${c.database}`
+                          : `Connect to ${c.host}:${c.port}${engine === 'postgres' || engine === 'mysql' ? `/${c.database}` : ''}`
+                      }
                       className={cn(
                         'flex min-w-0 flex-1 items-center gap-2 px-2 text-left text-[13px] transition-colors',
                         connecting
@@ -137,7 +139,7 @@ function SavedConnectionsList() {
                           : 'cursor-pointer text-[var(--wb-text)]',
                       )}
                     >
-                      <Circle className="h-2 w-2 shrink-0 text-[var(--wb-text-2)]" />
+                      <EngineIcon className="h-3 w-3 shrink-0 text-[var(--wb-text-2)]" />
                       <span className="truncate">{c.name}</span>
                       <span className="ml-auto shrink-0 text-[11px] text-[var(--wb-text-3)]">
                         {engineLabel}

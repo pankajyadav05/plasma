@@ -35,6 +35,13 @@ const NUMERIC_TYPES = new Set([
   'double precision',
   'decimal',
   'oid',
+  // SQLite / MySQL spellings
+  'int',
+  'tinyint',
+  'mediumint',
+  'float',
+  'double',
+  'number',
 ]);
 
 const TEMPORAL_TYPES = new Set(['date', 'timestamp', 'timestamptz', 'time', 'timetz']);
@@ -42,8 +49,9 @@ const TEMPORAL_TYPES = new Set(['date', 'timestamp', 'timestamptz', 'time', 'tim
 function baseType(typeName: string | null | undefined): string {
   return (typeName ?? '')
     .replace(/\(.*\)/, '')
-    .trim()
-    .toLowerCase();
+    .toLowerCase()
+    .replace(/\s+(unsigned|signed|zerofill)\b/g, '') // MySQL modifiers
+    .trim();
 }
 
 export function isNumericTypeName(typeName: string | null | undefined): boolean {

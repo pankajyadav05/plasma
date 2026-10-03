@@ -18,6 +18,7 @@ import {
 import { Badge } from '@/components/ui/view-parts';
 import { Segmented } from '@/components/ui/workbench';
 import { CheckLine, FormRow } from '@/features/backup/admin-parts';
+import { MigrationCheckPanel } from '@/features/migration/MigrationCheckPanel';
 import { cn } from '@/lib/cn';
 import { cleanIpcError } from '@/lib/errors';
 import { ipc } from '@/lib/ipc';
@@ -97,6 +98,7 @@ export function RolesDialog({
   const [applying, setApplying] = useState(false);
   const [applyError, setApplyError] = useState<string | null>(null);
   const [applied, setApplied] = useState<string | null>(null);
+  const [lintBlocked, setLintBlocked] = useState(false);
 
   const original = useMemo(() => roles.find((r) => r.name === selected) ?? null, [roles, selected]);
   const isNew = selected === NEW;
@@ -202,7 +204,7 @@ export function RolesDialog({
     .filter((n) => !n.startsWith('pg_') && n !== 'information_schema');
 
   const apply = async () => {
-    if (statements.length === 0 || readOnly) return;
+    if (statements.length === 0 || readOnly || lintBlocked) return;
     setApplyError(null);
     setApplied(null);
     const script = statements.map((s) => `${s.display};`).join('\n');
@@ -575,6 +577,12 @@ export function RolesDialog({
                   </div>
                 )}
 
+                {statements.length > 0 && (
+                  <MigrationCheckPanel
+                    sql={statements.map((s) => `${s.display};`).join('\n')}
+                    onBlockedChange={setLintBlocked}
+                  />
+                )}
                 {previewOpen && (
                   <pre
                     className="max-h-32 overflow-auto whitespace-pre-wrap rounded-[7px] bg-[var(--wb-field)] p-2 font-mono text-[11.5px] text-[var(--wb-text-2)] shadow-[inset_0_0_0_1px_var(--wb-toolbar-group-edge)]"
@@ -610,7 +618,7 @@ export function RolesDialog({
                   <Button
                     variant={dropping ? 'destructive' : 'primary'}
                     onClick={() => void apply()}
-                    disabled={readOnly || applying || statements.length === 0}
+                    disabled={readOnly || applying || statements.length === 0 || lintBlocked}
                   >
                     {applying ? 'Applying…' : dropping ? 'Drop role' : 'Apply'}
                   </Button>

@@ -5,7 +5,9 @@
  */
 import { ipc } from '@/lib/ipc';
 import { buildDefinitionQuerySql } from '@/lib/table-query';
+import { useSession } from '@/stores/session';
 import type { SchemaInfo } from '@shared/protocol';
+import { dialectFor } from '@shared/sql-dialect';
 import {
   type DefinitionRow,
   type RelationKind,
@@ -37,6 +39,26 @@ export async function loadRelationCreateScript(
   name: string,
   kind: RelationKind,
 ): Promise<string> {
+  const engine = useSession.getState().activeConfig?.engine;
+  if (engine === 'sqlite') {
+    // sqlite_schema keeps the original CREATE text of every object.
+    const rows = await run(
+      `SELECT type, sql FROM sqlite_schema
+       WHERE tbl_name = $1 AND sql IS NOT NULL
+       ORDER BY CASE type WHEN 'table' THEN 0 WHEN 'view' THEN 0 WHEN 'index' THEN 1 ELSE 2 END, name`,
+      [name],
+    );
+    const script = rows.map((r) => `${text(r[1]).trim().replace(/;\s*$/, '')};`).join('\n\n');
+    return script || `-- ${name} was not found`;
+  }
+  if (engine === 'mysql') {
+    const rows = await run(
+      `SHOW CREATE ${kind === 'view' ? 'VIEW' : 'TABLE'} ${dialectFor('mysql').qualify(schema, name)}`,
+      [],
+    );
+    const ddl = text(rows[0]?.[1]).trim();
+    return ddl ? `${ddl.replace(/;\s*$/, '')};` : `-- ${name} was not found`;
+  }
   if (kind === 'view' || kind === 'matview') {
     const rows = await run('SELECT pg_get_viewdef($1::regclass, true)::text', [
       quotedQualified(schema, name),

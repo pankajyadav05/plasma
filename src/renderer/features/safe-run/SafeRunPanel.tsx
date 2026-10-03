@@ -1,5 +1,6 @@
 import { Button } from '@/components/ui/button';
 import { type DataColumn, DataTable } from '@/components/ui/data-table';
+import { MigrationCheckPanel } from '@/features/migration/MigrationCheckPanel';
 import { cellToText } from '@/features/result-grid/cell-edit';
 import { cn } from '@/lib/cn';
 import { formatCountdown, safeRunThreshold, safeRunWarning } from '@/lib/safe-run';
@@ -274,6 +275,8 @@ function FailedBar({ sr, onClose }: { sr: SafeRunState; onClose: () => void }) {
         <div className="text-[13px] font-medium text-[var(--wb-text)]">Safe Run did not finish</div>
         <div className="whitespace-pre-wrap text-[13px] text-[var(--wb-text-2)]">{sr.error}</div>
         <div className="mt-1 truncate font-mono text-[12px] text-[var(--wb-text-3)]">{sr.sql}</div>
+        {/* Safe Run is DML-only; for DDL show what a normal Run would do. */}
+        <MigrationCheckPanel sql={sr.sql} className="mt-2" />
       </div>
       <Button size="pill" variant="secondary" onClick={onClose}>
         Close

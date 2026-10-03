@@ -52,6 +52,7 @@
     "electron-log": "^5.2.3",
     "electron-updater": "^6.8.9",
     "ioredis": "^5.10.1",
+    "mysql2": "^3.24.5",
     "pg": "^8.13.1",
     "pg-cursor": "2.12.2",
     "sql-formatter": "^15.4.10",

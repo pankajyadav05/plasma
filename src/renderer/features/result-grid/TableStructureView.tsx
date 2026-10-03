@@ -1,5 +1,6 @@
 import { Checkbox } from '@/components/ui/checkbox';
 import { IconButton, Pill } from '@/components/ui/workbench';
+import { MigrationCheckPanel } from '@/features/migration/MigrationCheckPanel';
 import { AddConstraintDialog, AddIndexDialog } from '@/features/structure/StructureAddDialogs';
 import { applyStructurePlan } from '@/features/structure/apply-structure';
 import {
@@ -76,6 +77,7 @@ export function TableStructureView() {
   const [applying, setApplying] = useState(false);
   const [applyError, setApplyError] = useState<string | null>(null);
   const [showPreview, setShowPreview] = useState(true);
+  const [lintBlocked, setLintBlocked] = useState(false);
 
   // `reloadKey` is a deliberate re-fetch trigger for the Reload button.
   // biome-ignore lint/correctness/useExhaustiveDependencies: reloadKey forces a re-query
@@ -161,7 +163,7 @@ export function TableStructureView() {
   }, [schemaName, tableName, staged, original, model]);
 
   const apply = async () => {
-    if (!built.plan || !schemaName || !tableName) return;
+    if (!built.plan || !schemaName || !tableName || lintBlocked) return;
     setApplying(true);
     setApplyError(null);
     const out = await applyStructurePlan(built.plan, `alter table ${schemaName}.${tableName}`);
@@ -784,13 +786,18 @@ export function TableStructureView() {
             </Pill>
             <Pill
               onClick={() => void apply()}
-              disabled={applying || built.problem !== null || !built.plan}
+              disabled={applying || built.problem !== null || !built.plan || lintBlocked}
               data-testid="structure-apply"
             >
               {applying ? 'Applying…' : 'Apply'}
             </Pill>
           </div>
-          {showPreview && <SqlPreview className="min-h-0" sql={built.sql} error={built.problem} />}
+          {!built.problem && built.sql.trim() !== '' && (
+            <MigrationCheckPanel sql={built.sql} onBlockedChange={setLintBlocked} />
+          )}
+          {showPreview && (
+            <SqlPreview className="min-h-0" sql={built.sql} error={built.problem} lint={false} />
+          )}
           {applyError && (
             <pre
               className="whitespace-pre-wrap font-mono text-[12px] text-destructive"

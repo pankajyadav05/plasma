@@ -10,6 +10,7 @@ import type {
   ConnectionSshConfig,
   SavedConnection,
 } from '@shared/protocol';
+import { engineCaps } from '@shared/sql-dialect';
 import { discardAllPendingEdits, pendingEditCount, restampEdits } from './session-pending-edits';
 import { redisConnectReset } from './session-redis';
 import { clearTabResults } from './session-tab-model';
@@ -343,11 +344,13 @@ async function loadEngineOverview(
   get: () => SessionState,
   engine: ConnectionEngine,
 ): Promise<void> {
-  if (engine === 'postgres') {
+  if (engineCaps(engine).sql) {
     await get().refreshSchema();
     const schema = get().schema;
     if (schema && schema.schemas.length > 0) {
-      const first = schema.schemas.find((s) => s.name === 'public') ?? schema.schemas[0];
+      // Postgres opens on `public`; MySQL's "schemas" are databases, so open the connected one.
+      const preferred = engine === 'mysql' ? get().activeConfig?.database : 'public';
+      const first = schema.schemas.find((s) => s.name === preferred) ?? schema.schemas[0];
       set({ expandedSchemas: new Set([first.name]), currentSchema: first.name });
     }
     return;

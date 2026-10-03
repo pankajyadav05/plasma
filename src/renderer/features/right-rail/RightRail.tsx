@@ -12,6 +12,7 @@ import { kbd } from '@/lib/platform';
 import { buildRlsPoliciesSql } from '@/lib/table-query';
 import { type RightPanelMode, useActiveTab, useSession } from '@/stores/session';
 import { useWorkbench } from '@/stores/workbench';
+import { engineCaps } from '@shared/sql-dialect';
 import {
   Bookmark,
   Check,
@@ -87,13 +88,20 @@ export function RightRail() {
   const engine = useSession((s) => s.activeConfig?.engine ?? 'postgres');
   const tab = useActiveTab();
   const isTable = tab?.kind === 'table';
-  const postgres = engine === 'postgres';
+  const caps = engineCaps(engine);
+  const postgres = caps.sql;
   const narrow = useNarrowWindow();
   // Details + Assistant exist for every engine (Redis elements and
   // OpenSearch documents publish into Details too); the Postgres session
   // tools (compiled SQL, role, RLS) fall back to Details elsewhere.
   const effective =
-    mode === null ? null : postgres || mode === 'details' || mode === 'ai' ? mode : 'details';
+    mode === null
+      ? null
+      : mode === 'details' || mode === 'ai' || (postgres && mode === 'query')
+        ? mode
+        : (mode === 'role' && caps.roles) || (mode === 'rls' && caps.pgExtras)
+          ? mode
+          : 'details';
 
   // RLS / compiled SQL are table-scoped — fall back to Details elsewhere.
   useEffect(() => {
@@ -128,7 +136,12 @@ export function RightRail() {
           />
           <div className="flex justify-end">
             {postgres && (
-              <SessionToolsMenu isTable={isTable} rlsCount={isTable ? tab.rlsPolicyCount : null} />
+              <SessionToolsMenu
+                isTable={isTable}
+                rlsCount={isTable ? tab.rlsPolicyCount : null}
+                roles={caps.roles}
+                rls={caps.pgExtras}
+              />
             )}
           </div>
         </div>
@@ -148,7 +161,17 @@ export function RightRail() {
   );
 }
 
-function SessionToolsMenu({ isTable, rlsCount }: { isTable: boolean; rlsCount: number | null }) {
+function SessionToolsMenu({
+  isTable,
+  rlsCount,
+  roles,
+  rls,
+}: {
+  isTable: boolean;
+  rlsCount: number | null;
+  roles: boolean;
+  rls: boolean;
+}) {
   const mode = useSession((s) => s.rightPanelMode);
   const setMode = useSession((s) => s.setRightPanelMode);
   const activeRole = useSession((s) => s.activeRole);
@@ -163,7 +186,11 @@ function SessionToolsMenu({ isTable, rlsCount }: { isTable: boolean; rlsCount: n
       <PopoverTrigger asChild>
         <IconButton
           variant="plain"
-          label="Session tools — compiled SQL, role, row-level security"
+          label={
+            roles
+              ? 'Session tools — compiled SQL, role, row-level security'
+              : 'Session tools — compiled SQL'
+          }
           active={secondary}
           className="[&_svg]:h-4 [&_svg]:w-4"
         >
@@ -178,21 +205,27 @@ function SessionToolsMenu({ isTable, rlsCount }: { isTable: boolean; rlsCount: n
           checked={mode === 'query' ? true : undefined}
           onClick={() => pick('query')}
         />
-        <MenuItem
-          icon={<UserCircle />}
-          label="Session role"
-          hint={activeRole ?? 'default'}
-          checked={mode === 'role' ? true : undefined}
-          onClick={() => pick('role')}
-        />
-        <MenuItem
-          icon={rlsCount === 0 ? <ShieldOff /> : rlsCount ? <ShieldCheck /> : <Shield />}
-          label="Row-level security"
-          hint={rlsCount === null ? undefined : `${rlsCount} polic${rlsCount === 1 ? 'y' : 'ies'}`}
-          disabled={!isTable}
-          checked={mode === 'rls' ? true : undefined}
-          onClick={() => pick('rls')}
-        />
+        {roles && (
+          <MenuItem
+            icon={<UserCircle />}
+            label="Session role"
+            hint={activeRole ?? 'default'}
+            checked={mode === 'role' ? true : undefined}
+            onClick={() => pick('role')}
+          />
+        )}
+        {rls && (
+          <MenuItem
+            icon={rlsCount === 0 ? <ShieldOff /> : rlsCount ? <ShieldCheck /> : <Shield />}
+            label="Row-level security"
+            hint={
+              rlsCount === null ? undefined : `${rlsCount} polic${rlsCount === 1 ? 'y' : 'ies'}`
+            }
+            disabled={!isTable}
+            checked={mode === 'rls' ? true : undefined}
+            onClick={() => pick('rls')}
+          />
+        )}
       </PopoverContent>
     </Popover>
   );

@@ -2,20 +2,20 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { ToolbarButton, ToolbarDivider, ToolbarGroup } from '@/components/ui/workbench';
 import { PendingEditsTable } from '@/features/result-grid/PendingEditsTable';
 import { cn } from '@/lib/cn';
+import { ENGINE_ICON, databaseLabel, shortServerVersion } from '@/lib/engine-meta';
 import { kbd } from '@/lib/platform';
 import { useReconnect } from '@/stores/reconnect';
 import { useActiveTabSelect, useSession } from '@/stores/session';
 import { editsOf, summarizeEdits } from '@/stores/session-pending-edits';
-import type { ConnectionEngine, SavedConnection } from '@shared/protocol';
+import type { SavedConnection } from '@shared/protocol';
+import { engineCaps } from '@shared/sql-dialect';
 import {
   Activity,
-  Boxes,
   Check,
   ChevronsUpDown,
   Command,
   Database,
   Eye,
-  Layers,
   Loader2,
   Lock,
   PanelLeft,
@@ -34,18 +34,6 @@ import { UpdateBadge } from './UpdateBadge';
 import { WindowControls } from './WindowControls';
 
 const isMac = window.plasma?.platform === 'darwin';
-
-const ENGINE_ICON: Record<ConnectionEngine, typeof Database> = {
-  postgres: Database,
-  redis: Layers,
-  opensearch: Boxes,
-};
-
-const ENGINE_LABEL: Record<ConnectionEngine, string> = {
-  postgres: 'PostgreSQL',
-  redis: 'Redis',
-  opensearch: 'OpenSearch',
-};
 
 /** Native-looking graphite popover surface for the toolbar switchers. */
 const POPOVER =
@@ -108,7 +96,7 @@ export function TopBar() {
     >
       {!isMac && <BrandMark className="no-drag mx-1 h-5 w-5 shrink-0 text-foreground" />}
 
-      {connected && <LeftClusters postgres={engine === 'postgres'} />}
+      {connected && <LeftClusters sql={engineCaps(engine).sql} />}
 
       <StatusCapsule />
 
@@ -122,7 +110,7 @@ export function TopBar() {
 
 // ───────────────────────── Left clusters ─────────────────────────
 
-function LeftClusters({ postgres }: { postgres: boolean }) {
+function LeftClusters({ sql }: { sql: boolean }) {
   const sidebarCollapsed = useSession((s) => s.settings.sidebarCollapsed);
   const toggleSidebar = useSession((s) => s.toggleSidebar);
   const txnState = useSession((s) => s.txnState);
@@ -139,9 +127,9 @@ function LeftClusters({ postgres }: { postgres: boolean }) {
         </ToolbarButton>
       </ToolbarGroup>
 
-      {postgres && <ChangesCluster />}
-      {postgres && txnState === 'active' && <TxnCluster />}
-      <SessionCluster postgres={postgres} />
+      {sql && <ChangesCluster />}
+      {sql && txnState === 'active' && <TxnCluster />}
+      <SessionCluster sql={sql} />
     </>
   );
 }
@@ -255,7 +243,7 @@ function TxnCluster() {
 }
 
 /** Safety (read-only / edit) · database switcher · new SQL tab. */
-function SessionCluster({ postgres }: { postgres: boolean }) {
+function SessionCluster({ sql }: { sql: boolean }) {
   const activeConfig = useSession((s) => s.activeConfig);
   const editMode = useSession((s) => s.editMode);
   const toggleEditMode = useSession((s) => s.toggleEditMode);
@@ -289,7 +277,7 @@ function SessionCluster({ postgres }: { postgres: boolean }) {
           </ToolbarButton>
         }
       />
-      {postgres && (
+      {sql && (
         <ToolbarButton
           label={`New SQL query (${kbd('T')})`}
           onClick={() => {
@@ -317,7 +305,7 @@ function RightClusters({ connected }: { connected: boolean }) {
   const setRightPanelMode = useSession((s) => s.setRightPanelMode);
   const engine = useSession((s) => s.activeConfig?.engine ?? 'postgres');
   const activeKind = useActiveTabSelect((t) => t?.kind);
-  const postgres = engine === 'postgres';
+  const activity = engineCaps(engine).activity || engine === 'redis' || engine === 'opensearch';
 
   return (
     <>
@@ -334,9 +322,9 @@ function RightClusters({ connected }: { connected: boolean }) {
             <RefreshCw className={schemaLoading ? 'animate-spin' : ''} />
           </ToolbarButton>
         )}
-        {connected && postgres && (
+        {connected && activity && (
           <ToolbarButton
-            label="Live activity (pg_stat_activity)"
+            label="Health advisor"
             active={canvasMode === 'monitor'}
             onClick={() => setCanvasMode(canvasMode === 'monitor' ? 'database' : 'monitor')}
           >
@@ -385,9 +373,11 @@ function StatusCapsule() {
   const canvasMode = useSession((s) => s.canvasMode);
 
   const engine = activeConfig?.engine ?? 'postgres';
+  const caps = engineCaps(engine);
   const redisDb = useSession((s) => s.redisDb);
   // Redis can switch logical db at runtime; the config only holds the initial one.
-  const dbLabel = engine === 'redis' ? String(redisDb ?? 0) : activeConfig?.database;
+  const dbLabel =
+    engine === 'redis' ? String(redisDb ?? 0) : activeConfig ? databaseLabel(activeConfig) : '';
   const connected = connectionState === 'connected';
   // Connected = a neutral surface faintly tinted with the theme accent, text
   // --wb-text; the env tag shows as a coloured chip. Only PROD fills the
@@ -417,7 +407,7 @@ function StatusCapsule() {
   const object =
     canvasMode !== 'database'
       ? canvasMode === 'monitor'
-        ? 'Activity'
+        ? 'Health'
         : canvasMode === 'history'
           ? 'History'
           : canvasMode === 'settings'
@@ -426,7 +416,7 @@ function StatusCapsule() {
       : tab
         ? tab.kind === 'table' && tab.tableName
           ? tab.tableName
-          : tab.kind === 'sql' && engine !== 'postgres'
+          : tab.kind === 'sql' && !caps.sql
             ? 'Overview' // Redis / OpenSearch placeholder tab (see TabStrip)
             : tab.title
         : null;
@@ -458,7 +448,7 @@ function StatusCapsule() {
               <Sep />
             </>
           )}
-          {drop < 1 && (
+          {drop < 1 && engine !== 'sqlite' && (
             <>
               <Seg
                 title={
@@ -484,10 +474,10 @@ function StatusCapsule() {
           {dbLabel && (
             <>
               <Sep />
-              <Seg>{dbLabel}</Seg>
+              <Seg title={engine === 'sqlite' ? activeConfig.database : undefined}>{dbLabel}</Seg>
             </>
           )}
-          {engine === 'postgres' && drop < 3 && <SchemaSwitcher />}
+          {caps.schemaSwitcher && drop < 3 && <SchemaSwitcher />}
           {object && (
             <>
               <span className="shrink-0 whitespace-pre opacity-60" aria-hidden>
@@ -893,11 +883,4 @@ function SchemaSwitcher() {
   );
 }
 
-function shortVersion(full: string | null, engine: ConnectionEngine): string {
-  if (!full) return ENGINE_LABEL[engine];
-  const m = full.match(/^(PostgreSQL\s+[\d.]+)/);
-  if (m) return m[1];
-  // Redis / OpenSearch report bare versions ("7.2.4") — prefix the engine.
-  if (/^\d/.test(full)) return `${ENGINE_LABEL[engine]} ${full.split(/\s/)[0]}`;
-  return full.length > 32 ? `${full.slice(0, 32)}…` : full;
-}
+const shortVersion = shortServerVersion;

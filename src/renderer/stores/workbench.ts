@@ -74,6 +74,7 @@ export type Overlay =
   | 'schemaDiff'
   | 'cheatSheet'
   | 'backup'
+  | 'sqliteBackup'
   | 'restore'
   | 'roles'
   | 'dbSearch'

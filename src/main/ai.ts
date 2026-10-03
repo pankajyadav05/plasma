@@ -188,7 +188,7 @@ const TOOLS_OPENSEARCH = [
 ] as const;
 
 function toolsForEngine(engine: ConnectionEngine): readonly unknown[] {
-  if (engine === 'postgres') return TOOLS_POSTGRES;
+  if (engine === 'postgres' || engine === 'sqlite' || engine === 'mysql') return TOOLS_POSTGRES;
   if (engine === 'redis') return TOOLS_REDIS;
   return TOOLS_OPENSEARCH;
 }
@@ -462,10 +462,15 @@ function buildMessages(
 
   let systemContent: string | null = null;
 
-  if (engine === 'postgres' && schema) {
+  const sqlFlavour: Partial<Record<ConnectionEngine, string>> = {
+    postgres: 'Postgres',
+    sqlite: 'SQLite',
+    mysql: 'MySQL/MariaDB',
+  };
+  if (sqlFlavour[engine] && schema) {
     const ddl = compactSchema(schema);
     if (ddl) {
-      systemContent = `You are Plasma's SQL assistant. The user is exploring a Postgres database. Use the schema below to write correct, concise SQL. When the user asks for a query, return JUST the SQL inside a \`\`\`sql code block — no prose around it unless they explicitly ask for an explanation. Prefer LIMIT clauses on exploratory queries. You may call the \`query_database\` tool to inspect actual data when an answer requires it (e.g. counts, samples, distinct values) — but never run mutations.\n\n--- SCHEMA ---\n${ddl}`;
+      systemContent = `You are Plasma's SQL assistant. The user is exploring a ${sqlFlavour[engine]} database. Use the schema below to write correct, concise SQL. When the user asks for a query, return JUST the SQL inside a \`\`\`sql code block — no prose around it unless they explicitly ask for an explanation. Prefer LIMIT clauses on exploratory queries. You may call the \`query_database\` tool to inspect actual data when an answer requires it (e.g. counts, samples, distinct values) — but never run mutations.\n\n--- SCHEMA ---\n${ddl}`;
     }
   } else if (engine === 'redis') {
     systemContent = `You are Plasma's Redis assistant. The user is connected to a Redis instance. When they ask for a command, return JUST the command inside a \`\`\`redis code block (no prose unless they ask). When the user asks WHAT they have, use the \`redis_command\` tool with read-only commands (DBSIZE, INFO, SCAN, TYPE, MEMORY USAGE, etc.) to look around — never use write commands. Redis keys are flat strings, conventionally namespaced with \`:\` separators (\`user:42:profile\`).${

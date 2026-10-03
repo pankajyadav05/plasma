@@ -23,8 +23,9 @@
 import { cellToText, isNoopEdit } from '@/features/result-grid/cell-edit';
 import { cleanIpcError } from '@/lib/errors';
 import { ipc } from '@/lib/ipc';
-import { buildDeleteSql, buildUpdateSql, quoteIdent } from '@/lib/table-query';
+import { buildDeleteSql, buildInsertSql, buildUpdateSql } from '@/lib/table-query';
 import type { ColumnMeta, SchemaInfo } from '@shared/protocol';
+import { POSTGRES_DIALECT, type SqlDialect, dialectFor } from '@shared/sql-dialect';
 import { effectiveSafeMode } from './safe-mode';
 import { evaluateGate } from './session-prod-gate';
 import type { PendingEdit, QueryTab } from './session-types';
@@ -142,10 +143,16 @@ export function tablePkNames(
   tableName: string | undefined,
 ): string[] {
   if (!schema || !schemaName || !tableName) return [];
-  return schema.columns
+  const declared = schema.columns
     .filter((c) => c.schema === schemaName && c.table === tableName && c.isPrimaryKey)
     .sort((a, b) => a.ordinal - b.ordinal)
     .map((c) => c.name);
+  if (declared.length > 0) return declared;
+  // SQLite rowid table with no declared key: rows are addressed by `rowid`.
+  const implicit = schema.tables.find(
+    (t) => t.schema === schemaName && t.name === tableName,
+  )?.implicitRowid;
+  return implicit ? [implicit] : [];
 }
 
 /**
@@ -273,7 +280,10 @@ export interface EditBatch {
  *      by the row's ORIGINAL primary key,
  *   3. INSERTs.
  */
-export function buildEditBatch(edits: readonly PendingEdit[]): EditBatch {
+export function buildEditBatch(
+  edits: readonly PendingEdit[],
+  dialect: SqlDialect = POSTGRES_DIALECT,
+): EditBatch {
   const updates: Array<{ sql: string; params: unknown[] }> = [];
   const editIds: string[][] = [];
   const tableKey = (e: PendingEdit) => `${e.schema}\u0000${e.table}`;
@@ -289,6 +299,7 @@ export function buildEditBatch(edits: readonly PendingEdit[]): EditBatch {
       schema: e.schema,
       table: e.table,
       pkValues: e.pkValues,
+      dialect,
     });
     updates.push({ sql, params });
     editIds.push([e.id]);
@@ -312,6 +323,7 @@ export function buildEditBatch(edits: readonly PendingEdit[]): EditBatch {
       table: first.table,
       set,
       pkValues: first.pkValues,
+      dialect,
     });
     updates.push({ sql, params });
     editIds.push(list.map((e) => e.id));
@@ -321,15 +333,16 @@ export function buildEditBatch(edits: readonly PendingEdit[]): EditBatch {
     if (editKind(e) !== 'insert') continue;
     const values = e.values ?? {};
     const cols = Object.keys(values);
-    const from = `${quoteIdent(e.schema)}.${quoteIdent(e.table)}`;
     if (cols.length === 0) {
-      updates.push({ sql: `INSERT INTO ${from} DEFAULT VALUES`, params: [] });
+      updates.push({ sql: dialect.insertDefaults(dialect.qualify(e.schema, e.table)), params: [] });
     } else {
-      const params = cols.map((c) => values[c] ?? null);
-      const sql = `INSERT INTO ${from} (${cols.map(quoteIdent).join(', ')}) VALUES (${cols
-        .map((_, i) => `$${i + 1}`)
-        .join(', ')})`;
-      updates.push({ sql, params });
+      const { sql } = buildInsertSql({
+        schema: e.schema,
+        table: e.table,
+        values: Object.fromEntries(cols.map((c) => [c, values[c] ?? null])),
+        dialect,
+      });
+      updates.push({ sql, params: cols.map((c) => values[c] ?? null) });
     }
     editIds.push([e.id]);
   }
@@ -805,7 +818,7 @@ export async function commitPendingEdits(
   if (mismatched.length > 0 || liveGen <= 0) {
     fail('pending edits belong to a previous connection — discard them before committing');
   }
-  const batch = buildEditBatch(edits);
+  const batch = buildEditBatch(edits, dialectFor(state.activeConfig?.engine));
   // Prod tag / safe mode: every grid write needs an explicit confirm (or is
   // refused outright on a read-only safe mode).
   const decision = evaluateGate(get, '', true);

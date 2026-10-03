@@ -5,6 +5,8 @@ import {
   betweenBounds,
   buildCountSql,
   buildDataSql,
+  buildDeleteSql,
+  buildEstimatedCountSql,
   buildUpdateSql,
   quoteIdent,
   splitFilterList,
@@ -313,5 +315,67 @@ describe('F6 filter operators', () => {
     expect(splitFilterList('a, \'b,c\', "d"')).toEqual(['a', 'b,c', 'd']);
     expect(betweenBounds('1, 2')).toEqual(['1', '2']);
     expect(betweenBounds('1')).toBeNull();
+  });
+});
+
+describe('dialect-aware builders', async () => {
+  const { SQLITE_DIALECT, MYSQL_DIALECT } = await import('@shared/sql-dialect');
+  const base = {
+    schema: 'main',
+    table: 'users',
+    allColumns: ['id', 'name'],
+    hiddenColumns: new Set<string>(),
+    sort: [{ column: 'name', direction: 'desc' as const }],
+    page: 2,
+    pageSize: 50,
+  };
+
+  it('builds a SQLite page with its own LIKE and the implicit rowid', () => {
+    const { sql, params } = buildDataSql({
+      ...base,
+      dialect: SQLITE_DIALECT,
+      implicitKey: 'rowid',
+      primaryKey: ['rowid'],
+      filters: [{ id: '1', column: 'name', op: 'ILIKE', value: '50%' }],
+    });
+    expect(sql).toBe(
+      [
+        `SELECT "rowid", * FROM "main"."users"`,
+        `WHERE CAST("name" AS TEXT) LIKE $1 ESCAPE '\\'`,
+        `ORDER BY "name" DESC, "rowid" ASC`,
+        'LIMIT 50 OFFSET 100',
+      ].join('\n'),
+    );
+    expect(params).toEqual(['%50\\%%']);
+  });
+
+  it('builds MySQL statements with backticks and no ctid', () => {
+    const data = buildDataSql({
+      ...base,
+      dialect: MYSQL_DIALECT,
+      filters: [],
+      ctidFallback: true,
+      hiddenColumns: new Set(['name']),
+    });
+    expect(data.sql).toBe(
+      'SELECT `id` FROM `main`.`users`\nORDER BY `name` DESC\nLIMIT 50 OFFSET 100',
+    );
+    expect(
+      buildUpdateSql({
+        schema: 'd',
+        table: 't',
+        set: { a: '1' },
+        pkValues: { id: '2' },
+        dialect: MYSQL_DIALECT,
+      }),
+    ).toEqual({ sql: 'UPDATE `d`.`t` SET `a` = $1 WHERE `id` = $2', params: ['1', '2'] });
+    expect(
+      buildDeleteSql({ schema: 'd', table: 't', pkValues: { id: '2' }, dialect: MYSQL_DIALECT })
+        .sql,
+    ).toBe('DELETE FROM `d`.`t` WHERE `id` = $1');
+    expect(
+      buildCountSql({ schema: 'd', table: 't', filters: [], dialect: MYSQL_DIALECT }).sql,
+    ).toBe('SELECT COUNT(*) FROM `d`.`t`');
+    expect(() => buildEstimatedCountSql('main', 't', SQLITE_DIALECT)).toThrow();
   });
 });

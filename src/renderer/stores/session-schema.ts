@@ -11,6 +11,7 @@
  */
 import { ipc } from '@/lib/ipc';
 import type { SchemaInfo } from '@shared/protocol';
+import { engineCaps } from '@shared/sql-dialect';
 import { toggled } from './session-tab-model';
 import type { SliceCreator } from './session-types';
 
@@ -59,6 +60,7 @@ export function withObjects(objects: Partial<SchemaInfo>, columns: ColumnPart): 
     columns: columns.columns ?? [],
     foreignKeys: columns.foreignKeys ?? [],
     indexes: columns.indexes ?? [],
+    triggers: objects.triggers ?? [],
   };
 }
 
@@ -87,9 +89,9 @@ export function refreshSchemaCoalesced(set: Set_, get: Get): Promise<void> {
 }
 
 async function doRefresh(set: Set_, get: Get): Promise<void> {
-  // Postgres-only — redis/opensearch have their own overview loaders.
+  // SQL engines only — redis/opensearch have their own overview loaders.
   const eng = get().activeConfig?.engine ?? 'postgres';
-  if (eng !== 'postgres') return;
+  if (!engineCaps(eng).sql) return;
   const connId = get().activeConfig?.id;
   set({ schemaLoading: true, schemaError: null });
   try {
@@ -121,7 +123,7 @@ async function doRefresh(set: Set_, get: Get): Promise<void> {
 /** Load columns + FKs for one schema if they aren't loaded yet. */
 export function ensureSchemaColumns(set: Set_, get: Get, schemaName: string): Promise<void> {
   const state = get();
-  if ((state.activeConfig?.engine ?? 'postgres') !== 'postgres') return Promise.resolve();
+  if (!engineCaps(state.activeConfig?.engine).sql) return Promise.resolve();
   if (!state.schema || state.columnSchemas?.has(schemaName)) return Promise.resolve();
   if (!state.schema.schemas.some((s: { name: string }) => s.name === schemaName)) {
     return Promise.resolve();

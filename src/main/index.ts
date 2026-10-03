@@ -21,6 +21,7 @@ import {
   CommitEditBatchRequest,
   ConnectionConfig,
   type ConnectionConfig as ConnectionConfigType,
+  type ConnectionEngine,
   type ConnectionInfo,
   type ConnectionRecovered,
   ConnectionSshConfig,
@@ -49,6 +50,7 @@ import {
   type WorkerResponse,
 } from '@shared/protocol';
 import { MAX_RESULT_ROWS } from '@shared/result-bounds';
+import { isSqlEngine } from '@shared/sql-dialect';
 import { isSingleSqlStatement, looksLikeWriteSql } from '@shared/sql-statements';
 import { isUninferableParamError } from '@shared/sql-variables';
 import { assertTlsAllowedForTag, resolveTls, withTunnelServername } from '@shared/tls';
@@ -114,6 +116,13 @@ import { SessionGate, connectOrCleanUp } from './session-gate';
 import { applySettingsPatch, getAllSettings, getPublicSettings } from './settings';
 import { formatSql } from './sql-format';
 import {
+  allowSqlitePath,
+  assertSqlitePathAllowed,
+  createSqliteFile,
+  normalizeSqlitePath,
+  sqliteFileProblem,
+} from './sqlite-files';
+import {
   HOST_KEY_PROMPT_TIMEOUT_MS,
   closeAllTunnels,
   closeTunnel,
@@ -156,7 +165,7 @@ let queryRequestRevision = 0;
 // Track the active engine so the AI tool executor can dispatch the
 // right tool call (sideband SQL vs Redis command vs OS search). Set
 // by ConnectionConnect / VaultConnectById, cleared on disconnect.
-let activeEngine: 'postgres' | 'redis' | 'opensearch' | null = null;
+let activeEngine: ConnectionEngine | null = null;
 
 /**
  * The session main opened, retained so a transport loss (VPN drop,
@@ -283,8 +292,8 @@ app
     // read-only command list; OpenSearch hits search / SQL plugin.
     setAiToolExecutor(async (name, args) => {
       if (name === 'query_database') {
-        if (activeEngine !== 'postgres') {
-          return JSON.stringify({ error: 'no postgres connection' });
+        if (!isSqlEngine(activeEngine)) {
+          return JSON.stringify({ error: 'no SQL connection' });
         }
         const sql = typeof args.sql === 'string' ? args.sql : '';
         if (!sql) return JSON.stringify({ error: 'missing sql arg' });
@@ -469,7 +478,9 @@ async function callWorker<K extends WorkerResponse['kind']>(
   }
   // C1: one guard for every engine and every route — whatever handler
   // issued it, a write never reaches the worker on a read-only session.
-  if (retainedSession?.config.readOnly === true) assertAllowedOnReadOnly(loose);
+  if (retainedSession?.config.readOnly === true) {
+    assertAllowedOnReadOnly(loose, retainedSession.config.engine);
+  }
   return connectionRecovery.run(
     req.kind,
     async () => {
@@ -586,7 +597,18 @@ function serializeSessionChange<T>(fn: () => Promise<T>): Promise<T> {
 /** Parse a renderer config, with a readable message instead of Zod JSON (F6). */
 function parseConnectionConfig(raw: unknown): ConnectionConfigType {
   const parsed = ConnectionConfig.safeParse(raw);
-  if (parsed.success) return parsed.data;
+  if (parsed.success) {
+    // A SQLite file may only be one the user picked in the native dialog
+    // (or the one already saved for this very connection).
+    if (parsed.data.engine === 'sqlite') {
+      const saved = vaultList().find((c) => c.id === parsed.data.id);
+      assertSqlitePathAllowed(
+        parsed.data.database,
+        saved?.engine === 'sqlite' ? saved.database : null,
+      );
+    }
+    return parsed.data;
+  }
   const first = parsed.error.issues[0];
   const field = first?.path.join('.') || 'connection';
   throw new Error(`Invalid ${field}: ${first?.message ?? 'check the connection details'}`);
@@ -895,6 +917,69 @@ function registerIpcHandlers() {
         ? await dialog.showOpenDialog(win, opts)
         : await dialog.showOpenDialog(opts);
       return picked.canceled ? null : (picked.filePaths[0] ?? null);
+    },
+  );
+
+  ipcMain.handle(
+    IpcChannel.ConnectionPickSqlite,
+    async (e, rawMode: unknown): Promise<string | null> => {
+      const win = BrowserWindow.fromWebContents(e.sender);
+      const create = rawMode === 'create';
+      const filters = [
+        { name: 'SQLite database', extensions: ['db', 'sqlite', 'sqlite3', 'db3', 's3db'] },
+        { name: 'All files', extensions: ['*'] },
+      ];
+      let picked: string | undefined;
+      if (create) {
+        const opts = { title: 'Create a SQLite database', defaultPath: 'database.db', filters };
+        const r = win ? await dialog.showSaveDialog(win, opts) : await dialog.showSaveDialog(opts);
+        picked = r.canceled ? undefined : r.filePath;
+      } else {
+        const opts = {
+          title: 'Open a SQLite database',
+          filters,
+          properties: ['openFile' as const, 'showHiddenFiles' as const],
+        };
+        const r = win ? await dialog.showOpenDialog(win, opts) : await dialog.showOpenDialog(opts);
+        picked = r.canceled ? undefined : r.filePaths[0];
+      }
+      if (!picked) return null;
+      if (create) createSqliteFile(picked);
+      else {
+        const problem = sqliteFileProblem(picked);
+        if (problem) throw new Error(problem);
+      }
+      allowSqlitePath(picked);
+      return picked;
+    },
+  );
+
+  // "Export database file copy": the worker runs SQLite's backup API; main
+  // only chooses where the copy goes.
+  ipcMain.handle(
+    IpcChannel.SqliteBackupCopy,
+    async (e): Promise<{ filePath: string; bytes: number } | null> => {
+      if (activeEngine !== 'sqlite' || !retainedSession) {
+        throw new Error('No SQLite database is open.');
+      }
+      const win = BrowserWindow.fromWebContents(e.sender);
+      const source = retainedSession.config.database;
+      const base = source.replace(/^.*[\\/]/, '').replace(/\.[^.]*$/, '') || 'database';
+      const opts = {
+        title: 'Export database file copy',
+        defaultPath: `${base}-copy.db`,
+        filters: [{ name: 'SQLite database', extensions: ['db', 'sqlite', 'sqlite3'] }],
+      };
+      const r = win ? await dialog.showSaveDialog(win, opts) : await dialog.showSaveDialog(opts);
+      if (r.canceled || !r.filePath) return null;
+      if (normalizeSqlitePath(r.filePath) === normalizeSqlitePath(source)) {
+        throw new Error('Choose a different file than the database itself.');
+      }
+      const done = await callWorker(
+        { kind: 'sqliteBackup', filePath: r.filePath },
+        'sqliteBackupDone',
+      );
+      return { filePath: done.filePath, bytes: done.bytes };
     },
   );
 
@@ -1486,7 +1571,7 @@ function registerIpcHandlers() {
       applyThemeToWindow(mainWindow, merged.theme);
     }
     // Push queryTimeoutMs → PG statement_timeout while connected (U20).
-    if (merged.queryTimeoutMs !== prev.queryTimeoutMs && activeEngine === 'postgres') {
+    if (merged.queryTimeoutMs !== prev.queryTimeoutMs && isSqlEngine(activeEngine)) {
       void applyStatementTimeout(merged.queryTimeoutMs);
     }
     return merged;

@@ -18,6 +18,7 @@ import { SAFE_MODE_LABEL, SAFE_MODE_LEVELS } from '@/stores/safe-mode';
 import { useSession } from '@/stores/session';
 import { ROW_LIMIT_CHOICES, useWorkbench } from '@/stores/workbench';
 import { cheatSheetSections, formatBinding, formatKeys } from '@shared/keymap';
+import { LINT_RULES, LINT_RULE_IDS } from '@shared/pg-migration-lint';
 import type { Settings } from '@shared/protocol';
 import { Download, Loader2, RotateCw } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -50,7 +51,11 @@ export const SETTINGS_SECTIONS: ReadonlyArray<{
     label: 'General',
     keywords: 'launch connect reconnect restore workspace tabs sidebar',
   },
-  { id: 'editor', label: 'Editor', keywords: 'sql font size word wrap row limit' },
+  {
+    id: 'editor',
+    label: 'Editor',
+    keywords: 'sql font size word wrap row limit migration lint ddl',
+  },
   {
     id: 'table',
     label: 'Table & grid',
@@ -245,7 +250,74 @@ function EditorSection() {
           width="w-[160px]"
         />
       </Row>
+      <MigrationLintSettings />
     </Rows>
+  );
+}
+
+/** Migration linter: on/off, severity threshold and the per-rule mute list. */
+function MigrationLintSettings() {
+  const settings = useSession((s) => s.settings);
+  const updateSettings = useSession((s) => s.updateSettings);
+  const enabled = settings.migrationLintEnabled !== false;
+  const muted = settings.migrationLintMuted ?? [];
+  return (
+    <>
+      <CheckRow
+        id="migration-lint"
+        label="Migration linter"
+        text="Check DDL for unsafe migrations"
+        hint="Flags blocking or rewriting DDL in Preview SQL panels and the SQL editor, with a safer alternative."
+        checked={enabled}
+        onChange={(v) => void updateSettings({ migrationLintEnabled: v })}
+      />
+      {enabled && (
+        <>
+          <Row label="Show findings" htmlFor="migration-lint-severity">
+            <Choice
+              id="migration-lint-severity"
+              value={settings.migrationLintMinSeverity ?? 'info'}
+              onChange={(v) =>
+                void updateSettings({ migrationLintMinSeverity: v as 'info' | 'warn' | 'error' })
+              }
+              options={[
+                { value: 'info', label: 'All (info and above)' },
+                { value: 'warn', label: 'Warnings and errors' },
+                { value: 'error', label: 'Errors only' },
+              ]}
+              width="w-[200px]"
+            />
+          </Row>
+          <Row label="Rules" hint="Untick a rule to mute it everywhere.">
+            <div className="flex max-h-[220px] flex-col gap-1.5 overflow-auto pr-2">
+              {LINT_RULE_IDS.map((id) => (
+                <div key={id} className="flex items-center gap-2">
+                  <Checkbox
+                    id={`lint-rule-${id}`}
+                    checked={!muted.includes(id)}
+                    onCheckedChange={(v) =>
+                      void updateSettings({
+                        migrationLintMuted:
+                          v === true ? muted.filter((m) => m !== id) : [...new Set([...muted, id])],
+                      })
+                    }
+                  />
+                  <label
+                    htmlFor={`lint-rule-${id}`}
+                    className="cursor-pointer text-[12.5px] text-[var(--wb-text)]"
+                  >
+                    {LINT_RULES[id].title}
+                    <span className="ml-1.5 text-[var(--wb-text-3)]">
+                      {LINT_RULES[id].severity}
+                    </span>
+                  </label>
+                </div>
+              ))}
+            </div>
+          </Row>
+        </>
+      )}
+    </>
   );
 }
 

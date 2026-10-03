@@ -6,12 +6,15 @@ import type { ConnectionConfig, ConnectionEngine, TlsMode } from './protocol';
  *   postgres://user:pass@host:5432/db?sslmode=verify-full
  *   redis://user:pass@host:6379/0      rediss:// = TLS
  *   https://user:pass@search.example.com:9200   (OpenSearch; http:// = no TLS)
+ *   mysql://user:pass@host:3306/db?sslmode=verify-full   (MySQL / MariaDB)
  */
 
 const DEFAULT_PORT: Record<ConnectionEngine, number> = {
   postgres: 5432,
   redis: 6379,
   opensearch: 9200,
+  sqlite: 1,
+  mysql: 3306,
 };
 
 const SSL_MODES: readonly TlsMode[] = ['disable', 'prefer', 'require', 'verify-ca', 'verify-full'];
@@ -26,6 +29,9 @@ function engineForScheme(scheme: string): { engine: ConnectionEngine; tls: boole
     case 'postgres':
     case 'postgresql':
       return { engine: 'postgres', tls: false };
+    case 'mysql':
+    case 'mariadb':
+      return { engine: 'mysql', tls: false };
     case 'redis':
       return { engine: 'redis', tls: false };
     case 'rediss':
@@ -64,6 +70,7 @@ export function parseConnectionUrl(input: string): ParsedConnectionUrl {
 
   let database = '';
   if (kind.engine === 'postgres') database = path || params.get('dbname') || '';
+  else if (kind.engine === 'mysql') database = path || params.get('database') || '';
   else if (kind.engine === 'redis') database = path || params.get('db') || '0';
 
   let ssl = kind.tls;
@@ -103,16 +110,20 @@ export function formatConnectionUrl(
   opts: { includePassword?: boolean } = {},
 ): string {
   const engine = config.engine ?? 'postgres';
+  // A SQLite "URL" is just the file; there is no host to dial.
+  if (engine === 'sqlite') return `sqlite://${config.database}`;
   const scheme =
     engine === 'postgres'
       ? 'postgres'
-      : engine === 'redis'
-        ? config.ssl
-          ? 'rediss'
-          : 'redis'
-        : config.ssl
-          ? 'https'
-          : 'http';
+      : engine === 'mysql'
+        ? 'mysql'
+        : engine === 'redis'
+          ? config.ssl
+            ? 'rediss'
+            : 'redis'
+          : config.ssl
+            ? 'https'
+            : 'http';
   const user = config.user ? encodeURIComponent(config.user) : '';
   const pass =
     opts.includePassword && config.password ? `:${encodeURIComponent(config.password)}` : '';
@@ -121,7 +132,7 @@ export function formatConnectionUrl(
   const path =
     engine === 'opensearch' || !config.database ? '' : `/${encodeURIComponent(config.database)}`;
   let query = '';
-  if (engine === 'postgres') {
+  if (engine === 'postgres' || engine === 'mysql') {
     const mode = !config.ssl
       ? 'disable'
       : config.tls?.mode === 'insecure'

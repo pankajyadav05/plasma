@@ -1,6 +1,7 @@
 import { ipc } from '@/lib/ipc';
 import type { Filter, TableSort } from '@/lib/table-query';
 import type { ConnectionEngine } from '@shared/protocol';
+import { engineCaps } from '@shared/sql-dialect';
 import { editsOf, pendingEditCount, withoutTabEdits } from './session-pending-edits';
 import { DEFAULT_SETTINGS } from './session-settings';
 import { createEmptyTab, createTableTab, patchActiveTab, patchTabById } from './session-tab-model';
@@ -247,7 +248,7 @@ export function installTabPersistence<S extends PersistableState>(
     if (state.tabs === prev.tabs && state.activeTabId === prev.activeTabId) return;
     const connId = state.activeConfig?.id;
     const engine = state.activeConfig?.engine ?? 'postgres';
-    if (!connId || engine !== 'postgres' || state.tabsConnectionId !== connId) return;
+    if (!connId || !engineCaps(engine).sql || state.tabsConnectionId !== connId) return;
     if (pending && pending.connectionId !== connId) flush();
     const { tabs, activeTabId } = state;
     pending = { connectionId: connId, data: () => serializeTabs(tabs, activeTabId) };
@@ -581,7 +582,7 @@ export function adoptConnectionTabs(
   const pageSize = state.settings.defaultPageSize;
   // Settings → "Restore tabs on launch" (restoreWorkspace, default on).
   const restore = state.settings.restoreWorkspace !== false;
-  const persisted = restore && connId && engine === 'postgres' ? loadPersistedTabs(connId) : null;
+  const persisted = restore && connId && engineCaps(engine).sql ? loadPersistedTabs(connId) : null;
   const pristine =
     state.tabs.length === 1 &&
     state.tabs[0]!.kind === 'sql' &&

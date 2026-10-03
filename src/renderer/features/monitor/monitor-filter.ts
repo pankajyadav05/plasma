@@ -18,7 +18,7 @@ export interface ActivityFilter {
   database: string | null;
 }
 
-export function filterActivity(rows: readonly ActivityRow[], f: ActivityFilter): ActivityRow[] {
+export function filterActivity<T extends ActivityRow>(rows: readonly T[], f: ActivityFilter): T[] {
   const q = f.search.trim().toLowerCase();
   return rows.filter((r) => {
     if (!f.showSelf && r.isCurrent) return false;

@@ -9,10 +9,14 @@ import {
   WorkerRequest,
   type WorkerResponse,
 } from '@shared/protocol';
+import { dialectFor } from '@shared/sql-dialect';
+import { MysqlDriver } from './drivers/mysql';
 import { OpenSearchDriver } from './drivers/opensearch';
 import { PostgresDriver } from './drivers/postgres';
 import { RedisDriver } from './drivers/redis';
 import { dispatchRedis } from './drivers/redis-dispatch';
+import type { SqlEngineDriver } from './drivers/sql-engine';
+import { SqliteDriver } from './drivers/sqlite';
 import { ExportCancelledError, writeExportFromQueryStream, writeExportRows } from './export-file';
 import { RequestScheduler } from './request-scheduler';
 import { runIsolatedTestConnect } from './test-connect';
@@ -39,6 +43,16 @@ const runningImports = new Set<string>();
 const exportCancelled = new Set<string>();
 const redis = new RedisDriver();
 const os = new OpenSearchDriver();
+const sqlite = new SqliteDriver();
+const mysql = new MysqlDriver();
+
+/** The active driver for SQL-workbench requests (query, edits, txn, export…). */
+function sqlDriver(): SqlEngineDriver | null {
+  if (activeEngine === 'postgres') return pg;
+  if (activeEngine === 'sqlite') return sqlite;
+  if (activeEngine === 'mysql') return mysql;
+  return null;
+}
 
 let activeEngine: ConnectionEngine | null = null;
 const scheduler = new RequestScheduler();
@@ -76,7 +90,13 @@ function unsupported(id: string, op: string): void {
 }
 
 async function disconnectAll(): Promise<void> {
-  await Promise.allSettled([pg.disconnect(), redis.disconnect(), os.disconnect()]);
+  await Promise.allSettled([
+    pg.disconnect(),
+    redis.disconnect(),
+    os.disconnect(),
+    sqlite.disconnect(),
+    mysql.disconnect(),
+  ]);
   activeEngine = null;
   // Keep connectionGen as-is until the next connect bumps it — stale
   // edit batches still fail the write-boundary check because pg's
@@ -125,10 +145,16 @@ process.parentPort.on('message', async (evt: Electron.MessageEvent) => {
             serverVersion = await redis.connect(req.config);
           } else if (engine === 'opensearch') {
             serverVersion = await os.connect(req.config, req.statementTimeoutMs);
+          } else if (engine === 'sqlite') {
+            serverVersion = await sqlite.connect(req.config, req.statementTimeoutMs);
+          } else if (engine === 'mysql') {
+            serverVersion = await mysql.connect(req.config, req.statementTimeoutMs);
           }
           activeEngine = engine;
           connectionGen += 1;
           if (engine === 'postgres') pg.setConnectionGen(connectionGen);
+          else if (engine === 'sqlite') sqlite.setConnectionGen(connectionGen);
+          else if (engine === 'mysql') mysql.setConnectionGen(connectionGen);
           send({
             kind: 'connected',
             id: req.id,
@@ -148,6 +174,10 @@ process.parentPort.on('message', async (evt: Electron.MessageEvent) => {
         case 'setStatementTimeout': {
           if (activeEngine === 'postgres') {
             await pg.setStatementTimeout(req.timeoutMs);
+          } else if (activeEngine === 'sqlite') {
+            await sqlite.setStatementTimeout(req.timeoutMs);
+          } else if (activeEngine === 'mysql') {
+            await mysql.setStatementTimeout(req.timeoutMs);
           }
           send({ kind: 'statementTimeoutSet', id: req.id });
           break;
@@ -159,11 +189,12 @@ process.parentPort.on('message', async (evt: Electron.MessageEvent) => {
 
         // ── Postgres-only ──
         case 'query': {
-          if (activeEngine !== 'postgres') return unsupported(req.id, 'query');
+          const drv = sqlDriver();
+          if (!drv) return unsupported(req.id, 'query');
           {
             // F10: no queryChunk stream — nothing consumes it, and each chunk
             // was a second full copy of the rows across two process hops.
-            const result = await pg.query(req.sql, req.params, {
+            const result = await drv.query(req.sql, req.params, {
               revision: req.revision ?? 0,
               maxRows: req.maxRows,
               maxBytes: req.maxBytes,
@@ -174,8 +205,9 @@ process.parentPort.on('message', async (evt: Electron.MessageEvent) => {
           break;
         }
         case 'commitEditBatch': {
-          if (activeEngine !== 'postgres') return unsupported(req.id, 'commitEditBatch');
-          const { state, applied } = await pg.commitEditBatch(req.connectionGen, req.updates);
+          const drv = sqlDriver();
+          if (!drv) return unsupported(req.id, 'commitEditBatch');
+          const { state, applied } = await drv.commitEditBatch(req.connectionGen, req.updates);
           send({ kind: 'editBatchResult', id: req.id, state, applied });
           break;
         }
@@ -215,15 +247,17 @@ process.parentPort.on('message', async (evt: Electron.MessageEvent) => {
           break;
         }
         case 'explain': {
-          if (activeEngine !== 'postgres') return unsupported(req.id, 'explain');
-          const result = await pg.explain(req.sql, req.analyze, req.params);
+          const drv = sqlDriver();
+          if (!drv) return unsupported(req.id, 'explain');
+          const result = await drv.explain(req.sql, req.analyze, req.params);
           send({ kind: 'queryResult', id: req.id, result });
           break;
         }
         case 'sidebandQuery': {
-          if (activeEngine !== 'postgres') return unsupported(req.id, 'sidebandQuery');
+          const drv = sqlDriver();
+          if (!drv) return unsupported(req.id, 'sidebandQuery');
           {
-            const result = await pg.sidebandQuery(req.sql, req.params, {
+            const result = await drv.sidebandQuery(req.sql, req.params, {
               revision: req.revision ?? 0,
               timeoutMs: req.timeoutMs,
             });
@@ -232,19 +266,21 @@ process.parentPort.on('message', async (evt: Electron.MessageEvent) => {
           break;
         }
         case 'aiQuery': {
-          if (activeEngine !== 'postgres') return unsupported(req.id, 'aiQuery');
-          const result = await pg.aiQuery(req.sql, req.params);
+          const drv = sqlDriver();
+          if (!drv) return unsupported(req.id, 'aiQuery');
+          const result = await drv.aiQuery(req.sql, req.params);
           send({ kind: 'queryResult', id: req.id, result });
           break;
         }
         case 'cancel': {
-          const delivered = activeEngine === 'postgres' ? await pg.cancelQuery() : undefined;
+          const delivered = await sqlDriver()?.cancelQuery();
           send({ kind: 'cancelled', id: req.id, delivered });
           break;
         }
         case 'introspect': {
-          if (activeEngine === 'postgres') {
-            const info = await pg.introspect(req.opts);
+          const drv = sqlDriver();
+          if (drv) {
+            const info = await drv.introspect(req.opts);
             send({ kind: 'schemaInfo', id: req.id, info });
           } else if (activeEngine === 'redis') {
             const info = await redis.refreshOverview();
@@ -258,20 +294,23 @@ process.parentPort.on('message', async (evt: Electron.MessageEvent) => {
           break;
         }
         case 'beginTxn': {
-          if (activeEngine !== 'postgres') return unsupported(req.id, 'beginTxn');
-          const state = await pg.beginTransaction();
+          const drv = sqlDriver();
+          if (!drv) return unsupported(req.id, 'beginTxn');
+          const state = await drv.beginTransaction();
           send({ kind: 'txnState', id: req.id, state });
           break;
         }
         case 'commitTxn': {
-          if (activeEngine !== 'postgres') return unsupported(req.id, 'commitTxn');
-          const state = await pg.commitTransaction();
+          const drv = sqlDriver();
+          if (!drv) return unsupported(req.id, 'commitTxn');
+          const state = await drv.commitTransaction();
           send({ kind: 'txnState', id: req.id, state });
           break;
         }
         case 'rollbackTxn': {
-          if (activeEngine !== 'postgres') return unsupported(req.id, 'rollbackTxn');
-          const state = await pg.rollbackTransaction();
+          const drv = sqlDriver();
+          if (!drv) return unsupported(req.id, 'rollbackTxn');
+          const state = await drv.rollbackTransaction();
           send({ kind: 'txnState', id: req.id, state });
           break;
         }
@@ -293,7 +332,7 @@ process.parentPort.on('message', async (evt: Electron.MessageEvent) => {
         }
 
         case 'exportRows': {
-          if (activeEngine !== 'postgres') return unsupported(req.id, 'exportRows');
+          if (!sqlDriver()) return unsupported(req.id, 'exportRows');
           const jobId = req.jobId;
           if (jobId) exportCancelled.delete(jobId);
           try {
@@ -304,6 +343,7 @@ process.parentPort.on('message', async (evt: Electron.MessageEvent) => {
               rows: req.rows,
               targetTable: req.targetTable,
               csv: req.csv,
+              dialect: dialectFor(activeEngine),
               isCancelled: () => (jobId ? exportCancelled.has(jobId) : false),
               onProgress: (p) =>
                 jobId &&
@@ -316,19 +356,21 @@ process.parentPort.on('message', async (evt: Electron.MessageEvent) => {
           break;
         }
         case 'exportQuery': {
-          if (activeEngine !== 'postgres') return unsupported(req.id, 'exportQuery');
+          const drv = sqlDriver();
+          if (!drv) return unsupported(req.id, 'exportQuery');
           const jobId = req.jobId;
           if (jobId) exportCancelled.delete(jobId);
           const isCancelled = () => (jobId ? exportCancelled.has(jobId) : false);
           try {
             // P1-3: the stream is closed inside, whatever fails first.
             const result = await writeExportFromQueryStream(
-              pg.streamQueryForExport(req.sql, req.params),
+              drv.streamQueryForExport(req.sql, req.params),
               {
                 filePath: req.filePath,
                 format: req.format,
                 targetTable: req.targetTable,
                 csv: req.csv,
+                dialect: dialectFor(activeEngine),
                 isCancelled,
                 onProgress: (p) =>
                   jobId &&
@@ -351,16 +393,22 @@ process.parentPort.on('message', async (evt: Electron.MessageEvent) => {
           }
           break;
         }
+        case 'sqliteBackup': {
+          if (activeEngine !== 'sqlite') return unsupported(req.id, 'sqliteBackup');
+          const { bytes } = await sqlite.backupTo(req.filePath);
+          send({ kind: 'sqliteBackupDone', id: req.id, filePath: req.filePath, bytes });
+          break;
+        }
         case 'exportCancel': {
           exportCancelled.add(req.jobId);
           // A long-running fetch is interrupted server-side; the writer also
           // checks the flag between batches.
-          const delivered = activeEngine === 'postgres' ? await pg.cancelQuery() : undefined;
+          const delivered = await sqlDriver()?.cancelQuery();
           send({ kind: 'cancelled', id: req.id, delivered });
           break;
         }
         case 'cancelAux': {
-          const delivered = activeEngine === 'postgres' ? await pg.cancelAux() : undefined;
+          const delivered = await sqlDriver()?.cancelAux();
           send({ kind: 'cancelled', id: req.id, delivered });
           break;
         }
@@ -496,7 +544,10 @@ process.parentPort.on('message', async (evt: Electron.MessageEvent) => {
       fatal: isConnectionLostError(err) ? CONNECTION_LOST : undefined,
       // C5: main must not replay anything into a fresh session when the
       // old one died with a transaction open.
-      txnLost: isConnectionLostError(err) && pg.lostDuringTransaction() ? true : undefined,
+      txnLost:
+        isConnectionLostError(err) && (pg.lostDuringTransaction() || mysql.lostDuringTransaction())
+          ? true
+          : undefined,
       notices: noticesOf(err),
     });
   }

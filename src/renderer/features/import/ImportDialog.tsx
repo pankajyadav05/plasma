@@ -94,6 +94,7 @@ function ImportBody({
   const [csvOver, setCsvOver] = useState<Partial<ImportCsvOptions>>({});
   const [preview, setPreview] = useState<ImportPreview | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
+  const [lintBlocked, setLintBlocked] = useState(false);
   const [mode, setMode] = useState<Mode>(initialTable ? 'existing' : 'new');
   const [tableKey, setTableKey] = useState(initialTable ? `${schema}.${initialTable}` : '');
   const [newName, setNewName] = useState('');
@@ -262,7 +263,8 @@ function ImportBody({
     progress && progress.totalBytes > 0
       ? Math.min(100, Math.round((progress.bytesRead / progress.totalBytes) * 100))
       : 0;
-  const canImport = !readOnly && !running && built.value !== null && !built.problem && !result?.ok;
+  const canImport =
+    !readOnly && !running && built.value !== null && !built.problem && !result?.ok && !lintBlocked;
 
   return (
     <DialogContent className="max-w-[860px]" data-testid="import-dialog">
@@ -575,6 +577,7 @@ function ImportBody({
             className="max-h-[220px]"
             sql={(preview.statements ?? []).map((s) => `${s};`).join('\n\n')}
             emptyText="No statements found."
+            onLintBlockedChange={setLintBlocked}
           />
         </div>
       )}

@@ -18,6 +18,7 @@ import {
 } from '@/stores/session-pending-edits';
 import { useWorkbench } from '@/stores/workbench';
 import type { ColumnMeta } from '@shared/protocol';
+import { engineCaps } from '@shared/sql-dialect';
 import { Braces, Check, Copy, Pencil, SlidersHorizontal } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -144,9 +145,10 @@ export function DetailsPanel() {
                 {emptyHint(engine, tab?.kind, Boolean(tab?.queryResult))}
               </div>
             </div>
-            {tab?.kind === 'table' && tab.tableSchema && tab.tableName && (
-              <TableOverview schema={tab.tableSchema} table={tab.tableName} />
-            )}
+            {engineCaps(engine).pgExtras &&
+              tab?.kind === 'table' &&
+              tab.tableSchema &&
+              tab.tableName && <TableOverview schema={tab.tableSchema} table={tab.tableName} />}
           </>
         )}
       </div>

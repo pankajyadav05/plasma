@@ -116,6 +116,7 @@ const POLICY_BY_KIND: Partial<Record<WorkerRequest['kind'], RecoveryPolicy>> = {
   // Side effects: replaying rewrites files / repeats mutations.
   exportQuery: 'reconnect-only',
   exportRows: 'reconnect-only',
+  sqliteBackup: 'reconnect-only',
   redisWrite: 'reconnect-only',
   redisDeleteKey: 'reconnect-only',
   redisBulkDelete: 'reconnect-only',

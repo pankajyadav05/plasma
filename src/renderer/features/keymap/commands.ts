@@ -4,6 +4,7 @@ import {
   rememberFileHandle,
   saveSqlFile,
 } from '@/features/editor/sql-files';
+import { useMigrationDialog } from '@/features/migration/migration-dialog-store';
 import { isSplit, paneTabIds } from '@/stores/pane-state';
 import { usePanes } from '@/stores/panes';
 import { activeTab, useSession } from '@/stores/session';
@@ -11,6 +12,7 @@ import { editsOf } from '@/stores/session-pending-edits';
 import { useWorkbench } from '@/stores/workbench';
 import type { KeyId } from '@shared/keymap';
 import type { ConnectionEngine } from '@shared/protocol';
+import { type EngineCapabilities, engineCaps } from '@shared/sql-dialect';
 
 /**
  * One dispatcher for every app command, whatever triggered it: the
@@ -26,13 +28,19 @@ export type CommandId =
   | 'monitor'
   | 'exportJson'
   | 'backup'
+  | 'sqliteBackup'
   | 'restore'
   | 'roles'
+  | 'checkMigration'
   | 'dbSearch'
   | 'erDiagram'
   | 'splitPane'
   | 'closePane';
 
+/**
+ * Commands of the SQL workbench (every SQL engine); the finer per-engine
+ * restrictions are `COMMAND_CAPABILITY` below.
+ */
 const POSTGRES_ONLY: ReadonlySet<CommandId> = new Set<CommandId>([
   'runQuery',
   'runQueryAll',
@@ -50,6 +58,7 @@ const POSTGRES_ONLY: ReadonlySet<CommandId> = new Set<CommandId>([
   'backup',
   'restore',
   'roles',
+  'checkMigration',
   'dbSearch',
   'erDiagram',
   'splitPane',
@@ -67,6 +76,19 @@ const POSTGRES_ONLY: ReadonlySet<CommandId> = new Set<CommandId>([
   'fontReset',
   'toggleComment',
 ]);
+
+/** Extra capability a workbench command needs (anything absent needs only `sql`). */
+const COMMAND_CAPABILITY: Partial<Record<CommandId, keyof EngineCapabilities>> = {
+  monitor: 'activity',
+  backup: 'pgBackup',
+  restore: 'pgBackup',
+  roles: 'roles',
+  safeRun: 'safeRun',
+  erDiagram: 'er',
+  dbSearch: 'pgExtras',
+  schemaDiff: 'pgExtras',
+  checkMigration: 'pgExtras',
+};
 
 /** Commands that need a live connection. */
 const NEEDS_CONNECTION: ReadonlySet<CommandId> = new Set<CommandId>([
@@ -86,7 +108,14 @@ export function commandAvailable(
   connected: boolean,
 ): boolean {
   if (NEEDS_CONNECTION.has(id) && !connected) return false;
-  if (POSTGRES_ONLY.has(id) && engine !== 'postgres') return false;
+  if (id === 'sqliteBackup') return connected && engineCaps(engine).fileBackup;
+  if (POSTGRES_ONLY.has(id)) {
+    if (engine === null) return false;
+    const caps = engineCaps(engine);
+    if (!caps.sql) return false;
+    const need = COMMAND_CAPABILITY[id];
+    if (need && !caps[need]) return false;
+  }
   return true;
 }
 
@@ -101,7 +130,7 @@ function engineOf(): ConnectionEngine | null {
 /** Tabs the strip shows (Redis / OpenSearch hide extra SQL tabs). */
 export function visibleTabs() {
   const s = session();
-  if (engineOf() === 'postgres' || engineOf() === null) {
+  if (engineOf() === null || engineCaps(engineOf()).sql) {
     // With a split, ⌘1…9 and next / previous tab work within the focused pane.
     const panes = usePanes.getState();
     if (!isSplit(panes)) return s.tabs;
@@ -257,6 +286,12 @@ export function runCommand(id: CommandId): boolean {
     case 'backup':
     case 'restore':
     case 'roles':
+      wb.setOverlay(id);
+      return true;
+    case 'checkMigration':
+      useMigrationDialog.getState().show();
+      return true;
+    case 'sqliteBackup':
       wb.setOverlay(id);
       return true;
     case 'dbSearch':

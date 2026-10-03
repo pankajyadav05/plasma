@@ -62,6 +62,7 @@ function CreateTableBody({
   const readOnly = useSession((s) => Boolean(s.activeConfig?.readOnly));
   const [schema, setSchema] = useState(initialSchema);
   const [name, setName] = useState('');
+  const [lintBlocked, setLintBlocked] = useState(false);
   const [comment, setComment] = useState('');
   const [rows, setRows] = useState<Row[]>(() => [
     newRow({ name: 'id', type: 'bigserial', nullable: false, primaryKey: true }),
@@ -98,7 +99,8 @@ function CreateTableBody({
     }
   }, [rows, name, schema, comment]);
 
-  const canCreate = !readOnly && !busy && built.statements.length > 0 && !built.problem;
+  const canCreate =
+    !readOnly && !busy && built.statements.length > 0 && !built.problem && !lintBlocked;
 
   const submit = async () => {
     setBusy(true);
@@ -245,6 +247,7 @@ function CreateTableBody({
           className="max-h-[170px]"
           sql={built.sql}
           error={built.problem}
+          onLintBlockedChange={setLintBlocked}
           emptyText={`Name the table to see the SQL for ${quoteIdent(schema)}.…`}
         />
       </div>

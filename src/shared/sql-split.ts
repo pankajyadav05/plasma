@@ -13,7 +13,8 @@
  *   - SQL-standard function bodies (`BEGIN ATOMIC … END`, PG14+): inside
  *     `CREATE [OR REPLACE] FUNCTION|PROCEDURE`, `BEGIN` / `CASE` open a
  *     block and `END` closes one — the same heuristic psql uses — so the
- *     body's semicolons don't split the statement
+ *     body's semicolons don't split the statement; the same goes for the
+ *     `CREATE [TEMP] TRIGGER … BEGIN … END` bodies of SQLite and MySQL
  *
  * Chunks that hold only whitespace and comments are dropped (a trailing
  * `-- done` after the last `;` is not a statement). Linear time: dollar
@@ -62,6 +63,9 @@ export function splitSqlStatementRanges(sql: string): SqlStatement[] {
   const inRoutineDefinition = () => {
     if (idents[0] !== 'create') return false;
     if (idents[1] === 'function' || idents[1] === 'procedure') return true;
+    // SQLite / MySQL: CREATE [TEMP] TRIGGER … BEGIN stmt; stmt; END.
+    if (idents[1] === 'trigger') return true;
+    if ((idents[1] === 'temp' || idents[1] === 'temporary') && idents[2] === 'trigger') return true;
     return (
       idents[1] === 'or' &&
       idents[2] === 'replace' &&
@@ -144,6 +148,22 @@ export function splitSqlStatementRanges(sql: string): SqlStatement[] {
         if (sql[i] === '"' && sql[i + 1] === '"') {
           i += 2;
         } else if (sql[i] === '"') {
+          i++;
+          break;
+        } else {
+          i++;
+        }
+      }
+      continue;
+    }
+
+    // MySQL / SQLite backtick identifier (not valid Postgres, so never ambiguous).
+    if (c === '`') {
+      i++;
+      while (i < N) {
+        if (sql[i] === '`' && sql[i + 1] === '`') {
+          i += 2;
+        } else if (sql[i] === '`') {
           i++;
           break;
         } else {

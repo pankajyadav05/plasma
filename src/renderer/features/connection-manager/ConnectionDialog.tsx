@@ -32,12 +32,15 @@ import type {
   OpenSearchOptions,
   TlsMode,
 } from '@shared/protocol';
+import { engineCaps } from '@shared/sql-dialect';
 import {
   Boxes,
   Check,
   ChevronRight,
   Copy,
   Database,
+  DatabaseZap,
+  HardDrive,
   Layers,
   Link2,
   Loader2,
@@ -75,6 +78,8 @@ const ENGINE_DEFAULTS: Record<
   postgres: { port: 5432, database: 'postgres', user: 'postgres', ssl: false },
   redis: { port: 6379, database: '0', user: '', ssl: false },
   opensearch: { port: 9200, database: '', user: '', ssl: false },
+  sqlite: { port: 1, database: '', user: '', ssl: false },
+  mysql: { port: 3306, database: '', user: 'root', ssl: false },
 };
 
 const ENGINE_DISPLAY: Record<
@@ -84,6 +89,8 @@ const ENGINE_DISPLAY: Record<
   postgres: { label: 'Postgres', subtitle: 'Relational · SQL', icon: Database },
   redis: { label: 'Redis', subtitle: 'Key-value · cache', icon: Layers },
   opensearch: { label: 'OpenSearch', subtitle: 'Search · documents', icon: Boxes },
+  sqlite: { label: 'SQLite', subtitle: 'Local file · SQL', icon: HardDrive },
+  mysql: { label: 'MySQL', subtitle: 'MySQL · MariaDB', icon: DatabaseZap },
 };
 
 /**
@@ -207,7 +214,8 @@ export function ConnectionDialog() {
   const showDisconnect = Boolean(
     activeConfig && isEditing && activeConfig.id === dialogPrefill?.id,
   );
-  const sshSupported = engine !== 'opensearch';
+  const sshSupported = engineCaps(engine).ssh && engine !== 'opensearch';
+  const isFile = engine === 'sqlite';
   const tlsMode = formTlsMode(form);
 
   /** Anything the user edits invalidates the last test / errors for that field. */
@@ -391,6 +399,30 @@ export function ConnectionDialog() {
     }
   };
 
+  const pickSqlite = async (mode: 'open' | 'create') => {
+    try {
+      const path = await ipc.conn.pickSqliteFile(mode);
+      if (!path) return;
+      setForm((prev) => ({
+        ...prev,
+        database: path,
+        host: 'local',
+        port: 1,
+        name:
+          prev.name && prev.name !== 'localhost' ? prev.name : (path.split(/[\\/]/).pop() ?? path),
+      }));
+      touched(['database']);
+    } catch (err) {
+      setErrors((prev) => ({
+        ...prev,
+        database:
+          err instanceof Error
+            ? err.message.replace(/^Error invoking remote method '[^']*': (Error: )?/, '')
+            : String(err),
+      }));
+    }
+  };
+
   const pickFile = async (key: 'caFile' | 'certFile' | 'keyFile', title: string) => {
     const path = await ipc.conn.pickFile(title);
     if (path) updateTls(key, path);
@@ -405,7 +437,12 @@ export function ConnectionDialog() {
   const connectErrorVisible = showConnectError && connectionState === 'error' && connectionError;
 
   const tlsLabel = useMemo(
-    () => (engine === 'postgres' ? 'SSL mode' : engine === 'redis' ? 'TLS' : 'HTTPS'),
+    () =>
+      engine === 'postgres' || engine === 'mysql'
+        ? 'SSL mode'
+        : engine === 'redis'
+          ? 'TLS'
+          : 'HTTPS',
     [engine],
   );
 
@@ -428,7 +465,7 @@ export function ConnectionDialog() {
 
           <div className="min-h-0 flex-1 overflow-y-auto px-5 pb-4">
             {/* Engine picker */}
-            <div className="grid grid-cols-3 gap-2">
+            <div className="grid grid-cols-3 gap-2" data-testid="engine-picker">
               {(Object.keys(ENGINE_DISPLAY) as ConnectionEngine[]).map((eng) => {
                 const meta = ENGINE_DISPLAY[eng];
                 const Icon = meta.icon;
@@ -531,7 +568,27 @@ export function ConnectionDialog() {
                 </Field>
               </div>
 
-              <div className="grid grid-cols-[1fr_120px] gap-3">
+              {isFile && (
+                <Field label="Database file" htmlFor="conn-file" error={errors.database}>
+                  <div className="flex gap-2">
+                    <Input
+                      id="conn-file"
+                      value={form.database}
+                      readOnly
+                      aria-invalid={errors.database ? true : undefined}
+                      placeholder="No file chosen"
+                      className="font-mono"
+                    />
+                    <Pill onClick={() => void pickSqlite('open')}>Open…</Pill>
+                    <Pill onClick={() => void pickSqlite('create')}>New…</Pill>
+                  </div>
+                  <p className="pt-1 text-[12px] text-[var(--wb-text-2)]">
+                    Turn on Read-only below to open the file without being able to change it.
+                  </p>
+                </Field>
+              )}
+
+              <div className="grid grid-cols-[1fr_120px] gap-3" hidden={isFile}>
                 <Field label="Host" htmlFor="conn-host" error={errors.host}>
                   <Input
                     id="conn-host"
@@ -556,7 +613,7 @@ export function ConnectionDialog() {
                 </Field>
               </div>
 
-              {engine === 'redis' && redisEndpointKind(form.host) !== 'tcp' && (
+              {!isFile && engine === 'redis' && redisEndpointKind(form.host) !== 'tcp' && (
                 <p className="-mt-1.5 text-[12px] text-[var(--wb-text-2)]">
                   {
                     REDIS_HOST_HINT[
@@ -576,13 +633,13 @@ export function ConnectionDialog() {
               )}
 
               {/* Engine-specific data field */}
-              {engine === 'postgres' && (
+              {(engine === 'postgres' || engine === 'mysql') && (
                 <Field label="Database" htmlFor="conn-db" error={errors.database}>
                   <Input
                     id="conn-db"
                     value={form.database}
                     onChange={(e) => update('database', e.target.value, 'database')}
-                    placeholder="postgres"
+                    placeholder={engine === 'mysql' ? '(optional)' : 'postgres'}
                   />
                 </Field>
               )}
@@ -600,95 +657,100 @@ export function ConnectionDialog() {
               )}
 
               {/* User + password (OpenSearch API-key / SigV4 auth doesn't use them) */}
-              {(engine !== 'opensearch' || (form.opensearch?.auth ?? 'basic') === 'basic') && (
-                <div className="grid grid-cols-2 gap-3">
-                  <Field
-                    label={engine === 'redis' ? 'ACL user (optional)' : 'User'}
-                    htmlFor="conn-user"
-                  >
-                    <Input
-                      id="conn-user"
-                      value={form.user}
-                      onChange={(e) => update('user', e.target.value)}
-                      placeholder={engine === 'redis' ? '(leave empty for default)' : 'admin'}
-                    />
-                  </Field>
-                  <Field label="Password" htmlFor="conn-password">
-                    <Input
-                      id="conn-password"
-                      type="password"
-                      value={form.password}
-                      onChange={(e) => update('password', e.target.value)}
-                      placeholder={isEditing ? 'Saved — leave blank to keep' : '•••••••'}
-                    />
-                  </Field>
-                </div>
-              )}
-
-              {/* C4/C9: TLS mode + CA / client certificate files */}
-              <div className={SECTION}>
-                <Field label={tlsLabel} htmlFor="conn-ssl">
-                  <Select
-                    value={tlsMode}
-                    onValueChange={(v) => {
-                      setForm((prev) => withTlsMode(prev, v as TlsMode));
-                      touched(['tlsCert', 'tlsKey']);
-                    }}
-                  >
-                    <SelectTrigger
-                      id="conn-ssl"
-                      aria-label={tlsLabel}
-                      className="h-[26px] text-[13px]"
+              {!isFile &&
+                (engine !== 'opensearch' || (form.opensearch?.auth ?? 'basic') === 'basic') && (
+                  <div className="grid grid-cols-2 gap-3">
+                    <Field
+                      label={engine === 'redis' ? 'ACL user (optional)' : 'User'}
+                      htmlFor="conn-user"
                     >
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {TLS_MODES.filter((m) => engine === 'postgres' || m !== 'prefer').map((m) => (
-                        <SelectItem key={m} value={m} className="text-[13px]">
-                          {TLS_MODE_LABEL[m]}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </Field>
-                {(tlsMode === 'prefer' || tlsMode === 'require') && (
-                  <p className="text-[12px] text-[var(--wb-text-2)]">
-                    Encrypted, but the server certificate is not checked. Not allowed for
-                    connections tagged Prod.
-                  </p>
-                )}
-                {tlsMode !== 'disable' && (
-                  <div className="grid gap-2">
-                    <FileField
-                      label="CA certificate"
-                      value={form.tls?.caFile ?? ''}
-                      placeholder={
-                        tlsMode === 'verify-ca' || tlsMode === 'verify-full'
-                          ? 'System trust store'
-                          : 'Optional'
-                      }
-                      onChange={(v) => updateTls('caFile', v)}
-                      onBrowse={() => void pickFile('caFile', 'Choose a CA certificate')}
-                    />
-                    <FileField
-                      label="Client certificate"
-                      value={form.tls?.certFile ?? ''}
-                      placeholder="Optional (mutual TLS)"
-                      error={errors.tlsCert}
-                      onChange={(v) => updateTls('certFile', v)}
-                      onBrowse={() => void pickFile('certFile', 'Choose a client certificate')}
-                    />
-                    <FileField
-                      label="Client key"
-                      value={form.tls?.keyFile ?? ''}
-                      placeholder="Optional (mutual TLS)"
-                      error={errors.tlsKey}
-                      onChange={(v) => updateTls('keyFile', v)}
-                      onBrowse={() => void pickFile('keyFile', 'Choose a client key')}
-                    />
+                      <Input
+                        id="conn-user"
+                        value={form.user}
+                        onChange={(e) => update('user', e.target.value)}
+                        placeholder={engine === 'redis' ? '(leave empty for default)' : 'admin'}
+                      />
+                    </Field>
+                    <Field label="Password" htmlFor="conn-password">
+                      <Input
+                        id="conn-password"
+                        type="password"
+                        value={form.password}
+                        onChange={(e) => update('password', e.target.value)}
+                        placeholder={isEditing ? 'Saved — leave blank to keep' : '•••••••'}
+                      />
+                    </Field>
                   </div>
                 )}
-              </div>
+
+              {/* C4/C9: TLS mode + CA / client certificate files */}
+              {!isFile && (
+                <div className={SECTION}>
+                  <Field label={tlsLabel} htmlFor="conn-ssl">
+                    <Select
+                      value={tlsMode}
+                      onValueChange={(v) => {
+                        setForm((prev) => withTlsMode(prev, v as TlsMode));
+                        touched(['tlsCert', 'tlsKey']);
+                      }}
+                    >
+                      <SelectTrigger
+                        id="conn-ssl"
+                        aria-label={tlsLabel}
+                        className="h-[26px] text-[13px]"
+                      >
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {TLS_MODES.filter((m) => engine === 'postgres' || m !== 'prefer').map(
+                          (m) => (
+                            <SelectItem key={m} value={m} className="text-[13px]">
+                              {TLS_MODE_LABEL[m]}
+                            </SelectItem>
+                          ),
+                        )}
+                      </SelectContent>
+                    </Select>
+                  </Field>
+                  {(tlsMode === 'prefer' || tlsMode === 'require') && (
+                    <p className="text-[12px] text-[var(--wb-text-2)]">
+                      Encrypted, but the server certificate is not checked. Not allowed for
+                      connections tagged Prod.
+                    </p>
+                  )}
+                  {tlsMode !== 'disable' && (
+                    <div className="grid gap-2">
+                      <FileField
+                        label="CA certificate"
+                        value={form.tls?.caFile ?? ''}
+                        placeholder={
+                          tlsMode === 'verify-ca' || tlsMode === 'verify-full'
+                            ? 'System trust store'
+                            : 'Optional'
+                        }
+                        onChange={(v) => updateTls('caFile', v)}
+                        onBrowse={() => void pickFile('caFile', 'Choose a CA certificate')}
+                      />
+                      <FileField
+                        label="Client certificate"
+                        value={form.tls?.certFile ?? ''}
+                        placeholder="Optional (mutual TLS)"
+                        error={errors.tlsCert}
+                        onChange={(v) => updateTls('certFile', v)}
+                        onBrowse={() => void pickFile('certFile', 'Choose a client certificate')}
+                      />
+                      <FileField
+                        label="Client key"
+                        value={form.tls?.keyFile ?? ''}
+                        placeholder="Optional (mutual TLS)"
+                        error={errors.tlsKey}
+                        onChange={(v) => updateTls('keyFile', v)}
+                        onBrowse={() => void pickFile('keyFile', 'Choose a client key')}
+                      />
+                    </div>
+                  )}
+                </div>
+              )}
 
               {/* O12: OpenSearch auth, path prefix and extra nodes */}
               {engine === 'opensearch' && (

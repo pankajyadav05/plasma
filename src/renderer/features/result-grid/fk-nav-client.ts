@@ -6,6 +6,7 @@
 import { ipc } from '@/lib/ipc';
 import { useSession } from '@/stores/session';
 import type { ColumnMeta } from '@shared/protocol';
+import { dialectFor, engineCaps } from '@shared/sql-dialect';
 import { useEffect, useMemo, useState } from 'react';
 import {
   type FkLookup,
@@ -32,9 +33,17 @@ function connectionGen(): number {
   return useSession.getState().connectionGen ?? 0;
 }
 
+function currentDialect() {
+  return dialectFor(useSession.getState().activeConfig?.engine);
+}
+
 async function lookup(sql: string, params: unknown[]) {
+  const state = useSession.getState();
   // Under SET ROLE the lookup must see what the role sees: stay on the primary.
-  if (useSession.getState().activeRole) return ipc.query.run(sql, params, { internal: true });
+  // Engines without a second connection (SQLite) use the primary too.
+  if (state.activeRole || !engineCaps(state.activeConfig?.engine).sideband) {
+    return ipc.query.run(sql, params, { internal: true });
+  }
   return ipc.query.sideband(sql, params, { timeoutMs: LOOKUP_TIMEOUT_MS });
 }
 
@@ -54,7 +63,7 @@ export async function fetchIncomingCounts(
     // One statement for all; if it fails (a table we can't read), fall back
     // to per-request lookups so one forbidden table doesn't blank the rest.
     const run = async (rs: IncomingCountRequest[]) => {
-      const { sql, params } = buildIncomingCountSql(rs);
+      const { sql, params } = buildIncomingCountSql(rs, currentDialect());
       const res = await lookup(sql, params);
       return parseIncomingCounts(res.rows[0] ?? [], rs.length);
     };
@@ -117,7 +126,7 @@ export async function fetchPeekRow(
   refTable: string,
   match: FkLookup,
 ): Promise<PeekResult> {
-  const { sql, params } = buildPeekSql(refSchema, refTable, match);
+  const { sql, params } = buildPeekSql(refSchema, refTable, match, currentDialect());
   const cacheKey = `${sql}\n${params.join('\u0000')}`;
   const gen = connectionGen();
   const hit = peekCache.get(cacheKey);

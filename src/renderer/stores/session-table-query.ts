@@ -10,6 +10,7 @@ import {
   buildEstimatedCountSql,
   buildRlsCountSql,
 } from '@/lib/table-query';
+import { dialectFor, engineCaps } from '@shared/sql-dialect';
 import { tablePkNames } from './session-pending-edits';
 import { shouldUseEstimatedCount } from './session-sql-heuristics';
 import { columnsForTable, patchTabById, resultPatch } from './session-tab-model';
@@ -66,7 +67,15 @@ export async function runTableDataQuery(
     pkNames.size > 0
       ? new Set([...tab.hiddenColumns].filter((c: string) => !pkNames.has(c)))
       : tab.hiddenColumns;
+  const dialect = dialectFor(state.activeConfig?.engine);
+  const tableMeta = state.schema?.tables.find(
+    (t) => t.schema === tab.tableSchema && t.name === tab.tableName,
+  );
+  // SQLite rowid tables without a declared key are addressed through `rowid`.
+  const implicitKey = tableMeta?.implicitRowid;
   const { sql, params } = buildDataSql({
+    dialect,
+    implicitKey,
     schema: tab.tableSchema,
     table: tab.tableName,
     allColumns,
@@ -77,10 +86,7 @@ export async function runTableDataQuery(
     pageSize: tab.pageSize,
     // B5/F17: deterministic paging — PK order (ctid for key-less tables).
     primaryKey: [...pkNames],
-    ctidFallback:
-      pkNames.size === 0 &&
-      state.schema?.tables.find((t) => t.schema === tab.tableSchema && t.name === tab.tableName)
-        ?.kind === 'table',
+    ctidFallback: pkNames.size === 0 && tableMeta?.kind === 'table',
   });
 
   patchTabById(set, tabId, {
@@ -126,7 +132,9 @@ export async function reloadTableTab(set: SetFn, get: () => SessionState, tabId:
 export function loadTableTab(set: SetFn, get: () => SessionState, tabId: string, withRls = false) {
   void runTableDataQuery(set, get, tabId);
   void runTableCountQuery(set, get, tabId);
-  if (withRls) void runRlsCountForTab(set, get, tabId);
+  if (withRls && engineCaps(get().activeConfig?.engine).pgExtras) {
+    void runRlsCountForTab(set, get, tabId);
+  }
 }
 
 /** Index of the last page for `total` rows (0 for an empty table). */
@@ -182,7 +190,9 @@ export async function runTableCountQuery(
   const tableMeta = state.schema?.tables.find(
     (t) => t.schema === tab.tableSchema && t.name === tab.tableName,
   );
+  const dialect = dialectFor(state.activeConfig?.engine);
   const useEstimate =
+    dialect.estimatedCount('', '') !== null &&
     tab.filters.length === 0 &&
     (tableMeta?.kind === 'table' || tableMeta?.kind === 'matview') &&
     shouldUseEstimatedCount(
@@ -206,8 +216,9 @@ export async function runTableCountQuery(
   const isCurrent = claimTableRequest(countRequestGen, tabId, get);
 
   const { sql, params } = useEstimate
-    ? buildEstimatedCountSql(tab.tableSchema, tab.tableName)
+    ? buildEstimatedCountSql(tab.tableSchema, tab.tableName, dialect)
     : buildCountSql({
+        dialect,
         schema: tab.tableSchema,
         table: tab.tableName,
         filters: tab.filters,
@@ -218,9 +229,10 @@ export async function runTableCountQuery(
     // so they never queue behind — or get cancelled with — the user's
     // query. Under SET ROLE they must see what the role sees, so they
     // stay on the primary.
-    const result = state.activeRole
-      ? await ipc.query.run(sql, params, { internal: true })
-      : await ipc.query.sideband(sql, params, { timeoutMs: LOOKUP_TIMEOUT_MS });
+    const result =
+      state.activeRole || !engineCaps(state.activeConfig?.engine).sideband
+        ? await ipc.query.run(sql, params, { internal: true })
+        : await ipc.query.sideband(sql, params, { timeoutMs: LOOKUP_TIMEOUT_MS });
     if (!isCurrent()) return;
     const raw = result.rows[0]?.[0];
     const total = parseCount(raw);

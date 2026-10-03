@@ -1,4 +1,5 @@
 import type { ColumnMeta } from './protocol';
+import type { SqlDialect } from './sql-dialect';
 
 /**
  * Incremental CSV / JSON / SQL INSERT formatting (U16).
@@ -164,7 +165,12 @@ function quoteText(str: string): string {
  * array-as-jsonb. Only json/jsonb arrive as parsed values; they are
  * re-serialised and cast to the column's own JSON type.
  */
-export function sqlLiteral(value: unknown, column?: Pick<ColumnMeta, 'dataTypeName'>): string {
+export function sqlLiteral(
+  value: unknown,
+  column?: Pick<ColumnMeta, 'dataTypeName'>,
+  dialect?: SqlDialect,
+): string {
+  if (dialect && dialect.engine !== 'postgres') return genericSqlLiteral(value, column, dialect);
   if (value === null || value === undefined) return 'NULL';
   if (typeof value === 'number')
     return Number.isFinite(value) ? String(value) : quoteText(String(value));
@@ -186,6 +192,25 @@ export function sqlLiteral(value: unknown, column?: Pick<ColumnMeta, 'dataTypeNa
   return quoteText(String(value));
 }
 
+/**
+ * Literal for the SQLite / MySQL dialects: no `::json` casts (their drivers
+ * hand over plain text), blobs as `X'…'`, the engine's own string escaping.
+ */
+function genericSqlLiteral(
+  value: unknown,
+  column: Pick<ColumnMeta, 'dataTypeName'> | undefined,
+  dialect: SqlDialect,
+): string {
+  if (
+    typeof value === 'string' &&
+    column?.dataTypeName === 'bytea' &&
+    /^\\x[0-9a-fA-F]*$/.test(value)
+  ) {
+    return `X'${value.slice(2)}'`;
+  }
+  return dialect.literal(value);
+}
+
 /** Default INSERT target when the result has no single source table. */
 export const DEFAULT_EXPORT_TABLE = 'target_table';
 
@@ -193,9 +218,12 @@ export function formatSqlInsert(
   columns: readonly ColumnMeta[],
   row: readonly unknown[],
   tableName = DEFAULT_EXPORT_TABLE,
+  dialect?: SqlDialect,
 ): string {
-  const colList = columns.map((c) => `"${c.name.replace(/"/g, '""')}"`).join(', ');
-  const vals = row.map((v, i) => sqlLiteral(v, columns[i])).join(', ');
+  const colList = columns
+    .map((c) => (dialect ? dialect.quoteIdent(c.name) : `"${c.name.replace(/"/g, '""')}"`))
+    .join(', ');
+  const vals = row.map((v, i) => sqlLiteral(v, columns[i], dialect)).join(', ');
   return `INSERT INTO ${tableName} (${colList}) VALUES (${vals});`;
 }
 
@@ -207,7 +235,7 @@ export function createExportStreamer(
   format: ExportFormat,
   columns: readonly ColumnMeta[],
   sink: ExportSink,
-  opts?: { targetTable?: string; csv?: CsvOptions },
+  opts?: { targetTable?: string; csv?: CsvOptions; dialect?: SqlDialect },
 ): ExportStreamer {
   const csv = opts?.csv ?? DEFAULT_CSV_OPTIONS;
   const targetTable = opts?.targetTable || DEFAULT_EXPORT_TABLE;
@@ -257,7 +285,9 @@ export function createExportStreamer(
     begin() {},
     writeRows(rows) {
       if (rows.length === 0) return;
-      const body = rows.map((row) => formatSqlInsert(columns, row, targetTable)).join('\n');
+      const body = rows
+        .map((row) => formatSqlInsert(columns, row, targetTable, opts?.dialect))
+        .join('\n');
       void sink(`${body}\n`);
       rowIndex += rows.length;
     },
@@ -272,7 +302,7 @@ export function formatResultString(
   columns: readonly ColumnMeta[],
   rows: readonly unknown[][],
   format: ExportFormat,
-  opts?: { targetTable?: string; bom?: boolean; csv?: CsvOptions },
+  opts?: { targetTable?: string; bom?: boolean; csv?: CsvOptions; dialect?: SqlDialect },
 ): string {
   const parts: string[] = [];
   const streamer = createExportStreamer(

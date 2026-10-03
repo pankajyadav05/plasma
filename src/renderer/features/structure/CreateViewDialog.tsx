@@ -50,6 +50,7 @@ function CreateViewBody({
   const [orReplace, setOrReplace] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [lintBlocked, setLintBlocked] = useState(false);
 
   const schemas = useMemo(() => {
     const names = (schemaInfo?.schemas ?? []).map((s) => s.name);
@@ -147,6 +148,7 @@ function CreateViewBody({
           className="max-h-[150px]"
           sql={built.sql}
           error={built.problem}
+          onLintBlockedChange={setLintBlocked}
           emptyText="Name the view to see the SQL."
         />
       </div>
@@ -162,7 +164,7 @@ function CreateViewBody({
         </Button>
         <Button
           onClick={() => void submit()}
-          disabled={readOnly || busy || !built.sql}
+          disabled={readOnly || busy || !built.sql || lintBlocked}
           data-testid="create-view-submit"
         >
           {busy ? 'Creating…' : 'Create view'}

@@ -68,6 +68,12 @@ export function validateConnectionForm(input: ConnectionFormInput): FormErrors {
 
   if (!config.name.trim()) errors.name = 'Name is required';
 
+  if (engine === 'sqlite') {
+    // A file, not a host: nothing else on the form applies.
+    if (!config.database.trim()) errors.database = 'Choose or create a database file';
+    return errors;
+  }
+
   const host = config.host.trim();
   if (!host) errors.host = 'Host is required';
   else if (engine === 'redis' && redisEndpointKind(host) !== 'tcp') {

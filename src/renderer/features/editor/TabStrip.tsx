@@ -8,6 +8,7 @@ import { useSession } from '@/stores/session';
 import type { TabKind } from '@/stores/session';
 import { tabsWithEdits } from '@/stores/session-pending-edits';
 import { isPreviewTab, isTabDirty } from '@/stores/session-tabs';
+import { engineCaps } from '@shared/sql-dialect';
 import {
   Activity,
   Boxes,
@@ -147,7 +148,7 @@ export function TabStrip({ pane }: { pane?: PaneId } = {}) {
   // Redis / OpenSearch have no SQL editor: the session's placeholder SQL
   // tab renders the engine overview, so show it as a fixed "Overview" tab
   // (never "query-1.sql", never closable) and hide any extra SQL tabs.
-  const keyValueEngine = engine !== 'postgres';
+  const keyValueEngine = !engineCaps(engine).sql;
   const overviewId = keyValueEngine ? tabs.find((t) => t.kind === 'sql')?.id : undefined;
   const visible = keyValueEngine
     ? tabs.filter((t) => t.kind !== 'sql' || t.id === overviewId)
@@ -398,7 +399,7 @@ export function TabStrip({ pane }: { pane?: PaneId } = {}) {
         </button>
       )}
 
-      {engine === 'postgres' && (
+      {!keyValueEngine && (
         <button
           type="button"
           aria-label={`New SQL tab (${shortcut('newTab')})`}
@@ -465,7 +466,7 @@ export function TabStrip({ pane }: { pane?: PaneId } = {}) {
                 }}
               />
               <div className="my-1 h-px bg-[var(--wb-separator)]" />
-              {engine === 'postgres' && (
+              {!keyValueEngine && (
                 <MenuItem
                   icon={<Columns2 />}
                   label={split ? 'Move to Other Pane' : 'Split Pane Right'}

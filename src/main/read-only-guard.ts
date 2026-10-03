@@ -1,6 +1,6 @@
 import { isOsReadRequest, isReadOnlyOsSql } from '@shared/os-write-policy';
-import { pgReadOnlyEscapeReason } from '@shared/pg-readonly-sql';
 import { isRedisReadCommand } from '@shared/redis-command-policy';
+import { sqlReadOnlyEscapeReason } from '@shared/sql-readonly';
 
 /**
  * C1 — main-process guard for read-only connections, for every engine.
@@ -62,6 +62,7 @@ const READ_KINDS = new Set<string>([
   'exportCancel', // stops a file export
   'cancelAux', // cancels a read on the aux connection
   'exportRows', // writes a local file from rows already fetched
+  'sqliteBackup', // copies the database file; the database itself is only read
 ]);
 
 /** Fallback for kinds this file has not heard of yet. */
@@ -72,8 +73,12 @@ function str(v: unknown): string {
   return typeof v === 'string' ? v : '';
 }
 
-/** Throws ReadOnlyViolationError when `req` would write on a read-only session. */
-export function assertAllowedOnReadOnly(req: GuardedRequest): void {
+/**
+ * Throws ReadOnlyViolationError when `req` would write on a read-only session.
+ * `engine` picks the SQL escape screen (SQLite / MySQL have their own
+ * ways out of read-only); Postgres is the default.
+ */
+export function assertAllowedOnReadOnly(req: GuardedRequest, engine?: string | null): void {
   const { kind } = req;
 
   switch (kind) {
@@ -82,7 +87,7 @@ export function assertAllowedOnReadOnly(req: GuardedRequest): void {
     case 'aiQuery':
     case 'exportQuery':
       {
-        const why = pgReadOnlyEscapeReason(str(req.sql));
+        const why = sqlReadOnlyEscapeReason(engine, str(req.sql));
         if (why) throw new ReadOnlyViolationError(why);
       }
       return;

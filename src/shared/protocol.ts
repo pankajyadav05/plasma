@@ -45,8 +45,14 @@ export type AppMeta = z.infer<typeof AppMeta>;
  *                  ssl = TLS toggle, user = '' or ACL username
  *   - opensearch : host, port (9200/443), user, password (basic auth),
  *                  database = unused (kept ''), ssl = use HTTPS
+ *   - sqlite     : database = absolute path of the database file (picked
+ *                  through the native dialog and validated in main);
+ *                  host/port are placeholders ('local', 1); readOnly opens
+ *                  the file read-only
+ *   - mysql      : like postgres (host, port, database, user, password,
+ *                  ssl/tls); also serves MariaDB
  */
-export const ConnectionEngine = z.enum(['postgres', 'redis', 'opensearch']);
+export const ConnectionEngine = z.enum(['postgres', 'redis', 'opensearch', 'sqlite', 'mysql']);
 export type ConnectionEngine = z.infer<typeof ConnectionEngine>;
 /**
  * libpq-style TLS modes (C4/C9). `disable` is the same as `ssl: false`.
@@ -884,6 +890,13 @@ export const SchemaInfo = z.object({
        * nests these under their parent instead of listing them flat.
        */
       partitionOf: z.object({ schema: z.string(), name: z.string() }).nullable().optional(),
+      /**
+       * SQLite: a rowid table without a declared primary key. Holds the name
+       * of the implicit row-id column (`rowid`, `_rowid_` or `oid`, whichever
+       * is not shadowed by a real column); row edits and deletes address rows
+       * through it.
+       */
+      implicitRowid: z.string().optional(),
     }),
   ),
   columns: z.array(
@@ -938,6 +951,18 @@ export const SchemaInfo = z.object({
         definition: z.string(),
         unique: z.boolean().default(false),
         primary: z.boolean().default(false),
+      }),
+    )
+    .optional(),
+  /** Triggers (SQLite / MySQL); Postgres keeps them in the DDL view. */
+  triggers: z
+    .array(
+      z.object({
+        schema: z.string(),
+        table: z.string(),
+        name: z.string(),
+        /** `CREATE TRIGGER …` text when the engine stores it. */
+        definition: z.string().optional(),
       }),
     )
     .optional(),
@@ -1442,6 +1467,8 @@ export const WorkerRequest = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('exportCancel'), id: z.string(), jobId: z.string() }),
   /** Stop whatever is running on the aux connection (AI tool query, monitor lookup). */
   z.object({ kind: z.literal('cancelAux'), id: z.string() }),
+  /** SQLite: copy the open database to `filePath` with the online backup API. */
+  z.object({ kind: z.literal('sqliteBackup'), id: z.string(), filePath: z.string().min(1) }),
   z.object({
     kind: z.literal('exportQuery'),
     id: z.string(),
@@ -1567,6 +1594,12 @@ export const WorkerResponse = z.discriminatedUnion('kind', [
     bytesWritten: z.number().int().nonnegative(),
   }),
   z.object({ kind: z.literal('ddlResult'), id: z.string(), result: DdlApplyResult }),
+  z.object({
+    kind: z.literal('sqliteBackupDone'),
+    id: z.string(),
+    filePath: z.string(),
+    bytes: z.number().int().nonnegative(),
+  }),
   z.object({ kind: z.literal('importResult'), id: z.string(), result: ImportResult }),
   /** Export progress broadcast (C30) — not request-correlated. */
   z.object({ kind: z.literal('exportProgress'), id: z.string(), progress: ExportProgress }),
@@ -1677,6 +1710,12 @@ export const SettingsShape = z.object({
   safeRunRowThreshold: z.number().int().positive().catch(1000).default(1000),
   /** Seconds a Safe Run may wait for Commit / Roll back before it rolls itself back. */
   safeRunTimeoutSec: z.number().int().min(5).max(3600).catch(300).default(300),
+  /** Migration linter on DDL (Preview SQL panels, SQL editor squiggles, Check migration). */
+  migrationLintEnabled: z.boolean().catch(true).default(true),
+  /** Hide findings below this severity. */
+  migrationLintMinSeverity: z.enum(['info', 'warn', 'error']).catch('info').default('info'),
+  /** Migration-lint rule ids the user muted. */
+  migrationLintMuted: z.array(z.string()).catch([]).default([]),
   /** Defaults for CSV export (the export dialog starts from these). */
   csvExport: CsvExportOptions.catch({
     delimiter: ',',
@@ -2030,6 +2069,10 @@ export const IpcChannel = {
   ConnectionIntrospect: 'plasma:conn:introspect',
   /** Native open-file picker for TLS CA / cert / key files (C9). */
   ConnectionPickFile: 'plasma:conn:pickFile',
+  /** Native picker for a SQLite database file (open or create); main allowlists the path. */
+  ConnectionPickSqlite: 'plasma:conn:pickSqlite',
+  /** Copy the open SQLite database to a file through the backup API. */
+  SqliteBackupCopy: 'plasma:sqlite:backupCopy',
   /**
    * Push: an SSH bastion presented a host key that is unknown or changed.
    * Payload is `SshHostKeyPrompt`; answer with `SshHostKeyRespond` (C8).
@@ -2211,6 +2254,10 @@ export interface PlasmaAPI {
     introspect(opts?: IntrospectOpts): Promise<SchemaInfo>;
     /** Native file picker (TLS CA / cert / key). Resolves null when cancelled. */
     pickFile(title?: string): Promise<string | null>;
+    /** SQLite file picker: open an existing file or create a new one. Null when cancelled. */
+    pickSqliteFile(mode: 'open' | 'create'): Promise<string | null>;
+    /** "Export database file copy": SQLite backup API to a chosen file. Null when cancelled. */
+    sqliteBackupCopy(): Promise<{ filePath: string; bytes: number } | null>;
     /** Answer a `plasma:ssh:hostKeyPrompt` push (C8). */
     respondHostKey(requestId: string, accept: boolean): Promise<void>;
   };

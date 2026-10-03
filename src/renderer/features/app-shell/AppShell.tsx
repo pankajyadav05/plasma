@@ -9,6 +9,7 @@ import { SqlCanvas } from '@/features/editor/SqlCanvas';
 import { TabStrip } from '@/features/editor/TabStrip';
 import { VariablesBar } from '@/features/editor/VariablesBar';
 import { runCommand, selectTabAt } from '@/features/keymap/commands';
+import { MigrationCheckDialog } from '@/features/migration/MigrationCheckDialog';
 import { FilterRow } from '@/features/result-grid/FilterRow';
 import { ResultFooter } from '@/features/result-grid/ResultFooter';
 import { ResultGrid } from '@/features/result-grid/ResultGrid';
@@ -36,6 +37,10 @@ const ConnectionDialog = lazyNamed(
   'ConnectionDialog',
 );
 const BackupDialog = lazyNamed(() => import('@/features/backup/BackupDialog'), 'BackupDialog');
+const SqliteBackupDialog = lazyNamed(
+  () => import('@/features/backup/SqliteBackupDialog'),
+  'SqliteBackupDialog',
+);
 const RestoreDialog = lazyNamed(() => import('@/features/backup/RestoreDialog'), 'RestoreDialog');
 const ChartBody = lazyNamed(() => import('@/features/chart/ChartDialog'), 'ChartBody');
 const CodegenDialog = lazyNamed(() => import('@/features/codegen/CodegenDialog'), 'CodegenDialog');
@@ -48,7 +53,7 @@ const ErDiagramView = lazyNamed(
   'ErDiagramView',
 );
 const HistoryCanvas = lazyNamed(() => import('@/features/history/HistoryCanvas'), 'HistoryCanvas');
-const MonitorCanvas = lazyNamed(() => import('@/features/monitor/MonitorCanvas'), 'MonitorCanvas');
+const HealthCanvas = lazyNamed(() => import('@/features/monitor/HealthCanvas'), 'HealthCanvas');
 const NotebookDialog = lazyNamed(
   () => import('@/features/notebook/NotebookDialog'),
   'NotebookDialog',
@@ -187,6 +192,7 @@ export function AppShell() {
       <PendingEditsGateDialog />
       <CloseTabsDialog />
       <SnippetEditorDialog />
+      <MigrationCheckDialog />
       {/* Store-gated dialogs: lazy chunks that load right after first paint. */}
       <Suspense fallback={null}>
         <NewIndexDialog />
@@ -208,6 +214,9 @@ export function AppShell() {
       </LazyOnOpen>
       <LazyOnOpen open={overlay === 'backup'}>
         <BackupDialog {...overlayProps('backup')} />
+      </LazyOnOpen>
+      <LazyOnOpen open={overlay === 'sqliteBackup'}>
+        <SqliteBackupDialog {...overlayProps('sqliteBackup')} />
       </LazyOnOpen>
       <LazyOnOpen open={overlay === 'restore'}>
         <RestoreDialog {...overlayProps('restore')} />
@@ -274,7 +283,7 @@ function ConnectedShell() {
         ) : canvasMode === 'history' ? (
           <HistoryCanvas />
         ) : canvasMode === 'monitor' ? (
-          <MonitorCanvas />
+          <HealthCanvas />
         ) : (
           <EngineCanvas />
         )}

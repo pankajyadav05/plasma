@@ -8,13 +8,22 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { EmptyState, ViewTitle, ViewToolbar } from '@/components/ui/view-parts';
+import { Badge, EmptyState, SectionHeading } from '@/components/ui/view-parts';
 import { IconButton } from '@/components/ui/workbench';
 import { cn } from '@/lib/cn';
 import { cleanIpcError } from '@/lib/errors';
 import { ipc } from '@/lib/ipc';
 import { useSession } from '@/stores/session';
-import type { ActivityRow } from '@shared/protocol';
+import {
+  ACTIVITY_SQL,
+  type ActivitySession,
+  activityIsPartial,
+  blockingChain,
+  buildLockGraph,
+  lockTreeRows,
+  parseActivity,
+} from '@shared/health/pg-activity';
+import { rowsToObjects } from '@shared/health/types';
 import {
   AlertCircle,
   Copy,
@@ -31,46 +40,22 @@ import { filterActivity, isPlasmaSession, killSucceeded } from './monitor-filter
 
 const POLL_INTERVAL_MS = 2000;
 
-const ACTIVITY_SQL = `
-SELECT
-  pid,
-  state,
-  usename                                                           AS "user",
-  datname                                                           AS database,
-  application_name                                                  AS application_name,
-  COALESCE(client_addr::text, '')                                   AS client_addr,
-  to_char(backend_start, 'YYYY-MM-DD HH24:MI:SS TZ')                AS backend_start,
-  to_char(query_start,   'YYYY-MM-DD HH24:MI:SS TZ')                AS query_start,
-  to_char(state_change,  'YYYY-MM-DD HH24:MI:SS TZ')                AS state_change,
-  wait_event_type,
-  wait_event,
-  query,
-  CASE
-    WHEN state IN ('active') AND query_start IS NOT NULL
-      THEN EXTRACT(EPOCH FROM (clock_timestamp() - query_start)) * 1000
-    ELSE NULL
-  END                                                               AS duration_ms,
-  pid = pg_backend_pid()                                            AS is_current
-FROM pg_stat_activity
-WHERE backend_type = 'client backend'
-ORDER BY duration_ms DESC NULLS LAST, query_start DESC NULLS LAST
-`;
-
 /**
- * Live activity monitor canvas. Polls pg_stat_activity over the
- * worker's sideband connection (so it never queues behind the user's
- * primary query). Each row exposes state, user, db, wait event, age,
- * and the query (ellipsised, full text on hover / copy / open in a tab).
- * Other sessions' queries can be cancelled (pg_cancel_backend) or
- * terminated (pg_terminate_backend); Plasma's own sessions can't.
+ * Live activity: polls pg_stat_activity over the worker's sideband
+ * connection (read-only, with a statement timeout) so it never queues
+ * behind the user's primary query. Other sessions' queries can be
+ * cancelled (pg_cancel_backend) or terminated (pg_terminate_backend)
+ * after a confirmation and the prod gate; Plasma's own sessions can't.
+ * The lock-wait graph shows who blocks whom; selecting a session
+ * highlights its whole blocking chain.
  *
- * Defensive: polling stops while a confirm dialog is open so the row
- * the user is targeting doesn't shift out from under them.
+ * Polling stops while a confirm dialog is open so the row the user is
+ * targeting doesn't shift out from under them.
  */
-export function MonitorCanvas() {
-  const setCanvasMode = useSession((s) => s.setCanvasMode);
+export function ActivityPanel({ active }: { active: boolean }) {
   const reuseHistoryQuery = useSession((s) => s.reuseHistoryQuery);
-  const [rows, setRows] = useState<ActivityRow[]>([]);
+  const confirmUserSqlDetailed = useSession((s) => s.confirmUserSqlDetailed);
+  const [rows, setRows] = useState<ActivitySession[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [paused, setPaused] = useState(false);
@@ -78,6 +63,7 @@ export function MonitorCanvas() {
   const [showSelf, setShowSelf] = useState(false);
   const [search, setSearch] = useState('');
   const [database, setDatabase] = useState<string>('all');
+  const [selectedPid, setSelectedPid] = useState<number | null>(null);
   const [terminating, setTerminating] = useState<{
     pid: number;
     mode: 'cancel' | 'terminate';
@@ -90,24 +76,8 @@ export function MonitorCanvas() {
     if (pollGuard.current) return;
     pollGuard.current = true;
     try {
-      const res = await ipc.query.sideband(ACTIVITY_SQL);
-      const next: ActivityRow[] = res.rows.map((r) => ({
-        pid: Number(r[0] ?? 0),
-        state: (r[1] as string | null) ?? null,
-        user: (r[2] as string | null) ?? null,
-        database: (r[3] as string | null) ?? null,
-        applicationName: (r[4] as string | null) ?? null,
-        clientAddr: (r[5] as string | null) ?? null,
-        backendStart: (r[6] as string | null) ?? null,
-        queryStart: (r[7] as string | null) ?? null,
-        stateChange: (r[8] as string | null) ?? null,
-        waitEventType: (r[9] as string | null) ?? null,
-        waitEvent: (r[10] as string | null) ?? null,
-        query: (r[11] as string | null) ?? null,
-        durationMs: r[12] !== null && r[12] !== undefined ? Number(r[12]) : null,
-        isCurrent: r[13] === true || r[13] === 't' || r[13] === 1,
-      }));
-      setRows(next);
+      const res = await ipc.query.sideband(ACTIVITY_SQL, undefined, { timeoutMs: 8000 });
+      setRows(parseActivity(rowsToObjects(res)));
       setError(null);
       setLastPoll(Date.now());
     } catch (err) {
@@ -122,16 +92,25 @@ export function MonitorCanvas() {
   // every poll, which is exactly what we don't want.
   // biome-ignore lint/correctness/useExhaustiveDependencies: refresh is stable in behavior
   useEffect(() => {
+    if (!active) return;
     void refresh();
     if (paused || terminating) return;
     const t = setInterval(() => void refresh(), POLL_INTERVAL_MS);
     return () => clearInterval(t);
-  }, [paused, terminating]);
+  }, [active, paused, terminating]);
 
   const databases = useMemo(
     () => [...new Set(rows.map((r) => r.database).filter((d): d is string => Boolean(d)))].sort(),
     [rows],
   );
+
+  const graph = useMemo(() => buildLockGraph(rows), [rows]);
+  const tree = useMemo(() => lockTreeRows(graph), [graph]);
+  const chain = useMemo(
+    () => (selectedPid === null ? new Set<number>() : blockingChain(graph, selectedPid)),
+    [graph, selectedPid],
+  );
+  const partial = activityIsPartial(rows);
 
   const visibleRows = filterActivity(rows, {
     showIdle,
@@ -142,22 +121,29 @@ export function MonitorCanvas() {
 
   const onConfirmKill = async () => {
     if (!terminating) return;
+    const { pid, mode } = terminating;
     setBusy(true);
     setNotice(null);
     try {
-      const fn = terminating.mode === 'terminate' ? 'pg_terminate_backend' : 'pg_cancel_backend';
-      const res = await ipc.query.sideband(`SELECT ${fn}($1)`, [terminating.pid]);
+      const fn = mode === 'terminate' ? 'pg_terminate_backend' : 'pg_cancel_backend';
+      const sql = `SELECT ${fn}(${Math.trunc(pid)})`;
+      // Same gate as the editor: prod tag and safe mode apply to kills too.
+      const gate = await confirmUserSqlDetailed(sql, {
+        force: true,
+        summary: `${mode} pid ${pid}`,
+      });
+      if (!gate.ok) {
+        setError(gate.message);
+        return;
+      }
+      const res = await ipc.query.sideband(sql);
       // H3: these functions return false (not an error) when the backend
       // is gone or you lack permission — say so instead of implying success.
       if (killSucceeded(res.rows)) {
-        setNotice(
-          terminating.mode === 'terminate'
-            ? `Terminated pid ${terminating.pid}.`
-            : `Sent cancel to pid ${terminating.pid}.`,
-        );
+        setNotice(mode === 'terminate' ? `Terminated pid ${pid}.` : `Sent cancel to pid ${pid}.`);
       } else {
         setError(
-          `Postgres did not ${terminating.mode} pid ${terminating.pid} — the session has ended, or your role lacks permission (pg_signal_backend or superuser).`,
+          `Postgres did not ${mode} pid ${pid} — the session has ended, or your role lacks permission (pg_signal_backend or superuser).`,
         );
       }
     } catch (err) {
@@ -169,41 +155,10 @@ export function MonitorCanvas() {
     }
   };
 
-  return (
-    <main className="flex min-h-0 min-w-0 flex-1 flex-col bg-[var(--wb-content)]">
-      <ViewToolbar>
-        <ViewTitle
-          title="Live activity"
-          meta={
-            <>
-              {visibleRows.length} of {rows.length} sessions
-              {lastPoll && ` · updated ${fmtAgo(lastPoll)}`}
-              {paused && ' · paused'}
-            </>
-          }
-        />
-        <div className="flex-1" />
-        <IconButton variant="plain" label="Refresh now" onClick={() => void refresh()}>
-          <RefreshCw className={busy ? 'animate-spin' : ''} />
-        </IconButton>
-        <IconButton
-          variant="plain"
-          label={paused ? 'Resume polling' : 'Pause polling'}
-          active={paused}
-          onClick={() => setPaused((v) => !v)}
-        >
-          {paused ? <Play /> : <Pause />}
-        </IconButton>
-        <IconButton
-          variant="plain"
-          label="Close monitor"
-          title="Close (Esc)"
-          onClick={() => setCanvasMode('database')}
-        >
-          <X />
-        </IconButton>
-      </ViewToolbar>
+  const ask = (pid: number, mode: 'cancel' | 'terminate') => setTerminating({ pid, mode });
 
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-[var(--wb-separator)] px-2.5 py-2">
         <div className="relative min-w-[200px] max-w-[360px] flex-1">
           <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--wb-text-2)]" />
@@ -254,6 +209,23 @@ export function MonitorCanvas() {
             This monitor
           </label>
         </div>
+        <div className="flex-1" />
+        <span className="text-[12px] text-[var(--wb-text-2)]">
+          {visibleRows.length} of {rows.length} sessions
+          {lastPoll && ` · updated ${fmtAgo(lastPoll)}`}
+          {paused && ' · paused'}
+        </span>
+        <IconButton variant="plain" label="Refresh now" onClick={() => void refresh()}>
+          <RefreshCw className={busy ? 'animate-spin' : ''} />
+        </IconButton>
+        <IconButton
+          variant="plain"
+          label={paused ? 'Resume polling' : 'Pause polling'}
+          active={paused}
+          onClick={() => setPaused((v) => !v)}
+        >
+          {paused ? <Play /> : <Pause />}
+        </IconButton>
       </div>
 
       {error && (
@@ -268,11 +240,58 @@ export function MonitorCanvas() {
           </IconButton>
         </div>
       )}
+      {partial && (
+        <div className="shrink-0 border-b border-[var(--wb-separator)] px-3 py-1.5 text-[12px] text-[var(--wb-text-2)]">
+          <Badge tone="warn">needs pg_monitor</Badge> Your role only sees its own sessions. Grant
+          pg_monitor (or pg_read_all_stats) to see every session and its query.
+        </div>
+      )}
       <div className="sr-only" aria-live="polite">
         {notice}
       </div>
 
       <div className="min-h-0 flex-1 overflow-auto">
+        {tree.length > 0 && (
+          <section aria-label="Lock waits">
+            <SectionHeading
+              action={<Badge tone="warn">{graph.nodes.size - graph.roots.length} waiting</Badge>}
+            >
+              Lock waits
+            </SectionHeading>
+            <ul className="mx-4 mb-2 overflow-hidden rounded-[6px] border border-[var(--wb-separator)]">
+              {tree.map(({ key, pid, depth, node }) => {
+                const s = node.session;
+                const inChain = chain.has(pid);
+                return (
+                  <li key={key}>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedPid(selectedPid === pid ? null : pid)}
+                      aria-pressed={selectedPid === pid}
+                      className={cn(
+                        'flex w-full items-center gap-2 border-b border-[var(--wb-separator)] px-2 py-1 text-left font-mono text-[12px] last:border-b-0 hover:bg-[var(--wb-control-hover)]',
+                        inChain && 'bg-[color-mix(in_srgb,var(--status-staging)_22%,transparent)]',
+                        selectedPid === pid && 'ring-1 ring-inset ring-[var(--wb-accent)]',
+                      )}
+                      style={{ paddingLeft: 8 + depth * 18 }}
+                    >
+                      <span className="text-[var(--wb-text-3)]">
+                        {depth === 0 ? 'blocker' : 'waits on'}
+                      </span>
+                      <span className="text-[var(--wb-text)]">pid {pid}</span>
+                      <span className="font-sans text-[11px] text-[var(--wb-text-2)]">
+                        {s ? `${s.user ?? '—'} · ${s.state ?? '—'}` : 'not in snapshot'}
+                      </span>
+                      <span className="min-w-0 flex-1 truncate text-[var(--wb-text-2)]">
+                        {s?.query?.replace(/\s+/g, ' ').trim()}
+                      </span>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          </section>
+        )}
         <table className="w-full table-fixed text-[12px]">
           <thead className="sticky top-0 z-10 bg-[var(--wb-content)]">
             <tr className="text-left text-[12px] font-medium text-[var(--wb-text-2)]">
@@ -281,6 +300,7 @@ export function MonitorCanvas() {
               <Th width={110}>User</Th>
               <Th width={120}>Database</Th>
               <Th width={150}>Wait</Th>
+              <Th width={80}>Blocked by</Th>
               <Th width={80}>Age</Th>
               <Th>Query</Th>
               <Th width={112}>
@@ -298,6 +318,8 @@ export function MonitorCanvas() {
                   className={cn(
                     'group/act align-top font-mono',
                     i % 2 === 1 && 'bg-[var(--grid-row-a)]',
+                    chain.has(r.pid) &&
+                      'bg-[color-mix(in_srgb,var(--status-staging)_22%,transparent)]',
                   )}
                 >
                   <Td>
@@ -318,6 +340,19 @@ export function MonitorCanvas() {
                       <span className="text-[var(--wb-text-2)]">
                         {r.waitEventType}:{r.waitEvent}
                       </span>
+                    ) : (
+                      <span className="text-[var(--wb-text-3)]">—</span>
+                    )}
+                  </Td>
+                  <Td title={r.blockedBy.join(', ')}>
+                    {r.blockedBy.length ? (
+                      <button
+                        type="button"
+                        className="underline decoration-dotted"
+                        onClick={() => setSelectedPid(r.pid)}
+                      >
+                        {r.blockedBy.join(', ')}
+                      </button>
                     ) : (
                       <span className="text-[var(--wb-text-3)]">—</span>
                     )}
@@ -361,7 +396,7 @@ export function MonitorCanvas() {
                             : 'Cancel query (pg_cancel_backend)'
                         }
                         disabled={own}
-                        onClick={() => setTerminating({ pid: r.pid, mode: 'cancel' })}
+                        onClick={() => ask(r.pid, 'cancel')}
                       >
                         <X />
                       </IconButton>
@@ -375,7 +410,7 @@ export function MonitorCanvas() {
                         }
                         disabled={own}
                         className="hover:text-destructive"
-                        onClick={() => setTerminating({ pid: r.pid, mode: 'terminate' })}
+                        onClick={() => ask(r.pid, 'terminate')}
                       >
                         <Skull />
                       </IconButton>
@@ -411,7 +446,7 @@ export function MonitorCanvas() {
         variant="destructive"
         onConfirm={() => void onConfirmKill()}
       />
-    </main>
+    </div>
   );
 }
 

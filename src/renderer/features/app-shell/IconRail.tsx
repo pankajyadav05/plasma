@@ -1,5 +1,7 @@
 import { cn } from '@/lib/cn';
+import { databaseLabel } from '@/lib/engine-meta';
 import { type CanvasMode, useSession } from '@/stores/session';
+import { engineCaps } from '@shared/sql-dialect';
 import { Activity, Clock, Cog, Database } from 'lucide-react';
 
 interface RailItem {
@@ -21,9 +23,10 @@ export function IconRail() {
   const setCanvasMode = useSession((s) => s.setCanvasMode);
   const activeConfig = useSession((s) => s.activeConfig);
   const engine = activeConfig?.engine ?? 'postgres';
+  const caps = engineCaps(engine);
   const redisDb = useSession((s) => s.redisDb);
   const dbLabel =
-    (engine === 'redis' ? String(redisDb ?? 0) : activeConfig?.database) ||
+    (engine === 'redis' ? String(redisDb ?? 0) : activeConfig && databaseLabel(activeConfig)) ||
     activeConfig?.name ||
     'Database';
 
@@ -34,14 +37,16 @@ export function IconRail() {
       label: dbLabel,
       title: `${activeConfig?.name ?? 'Database'} — tables and queries`,
     },
-    ...(engine === 'postgres'
+    ...(caps.history
+      ? [{ mode: 'history' as const, icon: <Clock />, label: 'History', title: 'Query history' }]
+      : []),
+    ...(caps.activity || engine === 'redis' || engine === 'opensearch'
       ? [
-          { mode: 'history' as const, icon: <Clock />, label: 'History', title: 'Query history' },
           {
             mode: 'monitor' as const,
             icon: <Activity />,
-            label: 'Activity',
-            title: 'Live activity (pg_stat_activity)',
+            label: 'Health',
+            title: 'Health advisor — activity, indexes, vacuum, memory, cluster',
           },
         ]
       : []),

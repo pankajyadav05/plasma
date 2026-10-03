@@ -23,6 +23,7 @@ import {
   splitFilterList,
 } from '@/lib/table-query';
 import { useActiveTab, useSession } from '@/stores/session';
+import { dialectFor } from '@shared/sql-dialect';
 import { Command } from 'cmdk';
 import { Check, ChevronsUpDown, Code2, Loader2, Plus, Search, X } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -542,7 +543,13 @@ function ValueAutocomplete({
     setLoading(true);
     (async () => {
       try {
-        const { sql, params } = buildDistinctValuesSql(schema, table, column);
+        const { sql, params } = buildDistinctValuesSql(
+          schema,
+          table,
+          column,
+          '',
+          dialectFor(useSession.getState().activeConfig?.engine),
+        );
         const res = await ipc.query.sideband(sql, params, { timeoutMs: 5_000 });
         if (cancelled) return;
         setSample(

@@ -6,6 +6,7 @@ import { useSession } from '@/stores/session';
 import * as DialogPrimitive from '@radix-ui/react-dialog';
 import { KEYMAP, type KeyId } from '@shared/keymap';
 import type { ConnectionEngine } from '@shared/protocol';
+import { engineCaps } from '@shared/sql-dialect';
 import { Command } from 'cmdk';
 import {
   Bookmark,
@@ -56,11 +57,25 @@ const ACTIONS: ReadonlyArray<{ id: CommandId; label: string; keywords?: string[]
   { id: 'exportCsv', label: 'Export results as CSV', keywords: ['download'] },
   { id: 'exportJson', label: 'Export results as JSON', keywords: ['download'] },
   { id: 'history', label: 'Query history' },
-  { id: 'monitor', label: 'Activity monitor', keywords: ['sessions', 'pg_stat_activity', 'locks'] },
+  {
+    id: 'monitor',
+    label: 'Health advisor',
+    keywords: ['activity', 'sessions', 'pg_stat_activity', 'locks', 'indexes', 'vacuum', 'bloat'],
+  },
   { id: 'codegen', label: 'Generate code…', keywords: ['codegen', 'typescript', 'types'] },
   { id: 'notebook', label: 'Notebook…' },
   { id: 'schemaDiff', label: 'Schema diff…', keywords: ['compare', 'migration'] },
+  {
+    id: 'checkMigration',
+    label: 'Check migration…',
+    keywords: ['lint', 'ddl', 'lock', 'concurrently', 'squawk', 'unsafe'],
+  },
   { id: 'backup', label: 'Back up database…', keywords: ['dump', 'pg_dump', 'export'] },
+  {
+    id: 'sqliteBackup',
+    label: 'Export database file copy…',
+    keywords: ['sqlite', 'backup', 'copy', 'file'],
+  },
   { id: 'restore', label: 'Restore database…', keywords: ['pg_restore', 'import', 'backup'] },
   {
     id: 'roles',
@@ -197,6 +212,10 @@ function PaletteBody({
   );
 }
 
+function fileName(path: string): string {
+  return path.replace(/^.*[\\/]/, '');
+}
+
 function usePaletteEntries(close: () => void): PaletteEntry[] {
   const connectionState = useSession((s) => s.connectionState);
   const engine = useSession((s) =>
@@ -239,7 +258,13 @@ function usePaletteEntries(close: () => void): PaletteEntry[] {
       });
     }
 
-    if (connected && engine === 'postgres' && !useSession.getState().activeConfig?.readOnly) {
+    const sqlWorkbench = engine !== null && engineCaps(engine).sql;
+    if (
+      connected &&
+      engine !== null &&
+      engineCaps(engine).structureEditor &&
+      !useSession.getState().activeConfig?.readOnly
+    ) {
       const schemaName = () =>
         useSession.getState().currentSchema ??
         useSession.getState().schema?.schemas[0]?.name ??
@@ -277,9 +302,9 @@ function usePaletteEntries(close: () => void): PaletteEntry[] {
     }
 
     if (connected) {
-      const overview = engine !== 'postgres' ? tabs.find((t) => t.kind === 'sql')?.id : undefined;
+      const overview = !sqlWorkbench ? tabs.find((t) => t.kind === 'sql')?.id : undefined;
       tabs.forEach((t, i) => {
-        if (engine !== 'postgres' && t.kind === 'sql' && t.id !== overview) return;
+        if (!sqlWorkbench && t.kind === 'sql' && t.id !== overview) return;
         out.push({
           id: `tab:${t.id}`,
           group: 'Open tabs',
@@ -293,13 +318,13 @@ function usePaletteEntries(close: () => void): PaletteEntry[] {
       });
     }
 
-    if (connected && engine === 'postgres') {
+    if (connected && sqlWorkbench) {
       for (const t of tables ?? []) {
         const qualified = `${t.schema}.${t.name}`;
         out.push({
           id: `table:${qualified}`,
           group: 'Tables',
-          label: t.schema === 'public' ? t.name : qualified,
+          label: t.schema === 'public' || engine === 'sqlite' ? t.name : qualified,
           keywords: [qualified, t.name],
           meta:
             t.rowCountEstimate !== null && t.rowCountEstimate >= 0
@@ -357,7 +382,9 @@ function usePaletteEntries(close: () => void): PaletteEntry[] {
         keywords: [c.host ?? '', c.database ?? ''],
         meta: active
           ? 'connected'
-          : [c.host, c.port].filter(Boolean).join(':') + (c.database ? `/${c.database}` : ''),
+          : c.engine === 'sqlite'
+            ? fileName(c.database)
+            : [c.host, c.port].filter(Boolean).join(':') + (c.database ? `/${c.database}` : ''),
         icon: <Plug className="h-3.5 w-3.5" />,
         run: act(() => (active ? undefined : s().connectSaved(c.id))),
       });

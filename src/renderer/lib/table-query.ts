@@ -6,10 +6,16 @@
  *   - the paginated data query
  *   - a separate count query for pagination totals
  *
- * All identifiers are properly double-quote-escaped to resist injection.
+ * All identifiers are properly quote-escaped to resist injection.
  * All filter values are passed as bind parameters ($1, $2, …) so the
  * user's input never gets interpolated into the SQL text.
+ *
+ * Every builder takes an optional `SqlDialect` (default Postgres): quoting,
+ * the text cast / LIKE spelling and the key-less row locator come from it, so
+ * the SQLite and MySQL workbenches share these builders. Placeholders stay
+ * `$n` for all engines; the SQLite / MySQL drivers translate them.
  */
+import { POSTGRES_DIALECT, type SqlDialect } from '@shared/sql-dialect';
 
 export type FilterOp =
   | '='
@@ -92,6 +98,13 @@ export interface BuildInput {
   primaryKey?: string[];
   /** Order by `ctid` when there's no primary key (plain tables only). */
   ctidFallback?: boolean;
+  /**
+   * SQLite rowid tables without a declared key: the implicit row-id column to
+   * select (so row edits can address the row) and order by.
+   */
+  implicitKey?: string;
+  /** Engine dialect; Postgres when absent. */
+  dialect?: SqlDialect;
   /** Full-result export: no LIMIT/OFFSET. */
   unpaged?: boolean;
 }
@@ -106,14 +119,18 @@ export function quoteIdent(name: string): string {
   return `"${name.replace(/"/g, '""')}"`;
 }
 
-function buildFilterClauses(filters: Filter[], addParam: (value: unknown) => string): string[] {
+function buildFilterClauses(
+  filters: Filter[],
+  addParam: (value: unknown) => string,
+  d: SqlDialect = POSTGRES_DIALECT,
+): string[] {
   const clauses: string[] = [];
   for (const f of filters) {
     if (f.enabled === false) continue;
     // Skip filters with empty values unless the op is IS NULL / IS NOT NULL
     const needsValue = f.op !== 'IS NULL' && f.op !== 'IS NOT NULL';
     if (needsValue && f.value.trim() === '') continue;
-    const col = quoteIdent(f.column);
+    const col = d.quoteIdent(f.column);
     switch (f.op) {
       case '=':
       case '!=':
@@ -131,7 +148,7 @@ function buildFilterClauses(filters: Filter[], addParam: (value: unknown) => str
       case 'NOT LIKE':
       case 'NOT ILIKE':
         // R-28: "contains": the user's %, _ and backslash are literal text.
-        clauses.push(`${col}::text ${f.op} ${addParam(`%${escapeLikePattern(f.value)}%`)}`);
+        clauses.push(d.likePredicate(col, f.op, addParam(`%${escapeLikePattern(f.value)}%`)));
         break;
       case 'IN':
       case 'NOT IN': {
@@ -164,14 +181,15 @@ function buildFilterClauses(filters: Filter[], addParam: (value: unknown) => str
  * and pages repeat or skip rows.
  */
 function buildOrderBy(input: BuildInput): string {
+  const d = input.dialect ?? POSTGRES_DIALECT;
   const terms = input.sort.map(
-    (s) => `${quoteIdent(s.column)} ${s.direction === 'asc' ? 'ASC' : 'DESC'}`,
+    (s) => `${d.quoteIdent(s.column)} ${s.direction === 'asc' ? 'ASC' : 'DESC'}`,
   );
   const sorted = new Set(input.sort.map((s) => s.column));
   const pk = input.primaryKey ?? [];
   if (pk.length > 0) {
-    for (const c of pk) if (!sorted.has(c)) terms.push(`${quoteIdent(c)} ASC`);
-  } else if (input.ctidFallback) {
+    for (const c of pk) if (!sorted.has(c)) terms.push(`${d.quoteIdent(c)} ASC`);
+  } else if (input.ctidFallback && d.rowLocator === 'ctid') {
     terms.push('ctid');
   }
   return terms.length > 0 ? `ORDER BY ${terms.join(', ')}` : '';
@@ -192,6 +210,7 @@ function buildOrderBy(input: BuildInput): string {
  *   LIMIT 100 OFFSET 0
  */
 export function buildDataSql(input: BuildInput): BuiltSql {
+  const d = input.dialect ?? POSTGRES_DIALECT;
   const params: unknown[] = [];
   const addParam = (value: unknown) => {
     params.push(value);
@@ -199,16 +218,20 @@ export function buildDataSql(input: BuildInput): BuiltSql {
   };
 
   const visibleColumns = input.allColumns.filter((c) => !input.hiddenColumns.has(c));
-  const selectClause =
+  const columnList =
     input.hiddenColumns.size === 0 || visibleColumns.length === input.allColumns.length
       ? '*'
       : visibleColumns.length === 0
         ? '*' // fallback — never let the user hide everything
-        : visibleColumns.map(quoteIdent).join(', ');
+        : visibleColumns.map((c) => d.quoteIdent(c)).join(', ');
+  // A key-less SQLite table is addressed by its implicit rowid: fetch it too.
+  const selectClause = input.implicitKey
+    ? `${d.quoteIdent(input.implicitKey)}, ${columnList}`
+    : columnList;
 
-  const fromClause = `${quoteIdent(input.schema)}.${quoteIdent(input.table)}`;
+  const fromClause = d.qualify(input.schema, input.table);
 
-  const whereClauses = buildFilterClauses(input.filters, addParam);
+  const whereClauses = buildFilterClauses(input.filters, addParam, d);
   const whereClause = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
 
   const orderByClause = buildOrderBy(input);
@@ -239,7 +262,9 @@ export function buildUpdateSql(input: {
   table: string;
   set: Record<string, unknown>;
   pkValues: Record<string, unknown>;
+  dialect?: SqlDialect;
 }): BuiltSql {
+  const d = input.dialect ?? POSTGRES_DIALECT;
   const setCols = Object.keys(input.set);
   const pkCols = Object.keys(input.pkValues);
   if (setCols.length === 0) throw new Error('nothing to update');
@@ -253,12 +278,12 @@ export function buildUpdateSql(input: {
     return `$${params.length}`;
   };
 
-  const setClause = setCols.map((c) => `${quoteIdent(c)} = ${addParam(input.set[c])}`).join(', ');
+  const setClause = setCols.map((c) => `${d.quoteIdent(c)} = ${addParam(input.set[c])}`).join(', ');
   const whereClause = pkCols
-    .map((c) => `${quoteIdent(c)} = ${addParam(input.pkValues[c])}`)
+    .map((c) => `${d.quoteIdent(c)} = ${addParam(input.pkValues[c])}`)
     .join(' AND ');
 
-  const from = `${quoteIdent(input.schema)}.${quoteIdent(input.table)}`;
+  const from = d.qualify(input.schema, input.table);
   const sql = `UPDATE ${from} SET ${setClause} WHERE ${whereClause}`;
   return { sql, params };
 }
@@ -271,7 +296,9 @@ export function buildInsertSql(input: {
   schema: string;
   table: string;
   values: Record<string, unknown>;
+  dialect?: SqlDialect;
 }): BuiltSql {
+  const d = input.dialect ?? POSTGRES_DIALECT;
   const cols = Object.keys(input.values);
   if (cols.length === 0) throw new Error('nothing to insert');
 
@@ -281,9 +308,9 @@ export function buildInsertSql(input: {
     return `$${params.length}`;
   };
 
-  const colList = cols.map(quoteIdent).join(', ');
+  const colList = cols.map((c) => d.quoteIdent(c)).join(', ');
   const valList = cols.map((c) => addParam(input.values[c])).join(', ');
-  const from = `${quoteIdent(input.schema)}.${quoteIdent(input.table)}`;
+  const from = d.qualify(input.schema, input.table);
   const sql = `INSERT INTO ${from} (${colList}) VALUES (${valList})`;
   return { sql, params };
 }
@@ -295,7 +322,9 @@ export function buildDeleteSql(input: {
   schema: string;
   table: string;
   pkValues: Record<string, unknown>;
+  dialect?: SqlDialect;
 }): BuiltSql {
+  const d = input.dialect ?? POSTGRES_DIALECT;
   const pkCols = Object.keys(input.pkValues);
   if (pkCols.length === 0) {
     throw new Error('cannot delete a row without primary-key columns');
@@ -308,9 +337,9 @@ export function buildDeleteSql(input: {
   };
 
   const whereClause = pkCols
-    .map((c) => `${quoteIdent(c)} = ${addParam(input.pkValues[c])}`)
+    .map((c) => `${d.quoteIdent(c)} = ${addParam(input.pkValues[c])}`)
     .join(' AND ');
-  const from = `${quoteIdent(input.schema)}.${quoteIdent(input.table)}`;
+  const from = d.qualify(input.schema, input.table);
   const sql = `DELETE FROM ${from} WHERE ${whereClause}`;
   return { sql, params };
 }
@@ -320,13 +349,14 @@ export function buildDeleteSql(input: {
  * Only valid when there are zero filters (it counts the whole relation).
  * Caller is responsible for that check.
  */
-export function buildEstimatedCountSql(schema: string, table: string): BuiltSql {
-  return {
-    sql: `SELECT reltuples::bigint AS estimate
-          FROM pg_class
-          WHERE oid = $1::regclass`,
-    params: [`${quoteIdent(schema)}.${quoteIdent(table)}`],
-  };
+export function buildEstimatedCountSql(
+  schema: string,
+  table: string,
+  dialect: SqlDialect = POSTGRES_DIALECT,
+): BuiltSql {
+  const est = dialect.estimatedCount(schema, table);
+  if (!est) throw new Error(`${dialect.engine} has no cheap row-count estimate`);
+  return est as BuiltSql;
 }
 
 /**
@@ -423,19 +453,20 @@ export function buildDistinctValuesSql(
   table: string,
   column: string,
   prefix = '',
+  d: SqlDialect = POSTGRES_DIALECT,
 ): BuiltSql {
-  const from = `${quoteIdent(schema)}.${quoteIdent(table)}`;
-  const col = quoteIdent(column);
+  const from = d.qualify(schema, table);
+  const col = d.quoteIdent(column);
   const trimmed = prefix.trim();
   const params: unknown[] = [];
   let match = '';
   if (trimmed.length > 0) {
     params.push(`${escapeLikePattern(trimmed)}%`);
-    match = ` AND ${col}::text ILIKE $1`;
+    match = ` AND ${d.likePredicate(col, 'ILIKE', '$1')}`;
   }
   return {
     sql: `SELECT DISTINCT v FROM (
-            SELECT ${col}::text AS v
+            SELECT ${d.textCast(col)} AS v
             FROM ${from}
             WHERE ${col} IS NOT NULL${match}
             LIMIT ${DISTINCT_SAMPLE_ROWS}
@@ -479,15 +510,18 @@ export function buildRolesSql(): BuiltSql {
  * so filtered totals are accurate. No SELECT/ORDER BY/LIMIT — just the
  * row count.
  */
-export function buildCountSql(input: Pick<BuildInput, 'schema' | 'table' | 'filters'>): BuiltSql {
+export function buildCountSql(
+  input: Pick<BuildInput, 'schema' | 'table' | 'filters' | 'dialect'>,
+): BuiltSql {
+  const d = input.dialect ?? POSTGRES_DIALECT;
   const params: unknown[] = [];
   const addParam = (value: unknown) => {
     params.push(value);
     return `$${params.length}`;
   };
 
-  const fromClause = `${quoteIdent(input.schema)}.${quoteIdent(input.table)}`;
-  const whereClauses = buildFilterClauses(input.filters, addParam);
+  const fromClause = d.qualify(input.schema, input.table);
+  const whereClauses = buildFilterClauses(input.filters, addParam, d);
   const whereClause = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
 
   const sql = [`SELECT COUNT(*) FROM ${fromClause}`, whereClause].filter(Boolean).join('\n');

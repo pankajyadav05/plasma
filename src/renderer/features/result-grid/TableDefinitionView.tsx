@@ -1,5 +1,6 @@
 import { Pill } from '@/components/ui/workbench';
 import { PLASMA_THEME_ID, applyMonacoTheme } from '@/features/editor/paperTheme';
+import { loadRelationCreateScript } from '@/features/sidebar/object-ddl';
 import { cleanIpcError } from '@/lib/errors';
 import { ipc } from '@/lib/ipc';
 import { buildTableDdlSql, composeTableDdl } from '@/lib/table-ddl';
@@ -24,6 +25,7 @@ export function TableDefinitionView() {
   const addTab = useSession((s) => s.addTab);
   const fontSize = useSession((s) => s.settings.editorFontSize);
   const theme = useSession((s) => s.settings.theme);
+  const engine = useSession((s) => s.activeConfig?.engine ?? 'postgres');
   const [ddl, setDdl] = useState<string>('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -40,6 +42,18 @@ export function TableDefinitionView() {
       try {
         // PF10: views/matviews via pg_get_viewdef; tables with identity,
         // constraints, indexes, triggers, comments, RLS and owner.
+        if (engine !== 'postgres') {
+          const kind = useSession
+            .getState()
+            .schema?.tables.find((t) => t.schema === tableSchema && t.name === tableName)?.kind;
+          const script = await loadRelationCreateScript(
+            tableSchema,
+            tableName,
+            kind === 'view' ? 'view' : 'table',
+          );
+          if (!cancelled) setDdl(`${script.trimEnd()}\n`);
+          return;
+        }
         const { sql, params } = buildTableDdlSql(tableSchema, tableName);
         const res = await ipc.query.sideband(sql, params, { timeoutMs: 15_000 });
         if (cancelled) return;
@@ -55,7 +69,7 @@ export function TableDefinitionView() {
     return () => {
       cancelled = true;
     };
-  }, [tableSchema, tableName]);
+  }, [tableSchema, tableName, engine]);
 
   const handleMount: OnMount = (_editor, monaco) => {
     applyMonacoTheme(monaco as typeof MonacoType, theme);

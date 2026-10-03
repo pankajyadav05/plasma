@@ -1,4 +1,5 @@
 import { Checkbox } from '@/components/ui/checkbox';
+import { MigrationCheckPanel } from '@/features/migration/MigrationCheckPanel';
 import { cn } from '@/lib/cn';
 import { COMMON_PG_TYPES } from '@shared/pg-ddl';
 import { forwardRef, useId } from 'react';
@@ -40,13 +41,23 @@ export function SqlPreview({
   error,
   className,
   emptyText = 'No changes.',
+  onLintBlockedChange,
+  lint = true,
 }: {
   sql: string;
   error?: string | null;
   className?: string;
   emptyText?: string;
+  /**
+   * Migration lint + lock preview are shown above the SQL. When given, error
+   * findings need a "Run anyway" acknowledgement and this reports whether
+   * the caller's apply action must stay disabled.
+   */
+  onLintBlockedChange?: (blocked: boolean) => void;
+  lint?: boolean;
 }) {
-  return (
+  const showLint = lint && !error && sql.trim() !== '';
+  const block = (
     <div className={cn('flex min-h-0 flex-col', className)}>
       {error ? (
         <pre className="whitespace-pre-wrap rounded-[6px] bg-[var(--wb-field)] px-2.5 py-2 font-mono text-[12px] text-destructive">
@@ -60,6 +71,13 @@ export function SqlPreview({
           {sql || <span className="text-[var(--wb-text-3)]">{emptyText}</span>}
         </pre>
       )}
+    </div>
+  );
+  if (!showLint) return block;
+  return (
+    <div className="flex min-h-0 flex-col gap-2">
+      <MigrationCheckPanel sql={sql} onBlockedChange={onLintBlockedChange} className="shrink-0" />
+      {block}
     </div>
   );
 }

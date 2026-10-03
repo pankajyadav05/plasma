@@ -22,6 +22,8 @@ const api: PlasmaAPI = {
     test: (config, ssh) => ipcRenderer.invoke(IpcChannel.ConnectionTest, config, ssh),
     introspect: (opts) => ipcRenderer.invoke(IpcChannel.ConnectionIntrospect, opts),
     pickFile: (title) => ipcRenderer.invoke(IpcChannel.ConnectionPickFile, title),
+    pickSqliteFile: (mode) => ipcRenderer.invoke(IpcChannel.ConnectionPickSqlite, mode),
+    sqliteBackupCopy: () => ipcRenderer.invoke(IpcChannel.SqliteBackupCopy),
     respondHostKey: (requestId, accept) =>
       ipcRenderer.invoke(IpcChannel.SshHostKeyRespond, { requestId, accept }),
   },

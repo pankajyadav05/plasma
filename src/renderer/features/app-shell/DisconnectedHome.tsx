@@ -1,14 +1,17 @@
 import { Button } from '@/components/ui/button';
+import { ENGINE_ICON } from '@/lib/engine-meta';
 import { useSession } from '@/stores/session';
 import type { ConnectionEngine, SavedConnection } from '@shared/protocol';
-import { Boxes, Cog, Copy, Database, Layers, Pencil, Plus } from 'lucide-react';
+import { Cog, Copy, type LucideIcon, Pencil, Plus } from 'lucide-react';
 import { Fragment } from 'react';
 import { groupConnections } from '../connection-manager/connection-groups';
 
-const ENGINE_META: Record<ConnectionEngine, { label: string; icon: typeof Database }> = {
-  postgres: { label: 'Postgres', icon: Database },
-  redis: { label: 'Redis', icon: Layers },
-  opensearch: { label: 'OpenSearch', icon: Boxes },
+const ENGINE_META: Record<ConnectionEngine, { label: string; icon: LucideIcon }> = {
+  postgres: { label: 'Postgres', icon: ENGINE_ICON.postgres },
+  redis: { label: 'Redis', icon: ENGINE_ICON.redis },
+  opensearch: { label: 'OpenSearch', icon: ENGINE_ICON.opensearch },
+  sqlite: { label: 'SQLite', icon: ENGINE_ICON.sqlite },
+  mysql: { label: 'MySQL', icon: ENGINE_ICON.mysql },
 };
 
 /**
@@ -25,6 +28,7 @@ function metaLine(c: SavedConnection): string {
   if (engine === 'opensearch') {
     return c.user ? `${hostPort} · ${c.user}` : hostPort;
   }
+  if (engine === 'sqlite') return c.database;
   return `${hostPort} · ${c.database} · ${c.user}`;
 }
 

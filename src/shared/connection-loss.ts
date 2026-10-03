@@ -45,6 +45,9 @@ const LOST_PATTERNS = [
   "stream isn't writeable",
   'connection is already closed',
   'max retries per request limit reached',
+  // mysql2
+  'connection lost: the server closed the connection',
+  'connection is in closed state',
   // node http / opensearch transport
   'socket hang up',
   'other side closed',

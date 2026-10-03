@@ -1,7 +1,9 @@
 import type { ConnectionConfig, ConnectionEngine } from '@shared/protocol';
+import { MysqlDriver } from './drivers/mysql';
 import { OpenSearchDriver } from './drivers/opensearch';
 import { PostgresDriver } from './drivers/postgres';
 import { RedisDriver } from './drivers/redis';
+import { SqliteDriver } from './drivers/sqlite';
 
 /** Minimal driver surface needed for an isolated connectivity probe. */
 export interface TestableDriver {
@@ -15,6 +17,8 @@ const defaultFactories: Record<ConnectionEngine, DriverFactory> = {
   postgres: () => new PostgresDriver(),
   redis: () => new RedisDriver(),
   opensearch: () => new OpenSearchDriver(),
+  sqlite: () => new SqliteDriver(),
+  mysql: () => new MysqlDriver(),
 };
 
 /**
@@ -25,10 +29,10 @@ const defaultFactories: Record<ConnectionEngine, DriverFactory> = {
  */
 export async function runIsolatedTestConnect(
   config: ConnectionConfig,
-  factories: Record<ConnectionEngine, DriverFactory> = defaultFactories,
+  overrides: Partial<Record<ConnectionEngine, DriverFactory>> = {},
 ): Promise<{ serverVersion: string; engine: ConnectionEngine }> {
   const engine: ConnectionEngine = config.engine ?? 'postgres';
-  const driver = factories[engine]();
+  const driver = (overrides[engine] ?? defaultFactories[engine])();
   try {
     const serverVersion = await driver.connect(config);
     return { serverVersion, engine };

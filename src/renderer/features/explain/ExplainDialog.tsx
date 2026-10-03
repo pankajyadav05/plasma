@@ -8,6 +8,7 @@ import { inlineVariables, runBound } from '@/lib/query-variables';
 import { useSession } from '@/stores/session';
 import { looksLikeWrite } from '@/stores/session-sql-heuristics';
 import type { ExplainNode } from '@shared/protocol';
+import { engineCaps } from '@shared/sql-dialect';
 import type { VariableValues } from '@shared/sql-variables';
 import { Check, ChevronDown, ChevronRight, Copy, Loader2, Sparkles } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -46,6 +47,7 @@ export function ExplainDialog({
   const runId = useRef(0);
   const analyzing = useRef(false);
   const readOnly = useSession((s) => Boolean(s.activeConfig?.readOnly));
+  const canAnalyze = useSession((s) => engineCaps(s.activeConfig?.engine).explainAnalyze);
   const confirmUserSql = useSession((s) => s.confirmUserSqlDetailed);
   const values = useMemo(() => variables ?? {}, [variables]);
   // What would really run (raw values pasted in) decides write detection and the gate.
@@ -195,7 +197,7 @@ export function ExplainDialog({
             Explain with AI
           </Pill>
           <div className="flex-1" />
-          {!analyzed && (
+          {!analyzed && canAnalyze && (
             <Pill
               onClick={() => void run(true)}
               disabled={loading || (writes && readOnly)}

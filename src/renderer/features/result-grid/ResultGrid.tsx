@@ -16,6 +16,7 @@ import {
 } from '@/stores/session-pending-edits';
 import { useWorkbench } from '@/stores/workbench';
 import type { ColumnMeta } from '@shared/protocol';
+import { engineCaps } from '@shared/sql-dialect';
 import {
   AlertCircle,
   ArrowDownToLine,
@@ -56,7 +57,7 @@ import {
   formatRows,
   parseClipboardBlock,
 } from './clipboard-format';
-import { computeColumnStats } from './column-stats';
+import { computeColumnStats, isNumericTypeName } from './column-stats';
 import {
   type IndexedRow,
   slicePageSorted,
@@ -95,6 +96,7 @@ import {
 import { isErrorTabActive } from './result-view';
 import { ROW_HEIGHT_PX, computeRowWindow } from './windowed-rows';
 
+const SimpleStructureView = lazyNamed(() => import('./SimpleStructureView'), 'SimpleStructureView');
 const TableStructureView = lazyNamed(() => import('./TableStructureView'), 'TableStructureView');
 
 // Stable empty Set used as a fallback when the active tab is null. Using
@@ -188,6 +190,7 @@ const MOD = isMac ? '⌘' : 'Ctrl+';
 export function ResultGrid() {
   const tab = useActiveTabSansSql();
   const zebraRows = useSession((s) => s.settings.gridAlternatingRows);
+  const structureEditor = useSession((s) => engineCaps(s.activeConfig?.engine).structureEditor);
   const setSort = useSession((s) => s.setSort);
   const setSelectedCell = useSession((s) => s.setSelectedCell);
   const toggleRowSelected = useSession((s) => s.toggleRowSelected);
@@ -1397,7 +1400,7 @@ export function ResultGrid() {
   if (tab?.kind === 'table' && tab.viewMode === 'structure') {
     return (
       <Suspense fallback={null}>
-        <TableStructureView />
+        {structureEditor ? <TableStructureView /> : <SimpleStructureView />}
       </Suspense>
     );
   }
@@ -2507,16 +2510,7 @@ function cellTitle(text: string | null | undefined): string {
  */
 function cellClass(col: ColumnMeta | undefined): string {
   if (!col) return '';
-  const t = col.dataTypeName;
-  if (
-    t === 'int2' ||
-    t === 'int4' ||
-    t === 'int8' ||
-    t === 'float4' ||
-    t === 'float8' ||
-    t === 'numeric'
-  ) {
-    return 'text-right';
-  }
-  return '';
+  // Shared with the range stats, so SQLite/MySQL names (INTEGER, REAL,
+  // DECIMAL, DOUBLE…) align like Postgres ones.
+  return isNumericTypeName(col.dataTypeName) ? 'text-right' : '';
 }

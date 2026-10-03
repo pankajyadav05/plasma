@@ -16,6 +16,7 @@ import {
 import { snippetBodyFromSelection, suggestPrefix } from '@shared/snippets';
 import type * as MonacoType from 'monaco-editor';
 import { Suspense, lazy, useCallback, useEffect, useRef, useState } from 'react';
+import { attachMigrationLint } from './migration-lint-monaco';
 import { PLASMA_THEME_ID, applyMonacoTheme } from './paperTheme';
 import { registerSqlCompletions } from './sqlCompletions';
 
@@ -275,6 +276,7 @@ export function MonacoEditor({
       publishCaret(editor);
       const disposables = [
         saveAsSnippet,
+        { dispose: attachMigrationLint(monaco, editor) },
         focusDisposable,
         editor.onDidChangeCursorPosition(() => publishCaret(editor)),
         editor.onDidChangeCursorSelection(() => publishCaret(editor)),

@@ -93,3 +93,13 @@ describe('formatting', () => {
     expect(isNumericTypeName('text')).toBe(false);
   });
 });
+
+describe('isNumericTypeName across engines', () => {
+  it('recognises SQLite and MySQL spellings', async () => {
+    const { isNumericTypeName } = await import('./column-stats');
+    for (const t of ['INTEGER', 'REAL', 'int unsigned', 'DECIMAL(10,2)', 'double', 'tinyint(1)']) {
+      expect(isNumericTypeName(t)).toBe(true);
+    }
+    expect(isNumericTypeName('TEXT')).toBe(false);
+  });
+});
