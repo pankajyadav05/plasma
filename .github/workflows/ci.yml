@@ -70,7 +70,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       ELECTRON_SKIP_BINARY_DOWNLOAD: 1
-      PLASMA_LIVE_PG: postgres://postgres:postgres@127.0.0.1:5432/postgres
+      PLASMA_LIVE_PG: postgres://postgres:plasma-ci-s3cret@127.0.0.1:5432/postgres
       PLASMA_LIVE_REDIS: redis://127.0.0.1:6379
       PLASMA_LIVE_OS: http://127.0.0.1:9200
       # mysql.live.test.ts creates and drops its own database on this server.
@@ -90,7 +90,8 @@ jobs:
         image: postgres:16
         env:
           POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
+          # Distinctive on purpose: leak checks search for the password text.
+          POSTGRES_PASSWORD: plasma-ci-s3cret
           POSTGRES_DB: postgres
         ports:
           - 5432:5432
