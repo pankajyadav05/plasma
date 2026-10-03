@@ -170,7 +170,9 @@ jobs:
           echo "::error::OpenSearch did not become healthy"
           exit 1
       - name: Live tests
-        run: npx vitest run
+        # github-actions reporter turns failures into annotations, readable
+        # without repo-admin access.
+        run: npx vitest run --reporter=default --reporter=github-actions
 
   # `pnpm install` is where Windows and macOS releases used to break (native
   # rebuilds, postinstall spawning .cmd files). Run it for real on both, with
