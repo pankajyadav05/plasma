@@ -173,7 +173,19 @@ jobs:
       - name: Live tests
         # github-actions reporter turns failures into annotations, readable
         # without repo-admin access.
-        run: npx vitest run --reporter=default --reporter=github-actions
+        shell: bash
+        run: |
+          set +e
+          npx vitest run --reporter=default --reporter=github-actions --reporter=json --outputFile=live-results.json 2>&1 | tee live.log
+          code=${PIPESTATUS[0]}
+          if [ "$code" != "0" ]; then
+            # Unhandled errors and suite-level failures aren't annotated by the
+            # github-actions reporter; surface them too.
+            node -e "const r=require('./live-results.json');const bad=r.testResults.filter(t=>t.status!=='passed').map(t=>t.name+': '+(t.message||'').slice(0,300));console.log('::error title=live summary::failed='+r.numFailedTests+' suites='+r.numFailedTestSuites+'%0A'+bad.join('%0A').replace(/\n/g,' '))" || true
+            grep -n -A8 -E "Unhandled|Error:" live.log | head -60 | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}' > err.txt
+            echo "::error title=live errors::$(cat err.txt)"
+          fi
+          exit $code
 
   # `pnpm install` is where Windows and macOS releases used to break (native
   # rebuilds, postinstall spawning .cmd files). Run it for real on both, with
