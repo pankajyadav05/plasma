@@ -111,8 +111,7 @@
     "onlyBuiltDependencies": [
       "electron",
       "esbuild",
-      "@biomejs/biome",
-      "better-sqlite3"
+      "@biomejs/biome"
     ],
     "ignoredOptionalDependencies": [
       "cpu-features"

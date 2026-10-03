@@ -10,7 +10,9 @@ allowBuilds:
   electron: true
   esbuild: true
   "@biomejs/biome": true
-  better-sqlite3: true
+  # Ships N-API prebuilds for every platform; compiling it is pointless and
+  # fails on runners whose Visual Studio node-gyp doesn't recognise.
+  better-sqlite3: false
   ssh2: true
   electron-winstaller: true
   cpu-features: false
