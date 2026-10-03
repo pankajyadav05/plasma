@@ -1,6 +1,7 @@
 import { statSync } from 'node:fs';
 import { basename } from 'node:path';
 import {
+  DUCKDB_PG_EXTENSION_MISSING,
   type DataFileKind,
   createViewSql,
   dataFileKind,
@@ -251,9 +252,21 @@ export class DuckdbDriver implements SqlEngineDriver {
         try {
           await conn.run('LOAD postgres');
         } catch (err) {
-          throw new Error(
-            `This DuckDB build has no Postgres extension, so a live connection cannot be attached (${friendlyError(err).message}).`,
-          );
+          // Not bundled: DuckDB downloads its signed extension on demand, but
+          // only after the user has agreed to the download.
+          if (!config.duckdb?.installPostgresExtension) {
+            throw new Error(
+              `${DUCKDB_PG_EXTENSION_MISSING}. It is a one-time download from extensions.duckdb.org (${friendlyError(err).message}).`,
+            );
+          }
+          try {
+            await conn.run('INSTALL postgres');
+            await conn.run('LOAD postgres');
+          } catch (installErr) {
+            throw new Error(
+              `Could not download DuckDB's Postgres extension (${friendlyError(installErr).message}).`,
+            );
+          }
         }
         for (const a of attach) {
           const secret = `plasma_secret_${a.alias}`;

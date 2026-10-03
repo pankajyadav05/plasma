@@ -155,6 +155,11 @@ export const DuckdbOptions = z.object({
   files: z.array(z.string().min(1)).max(64).default([]),
   attachConnectionIds: z.array(z.string().min(1)).max(8).optional(),
   attach: z.array(DuckdbAttach).max(8).optional(),
+  /**
+   * The user agreed to download DuckDB's official (signed) Postgres
+   * extension from extensions.duckdb.org when it isn't installed yet.
+   */
+  installPostgresExtension: z.boolean().optional(),
 });
 export type DuckdbOptions = z.infer<typeof DuckdbOptions>;
 

@@ -145,6 +145,9 @@ export function dataFileSessionId(
  * Session config for a set of opened paths: a `.duckdb` file in the set is
  * the database (read-only), everything else becomes a view over `:memory:`.
  */
+/** Error text the DuckDB driver uses when the Postgres extension must be downloaded first. */
+export const DUCKDB_PG_EXTENSION_MISSING = "DuckDB's Postgres extension is not installed";
+
 export function dataFileSessionConfig(
   paths: readonly string[],
   attachConnectionIds: readonly string[] = [],

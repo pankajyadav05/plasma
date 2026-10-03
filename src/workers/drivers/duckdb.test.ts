@@ -264,7 +264,9 @@ livePg('DuckDB attached Postgres (live)', () => {
   });
 
   it('joins a CSV with a live table and keeps the attachment read-only', async () => {
-    const { d } = await open([csv], { duckdb: { files: [csv], attach: [attach] } });
+    const { d } = await open([csv], {
+      duckdb: { files: [csv], installPostgresExtension: true, attach: [attach] },
+    });
     const schema = await d.introspect();
     const t = schema.tables.find((x) => x.name === table);
     expect(t?.schema).toBe('pg_live.public');
@@ -288,7 +290,11 @@ livePg('DuckDB attached Postgres (live)', () => {
     // A trust-auth server accepts any password, so the check also runs there.
     const pw = attach.password || 'sup3r-s3cret';
     const { d } = await open([csv], {
-      duckdb: { files: [csv], attach: [{ ...attach, password: pw }] },
+      duckdb: {
+        files: [csv],
+        installPostgresExtension: true,
+        attach: [{ ...attach, password: pw }],
+      },
     });
     const dbs = await d.query('SELECT * FROM duckdb_databases()');
     expect(JSON.stringify(dbs.rows)).not.toContain(pw);
@@ -301,7 +307,10 @@ livePg('DuckDB attached Postgres (live)', () => {
     driver = new DuckdbDriver();
     const bad = { ...attach, port: 1, password: 'hunter2' };
     const err = await driver
-      .connect({ ...dataFileSessionConfig([csv]), duckdb: { files: [csv], attach: [bad] } })
+      .connect({
+        ...dataFileSessionConfig([csv]),
+        duckdb: { files: [csv], installPostgresExtension: true, attach: [bad] },
+      })
       .catch((e: Error) => e);
     expect(err).toBeInstanceOf(Error);
     expect((err as Error).message).toMatch(/Could not attach Postgres as pg_live/);

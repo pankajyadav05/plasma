@@ -1,6 +1,10 @@
 import { ipc } from '@/lib/ipc';
 import { useSession } from '@/stores/session';
-import { dataFileSessionConfig, isDataFileSession } from '@shared/data-files';
+import {
+  DUCKDB_PG_EXTENSION_MISSING,
+  dataFileSessionConfig,
+  isDataFileSession,
+} from '@shared/data-files';
 import type { DataFilePickResult } from '@shared/protocol';
 import { create } from 'zustand';
 
@@ -32,14 +36,33 @@ const message = (err: unknown): string => (err instanceof Error ? err.message : 
 export async function openDataFiles(
   result: DataFilePickResult,
   attachConnectionIds: readonly string[] = [],
+  installPostgresExtension = false,
 ): Promise<void> {
   if (result.files.length === 0) {
     set({ notice: { title: 'Could not open the file', lines: result.problems } });
     return;
   }
-  const config = dataFileSessionConfig(result.files, attachConnectionIds);
+  const base = dataFileSessionConfig(result.files, attachConnectionIds);
+  const config = installPostgresExtension
+    ? {
+        ...base,
+        duckdb: { ...base.duckdb, files: base.duckdb?.files ?? [], installPostgresExtension },
+      }
+    : base;
   await useSession.getState().connect(config);
   const { connectionState, connectionError } = useSession.getState();
+  if (
+    connectionState === 'error' &&
+    !installPostgresExtension &&
+    attachConnectionIds.length > 0 &&
+    connectionError?.includes(DUCKDB_PG_EXTENSION_MISSING) &&
+    window.confirm(
+      "Attaching Postgres needs DuckDB's official Postgres extension. Download it once from extensions.duckdb.org (signed by DuckDB, about 10 MB)?",
+    )
+  ) {
+    await openDataFiles(result, attachConnectionIds, true);
+    return;
+  }
   if (connectionState === 'error') {
     set({
       notice: {

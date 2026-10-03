@@ -38,7 +38,7 @@ live('clickhouse driver (live)', () => {
     await drv.connect({ ...base(), database: DB });
     await drv.query(`CREATE TABLE events (
       id UInt64, name String, ts DateTime, score Nullable(Float64), tags Array(String), amount Decimal(10, 2)
-    ) ENGINE = MergeTree PARTITION BY toYYYYMM(ts) ORDER BY (id, ts) TTL ts + INTERVAL 100 YEAR`);
+    ) ENGINE = MergeTree PARTITION BY toYYYYMM(ts) ORDER BY (id, ts) TTL ts + INTERVAL 50 YEAR`);
     await drv.query(
       `INSERT INTO events VALUES
         (1, 'ada', '2024-05-06 07:08:09', 1.5, ['x', 'y'], 12.34),
@@ -131,7 +131,7 @@ live('clickhouse driver (live)', () => {
     expect(details.Engine).toBe('MergeTree');
     expect(details['Sorting key']).toBe('id, ts');
     expect(details['Partition key']).toBe('toYYYYMM(ts)');
-    expect(details.TTL).toMatch(/ts \+ toIntervalYear\(100\)/);
+    expect(details.TTL).toMatch(/ts \+ toIntervalYear\(50\)/);
     expect(schema.tables.find((t) => t.name === 'big_events')?.kind).toBe('view');
     const cols = schema.columns.filter((c) => c.schema === DB && c.table === 'events');
     expect(cols.map((c) => c.name)).toEqual(['id', 'name', 'ts', 'score', 'tags', 'amount']);
