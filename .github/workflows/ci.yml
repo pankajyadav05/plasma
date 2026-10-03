@@ -181,7 +181,7 @@ jobs:
           if [ "$code" != "0" ]; then
             # Unhandled errors and suite-level failures aren't annotated by the
             # github-actions reporter; surface them too.
-            node -e "const r=require('./live-results.json');const bad=r.testResults.filter(t=>t.status!=='passed').map(t=>t.name+': '+(t.message||'').slice(0,300));console.log('::error title=live summary::failed='+r.numFailedTests+' suites='+r.numFailedTestSuites+'%0A'+bad.join('%0A').replace(/\n/g,' '))" || true
+            node -e "const r=require('./live-results.json');const out=[];for(const t of r.testResults){if(t.status==='passed')continue;out.push(t.name.replace(/.*plasma\\//,'')+' :: '+(t.message||'').slice(0,400));for(const a of t.assertionResults||[]){if(a.status==='failed')out.push('  '+a.fullName+' :: '+(a.failureMessages||[]).join(' ').slice(0,400));}}console.log('::error title=live summary::failed='+r.numFailedTests+' suites='+r.numFailedTestSuites+'%0A'+out.join('%0A').replace(/\\n/g,' ').replace(/\\r/g,''))" || true
             grep -n -A8 -E "Unhandled|Error:" live.log | head -60 | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}' > err.txt
             echo "::error title=live errors::$(cat err.txt)"
           fi

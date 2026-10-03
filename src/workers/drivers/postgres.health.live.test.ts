@@ -104,6 +104,7 @@ suite('health advisor (live)', { timeout: SUITE_TIMEOUT }, () => {
       host: u.hostname,
       port: Number(u.port),
       user: decodeURIComponent(u.username),
+      password: decodeURIComponent(u.password),
       database: u.pathname.slice(1),
     });
     await idler.connect();
@@ -193,6 +194,7 @@ suite('health advisor (live)', { timeout: SUITE_TIMEOUT }, () => {
         host: u.hostname,
         port: Number(u.port),
         user: decodeURIComponent(u.username),
+        password: decodeURIComponent(u.password),
         database: u.pathname.slice(1),
       });
     const holder = mk();
