@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  DATA_FILE_EXTENSIONS,
   attachAlias,
   createViewSql,
   dataFileKind,
@@ -8,6 +9,8 @@ import {
   dataFileSessionId,
   dataFileStem,
   isDataFileSession,
+  sheetViewStem,
+  uniqueViewNames,
   viewNamesFor,
 } from './data-files';
 
@@ -23,8 +26,8 @@ describe('dataFileKind', () => {
     expect(dataFileKind('C:\\data\\warehouse.duckdb')).toBe('duckdb');
   });
 
-  it('rejects everything else (XLSX needs an extension that is not bundled)', () => {
-    for (const p of ['/a/b.xlsx', '/a/b.txt', '/a/b', '/a/b.parquet.gz', '/a/.csv.exe']) {
+  it('rejects everything else (legacy .xls included)', () => {
+    for (const p of ['/a/b.xls', '/a/b.txt', '/a/b', '/a/b.parquet.gz', '/a/.csv.exe']) {
       expect(dataFileKind(p), p).toBeNull();
     }
   });
@@ -37,7 +40,7 @@ describe('dataFilePathProblem', () => {
     expect(dataFilePathProblem('/a/*.csv')).toMatch(/patterns/);
     expect(dataFilePathProblem('/a/b?.csv')).toMatch(/patterns/);
     expect(dataFilePathProblem('/a/b.csv\0.png')).toMatch(/not valid/);
-    expect(dataFilePathProblem('/a/b.xlsx')).toMatch(/Unsupported/);
+    expect(dataFilePathProblem('/a/b.txt')).toMatch(/Unsupported/);
   });
 });
 
@@ -102,5 +105,34 @@ describe('dataFileSessionConfig', () => {
   it('aliases attached Postgres connections without clashes', () => {
     expect(attachAlias('Prod DB')).toBe('pg_Prod_DB');
     expect(attachAlias('Prod DB', ['pg_prod_db'])).toBe('pg_Prod_DB_2');
+  });
+});
+
+describe('Excel workbooks', () => {
+  it('treats .xlsx as a data file and explains legacy .xls', () => {
+    expect(dataFileKind('/d/Report.XLSX')).toBe('xlsx');
+    expect(dataFileKind('/d/Report.xlsx.gz')).toBeNull();
+    expect(dataFilePathProblem('/d/Report.xls')).toMatch(/Save it as \.xlsx/);
+    expect(dataFilePathProblem('/d/Report.xlsx')).toBeNull();
+    expect(DATA_FILE_EXTENSIONS.tabular).toContain('xlsx');
+  });
+
+  it('builds one view per sheet with the sheet name quoted', () => {
+    expect(createViewSql('Sales_Q1', "/d/it's.xlsx", 'xlsx', "Bob's sheet")).toBe(
+      `CREATE VIEW "Sales_Q1" AS SELECT * FROM read_xlsx('/d/it''s.xlsx', sheet = 'Bob''s sheet')`,
+    );
+    expect(createViewSql('Sales', '/d/s.xlsx', 'xlsx')).toBe(
+      `CREATE VIEW "Sales" AS SELECT * FROM read_xlsx('/d/s.xlsx')`,
+    );
+  });
+
+  it('names sheet views after file and sheet, de-duplicated', () => {
+    expect(sheetViewStem('/d/Sales 2024.xlsx', 'Q1 / North')).toBe('Sales_2024_Q1_North');
+    expect(sheetViewStem('/d/Sales.xlsx', '***')).toBe('Sales');
+    expect(uniqueViewNames(['Sales', 'sales', 'Sales_2'])).toEqual([
+      'Sales',
+      'sales_2',
+      'Sales_2_2',
+    ]);
   });
 });

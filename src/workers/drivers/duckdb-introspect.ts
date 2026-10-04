@@ -30,6 +30,8 @@ export interface DuckdbViewSource {
   path: string;
   kind: DataFileKind;
   bytes: number | null;
+  /** Workbook sheet the view reads (Excel files). */
+  sheet?: string;
 }
 
 const HIDDEN_SCHEMAS = new Set(['information_schema', 'pg_catalog']);
@@ -91,6 +93,7 @@ export function buildDuckdbSchema(
           ? [
               { label: 'Source file', value: src.path },
               { label: 'Format', value: DATA_FILE_KIND_LABEL[src.kind] },
+              ...(src.sheet !== undefined ? [{ label: 'Sheet', value: src.sheet }] : []),
               ...(src.bytes !== null
                 ? [{ label: 'File size', value: formatBytes(src.bytes) }]
                 : []),

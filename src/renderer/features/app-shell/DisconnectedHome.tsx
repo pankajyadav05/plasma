@@ -170,8 +170,8 @@ export function DisconnectedHome() {
           <div className="min-w-0 flex-1">
             <div className="text-[13px] font-medium text-[var(--wb-text)]">Query a data file</div>
             <div className="text-[12px] text-[var(--wb-text-2)]">
-              Drop a CSV, TSV, Parquet or JSON file here, or open one. DuckDB makes each file a
-              table you can query with SQL.
+              Drop a CSV, Excel, Parquet or JSON file here, or open one. DuckDB makes each file (and
+              each Excel sheet) a table you can query with SQL.
             </div>
           </div>
           <Button

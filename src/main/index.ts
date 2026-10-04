@@ -746,6 +746,7 @@ async function establishSession(config: ConnectionConfigType) {
         duckdb: {
           files: config.duckdb.files,
           installPostgresExtension: config.duckdb.installPostgresExtension,
+          installExcelExtension: config.duckdb.installExcelExtension,
           attach: buildDuckdbAttachments(config.duckdb.attachConnectionIds, {
             load: (id) => vaultGetFull(id),
             sshFor: (id) => getFullSshConfig(id, settings.connectionSsh) !== null,

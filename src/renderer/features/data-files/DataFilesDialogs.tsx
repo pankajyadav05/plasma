@@ -35,7 +35,8 @@ function NoticeDialog() {
         <DialogHeader>
           <DialogTitle>{notice?.title}</DialogTitle>
           <DialogDescription>
-            DuckDB opens CSV, TSV, Parquet, JSON and NDJSON files, and .duckdb databases.
+            DuckDB opens CSV, TSV, Parquet, JSON, NDJSON and Excel (.xlsx) files, and .duckdb
+            databases.
           </DialogDescription>
         </DialogHeader>
         <ul className="list-disc space-y-1 pl-5 text-[12px] text-[var(--wb-text)]">

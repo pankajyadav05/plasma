@@ -7,7 +7,7 @@ import type { ConnectionConfig } from './protocol';
  * share one definition.
  */
 
-export type DataFileKind = 'csv' | 'tsv' | 'parquet' | 'json' | 'ndjson' | 'duckdb';
+export type DataFileKind = 'csv' | 'tsv' | 'parquet' | 'json' | 'ndjson' | 'xlsx' | 'duckdb';
 
 const COMPRESSED = /\.gz$/i;
 
@@ -30,6 +30,8 @@ export function dataFileKind(path: string): DataFileKind | null {
     case 'ndjson':
     case 'jsonl':
       return 'ndjson';
+    case 'xlsx':
+      return gz ? null : 'xlsx';
     case 'duckdb':
     case 'ddb':
       return gz ? null : 'duckdb';
@@ -40,7 +42,7 @@ export function dataFileKind(path: string): DataFileKind | null {
 
 /** Extensions (without dot) the file dialogs offer. */
 export const DATA_FILE_EXTENSIONS = {
-  tabular: ['csv', 'tsv', 'tab', 'parquet', 'json', 'jsonl', 'ndjson', 'gz'],
+  tabular: ['csv', 'tsv', 'tab', 'parquet', 'json', 'jsonl', 'ndjson', 'xlsx', 'gz'],
   database: ['duckdb', 'ddb'],
 } as const;
 
@@ -54,7 +56,10 @@ export function dataFilePathProblem(path: string): string | null {
     return 'File names containing * ? [ or ] are not supported (DuckDB would read them as patterns). Rename the file.';
   }
   if (!dataFileKind(path)) {
-    return 'Unsupported file type. Open a CSV, TSV, Parquet, JSON or NDJSON file (or a .duckdb database).';
+    if (/\.xls$/i.test(path)) {
+      return 'Old .xls workbooks are not supported. Save it as .xlsx (Excel: File → Save As) and open that.';
+    }
+    return 'Unsupported file type. Open a CSV, TSV, Parquet, JSON, NDJSON or Excel (.xlsx) file (or a .duckdb database).';
   }
   return null;
 }
@@ -73,9 +78,25 @@ export function dataFileStem(path: string): string {
 
 /** One unique view name per file, named after it (`t`, `t_2`, … on clashes). */
 export function viewNamesFor(paths: readonly string[], reserved: Iterable<string> = []): string[] {
+  return uniqueViewNames(paths.map(dataFileStem), reserved);
+}
+
+/** View name for one sheet of a workbook: `Sales` + `Q1 2024` -> `Sales_Q1_2024`. */
+export function sheetViewStem(path: string, sheet: string): string {
+  const clean = sheet
+    .replace(/[^A-Za-z0-9_]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 40);
+  return clean ? `${dataFileStem(path)}_${clean}`.slice(0, 80) : dataFileStem(path);
+}
+
+/** De-duplicate stems case-insensitively (`t`, `t_2`, …), avoiding `reserved`. */
+export function uniqueViewNames(
+  stems: readonly string[],
+  reserved: Iterable<string> = [],
+): string[] {
   const taken = new Set([...reserved].map((n) => n.toLowerCase()));
-  return paths.map((p) => {
-    const stem = dataFileStem(p);
+  return stems.map((stem) => {
     let name = stem;
     for (let n = 2; taken.has(name.toLowerCase()); n++) name = `${stem}_${n}`;
     taken.add(name.toLowerCase());
@@ -87,8 +108,13 @@ function singleQuoted(text: string): string {
   return `'${text.replace(/'/g, "''")}'`;
 }
 
-/** `CREATE VIEW` over one file, using the reader for its kind. */
-export function createViewSql(viewName: string, path: string, kind: DataFileKind): string {
+/** `CREATE VIEW` over one file (one sheet of a workbook), using the reader for its kind. */
+export function createViewSql(
+  viewName: string,
+  path: string,
+  kind: DataFileKind,
+  sheet?: string,
+): string {
   const view = `"${viewName.replace(/"/g, '""')}"`;
   const file = singleQuoted(path);
   switch (kind) {
@@ -102,6 +128,8 @@ export function createViewSql(viewName: string, path: string, kind: DataFileKind
       return `CREATE VIEW ${view} AS SELECT * FROM read_json_auto(${file}, format = 'auto')`;
     case 'ndjson':
       return `CREATE VIEW ${view} AS SELECT * FROM read_json_auto(${file}, format = 'newline_delimited')`;
+    case 'xlsx':
+      return `CREATE VIEW ${view} AS SELECT * FROM read_xlsx(${file}${sheet ? `, sheet = ${singleQuoted(sheet)}` : ''})`;
     case 'duckdb':
       throw new Error('A .duckdb file is a database, not a view source.');
   }
@@ -114,6 +142,7 @@ export const DATA_FILE_KIND_LABEL: Record<DataFileKind, string> = {
   parquet: 'Parquet',
   json: 'JSON',
   ndjson: 'NDJSON',
+  xlsx: 'Excel workbook',
   duckdb: 'DuckDB database',
 };
 
@@ -147,6 +176,8 @@ export function dataFileSessionId(
  */
 /** Error text the DuckDB driver uses when the Postgres extension must be downloaded first. */
 export const DUCKDB_PG_EXTENSION_MISSING = "DuckDB's Postgres extension is not installed";
+/** Error text the DuckDB driver uses when the Excel extension must be downloaded first. */
+export const DUCKDB_EXCEL_EXTENSION_MISSING = "DuckDB's Excel extension is not installed";
 
 export function dataFileSessionConfig(
   paths: readonly string[],

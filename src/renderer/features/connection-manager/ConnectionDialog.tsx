@@ -610,7 +610,7 @@ export function ConnectionDialog() {
                   </div>
                   <p className="pt-1 text-[12px] text-[var(--wb-text-2)]">
                     {engine === 'duckdb'
-                      ? 'Opened read-only. To query CSV, Parquet or JSON files, use Open data file… instead.'
+                      ? 'Opened read-only. To query CSV, Excel, Parquet or JSON files, use Open data file… instead.'
                       : 'Turn on Read-only below to open the file without being able to change it.'}
                   </p>
                 </Field>

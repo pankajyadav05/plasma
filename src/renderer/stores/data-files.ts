@@ -1,6 +1,7 @@
 import { ipc } from '@/lib/ipc';
 import { useSession } from '@/stores/session';
 import {
+  DUCKDB_EXCEL_EXTENSION_MISSING,
   DUCKDB_PG_EXTENSION_MISSING,
   dataFileSessionConfig,
   isDataFileSession,
@@ -32,36 +33,68 @@ const set = useDataFiles.setState;
 
 const message = (err: unknown): string => (err instanceof Error ? err.message : String(err));
 
+/** DuckDB extensions the user agreed to download for this open. */
+interface ExtensionConsent {
+  postgres?: boolean;
+  excel?: boolean;
+}
+
+/**
+ * DuckDB's official extensions are not bundled. When opening needs one that
+ * is not installed yet, the driver fails with a marker; ask once, then retry
+ * with consent. Sizes are the downloaded extension files.
+ */
+const EXTENSION_PROMPTS: ReadonlyArray<{
+  key: keyof ExtensionConsent;
+  marker: string;
+  question: string;
+}> = [
+  {
+    key: 'excel',
+    marker: DUCKDB_EXCEL_EXTENSION_MISSING,
+    question:
+      "Opening Excel files needs DuckDB's official Excel extension. Download it once from extensions.duckdb.org (signed by DuckDB, about 12 MB)?",
+  },
+  {
+    key: 'postgres',
+    marker: DUCKDB_PG_EXTENSION_MISSING,
+    question:
+      "Attaching Postgres needs DuckDB's official Postgres extension. Download it once from extensions.duckdb.org (signed by DuckDB, about 40 MB)?",
+  },
+];
+
 /** Start a session over `result.files`; refused files are listed in a notice. */
 export async function openDataFiles(
   result: DataFilePickResult,
   attachConnectionIds: readonly string[] = [],
-  installPostgresExtension = false,
+  consent: ExtensionConsent = {},
 ): Promise<void> {
   if (result.files.length === 0) {
     set({ notice: { title: 'Could not open the file', lines: result.problems } });
     return;
   }
   const base = dataFileSessionConfig(result.files, attachConnectionIds);
-  const config = installPostgresExtension
-    ? {
-        ...base,
-        duckdb: { ...base.duckdb, files: base.duckdb?.files ?? [], installPostgresExtension },
-      }
-    : base;
+  const config = {
+    ...base,
+    duckdb: {
+      ...base.duckdb,
+      files: base.duckdb?.files ?? [],
+      ...(consent.postgres ? { installPostgresExtension: true } : {}),
+      ...(consent.excel ? { installExcelExtension: true } : {}),
+    },
+  };
   await useSession.getState().connect(config);
   const { connectionState, connectionError } = useSession.getState();
-  if (
-    connectionState === 'error' &&
-    !installPostgresExtension &&
-    attachConnectionIds.length > 0 &&
-    connectionError?.includes(DUCKDB_PG_EXTENSION_MISSING) &&
-    window.confirm(
-      "Attaching Postgres needs DuckDB's official Postgres extension. Download it once from extensions.duckdb.org (signed by DuckDB, about 10 MB)?",
-    )
-  ) {
-    await openDataFiles(result, attachConnectionIds, true);
-    return;
+  if (connectionState === 'error' && connectionError) {
+    const needed = EXTENSION_PROMPTS.find(
+      (p) => !consent[p.key] && connectionError.includes(p.marker),
+    );
+    if (needed) {
+      if (window.confirm(needed.question)) {
+        await openDataFiles(result, attachConnectionIds, { ...consent, [needed.key]: true });
+        return;
+      }
+    }
   }
   if (connectionState === 'error') {
     set({

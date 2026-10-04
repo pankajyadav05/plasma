@@ -160,6 +160,8 @@ export const DuckdbOptions = z.object({
    * extension from extensions.duckdb.org when it isn't installed yet.
    */
   installPostgresExtension: z.boolean().optional(),
+  /** Same consent for DuckDB's official Excel extension (needed for .xlsx files). */
+  installExcelExtension: z.boolean().optional(),
 });
 export type DuckdbOptions = z.infer<typeof DuckdbOptions>;
 

@@ -5,6 +5,7 @@ import { dataFileSessionConfig } from '@shared/data-files';
 import type { ConnectionConfig } from '@shared/protocol';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { DuckdbDriver } from './duckdb';
+import { writeTestXlsx } from './test-xlsx';
 
 let dir: string;
 let csv: string;
@@ -315,5 +316,74 @@ livePg('DuckDB attached Postgres (live)', () => {
     expect(err).toBeInstanceOf(Error);
     expect((err as Error).message).toMatch(/Could not attach Postgres as pg_live/);
     expect((err as Error).message).not.toContain('hunter2');
+  });
+});
+
+/**
+ * Opt-in like the attach suite: reading .xlsx needs DuckDB's Excel extension,
+ * a one-time download, so it runs where the live suites run (network).
+ */
+const liveExt =
+  process.env.PLASMA_LIVE_PG || process.env.PLASMA_LIVE_DUCKDB_EXT ? describe : describe.skip;
+
+liveExt('DuckDB Excel workbooks (live: downloads the Excel extension)', () => {
+  it('opens every visible sheet as its own view, typed, alongside a CSV', async () => {
+    const book = join(dir, 'Sales Book.xlsx');
+    writeTestXlsx(book, [
+      {
+        name: 'Q1',
+        rows: [
+          ['region', 'amount'],
+          ['north', 120.5],
+          ['south', 99],
+        ],
+      },
+      {
+        name: 'Reps & Regions',
+        rows: [
+          ['region', 'rep'],
+          ['north', 'Ada'],
+          ['south', 'Grace'],
+        ],
+      },
+      { name: 'Lookup', rows: [['x'], ['y']], state: 'hidden' },
+    ]);
+    const { d } = await open([book, csv], {
+      duckdb: { files: [book, csv], installExcelExtension: true },
+    });
+    const schema = await d.introspect();
+    const views = schema.tables.map((t) => t.name).sort();
+    expect(views).toEqual(['Sales_2024', 'Sales_Book_Q1', 'Sales_Book_Reps_Regions']);
+    const q1 = schema.tables.find((t) => t.name === 'Sales_Book_Q1');
+    expect(q1?.details).toEqual(
+      expect.arrayContaining([
+        { label: 'Format', value: 'Excel workbook' },
+        { label: 'Sheet', value: 'Q1' },
+      ]),
+    );
+    const r = await d.query(
+      'SELECT q.region, q.amount + 0.5 AS a, r.rep FROM "Sales_Book_Q1" q JOIN "Sales_Book_Reps_Regions" r USING (region) ORDER BY 1',
+    );
+    expect(r.rows).toEqual([
+      ['north', 121, 'Ada'],
+      ['south', 99.5, 'Grace'],
+    ]);
+  });
+
+  it('names a single-sheet workbook after the file', async () => {
+    const book = join(dir, 'single.xlsx');
+    writeTestXlsx(book, [{ name: 'Sheet1', rows: [['n'], [1], [2]] }]);
+    const { d } = await open([book], { duckdb: { files: [book], installExcelExtension: true } });
+    const r = await d.query('SELECT sum(n) AS s FROM single');
+    expect(r.rows).toEqual([[3]]);
+  });
+
+  it('keeps the sandbox: other workbooks stay unreachable', async () => {
+    const book = join(dir, 'open.xlsx');
+    const other = join(dir, 'other.xlsx');
+    writeTestXlsx(book, [{ name: 'S', rows: [['n'], [1]] }]);
+    writeTestXlsx(other, [{ name: 'S', rows: [['n'], [2]] }]);
+    const { d } = await open([book], { duckdb: { files: [book], installExcelExtension: true } });
+    await expect(d.query(`SELECT * FROM read_xlsx('${other}')`)).rejects.toThrow();
   });
 });

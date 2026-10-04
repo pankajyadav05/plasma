@@ -1,11 +1,15 @@
 import { statSync } from 'node:fs';
 import { basename } from 'node:path';
 import {
+  DUCKDB_EXCEL_EXTENSION_MISSING,
   DUCKDB_PG_EXTENSION_MISSING,
   type DataFileKind,
   createViewSql,
   dataFileKind,
   dataFilePathProblem,
+  dataFileStem,
+  sheetViewStem,
+  uniqueViewNames,
   viewNamesFor,
 } from '@shared/data-files';
 import type {
@@ -30,6 +34,7 @@ import {
   buildDuckdbSchema,
 } from './duckdb-introspect';
 import type { ExportBatch, SqlEditUpdate, SqlEngineDriver, SqlQueryOpts } from './sql-engine';
+import { XlsxError, xlsxSheetNames } from './xlsx-sheets';
 
 import type {
   DuckDBConnection,
@@ -217,8 +222,31 @@ export class DuckdbDriver implements SqlEngineDriver {
       this.sources = [];
       this.attached = [];
 
-      const kinds = files.map((f) => dataFileKind(f) as DataFileKind);
-      const names = viewNamesFor(files);
+      // One view per file; an Excel workbook gives one view per visible sheet.
+      const sources: Array<{ path: string; kind: DataFileKind; sheet?: string; stem: string }> = [];
+      for (const path of files) {
+        const kind = dataFileKind(path) as DataFileKind;
+        if (kind !== 'xlsx') {
+          sources.push({ path, kind, stem: dataFileStem(path) });
+          continue;
+        }
+        let sheets: string[];
+        try {
+          sheets = xlsxSheetNames(path);
+        } catch (err) {
+          const why = err instanceof XlsxError ? err.message : friendlyError(err).message;
+          throw new Error(`Could not read ${basename(path)}: ${why}`);
+        }
+        for (const sheet of sheets) {
+          sources.push({
+            path,
+            kind,
+            sheet,
+            stem: sheets.length === 1 ? dataFileStem(path) : sheetViewStem(path, sheet),
+          });
+        }
+      }
+      const names = uniqueViewNames(sources.map((src) => src.stem));
       if (!inMemory && !openDirectly) {
         const [alias] = viewNamesFor([database], names);
         await conn.run(
@@ -229,22 +257,69 @@ export class DuckdbDriver implements SqlEngineDriver {
         allowed.push(database);
       }
 
-      for (let i = 0; i < files.length; i++) {
-        const path = files[i] as string;
-        const kind = kinds[i] as DataFileKind;
+      if (sources.some((src) => src.kind === 'xlsx')) {
         try {
-          await conn.run(createViewSql(names[i] as string, path, kind));
+          await conn.run('LOAD excel');
         } catch (err) {
-          throw new Error(`Could not read ${basename(path)}: ${friendlyError(err).message}`);
+          // Not bundled: DuckDB downloads its signed extension on demand, but
+          // only after the user has agreed to the download.
+          if (!config.duckdb?.installExcelExtension) {
+            throw new Error(
+              `${DUCKDB_EXCEL_EXTENSION_MISSING}. It is a one-time download from extensions.duckdb.org (${friendlyError(err).message}).`,
+            );
+          }
+          try {
+            await conn.run('INSTALL excel');
+            await conn.run('LOAD excel');
+          } catch (installErr) {
+            throw new Error(
+              `Could not download DuckDB's Excel extension (${friendlyError(installErr).message}).`,
+            );
+          }
         }
-        allowed.push(path);
-        let bytes: number | null = null;
+      }
+
+      const sizes = new Map<string, number | null>();
+      const openedSheets = new Map<string, number>();
+      const sheetErrors = new Map<string, string>();
+      for (let i = 0; i < sources.length; i++) {
+        const src = sources[i] as (typeof sources)[number];
+        const view = names[i] as string;
         try {
-          bytes = statSync(path).size;
-        } catch {
-          // gone since the check; the view still reports its own error on use
+          await conn.run(createViewSql(view, src.path, src.kind, src.sheet));
+        } catch (err) {
+          // A workbook can hold sheets read_xlsx cannot read (charts, empty
+          // tabs): skip those, as long as one sheet of the workbook opens.
+          if (src.sheet !== undefined) {
+            if (!sheetErrors.has(src.path)) {
+              sheetErrors.set(src.path, `${src.sheet}: ${friendlyError(err).message}`);
+            }
+            continue;
+          }
+          throw new Error(`Could not read ${basename(src.path)}: ${friendlyError(err).message}`);
         }
-        this.sources.push({ view: names[i] as string, path, kind, bytes });
+        if (src.sheet !== undefined)
+          openedSheets.set(src.path, (openedSheets.get(src.path) ?? 0) + 1);
+        if (!allowed.includes(src.path)) allowed.push(src.path);
+        if (!sizes.has(src.path)) {
+          let bytes: number | null = null;
+          try {
+            bytes = statSync(src.path).size;
+          } catch {
+            // gone since the check; the view still reports its own error on use
+          }
+          sizes.set(src.path, bytes);
+        }
+        this.sources.push({
+          view,
+          path: src.path,
+          kind: src.kind,
+          bytes: sizes.get(src.path) ?? null,
+          ...(src.sheet !== undefined ? { sheet: src.sheet } : {}),
+        });
+      }
+      for (const [path, why] of sheetErrors) {
+        if (!openedSheets.get(path)) throw new Error(`Could not read ${basename(path)}: ${why}`);
       }
 
       const attach = config.duckdb?.attach ?? [];
