@@ -1,11 +1,26 @@
 name: Release
 
-# Releases are built and published locally (pnpm release:mac / release:ship).
-# This workflow only runs when started by hand from the Actions tab, and it
-# only PUBLISHES to the production update feed from `main` or from a `v*` tag
-# whose version equals package.json (see the `guard` job).
+# Build, smoke-test, sign and publish from GitHub. Started by hand from the
+# Actions tab (Run workflow), and it only PUBLISHES to the production update
+# feed from `main` or from a `v*` tag whose version equals package.json (see
+# the `guard` job). Local releases (pnpm release:mac / release:ship) still work.
+#
+# `platforms` picks what to build and publish. Versioned files on the feed are
+# immutable, so a platform already published for this version (e.g. a local
+# Mac release) must be left out, or the upload refuses.
 on:
   workflow_dispatch:
+    inputs:
+      platforms:
+        description: Platforms to build and publish
+        type: choice
+        default: all
+        options:
+          - all
+          - windows+linux
+          - windows
+          - mac
+          - linux
 
 permissions:
   contents: write
@@ -82,6 +97,7 @@ jobs:
 
   build-windows:
     needs: [verify]
+    if: contains(fromJSON('["all","windows+linux","windows"]'), inputs.platforms)
     runs-on: windows-latest
     steps:
       - name: Checkout
@@ -151,6 +167,7 @@ jobs:
 
   build-macos:
     needs: [verify]
+    if: contains(fromJSON('["all","mac"]'), inputs.platforms)
     runs-on: macos-latest
     env:
       # Unsigned builds (identity: null in electron-builder.yml)
@@ -255,6 +272,7 @@ jobs:
 
   build-linux:
     needs: [verify]
+    if: contains(fromJSON('["all","windows+linux","linux"]'), inputs.platforms)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -324,8 +342,11 @@ jobs:
 
   publish:
     needs: [guard, build-windows, smoke-windows, build-macos, smoke-macos, build-linux, smoke-linux]
-    # Belt and braces: `guard` already failed any other ref.
-    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
+    # Platforms left out are skipped jobs, not failures; anything that ran must
+    # have passed. Belt and braces: `guard` already failed any other ref.
+    if: >-
+      !cancelled() && !failure() &&
+      (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
     runs-on: ubuntu-latest
     # Protect this environment (required reviewers) in the repo settings.
     environment: production
@@ -366,7 +387,13 @@ jobs:
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           PLASMA_UPDATE_SIGNING_KEY: ${{ secrets.PLASMA_UPDATE_SIGNING_KEY }}
-        run: pnpm run release:upload
+          PLATFORMS: ${{ inputs.platforms }}
+        run: |
+          case "$PLATFORMS" in
+            mac) node scripts/upload-release.mjs --mac-only ;;
+            linux) node scripts/upload-release.mjs --linux-only ;;
+            *) node scripts/upload-release.mjs ;;
+          esac
 
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/')

@@ -30,6 +30,25 @@ tag to equal `package.json`'s version, smoke-launches the packaged app on every
 platform (it must create `plasma.db`), and publishes from a protected
 `production` environment (add required reviewers in the repo settings).
 
+## Releasing from GitHub Actions
+
+`.github/workflows/release.yml` builds Windows, macOS and Linux on GitHub's
+runners, launches each build to prove it boots, then signs the manifests and
+uploads to R2 (and creates a GitHub Release when run from a `v*` tag).
+
+One-time setup (repo → Settings):
+
+- **Secrets and variables → Actions**: `R2_ACCESS_KEY_ID`,
+  `R2_SECRET_ACCESS_KEY`, and `PLASMA_UPDATE_SIGNING_KEY` (the value from your
+  `.env.local`).
+- **Environments**: `production` is created on first use; add yourself as a
+  required reviewer so a publish waits for your click.
+
+Run it: Actions → Release → Run workflow → branch `main` (or the version tag)
+→ `platforms`. Bump and push the version first (`pnpm ship:minor`). Leave out
+any platform already published for this version (versioned files are
+immutable), e.g. after a local `release:mac`, pick `windows+linux`.
+
 ## What the upload script guarantees
 
 `scripts/upload-release.mjs`:
