@@ -68,7 +68,7 @@ export const ToolbarButton = forwardRef<HTMLButtonElement, ToolbarButtonProps>(
         'disabled:pointer-events-none disabled:opacity-35',
         '[&_svg]:h-4 [&_svg]:w-4 [&_svg]:shrink-0 [&_svg]:stroke-[1.75]',
         active && 'bg-[var(--wb-control)] text-[var(--wb-text)]',
-        tone === 'accent' && 'text-[var(--wb-accent)] hover:text-[var(--wb-accent)]',
+        tone === 'accent' && 'text-[var(--wb-accent-text)] hover:text-[var(--wb-accent-text)]',
         tone === 'danger' && 'text-destructive hover:text-destructive',
         className,
       )}

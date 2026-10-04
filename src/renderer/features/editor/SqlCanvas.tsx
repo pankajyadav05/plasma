@@ -308,7 +308,7 @@ function EditorActionBar({
           <SplitPill>
             <Pill onClick={() => void formatActiveSql()} disabled={!hasSql} title="Beautify SQL">
               Beautify
-              <span className="font-mono text-[12px] opacity-70 @max-[520px]:hidden">
+              <span className="font-mono text-[12px] text-[var(--wb-text-2)] @max-[520px]:hidden">
                 {shortcut('formatSql')}
               </span>
             </Pill>
@@ -407,7 +407,7 @@ function EditorActionBar({
         >
           <ShieldCheck />
           Safe Run
-          <span className="font-mono text-[12px] opacity-70 @max-[620px]:hidden">
+          <span className="font-mono text-[12px] text-[var(--wb-text-2)] @max-[620px]:hidden">
             {shortcut('safeRun')}
           </span>
         </Pill>
@@ -417,7 +417,9 @@ function EditorActionBar({
         <Pill onClick={onRun} data-testid="run-cancel">
           <Square className="fill-current" />
           Cancel
-          <span className="font-mono text-[12px] opacity-70">{shortcut('cancelQuery')}</span>
+          <span className="font-mono text-[12px] text-[var(--wb-text-2)]">
+            {shortcut('cancelQuery')}
+          </span>
         </Pill>
       ) : (
         <SplitPill>
@@ -434,7 +436,7 @@ function EditorActionBar({
             }
           >
             {primaryLabel}
-            <span className="font-mono text-[12px] opacity-70 @max-[520px]:hidden">
+            <span className="font-mono text-[12px] text-[var(--wb-text-2)] @max-[520px]:hidden">
               {shortcut('runQuery')}
             </span>
           </Pill>

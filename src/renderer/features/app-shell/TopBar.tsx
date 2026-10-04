@@ -217,7 +217,7 @@ function ChangesCluster() {
       <span
         className={cn(
           'w-7 text-center font-mono text-[11px] font-semibold tabular-nums',
-          error ? 'text-destructive' : 'text-[var(--wb-accent)]',
+          error ? 'text-destructive' : 'text-[var(--wb-accent-text)]',
         )}
         role={error ? 'alert' : undefined}
         aria-label={error ? `Commit failed: ${error}` : undefined}
@@ -864,7 +864,7 @@ function ConnectionRow({
             {c.database ? ` / ${c.database}` : ''}
           </span>
         </span>
-        {active && <Check className="h-3.5 w-3.5 shrink-0 text-[var(--wb-accent)]" />}
+        {active && <Check className="h-3.5 w-3.5 shrink-0 text-[var(--wb-accent-text)]" />}
       </button>
       <button
         type="button"

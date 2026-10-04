@@ -605,7 +605,7 @@ function JsonNode({
           ? 'text-[var(--grid-null)]'
           : typeof value === 'string'
             ? 'text-[var(--wb-text)]'
-            : 'text-[var(--wb-accent)]',
+            : 'text-[var(--wb-accent-text)]',
       )}
     >
       {jsonLeafText(value)}

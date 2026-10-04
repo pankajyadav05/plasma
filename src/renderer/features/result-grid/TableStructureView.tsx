@@ -957,7 +957,7 @@ function FkLink({ target }: { target: string }) {
     <button
       type="button"
       onClick={() => openTable(ref.schema, ref.name)}
-      className="inline-flex items-center gap-0.5 text-[var(--wb-accent)] underline-offset-2 hover:underline"
+      className="inline-flex items-center gap-0.5 text-[var(--wb-accent-text)] underline-offset-2 hover:underline"
       title={`Open ${ref.schema}.${ref.name}`}
     >
       → {target}

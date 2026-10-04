@@ -52,7 +52,7 @@ function opMark(status: DiffRow['status']): { mark: string; label: string; class
       return { mark: '~', label: 'changed', className: 'text-[var(--status-warn)]' };
     case 'inserted':
     case 'new':
-      return { mark: '+', label: 'new row', className: 'text-[var(--wb-accent)]' };
+      return { mark: '+', label: 'new row', className: 'text-[var(--wb-accent-text)]' };
     case 'deleted':
     case 'old':
       return { mark: '−', label: 'removed row', className: 'text-[var(--wb-danger-fill)]' };

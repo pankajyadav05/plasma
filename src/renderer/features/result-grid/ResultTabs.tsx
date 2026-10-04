@@ -163,7 +163,7 @@ export function ResultMessagesPanel() {
           )}
         >
           <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
-            <CheckCircle2 className="h-3.5 w-3.5 text-[var(--wb-accent)]" />
+            <CheckCircle2 className="h-3.5 w-3.5 text-[var(--wb-accent-text)]" />
             <span className="font-semibold text-[var(--wb-text)]">Result {index + 1}</span>
             <span className="font-mono text-[12px] text-[var(--wb-text-2)]">
               {commandTitle(result.command, result.sql)}

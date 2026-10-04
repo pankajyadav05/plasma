@@ -127,7 +127,7 @@ const Card = memo(function Card({
           className="flex items-center gap-1.5 px-2 text-[var(--wb-text)]"
           style={{ height: ROW_HEIGHT }}
         >
-          <span className="flex w-4 shrink-0 justify-center text-[var(--wb-accent)]">
+          <span className="flex w-4 shrink-0 justify-center text-[var(--wb-accent-text)]">
             {c.pk ? (
               <Key className="h-3 w-3" aria-label="Primary key" />
             ) : c.fk ? (

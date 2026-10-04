@@ -33,7 +33,7 @@ function renderInline(nodes: Inline[], keyPrefix = 'i'): ReactNode[] {
             href={n.href}
             target="_blank"
             rel="noreferrer noopener"
-            className="text-[var(--wb-accent)] underline underline-offset-2"
+            className="text-[var(--wb-accent-text)] underline underline-offset-2"
           >
             {renderInline(n.c, key)}
           </a>

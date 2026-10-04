@@ -1727,6 +1727,12 @@ export const SettingsShape = z.object({
       'forest-canopy',
       'cyberpunk',
       'arctic',
+      'github',
+      'nord',
+      'solarized',
+      'gruvbox',
+      'tokyo-night',
+      'rose-pine',
     ])
     .catch('default')
     .default('default'),

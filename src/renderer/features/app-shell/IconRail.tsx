@@ -90,8 +90,8 @@ function Tile({
         'flex w-[71px] flex-col items-center gap-[5px] rounded-[8px] px-1 pb-2 pt-2.5 transition-colors',
         '[&_svg]:h-[22px] [&_svg]:w-[22px] [&_svg]:stroke-[1.6]',
         active
-          ? 'bg-[color-mix(in_oklch,var(--wb-window)_88%,var(--wb-text))] text-[var(--wb-text)]'
-          : 'text-[var(--wb-text-2)] hover:bg-[color-mix(in_oklch,var(--wb-window)_94%,var(--wb-text))] hover:text-[var(--wb-text)]',
+          ? 'bg-[color-mix(in_oklab,var(--wb-window)_88%,var(--wb-text))] text-[var(--wb-text)]'
+          : 'text-[var(--wb-text-2)] hover:bg-[color-mix(in_oklab,var(--wb-window)_94%,var(--wb-text))] hover:text-[var(--wb-text)]',
       )}
     >
       {item.icon}

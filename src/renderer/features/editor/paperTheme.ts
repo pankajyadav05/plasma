@@ -17,11 +17,13 @@ export const LIGHT_THEME_ID = PLASMA_THEME_ID;
 export const DARK_THEME_ID = PLASMA_THEME_ID;
 
 /**
- * Resolves `var(--name)` to `#RRGGBB` by letting the browser compute the
- * color on a hidden probe, then running it through a canvas 2D context
- * which normalizes any CSS color (oklch, hsl, rgb, named) to hex.
- * Returns the fallback on any failure so Monaco never gets a bad value.
+ * Resolves `var(--name)` to `#RRGGBB`: the browser computes the colour on
+ * a hidden probe, then a 1px canvas paints it and we read the pixel back.
+ * (Reading `ctx.fillStyle` is not enough — Chromium hands oklch/color-mix
+ * values back unchanged, which Monaco rejects.) Returns the fallback on
+ * any failure so Monaco never gets a bad value.
  */
+let probeCtx: CanvasRenderingContext2D | null = null;
 function resolveCssColor(varName: string, fallback: string): string {
   try {
     const probe = document.createElement('span');
@@ -32,19 +34,21 @@ function resolveCssColor(varName: string, fallback: string): string {
     document.body.removeChild(probe);
     if (!resolved) return fallback;
 
-    const ctx = document.createElement('canvas').getContext('2d');
+    if (!probeCtx) {
+      const canvas = document.createElement('canvas');
+      canvas.width = canvas.height = 1;
+      probeCtx = canvas.getContext('2d', { willReadFrequently: true });
+    }
+    const ctx = probeCtx;
     if (!ctx) return fallback;
+    ctx.clearRect(0, 0, 1, 1);
     ctx.fillStyle = '#000';
     ctx.fillStyle = resolved;
-    const out = ctx.fillStyle;
-    if (typeof out !== 'string') return fallback;
-    if (/^#[0-9a-f]{6}$/i.test(out)) return out;
-    const m = out.match(
-      /^rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)(?:\s*,\s*([\d.]+))?\s*\)$/i,
-    );
-    if (!m) return fallback;
-    const toHex = (n: number) => Math.round(n).toString(16).padStart(2, '0');
-    return `#${toHex(+m[1])}${toHex(+m[2])}${toHex(+m[3])}`;
+    ctx.fillRect(0, 0, 1, 1);
+    const [r, g, b, a] = ctx.getImageData(0, 0, 1, 1).data;
+    if (a === 0) return fallback;
+    const toHex = (n: number) => n.toString(16).padStart(2, '0');
+    return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
   } catch {
     return fallback;
   }
@@ -77,58 +81,22 @@ function buildTheme(mode: 'light' | 'dark'): MonacoType.editor.IStandaloneThemeD
   // Monaco token rules expect colors WITHOUT the leading `#`.
   const hex6 = (h: string) => (h.startsWith('#') ? h.slice(1, 7) : h);
 
-  // Default theme = TablePlus syntax palette (SPEC §2): muted blue
-  // keywords (not bold), rose strings, violet numbers, grey italic
-  // comments. Named palettes keep deriving from their own variables so
-  // the theme flavour still lands (keyword = --primary).
+  // Syntax colours come from the palette's `--syntax-*` tokens
+  // (globals.css), so every palette — default TablePlus set included —
+  // owns its editor look. Named palettes keep bold keywords and numbers.
   const isDefault = isDefaultPalette();
-  const syntax = isDefault
-    ? mode === 'dark'
-      ? {
-          keyword: '659AD4',
-          keywordStyle: '',
-          string: 'BF7471',
-          number: 'AC7CF8',
-          numberStyle: '',
-          type: '6399D4',
-          comment: '7F7F7F',
-          identifier: 'C1C0C1',
-          delimiter: 'C1C0C1',
-        }
-      : {
-          keyword: '0B57D0',
-          keywordStyle: '',
-          string: 'C41A16',
-          number: '7C3AED',
-          numberStyle: '',
-          type: '0B57D0',
-          comment: '8E8E93',
-          identifier: '1D1D1F',
-          delimiter: '1D1D1F',
-        }
-    : mode === 'dark'
-      ? {
-          keyword: hex6(primary),
-          keywordStyle: 'bold',
-          string: 'A3D977',
-          number: '7FB8FF',
-          numberStyle: 'bold',
-          type: 'E8B872',
-          comment: '888888',
-          identifier: hex6(fg),
-          delimiter: 'C0C0C0',
-        }
-      : {
-          keyword: hex6(primary),
-          keywordStyle: 'bold',
-          string: '3F6D1F',
-          number: '1C4480',
-          numberStyle: 'bold',
-          type: 'B47E11',
-          comment: '888888',
-          identifier: hex6(fg),
-          delimiter: '555555',
-        };
+  const weight = isDefault ? '' : 'bold';
+  const syntax = {
+    keyword: hex6(resolveCssColor('--syntax-keyword', primary)),
+    keywordStyle: weight,
+    string: hex6(resolveCssColor('--syntax-string', mode === 'dark' ? '#A3D977' : '#3F6D1F')),
+    number: hex6(resolveCssColor('--syntax-number', mode === 'dark' ? '#7FB8FF' : '#1C4480')),
+    numberStyle: weight,
+    type: hex6(resolveCssColor('--syntax-type', mode === 'dark' ? '#E8B872' : '#B47E11')),
+    comment: hex6(resolveCssColor('--syntax-comment', '#888888')),
+    identifier: hex6(resolveCssColor('--syntax-text', fg)),
+    delimiter: hex6(resolveCssColor('--syntax-delimiter', fg)),
+  };
 
   // Editor chrome colours. Default theme: TablePlus graphite (bg #242424,
   // grey line numbers, white active number, near-invisible current line)
@@ -162,7 +130,8 @@ function buildTheme(mode: 'light' | 'dark'): MonacoType.editor.IStandaloneThemeD
         lineNumber: mutedFg,
         lineNumberActive: primary,
         lineHighlight: `${muted}80`,
-        selection: accent,
+        // Accent-tinted selection, translucent so selected tokens keep their colours.
+        selection: `${wbAccent}${mode === 'dark' ? '55' : '3D'}`,
         cursor: wbAccent,
         accent: wbAccent,
       };
@@ -193,14 +162,12 @@ function buildTheme(mode: 'light' | 'dark'): MonacoType.editor.IStandaloneThemeD
       'editorLineNumber.foreground': ed.lineNumber,
       'editorLineNumber.activeForeground': ed.lineNumberActive,
       'editor.selectionBackground': ed.selection,
-      'editor.inactiveSelectionBackground': isDefault
-        ? `${ed.selection.slice(0, 7)}26`
-        : `${accent}80`,
+      'editor.inactiveSelectionBackground': `${ed.selection.slice(0, 7)}26`,
       'editor.lineHighlightBackground': ed.lineHighlight,
       'editor.lineHighlightBorder': '#00000000',
       'editorCursor.foreground': ed.cursor,
-      'editorBracketMatch.background': isDefault ? '#00000000' : accent,
-      'editorBracketMatch.border': isDefault ? `${ed.accent}99` : primary,
+      'editorBracketMatch.background': '#00000000',
+      'editorBracketMatch.border': `${ed.accent}99`,
       'editorWidget.background': card,
       'editorWidget.foreground': cardFg,
       'editorWidget.border': border,

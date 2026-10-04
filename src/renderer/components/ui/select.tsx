@@ -17,7 +17,7 @@ export const SelectTrigger = React.forwardRef<
       // Same box as Input: 26px, radius 7, --wb-field fill, hairline ring.
       'flex h-[26px] w-full items-center justify-between gap-2 rounded-[7px] border-0 bg-[var(--wb-field)] px-2 py-0 text-left text-[13px] text-[var(--wb-text)]',
       'shadow-[inset_0_0_0_1px_var(--wb-toolbar-group-edge)]',
-      'focus:outline-none focus-visible:shadow-[inset_0_0_0_1px_var(--ring),0_0_0_3px_color-mix(in_oklch,var(--ring)_30%,transparent)]',
+      'focus:outline-none focus-visible:shadow-[inset_0_0_0_1px_var(--ring),0_0_0_3px_color-mix(in_oklab,var(--ring)_30%,transparent)]',
       'disabled:cursor-not-allowed disabled:opacity-40',
       'data-[placeholder]:text-[var(--wb-text-3)]',
       '[&>span]:line-clamp-1',

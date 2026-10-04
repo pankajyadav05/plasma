@@ -14,7 +14,7 @@ export const Input = React.forwardRef<HTMLInputElement, InputProps>(
           'flex h-[26px] w-full rounded-[7px] border-0 bg-[var(--wb-field)] px-2 py-0 text-[13px] text-[var(--wb-text)]',
           'shadow-[inset_0_0_0_1px_var(--wb-toolbar-group-edge)] transition-shadow',
           'placeholder:text-[var(--wb-text-3)]',
-          'focus-visible:outline-none focus-visible:shadow-[inset_0_0_0_1px_var(--ring),0_0_0_3px_color-mix(in_oklch,var(--ring)_30%,transparent)]',
+          'focus-visible:outline-none focus-visible:shadow-[inset_0_0_0_1px_var(--ring),0_0_0_3px_color-mix(in_oklab,var(--ring)_30%,transparent)]',
           'aria-[invalid=true]:shadow-[inset_0_0_0_1px_var(--destructive)]',
           'disabled:cursor-not-allowed disabled:opacity-40',
           'file:border-0 file:bg-transparent file:text-[13px] file:font-medium',

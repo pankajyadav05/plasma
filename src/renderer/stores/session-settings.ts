@@ -16,6 +16,12 @@ const THEME_NAMES = [
   'forest-canopy',
   'cyberpunk',
   'arctic',
+  'github',
+  'nord',
+  'solarized',
+  'gruvbox',
+  'tokyo-night',
+  'rose-pine',
 ] as const;
 
 const FONT_SANS_STACKS: Record<string, string> = {

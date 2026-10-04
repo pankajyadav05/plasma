@@ -29,7 +29,7 @@ const buttonVariants = cva(
     variants: {
       variant: {
         primary:
-          'bg-[var(--wb-text)] font-medium text-[var(--wb-content)] hover:bg-[color-mix(in_oklch,var(--wb-text)_86%,var(--wb-content))]',
+          'bg-[var(--wb-text)] font-medium text-[var(--wb-content)] hover:bg-[color-mix(in_oklab,var(--wb-text)_86%,var(--wb-content))]',
         secondary:
           'bg-[var(--wb-control)] text-[var(--wb-text)] hover:bg-[var(--wb-control-hover)]',
         outline:
@@ -37,8 +37,8 @@ const buttonVariants = cva(
         ghost:
           'bg-transparent text-[var(--wb-text-2)] hover:bg-[var(--wb-control-hover)] hover:text-[var(--wb-text)]',
         destructive:
-          'bg-[var(--wb-danger-fill)] font-medium text-white hover:bg-[color-mix(in_oklch,var(--wb-danger-fill)_88%,black)]',
-        link: 'h-auto px-0 text-[var(--wb-accent)] underline-offset-4 hover:underline',
+          'bg-[var(--wb-danger-fill)] font-medium text-white hover:bg-[color-mix(in_oklab,var(--wb-danger-fill)_88%,black)]',
+        link: 'h-auto px-0 text-[var(--wb-accent-text)] underline-offset-4 hover:underline',
       },
       size: {
         xs: 'h-[22px] px-2 text-[12px] [&_svg]:h-3 [&_svg]:w-3',

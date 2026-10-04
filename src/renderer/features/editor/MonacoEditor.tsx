@@ -405,10 +405,10 @@ export function MonacoEditor({
     style.id = id;
     style.textContent = `
       .monaco-editor .${RUNNING_DECORATION} {
-        background-color: color-mix(in oklch, var(--wb-accent) 14%, transparent);
+        background-color: color-mix(in oklab, var(--wb-accent) 14%, transparent);
       }
       .monaco-editor .${CURRENT_STMT_DECORATION} {
-        background-color: color-mix(in oklch, var(--wb-accent) 6%, transparent);
+        background-color: color-mix(in oklab, var(--wb-accent) 6%, transparent);
       }
       .monaco-editor .${CURRENT_STMT_DECORATION}-bar {
         background-color: var(--wb-accent);

@@ -71,7 +71,7 @@ export function UpdateBadge() {
         size="xs"
         onClick={() => void install()}
         title={`Download Plasma v${status.version} — unsigned macOS builds cannot self-install`}
-        className="border border-primary text-primary"
+        className="border border-primary text-[var(--wb-accent-text)]"
       >
         <Download className="h-3 w-3" />
         update v{status.version} · download

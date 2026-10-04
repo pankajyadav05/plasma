@@ -14,7 +14,7 @@
   --popover: #ffffff;
   --popover-foreground: #1d1d1f;
   --primary: oklch(0.7122 0.1809 21.663);
-  --primary-foreground: #ffffff;
+  --primary-foreground: #1d1d1f;
   --secondary: #e3e3e3;
   --secondary-foreground: #1d1d1f;
   --muted: #f2f2f2;
@@ -35,7 +35,7 @@
   --sidebar: #f2f2f2;
   --sidebar-foreground: #1d1d1f;
   --sidebar-primary: oklch(0.7122 0.1809 21.663);
-  --sidebar-primary-foreground: #ffffff;
+  --sidebar-primary-foreground: #1d1d1f;
   --sidebar-accent: #d5d5d5;
   --sidebar-accent-foreground: #1d1d1f;
   --sidebar-border: #c9c9c9;
@@ -84,15 +84,15 @@
   --popover: #2c2c2c;
   --popover-foreground: #e0e0e0;
   --primary: oklch(0.7122 0.1809 21.663);
-  --primary-foreground: #ffffff;
+  --primary-foreground: #1d1d1f;
   --secondary: #343434;
   --secondary-foreground: #e0e0e0;
   --muted: #2e2e2e;
   --muted-foreground: #9a9a9a;
   --accent: #3c3c3c;
   --accent-foreground: #e0e0e0;
-  --destructive: #ff453a;
-  --destructive-foreground: #ffffff;
+  --destructive: #ff6b61;
+  --destructive-foreground: #1d1d1f;
   --border: #3a3a3a;
   --input: #3a3a3a;
   --ring: oklch(0.7122 0.1809 21.663);
@@ -104,7 +104,7 @@
   --sidebar: #1f1f1f;
   --sidebar-foreground: #e0e0e0;
   --sidebar-primary: oklch(0.7122 0.1809 21.663);
-  --sidebar-primary-foreground: #ffffff;
+  --sidebar-primary-foreground: #1d1d1f;
   --sidebar-accent: #464646;
   --sidebar-accent-foreground: #e0e0e0;
   --sidebar-border: #000000;
@@ -125,11 +125,11 @@
 /* Named themes keep type-tinted grid cells. */
 :root[class*="theme-"] {
   --type-num: oklch(0.45 0.12 255);
-  --type-str: oklch(0.52 0.13 135);
-  --type-date: oklch(0.5555 0 0);
-  --type-bool: oklch(0.6496 0.2362 26.9032);
+  --type-str: oklch(0.46 0.12 135);
+  --type-date: oklch(0.47 0 0);
+  --type-bool: oklch(0.52 0.19 27);
   --type-null: var(--grid-null);
-  --type-json: oklch(0.55 0.12 80);
+  --type-json: oklch(0.47 0.1 80);
 }
 :root.dark[class*="theme-"] {
   --type-num: oklch(0.75 0.15 255);
@@ -138,6 +138,25 @@
   --type-bool: oklch(0.72 0.18 25);
   --type-null: var(--grid-null);
   --type-json: oklch(0.78 0.14 80);
+}
+
+/* SQL syntax (Monaco) for named palettes: keyword = the palette accent,
+   the rest a balanced set. Zero specificity so any palette block with a
+   canonical scheme (catppuccin, nord, …) overrides it. */
+:where(:root) {
+  --syntax-keyword: var(--wb-accent-text);
+  --syntax-string: oklch(0.48 0.12 145);
+  --syntax-number: oklch(0.5 0.16 290);
+  --syntax-type: oklch(0.52 0.11 70);
+  --syntax-comment: var(--muted-foreground);
+  --syntax-text: var(--foreground);
+  --syntax-delimiter: color-mix(in oklab, var(--foreground) 75%, var(--background));
+}
+:where(.dark) {
+  --syntax-string: oklch(0.8 0.13 145);
+  --syntax-number: oklch(0.78 0.12 290);
+  --syntax-type: oklch(0.82 0.11 75);
+  --syntax-delimiter: color-mix(in oklab, var(--foreground) 70%, var(--background));
 }
 
 /* ─── Theme variants ──────────────────────────────────────────────────
@@ -170,7 +189,7 @@
   --muted-foreground: oklch(0.52 0.03 280);
   --accent: oklch(0.88 0.07 30);
   --accent-foreground: oklch(0.3 0.04 285);
-  --destructive: oklch(0.58 0.19 25);
+  --destructive: oklch(0.52 0.2 25);
   --destructive-foreground: oklch(1.0 0 0);
   --border: oklch(0.88 0.02 65);
   --input: oklch(0.93 0.015 60);
@@ -204,8 +223,8 @@
   --muted-foreground: oklch(0.73 0.03 70);
   --accent: oklch(0.78 0.17 25);
   --accent-foreground: oklch(0.19 0.025 285);
-  --destructive: oklch(0.7 0.17 25);
-  --destructive-foreground: oklch(0.19 0.025 285);
+  --destructive: oklch(0.72 0.18 25);
+  --destructive-foreground: oklch(0.18 0.03 25);
   --border: oklch(0.3 0.035 285);
   --input: oklch(0.27 0.03 285);
   --ring: oklch(0.78 0.14 280);
@@ -241,7 +260,7 @@
   --muted-foreground: oklch(0.48 0.04 35);
   --accent: oklch(0.88 0.05 60);
   --accent-foreground: oklch(0.22 0.04 30);
-  --destructive: oklch(0.55 0.19 25);
+  --destructive: oklch(0.52 0.2 25);
   --destructive-foreground: oklch(1.0 0 0);
   --border: oklch(0.86 0.025 50);
   --input: oklch(0.93 0.018 60);
@@ -275,8 +294,8 @@
   --muted-foreground: oklch(0.74 0.03 50);
   --accent: oklch(0.33 0.05 40);
   --accent-foreground: oklch(0.92 0.022 50);
-  --destructive: oklch(0.68 0.19 25);
-  --destructive-foreground: oklch(1.0 0 0);
+  --destructive: oklch(0.72 0.18 25);
+  --destructive-foreground: oklch(0.18 0.03 25);
   --border: oklch(0.3 0.03 40);
   --input: oklch(0.27 0.025 35);
   --ring: oklch(0.73 0.13 35);
@@ -303,7 +322,7 @@
   --card-foreground: oklch(0.3 0.05 280);
   --popover: oklch(0.98 0.012 285);
   --popover-foreground: oklch(0.3 0.05 280);
-  --primary: oklch(0.65 0.15 285);
+  --primary: oklch(0.56 0.16 285);
   --primary-foreground: oklch(0.98 0.012 285);
   --secondary: oklch(0.9 0.05 320);
   --secondary-foreground: oklch(0.3 0.05 280);
@@ -311,11 +330,11 @@
   --muted-foreground: oklch(0.52 0.05 280);
   --accent: oklch(0.85 0.1 320);
   --accent-foreground: oklch(0.3 0.05 280);
-  --destructive: oklch(0.65 0.2 25);
+  --destructive: oklch(0.52 0.2 25);
   --destructive-foreground: oklch(1.0 0 0);
   --border: oklch(0.88 0.035 285);
   --input: oklch(0.93 0.025 285);
-  --ring: oklch(0.65 0.15 285);
+  --ring: oklch(0.56 0.16 285);
   --chart-1: oklch(0.65 0.15 285);
   --chart-2: oklch(0.75 0.13 320);
   --chart-3: oklch(0.7 0.13 200);
@@ -323,7 +342,7 @@
   --chart-5: oklch(0.6 0.15 145);
   --sidebar: oklch(0.945 0.022 285);
   --sidebar-foreground: oklch(0.3 0.05 280);
-  --sidebar-primary: oklch(0.65 0.15 285);
+  --sidebar-primary: oklch(0.56 0.16 285);
   --sidebar-primary-foreground: oklch(0.98 0.012 285);
   --sidebar-accent: oklch(0.9 0.05 320);
   --sidebar-accent-foreground: oklch(0.3 0.05 280);
@@ -345,8 +364,8 @@
   --muted-foreground: oklch(0.74 0.04 290);
   --accent: oklch(0.33 0.07 320);
   --accent-foreground: oklch(0.92 0.025 290);
-  --destructive: oklch(0.68 0.2 25);
-  --destructive-foreground: oklch(1.0 0 0);
+  --destructive: oklch(0.72 0.18 25);
+  --destructive-foreground: oklch(0.18 0.03 25);
   --border: oklch(0.32 0.05 285);
   --input: oklch(0.29 0.05 285);
   --ring: oklch(0.75 0.13 285);
@@ -381,11 +400,11 @@
   --muted-foreground: oklch(0.35 0 0);
   --accent: oklch(0.9 0.2 95);
   --accent-foreground: oklch(0 0 0);
-  --destructive: oklch(0.6 0.24 25);
+  --destructive: oklch(0.52 0.2 25);
   --destructive-foreground: oklch(1.0 0 0);
   --border: oklch(0 0 0);
   --input: oklch(1.0 0 0);
-  --ring: oklch(0.9 0.2 95);
+  --ring: oklch(0 0 0);
   --chart-1: oklch(0 0 0);
   --chart-2: oklch(0.9 0.2 95);
   --chart-3: oklch(0.5 0 0);
@@ -415,8 +434,8 @@
   --muted-foreground: oklch(0.7 0 0);
   --accent: oklch(0.9 0.2 95);
   --accent-foreground: oklch(0 0 0);
-  --destructive: oklch(0.68 0.24 25);
-  --destructive-foreground: oklch(0 0 0);
+  --destructive: oklch(0.72 0.18 25);
+  --destructive-foreground: oklch(0.18 0.03 25);
   --border: oklch(1.0 0 0);
   --input: oklch(0.1 0 0);
   --ring: oklch(0.9 0.2 95);
@@ -452,7 +471,7 @@
   --muted-foreground: oklch(0.5 0.07 350);
   --accent: oklch(0.88 0.05 30);
   --accent-foreground: oklch(0.22 0.09 350);
-  --destructive: oklch(0.55 0.19 25);
+  --destructive: oklch(0.52 0.2 25);
   --destructive-foreground: oklch(1.0 0 0);
   --border: oklch(0.88 0.025 0);
   --input: oklch(0.94 0.015 0);
@@ -486,8 +505,8 @@
   --muted-foreground: oklch(0.74 0.05 0);
   --accent: oklch(0.78 0.13 30);
   --accent-foreground: oklch(0.14 0.035 350);
-  --destructive: oklch(0.68 0.19 25);
-  --destructive-foreground: oklch(1.0 0 0);
+  --destructive: oklch(0.72 0.18 25);
+  --destructive-foreground: oklch(0.18 0.03 25);
   --border: oklch(0.3 0.06 350);
   --input: oklch(0.25 0.05 350);
   --ring: oklch(0.72 0.2 0);
@@ -522,7 +541,7 @@
   --muted-foreground: oklch(0.5 0.04 120);
   --accent: oklch(0.75 0.13 70);
   --accent-foreground: oklch(0.25 0.04 130);
-  --destructive: oklch(0.58 0.19 25);
+  --destructive: oklch(0.52 0.2 25);
   --destructive-foreground: oklch(1.0 0 0);
   --border: oklch(0.86 0.025 100);
   --input: oklch(0.93 0.02 100);
@@ -556,8 +575,8 @@
   --muted-foreground: oklch(0.74 0.03 100);
   --accent: oklch(0.32 0.05 100);
   --accent-foreground: oklch(0.92 0.025 90);
-  --destructive: oklch(0.68 0.19 25);
-  --destructive-foreground: oklch(1.0 0 0);
+  --destructive: oklch(0.72 0.18 25);
+  --destructive-foreground: oklch(0.18 0.03 25);
   --border: oklch(0.3 0.035 130);
   --input: oklch(0.26 0.03 130);
   --ring: oklch(0.68 0.13 145);
@@ -593,7 +612,7 @@
   --muted-foreground: oklch(0.45 0.08 220);
   --accent: oklch(0.75 0.18 200);
   --accent-foreground: oklch(0.2 0.07 320);
-  --destructive: oklch(0.6 0.24 25);
+  --destructive: oklch(0.52 0.2 25);
   --destructive-foreground: oklch(1.0 0 0);
   --border: oklch(0.75 0.18 200);
   --input: oklch(0.93 0.025 200);
@@ -627,8 +646,8 @@
   --muted-foreground: oklch(0.75 0.12 200);
   --accent: oklch(0.78 0.22 200);
   --accent-foreground: oklch(0.09 0.025 280);
-  --destructive: oklch(0.7 0.24 25);
-  --destructive-foreground: oklch(0.09 0.025 280);
+  --destructive: oklch(0.72 0.18 25);
+  --destructive-foreground: oklch(0.18 0.03 25);
   --border: oklch(0.45 0.18 320);
   --input: oklch(0.18 0.04 280);
   --ring: oklch(0.75 0.24 320);
@@ -664,7 +683,7 @@
   --muted-foreground: oklch(0.5 0.04 235);
   --accent: oklch(0.82 0.09 200);
   --accent-foreground: oklch(0.22 0.05 240);
-  --destructive: oklch(0.58 0.19 25);
+  --destructive: oklch(0.52 0.2 25);
   --destructive-foreground: oklch(1.0 0 0);
   --border: oklch(0.88 0.015 220);
   --input: oklch(0.95 0.01 220);
@@ -698,8 +717,8 @@
   --muted-foreground: oklch(0.74 0.04 220);
   --accent: oklch(0.72 0.13 200);
   --accent-foreground: oklch(0.13 0.03 240);
-  --destructive: oklch(0.68 0.19 25);
-  --destructive-foreground: oklch(1.0 0 0);
+  --destructive: oklch(0.72 0.18 25);
+  --destructive-foreground: oklch(0.18 0.03 25);
   --border: oklch(0.28 0.05 240);
   --input: oklch(0.23 0.04 240);
   --ring: oklch(0.78 0.15 220);
@@ -716,6 +735,523 @@
   --sidebar-accent-foreground: oklch(0.93 0.025 220);
   --sidebar-border: oklch(0.28 0.05 240);
   --sidebar-ring: oklch(0.78 0.15 220);
+}
+
+/* ── github ── GitHub — Primer light and dark default. Neutral, blue accent, the most familiar code palette there is. */
+.theme-github {
+  --background: #ffffff;
+  --foreground: #1f2328;
+  --card: #ffffff;
+  --card-foreground: #1f2328;
+  --popover: #ffffff;
+  --popover-foreground: #1f2328;
+  --primary: #0969da;
+  --primary-foreground: #ffffff;
+  --secondary: #eff2f5;
+  --secondary-foreground: #1f2328;
+  --muted: #f6f8fa;
+  --muted-foreground: #59636e;
+  --accent: #ddf4ff;
+  --accent-foreground: #0a3069;
+  --destructive: #cf222e;
+  --destructive-foreground: #ffffff;
+  --border: #d1d9e0;
+  --input: #d1d9e0;
+  --ring: #0969da;
+  --chart-1: #0969da;
+  --chart-2: #1a7f37;
+  --chart-3: #9a6700;
+  --chart-4: #8250df;
+  --chart-5: #bf3989;
+  --sidebar: #f6f8fa;
+  --sidebar-foreground: #1f2328;
+  --sidebar-primary: #0969da;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #e6eaef;
+  --sidebar-accent-foreground: #1f2328;
+  --sidebar-border: #d1d9e0;
+  --sidebar-ring: #0969da;
+  --syntax-keyword: #cf222e;
+  --syntax-string: #0a3069;
+  --syntax-number: #0550ae;
+  --syntax-type: #953800;
+  --syntax-comment: #59636e;
+  --syntax-text: #1f2328;
+}
+.dark.theme-github {
+  --background: #0d1117;
+  --foreground: #e6edf3;
+  --card: #151b23;
+  --card-foreground: #e6edf3;
+  --popover: #151b23;
+  --popover-foreground: #e6edf3;
+  --primary: #4493f8;
+  --primary-foreground: #0d1117;
+  --secondary: #212830;
+  --secondary-foreground: #e6edf3;
+  --muted: #151b23;
+  --muted-foreground: #9198a1;
+  --accent: #132339;
+  --accent-foreground: #e6edf3;
+  --destructive: #f85149;
+  --destructive-foreground: #0d1117;
+  --border: #3d444d;
+  --input: #262c36;
+  --ring: #4493f8;
+  --chart-1: #4493f8;
+  --chart-2: #3fb950;
+  --chart-3: #d29922;
+  --chart-4: #ab7df8;
+  --chart-5: #db61a2;
+  --sidebar: #010409;
+  --sidebar-foreground: #e6edf3;
+  --sidebar-primary: #4493f8;
+  --sidebar-primary-foreground: #0d1117;
+  --sidebar-accent: #212830;
+  --sidebar-accent-foreground: #e6edf3;
+  --sidebar-border: #3d444d;
+  --sidebar-ring: #4493f8;
+  --syntax-keyword: #ff7b72;
+  --syntax-string: #a5d6ff;
+  --syntax-number: #79c0ff;
+  --syntax-type: #ffa657;
+  --syntax-comment: #9198a1;
+  --syntax-text: #e6edf3;
+}
+/* ── nord ── Nord — arctic, north-bluish. Snow Storm (light) and Polar Night (dark), frost-blue accents. */
+.theme-nord {
+  --background: #eceff4;
+  --foreground: #2e3440;
+  --card: #f5f7fa;
+  --card-foreground: #2e3440;
+  --popover: #f5f7fa;
+  --popover-foreground: #2e3440;
+  --primary: #5e81ac;
+  --primary-foreground: #ffffff;
+  --secondary: #e5e9f0;
+  --secondary-foreground: #2e3440;
+  --muted: #e5e9f0;
+  --muted-foreground: #434b5c;
+  --accent: #d8dee9;
+  --accent-foreground: #2e3440;
+  --destructive: #9a3842;
+  --destructive-foreground: #ffffff;
+  --border: #d3d9e3;
+  --input: #d8dee9;
+  --ring: #5e81ac;
+  --chart-1: #5e81ac;
+  --chart-2: #a3be8c;
+  --chart-3: #ebcb8b;
+  --chart-4: #b48ead;
+  --chart-5: #88c0d0;
+  --sidebar: #e5e9f0;
+  --sidebar-foreground: #2e3440;
+  --sidebar-primary: #5e81ac;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #d8dee9;
+  --sidebar-accent-foreground: #2e3440;
+  --sidebar-border: #d3d9e3;
+  --sidebar-ring: #5e81ac;
+  --syntax-keyword: #4c6a92;
+  --syntax-string: #55703a;
+  --syntax-number: #87587f;
+  --syntax-type: #2f7480;
+  --syntax-comment: #5f6a80;
+  --syntax-text: #2e3440;
+}
+.dark.theme-nord {
+  --background: #2e3440;
+  --foreground: #e5e9f0;
+  --card: #3b4252;
+  --card-foreground: #e5e9f0;
+  --popover: #3b4252;
+  --popover-foreground: #e5e9f0;
+  --primary: #88c0d0;
+  --primary-foreground: #2e3440;
+  --secondary: #3b4252;
+  --secondary-foreground: #e5e9f0;
+  --muted: #3b4252;
+  --muted-foreground: #b0b8c8;
+  --accent: #434c5e;
+  --accent-foreground: #eceff4;
+  --destructive: #ea9ca3;
+  --destructive-foreground: #2e3440;
+  --border: #434c5e;
+  --input: #3b4252;
+  --ring: #88c0d0;
+  --chart-1: #88c0d0;
+  --chart-2: #a3be8c;
+  --chart-3: #ebcb8b;
+  --chart-4: #b48ead;
+  --chart-5: #d08770;
+  --sidebar: #292e39;
+  --sidebar-foreground: #e5e9f0;
+  --sidebar-primary: #88c0d0;
+  --sidebar-primary-foreground: #2e3440;
+  --sidebar-accent: #3b4252;
+  --sidebar-accent-foreground: #e5e9f0;
+  --sidebar-border: #434c5e;
+  --sidebar-ring: #88c0d0;
+  --syntax-keyword: #81a1c1;
+  --syntax-string: #a3be8c;
+  --syntax-number: #b48ead;
+  --syntax-type: #8fbcbb;
+  --syntax-comment: #8f9ab0;
+  --syntax-text: #d8dee9;
+}
+/* ── solarized ── Solarized — Ethan Schoonover's precision palette. Text darkened from base00/base0 so it reads at 4.5:1. */
+.theme-solarized {
+  --background: #fdf6e3;
+  --foreground: #2f4249;
+  --card: #fffbf0;
+  --card-foreground: #2f4249;
+  --popover: #fffbf0;
+  --popover-foreground: #2f4249;
+  --primary: #268bd2;
+  --primary-foreground: #fdf6e3;
+  --secondary: #eee8d5;
+  --secondary-foreground: #2f4249;
+  --muted: #eee8d5;
+  --muted-foreground: #46585e;
+  --accent: #e6dfc8;
+  --accent-foreground: #073642;
+  --destructive: #bf2724;
+  --destructive-foreground: #fdf6e3;
+  --border: #e0d9c2;
+  --input: #eee8d5;
+  --ring: #268bd2;
+  --chart-1: #268bd2;
+  --chart-2: #859900;
+  --chart-3: #b58900;
+  --chart-4: #6c71c4;
+  --chart-5: #d33682;
+  --sidebar: #eee8d5;
+  --sidebar-foreground: #2f4249;
+  --sidebar-primary: #268bd2;
+  --sidebar-primary-foreground: #fdf6e3;
+  --sidebar-accent: #e3dcc6;
+  --sidebar-accent-foreground: #2f4249;
+  --sidebar-border: #e0d9c2;
+  --sidebar-ring: #268bd2;
+  --syntax-keyword: #677700;
+  --syntax-string: #1d7a73;
+  --syntax-number: #b0296a;
+  --syntax-type: #8a6800;
+  --syntax-comment: #647880;
+  --syntax-text: #2f4249;
+}
+.dark.theme-solarized {
+  --background: #002b36;
+  --foreground: #bccbcc;
+  --card: #073642;
+  --card-foreground: #bccbcc;
+  --popover: #073642;
+  --popover-foreground: #bccbcc;
+  --primary: #3d9be0;
+  --primary-foreground: #002b36;
+  --secondary: #073642;
+  --secondary-foreground: #bccbcc;
+  --muted: #073642;
+  --muted-foreground: #a5b5b5;
+  --accent: #0b4552;
+  --accent-foreground: #eee8d5;
+  --destructive: #f47672;
+  --destructive-foreground: #002b36;
+  --border: #0f4654;
+  --input: #073642;
+  --ring: #3d9be0;
+  --chart-1: #268bd2;
+  --chart-2: #859900;
+  --chart-3: #b58900;
+  --chart-4: #6c71c4;
+  --chart-5: #d33682;
+  --sidebar: #00252f;
+  --sidebar-foreground: #bccbcc;
+  --sidebar-primary: #3d9be0;
+  --sidebar-primary-foreground: #002b36;
+  --sidebar-accent: #0a3f4b;
+  --sidebar-accent-foreground: #bccbcc;
+  --sidebar-border: #0f4654;
+  --sidebar-ring: #3d9be0;
+  --syntax-keyword: #9cb000;
+  --syntax-string: #2fb3a8;
+  --syntax-number: #e0559a;
+  --syntax-type: #cf9f15;
+  --syntax-comment: #7f949b;
+  --syntax-text: #bccbcc;
+}
+/* ── gruvbox ── Gruvbox — retro groove. Warm parchment and charcoal, orange accent. */
+.theme-gruvbox {
+  --background: #fbf1c7;
+  --foreground: #3c3836;
+  --card: #f9f5d7;
+  --card-foreground: #3c3836;
+  --popover: #f9f5d7;
+  --popover-foreground: #3c3836;
+  --primary: #af3a03;
+  --primary-foreground: #fbf1c7;
+  --secondary: #ebdbb2;
+  --secondary-foreground: #3c3836;
+  --muted: #f2e5bc;
+  --muted-foreground: #564d46;
+  --accent: #ebdbb2;
+  --accent-foreground: #3c3836;
+  --destructive: #9d0006;
+  --destructive-foreground: #fbf1c7;
+  --border: #d5c4a1;
+  --input: #ebdbb2;
+  --ring: #af3a03;
+  --chart-1: #076678;
+  --chart-2: #79740e;
+  --chart-3: #b57614;
+  --chart-4: #8f3f71;
+  --chart-5: #427b58;
+  --sidebar: #f2e5bc;
+  --sidebar-foreground: #3c3836;
+  --sidebar-primary: #af3a03;
+  --sidebar-primary-foreground: #fbf1c7;
+  --sidebar-accent: #e5d5ab;
+  --sidebar-accent-foreground: #3c3836;
+  --sidebar-border: #d5c4a1;
+  --sidebar-ring: #af3a03;
+  --syntax-keyword: #9d0006;
+  --syntax-string: #66620a;
+  --syntax-number: #8f3f71;
+  --syntax-type: #8a5a0b;
+  --syntax-comment: #6c6158;
+  --syntax-text: #3c3836;
+}
+.dark.theme-gruvbox {
+  --background: #282828;
+  --foreground: #ebdbb2;
+  --card: #32302f;
+  --card-foreground: #ebdbb2;
+  --popover: #3c3836;
+  --popover-foreground: #ebdbb2;
+  --primary: #fe8019;
+  --primary-foreground: #282828;
+  --secondary: #3c3836;
+  --secondary-foreground: #ebdbb2;
+  --muted: #32302f;
+  --muted-foreground: #bdae93;
+  --accent: #504945;
+  --accent-foreground: #ebdbb2;
+  --destructive: #fd7060;
+  --destructive-foreground: #282828;
+  --border: #504945;
+  --input: #3c3836;
+  --ring: #fe8019;
+  --chart-1: #83a598;
+  --chart-2: #b8bb26;
+  --chart-3: #fabd2f;
+  --chart-4: #d3869b;
+  --chart-5: #8ec07c;
+  --sidebar: #1d2021;
+  --sidebar-foreground: #ebdbb2;
+  --sidebar-primary: #fe8019;
+  --sidebar-primary-foreground: #282828;
+  --sidebar-accent: #3c3836;
+  --sidebar-accent-foreground: #ebdbb2;
+  --sidebar-border: #504945;
+  --sidebar-ring: #fe8019;
+  --syntax-keyword: #fb4934;
+  --syntax-string: #b8bb26;
+  --syntax-number: #d3869b;
+  --syntax-type: #fabd2f;
+  --syntax-comment: #a89984;
+  --syntax-text: #ebdbb2;
+}
+/* ── tokyo-night ── Tokyo Night — Tokyo Day (light) and Night (dark). Indigo ink, neon-soft blues and violets. */
+.theme-tokyo-night {
+  --background: #e1e2e7;
+  --foreground: #2b3150;
+  --card: #e9e9ed;
+  --card-foreground: #2b3150;
+  --popover: #e9e9ed;
+  --popover-foreground: #2b3150;
+  --primary: #2e7de9;
+  --primary-foreground: #ffffff;
+  --secondary: #d0d5e3;
+  --secondary-foreground: #2b3150;
+  --muted: #d5d6db;
+  --muted-foreground: #474e70;
+  --accent: #c4c8da;
+  --accent-foreground: #343b58;
+  --destructive: #a3183f;
+  --destructive-foreground: #ffffff;
+  --border: #c4c8da;
+  --input: #d0d5e3;
+  --ring: #2e7de9;
+  --chart-1: #2e7de9;
+  --chart-2: #587539;
+  --chart-3: #8c6c3e;
+  --chart-4: #9854f1;
+  --chart-5: #007197;
+  --sidebar: #d5d6db;
+  --sidebar-foreground: #2b3150;
+  --sidebar-primary: #2e7de9;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #c4c8da;
+  --sidebar-accent-foreground: #2b3150;
+  --sidebar-border: #c4c8da;
+  --sidebar-ring: #2e7de9;
+  --syntax-keyword: #7340c4;
+  --syntax-string: #4b6630;
+  --syntax-number: #a35400;
+  --syntax-type: #006580;
+  --syntax-comment: #56609a;
+  --syntax-text: #2b3150;
+}
+.dark.theme-tokyo-night {
+  --background: #1a1b26;
+  --foreground: #c0caf5;
+  --card: #1f2335;
+  --card-foreground: #c0caf5;
+  --popover: #1f2335;
+  --popover-foreground: #c0caf5;
+  --primary: #7aa2f7;
+  --primary-foreground: #1a1b26;
+  --secondary: #24283b;
+  --secondary-foreground: #c0caf5;
+  --muted: #1f2335;
+  --muted-foreground: #9aa5ce;
+  --accent: #2f3549;
+  --accent-foreground: #c0caf5;
+  --destructive: #f7768e;
+  --destructive-foreground: #1a1b26;
+  --border: #292e42;
+  --input: #24283b;
+  --ring: #7aa2f7;
+  --chart-1: #7aa2f7;
+  --chart-2: #9ece6a;
+  --chart-3: #e0af68;
+  --chart-4: #bb9af7;
+  --chart-5: #7dcfff;
+  --sidebar: #16161e;
+  --sidebar-foreground: #c0caf5;
+  --sidebar-primary: #7aa2f7;
+  --sidebar-primary-foreground: #1a1b26;
+  --sidebar-accent: #292e42;
+  --sidebar-accent-foreground: #c0caf5;
+  --sidebar-border: #292e42;
+  --sidebar-ring: #7aa2f7;
+  --syntax-keyword: #bb9af7;
+  --syntax-string: #9ece6a;
+  --syntax-number: #ff9e64;
+  --syntax-type: #2ac3de;
+  --syntax-comment: #8089b3;
+  --syntax-text: #c0caf5;
+}
+/* ── rose-pine ── Rosé Pine — Dawn (light) and Moon (dark). Muted rose, pine and iris; low-glare. */
+.theme-rose-pine {
+  --background: #faf4ed;
+  --foreground: #433e63;
+  --card: #fffaf3;
+  --card-foreground: #433e63;
+  --popover: #fffaf3;
+  --popover-foreground: #433e63;
+  --primary: #286983;
+  --primary-foreground: #faf4ed;
+  --secondary: #f2e9e1;
+  --secondary-foreground: #433e63;
+  --muted: #f4ede8;
+  --muted-foreground: #5a5574;
+  --accent: #dfdad9;
+  --accent-foreground: #4f4a70;
+  --destructive: #933e58;
+  --destructive-foreground: #faf4ed;
+  --border: #dfdad9;
+  --input: #f2e9e1;
+  --ring: #286983;
+  --chart-1: #286983;
+  --chart-2: #56949f;
+  --chart-3: #ea9d34;
+  --chart-4: #907aa9;
+  --chart-5: #d7827e;
+  --sidebar: #f2e9e1;
+  --sidebar-foreground: #433e63;
+  --sidebar-primary: #286983;
+  --sidebar-primary-foreground: #faf4ed;
+  --sidebar-accent: #e4dcd6;
+  --sidebar-accent-foreground: #433e63;
+  --sidebar-border: #dfdad9;
+  --sidebar-ring: #286983;
+  --syntax-keyword: #286983;
+  --syntax-string: #94590f;
+  --syntax-number: #a8526b;
+  --syntax-type: #3a7480;
+  --syntax-comment: #6e6a86;
+  --syntax-text: #433e63;
+}
+.dark.theme-rose-pine {
+  --background: #232136;
+  --foreground: #e0def4;
+  --card: #2a273f;
+  --card-foreground: #e0def4;
+  --popover: #2a273f;
+  --popover-foreground: #e0def4;
+  --primary: #c4a7e7;
+  --primary-foreground: #232136;
+  --secondary: #393552;
+  --secondary-foreground: #e0def4;
+  --muted: #2a273f;
+  --muted-foreground: #aeaaca;
+  --accent: #393552;
+  --accent-foreground: #e0def4;
+  --destructive: #eb6f92;
+  --destructive-foreground: #232136;
+  --border: #44415a;
+  --input: #393552;
+  --ring: #c4a7e7;
+  --chart-1: #c4a7e7;
+  --chart-2: #9ccfd8;
+  --chart-3: #f6c177;
+  --chart-4: #eb6f92;
+  --chart-5: #3e8fb0;
+  --sidebar: #1e1c30;
+  --sidebar-foreground: #e0def4;
+  --sidebar-primary: #c4a7e7;
+  --sidebar-primary-foreground: #232136;
+  --sidebar-accent: #393552;
+  --sidebar-accent-foreground: #e0def4;
+  --sidebar-border: #44415a;
+  --sidebar-ring: #c4a7e7;
+  --syntax-keyword: #62a8c8;
+  --syntax-string: #f6c177;
+  --syntax-number: #c4a7e7;
+  --syntax-type: #9ccfd8;
+  --syntax-comment: #908caa;
+  --syntax-text: #e0def4;
+}
+
+/* Canonical syntax sets for palettes based on a known scheme. */
+.theme-catppuccin {
+  --syntax-keyword: oklch(0.5 0.21 300);
+  --syntax-string: oklch(0.5 0.14 140);
+  --syntax-number: oklch(0.55 0.17 45);
+  --syntax-type: oklch(0.53 0.12 75);
+}
+.dark.theme-catppuccin {
+  --syntax-keyword: #cba6f7;
+  --syntax-string: #a6e3a1;
+  --syntax-number: #fab387;
+  --syntax-type: #f9e2af;
+  --syntax-comment: #9399b2;
+}
+.theme-cyberpunk {
+  --syntax-string: oklch(0.5 0.1 200);
+  --syntax-number: oklch(0.5 0.17 280);
+}
+.dark.theme-cyberpunk {
+  --syntax-string: oklch(0.85 0.14 195);
+  --syntax-number: oklch(0.88 0.17 100);
+  --syntax-type: oklch(0.85 0.2 145);
+}
+.dark.theme-arctic {
+  --syntax-keyword: #81a1c1;
+  --syntax-string: #a3be8c;
+  --syntax-number: #b48ead;
+  --syntax-type: #8fbcbb;
 }
 
 @theme inline {
@@ -903,36 +1439,40 @@
       utility, re-pointed at the tokens. */
 
 :root {
-  --wb-window: color-mix(in oklch, var(--sidebar) 93%, var(--foreground));
+  --wb-window: color-mix(in oklab, var(--sidebar) 93%, var(--foreground));
   --wb-sidebar: var(--sidebar);
   --wb-content: var(--background);
-  --wb-tabbar: color-mix(in oklch, var(--background) 87%, var(--foreground));
-  --wb-control: color-mix(in oklch, var(--background) 89%, var(--foreground));
-  --wb-control-hover: color-mix(in oklch, var(--background) 85%, var(--foreground));
+  --wb-tabbar: color-mix(in oklab, var(--background) 87%, var(--foreground));
+  --wb-control: color-mix(in oklab, var(--background) 89%, var(--foreground));
+  --wb-control-hover: color-mix(in oklab, var(--background) 85%, var(--foreground));
   --wb-control-active: var(--card);
-  --wb-toolbar-group: color-mix(in oklch, var(--card) 70%, var(--sidebar));
-  --wb-toolbar-group-edge: color-mix(in oklch, var(--background) 81%, var(--foreground));
-  --wb-selected: color-mix(in oklch, var(--sidebar) 84%, var(--foreground));
+  --wb-toolbar-group: color-mix(in oklab, var(--card) 70%, var(--sidebar));
+  --wb-toolbar-group-edge: color-mix(in oklab, var(--background) 81%, var(--foreground));
+  --wb-selected: color-mix(in oklab, var(--sidebar) 84%, var(--foreground));
   --wb-segment-active: var(--card);
   --wb-field: var(--card);
-  --wb-separator: color-mix(in oklch, var(--background) 78%, var(--foreground));
+  --wb-separator: color-mix(in oklab, var(--background) 78%, var(--foreground));
   --wb-text: var(--foreground);
   /* Text tokens are mixed so every palette clears WCAG AA (4.5:1) on the
      surfaces they sit on: text-2 on controls / tab strip, text-3 on
      content and sidebars. */
-  --wb-text-2: color-mix(in oklch, var(--muted-foreground) 72%, var(--foreground));
+  --wb-text-2: color-mix(in oklab, var(--muted-foreground) 72%, var(--foreground));
   --wb-text-3: var(--muted-foreground);
   --wb-accent: var(--primary);
   /* Accent / destructive as a fill under white text: same hue, lightness
      capped so white labels stay >= 4.5:1 (menu highlight, badges). */
-  --wb-accent-fill: oklch(from var(--wb-accent) min(l, 0.55) c h);
-  --wb-danger-fill: oklch(from var(--destructive) min(l, 0.55) c h);
+  --wb-accent-fill: oklch(from var(--wb-accent) min(l, 0.52) c h);
+  --wb-danger-fill: oklch(from var(--destructive) min(l, 0.52) c h);
+  /* Accent as text (links, FK targets, "edited" marks): the accent itself
+     is tuned for fills and rings, so light palettes darken it and dark
+     palettes lighten it until it reads at 4.5:1. */
+  --wb-accent-text: oklch(from var(--wb-accent) min(l, 0.5) c h);
 
   --grid-text: var(--foreground);
-  --grid-row-a: color-mix(in oklch, var(--background) 96%, var(--foreground));
+  --grid-row-a: color-mix(in oklab, var(--background) 96%, var(--foreground));
   --grid-row-b: var(--background);
-  --grid-line: color-mix(in oklch, var(--background) 90%, var(--foreground));
-  --grid-null: color-mix(in oklch, var(--muted-foreground) 85%, var(--background));
+  --grid-line: color-mix(in oklab, var(--background) 90%, var(--foreground));
+  --grid-null: var(--muted-foreground);
 
   /* Connection status colours — env tag chips, prod capsule fill. Dark
      enough that white 13px text clears 4.5:1. */
@@ -940,7 +1480,7 @@
   --status-dev: #5a74a0;
   --status-staging: #887332;
   --status-prod: #a35252;
-  --status-none: color-mix(in oklch, var(--background) 85%, var(--foreground));
+  --status-none: color-mix(in oklab, var(--background) 85%, var(--foreground));
   /* Amber warning text / icons (long-running queries, truncation notes). */
   --status-warn: #8a5a00;
 
@@ -951,33 +1491,34 @@
 
   /* Connected capsule: a neutral control surface faintly tinted with the
      theme accent, text --wb-text. Only a PROD tag fills it red. */
-  --wb-connected: color-mix(in oklch, var(--wb-accent) 14%, var(--wb-control));
+  --wb-connected: color-mix(in oklab, var(--wb-accent) 14%, var(--wb-control));
 }
 
 .dark {
-  --wb-window: color-mix(in oklch, var(--sidebar) 84%, black);
-  --wb-tabbar: color-mix(in oklch, var(--background) 86%, var(--foreground));
-  --wb-control: color-mix(in oklch, var(--background) 88%, var(--foreground));
-  --wb-control-hover: color-mix(in oklch, var(--background) 84%, var(--foreground));
-  --wb-control-active: color-mix(in oklch, var(--background) 76%, var(--foreground));
-  --wb-toolbar-group: color-mix(in oklch, var(--background) 97%, var(--foreground));
-  --wb-toolbar-group-edge: color-mix(in oklch, var(--background) 83%, var(--foreground));
-  --wb-selected: color-mix(in oklch, var(--sidebar) 80%, var(--foreground));
-  --wb-segment-active: color-mix(in oklch, var(--sidebar) 86%, var(--foreground));
-  --wb-field: color-mix(in oklch, var(--sidebar) 82%, black);
-  --wb-separator: color-mix(in oklch, var(--background) 35%, black);
+  --wb-window: color-mix(in oklab, var(--sidebar) 84%, black);
+  --wb-tabbar: color-mix(in oklab, var(--background) 86%, var(--foreground));
+  --wb-control: color-mix(in oklab, var(--background) 88%, var(--foreground));
+  --wb-control-hover: color-mix(in oklab, var(--background) 84%, var(--foreground));
+  --wb-control-active: color-mix(in oklab, var(--background) 76%, var(--foreground));
+  --wb-toolbar-group: color-mix(in oklab, var(--background) 97%, var(--foreground));
+  --wb-toolbar-group-edge: color-mix(in oklab, var(--background) 83%, var(--foreground));
+  --wb-selected: color-mix(in oklab, var(--sidebar) 80%, var(--foreground));
+  --wb-segment-active: color-mix(in oklab, var(--sidebar) 86%, var(--foreground));
+  --wb-field: color-mix(in oklab, var(--sidebar) 82%, black);
+  --wb-separator: color-mix(in oklab, var(--background) 35%, black);
   --wb-text-2: var(--muted-foreground);
-  --wb-text-3: color-mix(in oklch, var(--muted-foreground) 88%, var(--background));
+  --wb-text-3: color-mix(in oklab, var(--muted-foreground) 88%, var(--background));
 
-  --grid-row-a: color-mix(in oklch, var(--background) 94%, var(--foreground));
-  --grid-line: color-mix(in oklch, var(--background) 94%, var(--foreground));
-  --grid-null: color-mix(in oklch, var(--muted-foreground) 75%, var(--background));
+  --grid-row-a: color-mix(in oklab, var(--background) 94%, var(--foreground));
+  --grid-line: color-mix(in oklab, var(--background) 94%, var(--foreground));
+  --grid-null: color-mix(in oklab, var(--muted-foreground) 88%, var(--background));
+  --wb-accent-text: oklch(from var(--wb-accent) max(l, 0.74) c h);
 
   --status-local: #4d6953;
   --status-dev: #4b5f7e;
   --status-staging: #7a6a3c;
   --status-prod: #7e4444;
-  --status-none: color-mix(in oklch, var(--background) 86%, var(--foreground));
+  --status-none: color-mix(in oklab, var(--background) 86%, var(--foreground));
   --status-warn: #e0a84a;
 
   --icon-folder: #ae86cd;
@@ -985,7 +1526,35 @@
   --icon-pin: #e49375;
   --icon-star: #d9b44a;
 
-  --wb-connected: color-mix(in oklch, var(--wb-accent) 16%, var(--wb-control));
+  --wb-connected: color-mix(in oklab, var(--wb-accent) 16%, var(--wb-control));
+}
+
+/* Dark named palettes: hairlines are a lighter step of the surface (a
+   darker step vanishes on near-black backgrounds). */
+:root.dark[class*="theme-"] {
+  --wb-separator: color-mix(in oklab, var(--background) 84%, var(--foreground));
+  --grid-line: color-mix(in oklab, var(--background) 91%, var(--foreground));
+}
+
+/* Neo-brutalism dark is pure black: lift controls and hairlines so the
+   chrome keeps its structure. */
+:root.dark.theme-neo-brutalism {
+  --wb-control: oklch(0.24 0 0);
+  --wb-control-hover: oklch(0.3 0 0);
+  --wb-separator: oklch(0.42 0 0);
+  --grid-line: oklch(0.26 0 0);
+  --grid-row-a: oklch(0.13 0 0);
+}
+
+/* Secondary text on a selected row (sidebar, palette, details field,
+   result tabs): the selection fill eats contrast, so muted labels step
+   up toward the main text colour there. */
+[class~="bg-[var(--wb-selected)]"],
+[aria-selected="true"],
+[data-selected="true"] {
+  --wb-text-2: color-mix(in oklab, var(--wb-text) 88%, var(--wb-selected));
+  --wb-text-3: color-mix(in oklab, var(--wb-text) 84%, var(--wb-selected));
+  --muted-foreground: color-mix(in oklab, var(--wb-text) 84%, var(--wb-selected));
 }
 
 /* Default theme — exact TablePlus values. */
@@ -1007,12 +1576,24 @@
   --wb-text-2: #5f5f64;
   --wb-text-3: #6b6b70;
   --wb-accent: var(--primary); /* Plasma coral — the palette the user picked */
+  --wb-accent-text: oklch(0.52 0.17 24);
+  /* A quieter coral wash than named palettes get: graphite stays graphite. */
+  --wb-connected: color-mix(in oklab, var(--wb-accent) 11%, var(--wb-control));
+
+  /* TablePlus syntax palette. */
+  --syntax-keyword: #0b57d0;
+  --syntax-string: #c41a16;
+  --syntax-number: #7c3aed;
+  --syntax-type: #0b57d0;
+  --syntax-comment: #8e8e93;
+  --syntax-text: #1d1d1f;
+  --syntax-delimiter: #1d1d1f;
 
   --grid-text: #1d1d1f;
   --grid-row-a: #f5f5f5;
   --grid-row-b: #ffffff;
   --grid-line: #e6e6e6;
-  --grid-null: #767676;
+  --grid-null: #6e6e6e;
 
   --status-local: #517f5c;
   --status-dev: #5a74a0;
@@ -1043,12 +1624,21 @@
   --wb-text-2: #a3a3a3;
   --wb-text-3: #8f8f8f;
   --wb-accent: var(--primary); /* Plasma coral — the palette the user picked */
+  --wb-accent-text: oklch(0.76 0.14 22);
+
+  --syntax-keyword: #659ad4;
+  --syntax-string: #d08a86;
+  --syntax-number: #ac7cf8;
+  --syntax-type: #6399d4;
+  --syntax-comment: #8a8a8a;
+  --syntax-text: #c1c0c1;
+  --syntax-delimiter: #c1c0c1;
 
   --grid-text: #d6d6d6;
   --grid-row-a: #2e2e2e;
   --grid-row-b: #1f1f1f;
   --grid-line: #2e2e2e;
-  --grid-null: #808080;
+  --grid-null: #969696;
 
   --status-local: #4d6953;
   --status-dev: #4b5f7e;
@@ -1063,17 +1653,17 @@
 
 /* Legacy material vars still referenced by a few views. */
 :root {
-  --hairline: color-mix(in oklch, var(--foreground) 11%, transparent);
+  --hairline: color-mix(in oklab, var(--foreground) 11%, transparent);
   --glass-fill: var(--wb-toolbar-group);
   --glass-stroke: var(--wb-toolbar-group-edge);
-  --glass-highlight: color-mix(in oklch, white 70%, transparent);
-  --glass-shadow: 0 0.5px 1px color-mix(in oklch, black 8%, transparent);
+  --glass-highlight: color-mix(in oklab, white 70%, transparent);
+  --glass-shadow: 0 0.5px 1px color-mix(in oklab, black 8%, transparent);
 }
 
 .dark {
-  --hairline: color-mix(in oklch, var(--foreground) 10%, transparent);
-  --glass-highlight: color-mix(in oklch, white 9%, transparent);
-  --glass-shadow: 0 0.5px 1px color-mix(in oklch, black 40%, transparent);
+  --hairline: color-mix(in oklab, var(--foreground) 10%, transparent);
+  --glass-highlight: color-mix(in oklab, white 9%, transparent);
+  --glass-shadow: 0 0.5px 1px color-mix(in oklab, black 40%, transparent);
 }
 
 /* macOS vibrancy: the native window is transparent behind the page.

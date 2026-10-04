@@ -482,7 +482,7 @@ function ColumnCombobox({
                   )}
                 >
                   {active ? (
-                    <Check className="h-3 w-3 text-[var(--wb-accent)]" />
+                    <Check className="h-3 w-3 text-[var(--wb-accent-text)]" />
                   ) : (
                     <span className="h-3 w-3" aria-hidden />
                   )}

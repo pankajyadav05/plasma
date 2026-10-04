@@ -83,6 +83,12 @@ const PALETTES: Array<{ id: ThemeName; label: string }> = [
   { id: 'forest-canopy', label: 'Forest Canopy' },
   { id: 'cyberpunk', label: 'Cyberpunk' },
   { id: 'arctic', label: 'Arctic' },
+  { id: 'github', label: 'GitHub' },
+  { id: 'nord', label: 'Nord' },
+  { id: 'solarized', label: 'Solarized' },
+  { id: 'gruvbox', label: 'Gruvbox' },
+  { id: 'tokyo-night', label: 'Tokyo Night' },
+  { id: 'rose-pine', label: 'Rosé Pine' },
 ];
 
 /** Bundled faces (styles/fonts.ts) — every option here actually loads. */

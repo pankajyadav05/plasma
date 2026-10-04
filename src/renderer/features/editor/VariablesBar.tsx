@@ -82,7 +82,9 @@ export function VariablesBar() {
           >
             <Play className="fill-current" />
             Run
-            <span className="font-mono text-[12px] opacity-70">{shortcut('runQuery')}</span>
+            <span className="font-mono text-[12px] text-[var(--wb-text-2)]">
+              {shortcut('runQuery')}
+            </span>
           </Pill>
           <IconButton
             variant="plain"

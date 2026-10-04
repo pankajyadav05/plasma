@@ -321,7 +321,7 @@ function FeatureSvg({
   project: (p: Pt) => [number, number];
 }) {
   const stroke = 'var(--chart-1)';
-  const fill = 'color-mix(in oklch, var(--chart-1) 18%, transparent)';
+  const fill = 'color-mix(in oklab, var(--chart-1) 18%, transparent)';
   switch (feature.kind) {
     case 'Point': {
       const [x, y] = project(feature.coords);

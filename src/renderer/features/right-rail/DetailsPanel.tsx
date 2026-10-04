@@ -305,7 +305,9 @@ function FieldRow({
           {readableTypeName(col)}
         </span>
         {isPending && (
-          <span className="shrink-0 text-[11px] font-medium text-[var(--wb-accent)]">edited</span>
+          <span className="shrink-0 text-[11px] font-medium text-[var(--wb-accent-text)]">
+            edited
+          </span>
         )}
         <div className="flex-1" />
         {hidden && !isNullish && !isEmpty && (

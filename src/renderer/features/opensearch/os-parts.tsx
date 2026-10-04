@@ -87,7 +87,9 @@ export function RunPill({
     >
       {running ? <Loader2 className="animate-spin" /> : <Play className="fill-current" />}
       <span className="whitespace-nowrap">{running ? 'Running' : 'Run'}</span>
-      <span className="whitespace-nowrap font-mono text-[12px] opacity-70">{kbd('⏎')}</span>
+      <span className="whitespace-nowrap font-mono text-[12px] text-[var(--wb-text-2)]">
+        {kbd('⏎')}
+      </span>
     </Pill>
   );
 }
