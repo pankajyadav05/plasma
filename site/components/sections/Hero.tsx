@@ -42,7 +42,7 @@ export function Hero({ captures }: { captures: Captures }) {
           <div className="lg:col-span-5 lg:col-start-8">
             <HeroCta />
             <p className="label mt-8 normal-case tracking-[0.02em] text-ink-2">
-              Apache-2.0 · macOS (Apple Silicon &amp; Intel) · Windows x64
+              Apache-2.0 · macOS (Apple Silicon) · Windows x64
             </p>
           </div>
         </div>

@@ -43,7 +43,9 @@ export function macDownloadUrlFromManifest(
   const fallback = macDownloadUrl(feedBaseUrl, version, arch);
   if (fallback === SITE_DOWNLOAD_URL) return fallback;
   const dmg = files.find((f) => /^[\w.-]+\.dmg$/.test(f.url) && f.url.endsWith(`-${arch}.dmg`));
-  return dmg ? `${feedBaseUrl}/${dmg.url}` : fallback;
+  // No build for this arch in the release (Intel Macs since 3.1.2): the
+  // download page, never a guessed URL that does not exist.
+  return dmg ? `${feedBaseUrl}/${dmg.url}` : SITE_DOWNLOAD_URL;
 }
 
 /**

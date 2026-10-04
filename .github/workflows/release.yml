@@ -200,17 +200,16 @@ jobs:
           path: release/*
           if-no-files-found: error
 
-  # Launch each packaged arch on a real Mac runner and prove the app boots
-  # and opens its SQLite database: if better-sqlite3's .node prebuild
-  # mismatches the arch, the app crashes before plasma.db ever appears.
-  # macos-latest is Apple Silicon; the x64 app runs under Rosetta 2
-  # (preinstalled on GitHub's arm64 images).
+  # Launch the packaged app on a real Mac runner (macos-latest is Apple
+  # Silicon, the only Mac arch shipped) and prove it boots and opens its
+  # SQLite database: if better-sqlite3's .node prebuild mismatches the arch,
+  # the app crashes before plasma.db ever appears.
   smoke-macos:
     needs: [build-macos]
     strategy:
       fail-fast: false
       matrix:
-        arch: [arm64, x64]
+        arch: [arm64]
     runs-on: macos-latest
     steps:
       - name: Download macOS artifacts

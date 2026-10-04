@@ -129,33 +129,20 @@ const artifacts = [
   },
   { name: 'latest.yml', contentType: 'text/yaml', required: true },
 
-  // macOS — DMG (user download) + ZIP (electron-updater) for arm64 + x64,
+  // macOS — DMG (user download) + ZIP (electron-updater), Apple Silicon only,
   // plus latest-mac.yml and any blockmaps electron-builder emitted.
   // Optional so a Windows-only local upload still works; CI builds both.
   {
     name: `Plasma-${version}-arm64.dmg`,
     contentType: 'application/x-apple-diskimage',
   },
-  {
-    name: `Plasma-${version}-x64.dmg`,
-    contentType: 'application/x-apple-diskimage',
-  },
   { name: `Plasma-${version}-arm64.zip`, contentType: 'application/zip' },
-  { name: `Plasma-${version}-x64.zip`, contentType: 'application/zip' },
   {
     name: `Plasma-${version}-arm64.zip.blockmap`,
     contentType: 'application/octet-stream',
   },
   {
-    name: `Plasma-${version}-x64.zip.blockmap`,
-    contentType: 'application/octet-stream',
-  },
-  {
     name: `Plasma-${version}-arm64.dmg.blockmap`,
-    contentType: 'application/octet-stream',
-  },
-  {
-    name: `Plasma-${version}-x64.dmg.blockmap`,
     contentType: 'application/octet-stream',
   },
   { name: 'latest-mac.yml', contentType: 'text/yaml' },

@@ -85,9 +85,9 @@ describe('macDownloadUrlFromManifest', () => {
     );
   });
 
-  it('falls back to the derived URL when the manifest lists no dmg for the arch', () => {
+  it('sends an arch the release does not ship (Intel) to the download page', () => {
     expect(macDownloadUrlFromManifest('https://cdn.example.com', files, '3.1.0', 'x64')).toBe(
-      'https://cdn.example.com/Plasma-3.1.0-x64.dmg',
+      SITE_DOWNLOAD_URL,
     );
   });
 });

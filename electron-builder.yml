@@ -122,8 +122,8 @@ portable:
 #   .zip — what electron-updater consumes for delta updates on macOS
 #          (the .dmg is not a valid auto-update payload on this platform).
 #
-# Targets both arm64 (Apple Silicon) and x64 (Intel). electron-builder
-# will run lipo on better-sqlite3's prebuilt binaries automatically.
+# Apple Silicon (arm64) only: Intel Macs are not supported from 3.1.2.
+# The x64 native bindings are left out of the bundle below.
 #
 # `identity: null` produces an unsigned build so `pnpm run dist:mac`
 # works on a stock developer machine without an Apple Developer ID in
@@ -150,17 +150,15 @@ mac:
   files:
     - out/**/*
     - package.json
-    - "!**/node_modules/better-sqlite3/prebuilds/{win32,linux,linuxmusl}-*.node"
-    - "!**/node_modules/@duckdb/node-bindings-{win32,linux}-*/**"
+    - "!**/node_modules/better-sqlite3/prebuilds/{win32,linux,linuxmusl,darwin-x64}*.node"
+    - "!**/node_modules/@duckdb/node-bindings-{win32,linux,darwin-x64}*/**"
   target:
     - target: dmg
       arch:
         - arm64
-        - x64
     - target: zip
       arch:
         - arm64
-        - x64
   category: public.app-category.developer-tools
   icon: resources/icon-1024.png
   artifactName: ${productName}-${version}-${arch}.${ext}

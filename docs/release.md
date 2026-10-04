@@ -7,7 +7,7 @@ How a build gets from this repo to users, and what protects the update channel.
 | Platform | Build | Artifacts | Manifest |
 |---|---|---|---|
 | Windows | `pnpm dist:win` | `Plasma-Setup-<v>-x64.exe`, `Plasma-Portable-<v>-x64.exe` | `latest.yml` |
-| macOS | `pnpm dist:mac` | `Plasma-<v>-{arm64,x64}.{dmg,zip}` | `latest-mac.yml` |
+| macOS | `pnpm dist:mac` | `Plasma-<v>-arm64.{dmg,zip}` (Apple Silicon only) | `latest-mac.yml` |
 | Linux | `pnpm dist:linux` | `Plasma-<v>-x86_64.AppImage`, `Plasma-<v>-amd64.deb` | `latest-linux.yml` |
 
 Everything lands in the Cloudflare R2 bucket behind
