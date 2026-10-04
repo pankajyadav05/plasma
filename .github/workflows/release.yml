@@ -394,6 +394,20 @@ jobs:
             *) node scripts/upload-release.mjs ;;
           esac
 
+      # The site reads the feed at build time, and Vercel's own deploy (on the
+      # version-bump push) runs before this upload. Rebuild it now that the
+      # feed serves this version. Skipped when the secret is not set.
+      - name: Redeploy the website
+        env:
+          VERCEL_DEPLOY_HOOK: ${{ secrets.VERCEL_DEPLOY_HOOK }}
+        run: |
+          if [ -z "$VERCEL_DEPLOY_HOOK" ]; then
+            echo "::notice::VERCEL_DEPLOY_HOOK not set; redeploy the site by hand so it shows this version."
+            exit 0
+          fi
+          curl -fsS -X POST "$VERCEL_DEPLOY_HOOK" > /dev/null
+          echo "site redeploy triggered"
+
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2

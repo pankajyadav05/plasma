@@ -41,6 +41,9 @@ One-time setup (repo → Settings):
 - **Secrets and variables → Actions**: `R2_ACCESS_KEY_ID`,
   `R2_SECRET_ACCESS_KEY`, and `PLASMA_UPDATE_SIGNING_KEY` (the value from your
   `.env.local`).
+- Optional `VERCEL_DEPLOY_HOOK` secret (Vercel → project → Settings → Git →
+  Deploy Hooks, branch `main`): the publish job calls it after the upload so
+  the site rebuilds with the new version.
 - **Environments**: `production` is created on first use; add yourself as a
   required reviewer so a publish waits for your click.
 
