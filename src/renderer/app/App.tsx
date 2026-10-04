@@ -1,4 +1,5 @@
 import { ErrorBoundary } from '@/components/ErrorBoundary';
+import { TooltipLayer } from '@/components/ui/tooltip-layer';
 import { AppShell } from '@/features/app-shell/AppShell';
 import { HostKeyDialog } from '@/features/connection-manager/HostKeyDialog';
 import { DataFilesDialogs } from '@/features/data-files/DataFilesDialogs';
@@ -144,6 +145,7 @@ export function App() {
       <HostKeyDialog />
       <WorkspaceDialogs />
       <DataFilesDialogs />
+      <TooltipLayer />
     </ErrorBoundary>
   );
 }

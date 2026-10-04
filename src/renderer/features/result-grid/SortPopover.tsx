@@ -1,9 +1,11 @@
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { IconButton } from '@/components/ui/workbench';
 import { readableTypeName } from '@/lib/pg-types';
 import { useActiveTabSelect, useSession } from '@/stores/session';
-import { ArrowDown, ArrowUp, ArrowUpDown, Trash2, X } from 'lucide-react';
+import { ArrowDown, ArrowUp, ArrowUpDown, Search, Trash2, X } from 'lucide-react';
+import { useState } from 'react';
 
 /**
  * Sort popover. Behaves slightly differently per tab kind:
@@ -33,6 +35,7 @@ export function SortPopover() {
       : undefined,
   );
   const schema = useSession((s) => s.schema);
+  const [query, setQuery] = useState('');
 
   if (!tab) return null;
 
@@ -51,6 +54,17 @@ export function SortPopover() {
       }));
 
   if (allColumns.length === 0) return null;
+
+  // Keep each column's position: SQL-tab sorting is keyed by result index.
+  const needle = query.trim().toLowerCase();
+  const visibleColumns = allColumns
+    .map((col, idx) => ({ ...col, idx }))
+    .filter(
+      (col) =>
+        !needle ||
+        col.name.toLowerCase().includes(needle) ||
+        col.dataType.toLowerCase().includes(needle),
+    );
 
   // ── Table tab state ──
   const sortList = isTable ? tab.tableSort : [];
@@ -151,7 +165,7 @@ export function SortPopover() {
   };
 
   return (
-    <Popover>
+    <Popover onOpenChange={(open) => !open && setQuery('')}>
       <PopoverTrigger asChild>
         <IconButton
           label="Sort"
@@ -239,9 +253,31 @@ export function SortPopover() {
           </div>
         )}
 
+        <div className="relative border-b border-border px-3 py-2">
+          <Search className="pointer-events-none absolute left-5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--wb-text-3)]" />
+          <Input
+            autoFocus
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => {
+              // Enter sorts by the first match — type, Enter, done.
+              if (e.key !== 'Enter' || visibleColumns.length === 0) return;
+              e.preventDefault();
+              const first = visibleColumns[0];
+              if (isTable) cycleSortTable(first.name);
+              else cycleSortSql(first.idx);
+            }}
+            placeholder={`Search ${allColumns.length} columns…`}
+            aria-label="Search columns"
+            className="pl-7"
+          />
+        </div>
+
         <div className="max-h-[320px] overflow-y-auto py-1">
-          <div className="px-4 pb-1 pt-2 text-xs text-muted-foreground">Click a column to sort</div>
-          {allColumns.map((col, idx) => {
+          <div className="px-4 pb-1 pt-2 text-xs text-muted-foreground">
+            {visibleColumns.length === 0 ? 'No matching columns' : 'Click a column to sort'}
+          </div>
+          {visibleColumns.map(({ idx, ...col }) => {
             const direction = directionFor(col.name, idx);
             return (
               <button
