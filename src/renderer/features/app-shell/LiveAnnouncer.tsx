@@ -44,9 +44,12 @@ export function LiveAnnouncer() {
     else setStatus(msg);
   }, [tabId, runState, result, error]);
 
+  const wasConnected = useRef(false);
   useEffect(() => {
     if (connectionState === 'connected') setStatus(`Connected${connName ? ` to ${connName}` : ''}`);
     else if (connectionState === 'error') setAlert('Connection failed');
+    else if (connectionState === 'idle' && wasConnected.current) setStatus('Disconnected');
+    wasConnected.current = connectionState === 'connected';
   }, [connectionState, connName]);
 
   useEffect(() => {

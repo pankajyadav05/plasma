@@ -31,6 +31,7 @@ import {
   RotateCw,
   ShieldCheck,
   Undo2,
+  Unplug,
   X,
 } from 'lucide-react';
 import { forwardRef, useEffect, useLayoutEffect, useRef, useState } from 'react';
@@ -766,7 +767,16 @@ function ConnectionSwitcher({ trigger }: { trigger: React.ReactElement }) {
   const connectionState = useSession((s) => s.connectionState);
   const openDialog = useSession((s) => s.openDialog);
   const connectSaved = useSession((s) => s.connectSaved);
+  const disconnect = useSession((s) => s.disconnect);
+  const retrying = useReconnect((s) => s.target !== null);
+  const cancelReconnect = useReconnect((s) => s.cancel);
+  const [open, setOpen] = useState(false);
   const [filter, setFilter] = useState('');
+  // Menu actions close the menu first, then act.
+  const act = (fn: () => void) => () => {
+    setOpen(false);
+    fn();
+  };
 
   const q = filter.trim().toLowerCase();
   const list = q
@@ -776,7 +786,13 @@ function ConnectionSwitcher({ trigger }: { trigger: React.ReactElement }) {
     : savedConnections;
 
   return (
-    <Popover onOpenChange={(o) => !o && setFilter('')}>
+    <Popover
+      open={open}
+      onOpenChange={(o) => {
+        setOpen(o);
+        if (!o) setFilter('');
+      }}
+    >
       <PopoverTrigger asChild>{trigger}</PopoverTrigger>
       <PopoverContent align="start" sideOffset={8} className={cn(POPOVER, 'w-[360px] p-1.5')}>
         <input
@@ -799,6 +815,7 @@ function ConnectionSwitcher({ trigger }: { trigger: React.ReactElement }) {
               c={c}
               active={activeConfig?.id === c.id}
               disabled={connectionState === 'connecting'}
+              onPick={() => setOpen(false)}
             />
           ))}
         </div>
@@ -806,7 +823,7 @@ function ConnectionSwitcher({ trigger }: { trigger: React.ReactElement }) {
         {activeConfig && connectionState === 'connected' && (
           <button
             type="button"
-            onClick={() => void connectSaved(activeConfig.id)}
+            onClick={act(() => void connectSaved(activeConfig.id))}
             className={MENU_ROW}
             title="Open a fresh session to the current connection"
           >
@@ -814,7 +831,34 @@ function ConnectionSwitcher({ trigger }: { trigger: React.ReactElement }) {
             Reconnect to {activeConfig.name}
           </button>
         )}
-        <button type="button" onClick={() => openDialog()} className={MENU_ROW}>
+        {activeConfig && connectionState === 'connected' && (
+          <button
+            type="button"
+            onClick={act(() => void disconnect())}
+            className={MENU_ROW}
+            title="Close the session. Staged grid edits are confirmed first."
+            data-testid="switcher-disconnect"
+          >
+            <Unplug className="h-3.5 w-3.5" />
+            Disconnect from {activeConfig.name}
+          </button>
+        )}
+        {retrying && connectionState !== 'connected' && (
+          <button
+            type="button"
+            onClick={act(() => {
+              cancelReconnect();
+              void disconnect();
+            })}
+            className={MENU_ROW}
+            title="Stop the automatic reconnect attempts"
+            data-testid="switcher-stop-reconnect"
+          >
+            <Unplug className="h-3.5 w-3.5" />
+            Stop reconnecting
+          </button>
+        )}
+        <button type="button" onClick={act(() => openDialog())} className={MENU_ROW}>
           <Plus className="h-3.5 w-3.5" />
           New connection…
         </button>
@@ -827,10 +871,13 @@ function ConnectionRow({
   c,
   active,
   disabled,
+  onPick,
 }: {
   c: SavedConnection;
   active: boolean;
   disabled: boolean;
+  /** Closes the menu. */
+  onPick: () => void;
 }) {
   const connectSaved = useSession((s) => s.connectSaved);
   const editConnection = useSession((s) => s.editConnection);
@@ -850,7 +897,9 @@ function ConnectionRow({
         type="button"
         disabled={disabled}
         onClick={() => {
-          if (!active && !disabled) void connectSaved(c.id);
+          if (active || disabled) return;
+          onPick();
+          void connectSaved(c.id);
         }}
         title={active ? 'Connected' : `Connect to ${c.name}`}
         className="flex min-w-0 flex-1 items-center gap-2.5 px-2 py-1.5 text-left"
@@ -874,7 +923,10 @@ function ConnectionRow({
       </button>
       <button
         type="button"
-        onClick={() => void editConnection(c.id)}
+        onClick={() => {
+          onPick();
+          void editConnection(c.id);
+        }}
         aria-label={`Edit ${c.name}`}
         title="Edit connection"
         className="mr-1 grid h-6 w-6 shrink-0 place-items-center rounded-[5px] text-[var(--wb-text-2)] opacity-0 transition-opacity hover:text-[var(--wb-text)] focus-visible:opacity-100 group-hover/row:opacity-100"
