@@ -515,14 +515,18 @@ function AppearanceSection() {
 /**
  * Reads a palette's colours from the stylesheet with an off-screen probe
  * (`.theme-x` / `.dark.theme-x` rules apply to any element), so swatches
- * can never drift from globals.css (V7). The default palette lives on
- * :root, so its swatch uses the root values when it is the active one.
+ * can never drift from globals.css (V7). The default palette's base
+ * blocks also match `.palette-default`, so its swatch reads its own values
+ * even while another palette is active on <html>.
  */
 function paletteChips(id: ThemeName, mode: 'light' | 'dark'): string[] {
   if (typeof document === 'undefined') return [];
   const probe = document.createElement('div');
   probe.style.display = 'none';
-  probe.className = [mode === 'dark' ? 'dark' : '', id !== 'default' ? `theme-${id}` : '']
+  probe.className = [
+    mode === 'dark' ? 'dark' : '',
+    id === 'default' ? 'palette-default' : `theme-${id}`,
+  ]
     .filter(Boolean)
     .join(' ');
   document.body.appendChild(probe);
@@ -545,15 +549,13 @@ function PalettePicker({
   mode: 'light' | 'dark';
   onChange: (v: ThemeName) => void;
 }) {
-  // Recomputed on mode / palette change (the default swatch reads :root).
+  // Recomputed on mode change; every swatch (default included) reads its
+  // own palette through the probe class, whatever palette is active.
   const chips = useMemo(() => {
     const map = new Map<ThemeName, string[]>();
-    for (const p of PALETTES) {
-      if (p.id === 'default' && value !== 'default') continue;
-      map.set(p.id, paletteChips(p.id, mode));
-    }
+    for (const p of PALETTES) map.set(p.id, paletteChips(p.id, mode));
     return map;
-  }, [mode, value]);
+  }, [mode]);
 
   return (
     <Choice

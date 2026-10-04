@@ -5,8 +5,11 @@
 @custom-variant dark (&:is(.dark *));
 
 /* Default theme (no `theme-*` class on <html>) — native macOS graphite,
-   matched to TablePlus. Named themes below override every palette var. */
-:root {
+   matched to TablePlus. Named themes below override every palette var.
+   `.palette-default` lets Settings read these values for the default
+   swatch while another palette is active. */
+:root,
+.palette-default {
   --background: #ffffff;
   --foreground: #1d1d1f;
   --card: #ffffff;
@@ -76,7 +79,8 @@
   --bg-hover: oklch(0 0 0 / 0.05);
 }
 
-.dark {
+.dark,
+.palette-default.dark {
   --background: #242424;
   --foreground: #e0e0e0;
   --card: #242424;
@@ -1415,8 +1419,10 @@
   padding-left: 12px;
   padding-right: 20px;
 }
+/* Traffic lights sit at x=18 (main/window.ts) and end near 78px on
+   current macOS; 92px keeps a ~14px gap before the first capsule. */
 :root[data-platform="darwin"] .topbar-pad {
-  padding-left: 80px;
+  padding-left: 92px;
 }
 /* Win/Linux: custom titlebar buttons live inside the topbar (right edge),
    they bring their own width — no extra padding needed. */

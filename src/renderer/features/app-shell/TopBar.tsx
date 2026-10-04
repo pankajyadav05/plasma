@@ -140,7 +140,12 @@ function LeftClusters({ sql }: { sql: boolean }) {
   );
 }
 
-/** Discard · Preview · Commit for buffered grid edits. */
+/**
+ * Discard · Preview · Commit for buffered grid edits. Contextual, like the
+ * transaction cluster: it only appears while the active tab has staged
+ * edits (or a commit is running / just failed), so the toolbar isn't
+ * carrying three dead buttons the rest of the time.
+ */
 function ChangesCluster() {
   // Edits are per tab: the toolbar shows / commits / discards the ACTIVE tab's.
   const edits = useSession((s) => editsOf(s.pendingEditsByTab, s.activeTabId));
@@ -154,6 +159,7 @@ function ChangesCluster() {
       : null,
   );
   const has = edits.length > 0;
+  if (!has && !busy && !error) return null;
 
   const onCommit = async () => {
     try {
