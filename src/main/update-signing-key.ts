@@ -10,7 +10,8 @@
  * (unsigned feed, logged warning). Paste the key BEFORE cutting the first
  * release that should enforce signatures.
  */
-export const UPDATE_SIGNING_PUBLIC_KEY: string | null = "zNXVmyGe4ePrj4gdshfTnYYDs31atet/tGIzIbh2w+w=";
+export const UPDATE_SIGNING_PUBLIC_KEY: string | null =
+  'zNXVmyGe4ePrj4gdshfTnYYDs31atet/tGIzIbh2w+w=';
 
 /**
  * Transition policy for feeds that were published before manifests were

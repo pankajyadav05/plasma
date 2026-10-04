@@ -369,7 +369,8 @@ function loadSigningKey() {
 /** Public key embedded in the app (src/main/update-signing-key.ts), or null. */
 function embeddedPublicKey() {
   const src = readFileSync(resolve(root, 'src/main/update-signing-key.ts'), 'utf8');
-  return /UPDATE_SIGNING_PUBLIC_KEY:\s*string\s*\|\s*null\s*=\s*'([^']+)'/.exec(src)?.[1] ?? null;
+  // Either quote style: the app reads both, so the release check must too.
+  return /UPDATE_SIGNING_PUBLIC_KEY:\s*string\s*\|\s*null\s*=\s*(['"])([^'"]+)\1/.exec(src)?.[2] ?? null;
 }
 
 const SPKI_PREFIX = Buffer.from('302a300506032b6570032100', 'hex');
@@ -504,6 +505,9 @@ for (const { name, contentType } of manifestUploads) {
  * @param {string} name manifest key (`latest.yml` / `latest-mac.yml`)
  * @returns {Promise<string[]>} problems found; empty means healthy
  */
+/** Manifests that are not published yet (left out of the summary). */
+const skipped = new Set();
+
 async function verifyManifest(name) {
   const problems = [];
   // Cache-buster: electron-updater appends one too, so this mirrors what
@@ -513,6 +517,7 @@ async function verifyManifest(name) {
   if (!res.ok) {
     if (res.status === 404 && verifyOnly && name === 'latest-linux.yml') {
       console.log('[verify] no Linux build published yet, skipping');
+      skipped.add(name);
       return [];
     }
     return [`${name}: HTTP ${res.status} ${res.statusText}`];
@@ -592,19 +597,20 @@ if (problems.length > 0) {
   process.exit(1);
 }
 
+const served = manifests.filter((m) => !skipped.has(m));
 console.log('');
-console.log(`[verify] feed serves ${version} — ${manifests.join(', ')} healthy`);
+console.log(`[verify] feed serves ${version} — ${served.join(', ')} healthy`);
 console.log('[upload] done. site download links:');
-if (manifests.includes('latest.yml')) {
+if (served.includes('latest.yml')) {
   console.log(`  ${publicBase}/Plasma-Setup-${version}-x64.exe`);
   console.log(`  ${publicBase}/Plasma-Portable-${version}-x64.exe`);
   console.log(`  ${publicBase}/latest.yml          ← Win auto-update`);
 }
-if (manifests.includes('latest-mac.yml')) {
+if (served.includes('latest-mac.yml')) {
   console.log(`  ${publicBase}/Plasma-${version}-arm64.dmg`);
   console.log(`  ${publicBase}/latest-mac.yml    ← Mac auto-update`);
 }
-if (manifests.includes('latest-linux.yml')) {
+if (served.includes('latest-linux.yml')) {
   console.log(`  ${publicBase}/Plasma-${version}-x86_64.AppImage`);
   console.log(`  ${publicBase}/latest-linux.yml  ← Linux auto-update`);
 }
