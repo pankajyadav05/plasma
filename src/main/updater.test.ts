@@ -22,6 +22,14 @@ vi.mock('./mac-signature', () => ({
   classifyMacAppSignature: () => signature.kind,
 }));
 
+// These tests pin the install path, not manifest signing (updater-signed.test.ts
+// covers that with its own key), so they run as an unsigned-feed build whatever
+// key the repo embeds.
+vi.mock('./update-signing-key', () => ({
+  UPDATE_SIGNING_PUBLIC_KEY: null,
+  SIGNED_UPDATES_REQUIRED_FROM: '3.1.0',
+}));
+
 const autoUpdater = vi.hoisted(() => {
   const listeners: Record<string, (arg: unknown) => void> = {};
   return {
