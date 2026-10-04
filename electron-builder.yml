@@ -71,6 +71,12 @@ electronFuses:
   onlyLoadAppFromAsar: true
   # Electron honours this on macOS and Windows only; Linux ignores the fuse.
   enableEmbeddedAsarIntegrityValidation: true
+  # Flipping fuses edits the Electron framework binary after its (linker,
+  # ad-hoc) signature was made. With `mac.identity: null` electron-builder
+  # never re-signs, so macOS killed 3.1.2 at launch: "SIGKILL (Code Signature
+  # Invalid)" in electron::fuses::IsRunAsNodeEnabled. This re-signs the .app
+  # ad-hoc right after the flip (macOS builds only; a no-op elsewhere).
+  resetAdHocDarwinSignature: true
 
 win:
   # Platform `files` must lead with a positive pattern: a list that starts with

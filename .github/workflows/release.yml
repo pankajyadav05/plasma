@@ -225,6 +225,14 @@ jobs:
           ditto -x -k "$ZIP" "smoke-${{ matrix.arch }}"
           xattr -cr "smoke-${{ matrix.arch }}/Plasma.app" || true
 
+      # A runner may launch a bundle whose signature no longer matches its
+      # code (3.1.2 did) while a stricter Mac kills it on first launch, so
+      # check the signature itself, every nested binary included.
+      - name: Code signature is intact
+        run: |
+          codesign --verify --deep --strict --verbose=2 "smoke-${{ matrix.arch }}/Plasma.app"
+          codesign --verify --strict --verbose=2 "smoke-${{ matrix.arch }}/Plasma.app/Contents/Frameworks/Electron Framework.framework"
+
       - name: Launch app and verify plasma.db
         run: |
           APP="smoke-${{ matrix.arch }}/Plasma.app/Contents/MacOS/Plasma"
