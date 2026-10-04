@@ -18,7 +18,7 @@
  *   2. git commit -m "v<next>"
  *   3. git tag v<next>                       (unless --no-tag)
  *   4. git push <remote> HEAD                (unless --no-push)
- *   5. git push <remote> --tags              (unless --no-tag or --no-push)
+ *   5. git push <remote> v<next>             (unless --no-tag or --no-push)
  *
  * Aborts if working tree has staged or unstaged changes other than the
  * allowed release files (package.json, site/lib/version.ts). Pre-existing
@@ -189,7 +189,9 @@ if (!noTag) {
 if (!noPush) {
   run('git', ['push', remote, 'HEAD']);
   if (!noTag) {
-    run('git', ['push', remote, '--tags']);
+    // Only the new tag: `--tags` also pushes every stale local tag, and one
+    // that differs from the remote fails the whole push.
+    run('git', ['push', remote, `refs/tags/${tag}`]);
   }
 }
 
