@@ -30,12 +30,15 @@ export function Topbar() {
         scrolled ? 'border-rule bg-paper/90 backdrop-blur-md' : 'border-transparent bg-paper/0'
       }`}
     >
-      <div className="wrap flex h-16 items-center justify-between gap-6">
-        <a href="#top" className="group flex items-baseline gap-3 rounded-sm" aria-label="Plasma, back to top">
+      {/* Wide screens: the same two columns as the page, so the logo sits over the
+          index and the actions line up with the content's right edge. */}
+      <div className="wrap flex h-16 items-center justify-between gap-6 xl:grid xl:max-w-none xl:grid-cols-[184px_minmax(0,1fr)] xl:gap-0 xl:px-0">
+        <a href="#top" className="group flex w-fit items-baseline gap-3 rounded-sm xl:ml-7" aria-label="Plasma, back to top">
           <Wordmark className="text-[26px]" />
         </a>
 
-        <nav aria-label="Primary" className="hidden md:block">
+        {/* The plate index replaces these links on wide screens. */}
+        <nav aria-label="Primary" className="hidden md:block xl:hidden">
           <ul className="flex items-center gap-1">
             {links.map((l) => (
               <li key={l.href}>
@@ -50,7 +53,7 @@ export function Topbar() {
           </ul>
         </nav>
 
-        <div className="flex items-center gap-2 sm:gap-3">
+        <div className="flex items-center gap-2 sm:gap-3 xl:mx-auto xl:w-full xl:max-w-[1400px] xl:justify-end xl:px-[clamp(20px,4vw,56px)]">
           <details className="group/menu relative md:hidden">
             <summary
               aria-label="Menu"

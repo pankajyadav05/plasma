@@ -1,3 +1,4 @@
+import { PlateIndex } from '@/components/plate-index';
 import { Topbar } from '@/components/topbar';
 import { Download } from '@/components/sections/Download';
 import { Engines } from '@/components/sections/Engines';
@@ -15,16 +16,20 @@ export default function Page() {
   return (
     <>
       <Topbar />
-      <main id="main">
-        <Hero captures={captures} />
-        <Workbench captures={captures} />
-        <Engines captures={captures} />
-        <Guardrails />
-        <Shortcuts />
-        <Local />
-        <Download />
-        <FAQ />
-      </main>
+      {/* Wide screens: the plate index on the left, the plates on the right. */}
+      <div className="xl:grid xl:grid-cols-[184px_minmax(0,1fr)]">
+        <PlateIndex />
+        <main id="main" className="min-w-0">
+          <Hero captures={captures} />
+          <Workbench captures={captures} />
+          <Engines captures={captures} />
+          <Guardrails />
+          <Shortcuts />
+          <Local />
+          <Download />
+          <FAQ />
+        </main>
+      </div>
       <Footer />
     </>
   );

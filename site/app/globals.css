@@ -350,6 +350,19 @@ body::before {
 .keycap.is-glyph {
   font-size: 26px;
 }
+/* Beside the plate index the shortcut cells are narrowest: smaller caps keep
+   three keys (Ctrl Shift ↵) on one line. */
+@media (min-width: 1280px) and (max-width: 1535px) {
+  .keycap {
+    min-width: 46px;
+    height: 46px;
+    padding: 0 11px;
+    font-size: 15.5px;
+  }
+  .keycap.is-glyph {
+    font-size: 22px;
+  }
+}
 .keycap.is-down,
 .keycap:active {
   transform: translateY(4px);
