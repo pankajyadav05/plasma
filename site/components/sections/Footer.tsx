@@ -1,10 +1,8 @@
 import { GITHUB_URL } from '@/components/github-icon';
 import { Wordmark } from '@/components/wordmark';
 import { LICENSE } from '@/lib/feed';
-import { getReleases } from '@/lib/version';
 
-export async function Footer() {
-  const { latestVersion } = await getReleases();
+export function Footer() {
   return (
     <footer className="on-ink bg-ink text-paper">
       <div className="wrap pb-10 pt-24 md:pt-32">
@@ -32,15 +30,8 @@ export async function Footer() {
         </div>
 
         <div className="mono mt-20 flex flex-col gap-3 border-t border-paper/20 pt-6 text-[11.5px] tracking-[0.02em] text-paper/65 md:flex-row md:justify-between">
-          <p>
-            {LICENSE}
-            {latestVersion && (
-              <>
-                <span className="mx-2 text-paper/30">·</span> v{latestVersion}
-              </>
-            )}
-          </p>
-          <p>Set in Archivo &amp; Martian Mono. Screenshots are the real app with illustrative data.</p>
+          <p>{LICENSE}</p>
+          <p>The screenshots show the real app with sample data.</p>
         </div>
       </div>
     </footer>

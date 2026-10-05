@@ -2,22 +2,20 @@ import { SectionHead } from '@/components/plate';
 import { Reveal } from '@/components/reveal';
 
 const ITEMS = [
-  ['Is it free?', 'Yes. Plasma is Apache-2.0, and the source is on GitHub.'],
-  ['Which databases?', 'Postgres, Redis and OpenSearch.'],
-  ['Does it need an account?', 'No.'],
-  ['Is AI required?', "No. It's optional and bring-your-own-key."],
-  [
-    'Why does macOS warn on first launch?',
-    "The builds aren't code-signed yet. See the command in the download section above.",
-  ],
+  ['Is Plasma free?', 'Yes. Plasma has the Apache-2.0 license. The source code is on GitHub.'],
+  ['Which databases can I use?', 'Postgres, MySQL, MariaDB, SQLite, ClickHouse, DuckDB, Redis and OpenSearch.'],
+  ['Do I need an account?', 'No.'],
+  ['Is AI necessary?', 'No. AI is optional. You supply your own key.'],
+  ['Why does macOS show a warning?', 'The builds do not have an Apple signature yet. Refer to the download section.'],
+  ['Why does Windows show a warning?', 'The builds do not have a Microsoft signature yet. Click More info, then Run anyway.'],
 ] as const;
 
 export function FAQ() {
   return (
-    <section id="faq" aria-labelledby="faq-title" className="py-28 md:py-44">
+    <section id="faq" aria-labelledby="faq-title" className="py-24 md:py-32">
       <div className="wrap">
         <SectionHead plate="Appendix" name="Questions" />
-        <div className="mt-16 grid gap-12 lg:grid-cols-12">
+        <div className="mt-14 grid gap-12 lg:grid-cols-12">
           <Reveal className="lg:col-span-5">
             <h2 id="faq-title" className="display t-h2">
               Questions.

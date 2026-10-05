@@ -76,7 +76,7 @@ export function Shortcuts() {
     <section
       id="shortcuts"
       aria-labelledby="shortcuts-title"
-      className="on-ink relative bg-ink py-28 text-paper md:py-44"
+      className="on-ink relative bg-ink py-24 text-paper md:py-32"
     >
       <div className="wrap">
         <div className="flex items-center gap-4 border-t border-paper/70 pt-3" aria-hidden="true">
@@ -85,7 +85,7 @@ export function Shortcuts() {
           <span className="label text-paper/70">Shortcuts</span>
         </div>
 
-        <div className="mt-16 grid gap-8 lg:grid-cols-12">
+        <div className="mt-14 grid gap-8 lg:grid-cols-12">
           <Reveal className="lg:col-span-8">
             <h2 id="shortcuts-title" className="display t-h2">
               Keyboard first. Mouse optional.
@@ -93,13 +93,13 @@ export function Shortcuts() {
           </Reveal>
           <Reveal className="lg:col-span-4 lg:self-end" delay={100}>
             <p className="max-w-[28em] text-[17.5px] leading-[1.55] text-paper/70">
-              Try one on your own keyboard. The matching key lights up.
+              Push a shortcut on your keyboard. The matching keys come on here.
             </p>
           </Reveal>
         </div>
 
         <Reveal delay={80}>
-          <ul className="mt-20 grid gap-px overflow-hidden rounded-[14px] border border-paper/15 bg-paper/15 sm:grid-cols-2 lg:grid-cols-4">
+          <ul className="mt-16 grid gap-px overflow-hidden rounded-[14px] border border-paper/15 bg-paper/15 sm:grid-cols-2 lg:grid-cols-4">
             {SHORTCUTS.map((s) => {
               const on = lit === s.id;
               return (

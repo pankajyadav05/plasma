@@ -2,42 +2,51 @@ import { SectionHead } from '@/components/plate';
 import { Reveal } from '@/components/reveal';
 
 const LEDGER = [
-  ['Connections', 'On your machine'],
-  ['History', 'On your machine'],
-  ['Preferences', 'On your machine'],
-  ['Saved passwords', 'Encrypted with your OS keychain'],
-  ['Account', 'None'],
-  ['AI prompts', 'Only when you use AI, to your provider'],
+  ['Connections', 'On your computer'],
+  ['Query history', 'On your computer'],
+  ['Settings', 'On your computer'],
+  ['Saved passwords', 'Encrypted by your OS keychain'],
+  ['Account', 'Not necessary'],
+  ['AI prompts', 'Sent only when you use AI'],
 ] as const;
 
 export function Local() {
   return (
-    <section id="local" aria-labelledby="local-title" className="py-28 md:py-44">
+    <section id="local" aria-labelledby="local-title" className="py-24 md:py-32">
       <div className="wrap">
         <SectionHead plate="Plate 05" name="Local-first" />
 
-        <div className="mt-16 grid gap-16 lg:grid-cols-12 lg:gap-10">
+        <div className="mt-14 grid gap-16 lg:grid-cols-12 lg:gap-10">
           <div className="lg:col-span-7">
             <Reveal>
               <h2 id="local-title" className="display t-h2">
                 Local-first. No account.
               </h2>
               <p className="lede mt-10 !max-w-[30em] !text-ink">
-                Your connections, history and preferences live on your machine. Saved passwords are encrypted with
-                your OS keychain. There&apos;s no account and no telemetry dashboard.
+                Plasma keeps your connections, history and settings on your computer. Your OS keychain encrypts
+                saved passwords.
               </p>
             </Reveal>
-            <Reveal className="mt-14 max-w-[34em] border-t border-rule pt-6" delay={80}>
-              <p className="label text-ink">AI, optional</p>
-              <p className="prose-p mt-3">
-                AI is optional and bring-your-own-key (OpenRouter). When you use it, your prompt and the context you
-                include go to that provider. Row data is shared only on connections where you allow it.
-              </p>
-            </Reveal>
+            <div className="mt-14 grid max-w-[40em] gap-10 sm:grid-cols-2">
+              <Reveal className="border-t border-rule pt-6" delay={80}>
+                <p className="label text-ink">Team workspaces</p>
+                <p className="prose-p mt-3">
+                  Keep shared connections, queries and snippets in a .plasma folder in git. Passwords stay out of
+                  the folder.
+                </p>
+              </Reveal>
+              <Reveal className="border-t border-rule pt-6" delay={140}>
+                <p className="label text-ink">AI is optional</p>
+                <p className="prose-p mt-3">
+                  You supply your own OpenRouter key. Plasma sends row data only from connections where you allow
+                  it.
+                </p>
+              </Reveal>
+            </div>
           </div>
 
           <Reveal className="lg:col-span-5" delay={120}>
-            <p className="label border-b border-ink pb-3">Register of where things live</p>
+            <p className="label border-b border-ink pb-3">Where your data stays</p>
             <dl>
               {LEDGER.map(([k, v], i) => (
                 <div

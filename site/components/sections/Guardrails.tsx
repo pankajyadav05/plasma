@@ -11,7 +11,7 @@ const LEVELS = [
     id: 'off',
     name: 'Off',
     tag: 'Runs',
-    outcome: 'Runs immediately.',
+    outcome: 'The statement runs immediately.',
     detail: null,
     angle: -66,
   },
@@ -19,7 +19,7 @@ const LEVELS = [
     id: 'dangerous',
     name: 'Confirm dangerous',
     tag: 'Asks first',
-    outcome: "Plasma asks first: DROP, TRUNCATE, and DELETE or UPDATE without WHERE.",
+    outcome: 'Plasma asks before DROP, TRUNCATE, and DELETE or UPDATE without WHERE.',
     detail: 'Default',
     angle: -22,
   },
@@ -27,7 +27,7 @@ const LEVELS = [
     id: 'all',
     name: 'Confirm all',
     tag: 'Asks first',
-    outcome: 'Every statement asks before it runs.',
+    outcome: 'Plasma asks before each statement.',
     detail: null,
     angle: 22,
   },
@@ -35,17 +35,19 @@ const LEVELS = [
     id: 'readonly',
     name: 'Read-only',
     tag: 'Refused',
-    outcome: 'Refused. Writes are blocked on this connection.',
+    outcome: 'Plasma blocks all writes on this connection.',
     detail: null,
     angle: 66,
   },
 ] as const;
 
 const CELLS = [
-  ['Production tag', 'An extra confirmation on connections you mark Prod.'],
-  ['Read-only connections', "Enforced in the app's main process, not just the UI."],
-  ['Staged edits', 'Grid and structure changes run in one transaction you review first.'],
-  ['Secrets in your keychain', 'Saved passwords use OS-backed encryption.'],
+  ['Safe Run', 'Do a dry run of a change. Examine the changed rows, then commit or roll back.'],
+  ['Production tag', 'Connections with the Prod tag ask for one more confirmation.'],
+  ['Read-only connections', 'The main process blocks writes. The UI cannot bypass this block.'],
+  ['Migration check', 'Plasma finds unsafe DDL and shows the locks that it takes.'],
+  ['Audit log', 'Plasma records each statement on Prod connections. Changes to the log are visible.'],
+  ['Presentation mode', 'Plasma hides personal data when you share your screen.'],
 ] as const;
 
 const CX = 130;
@@ -117,22 +119,22 @@ export function Guardrails() {
   };
 
   return (
-    <section id="guardrails" aria-labelledby="guardrails-title" className="py-28 md:py-44">
+    <section id="guardrails" aria-labelledby="guardrails-title" className="py-24 md:py-32">
       <div className="wrap">
         <SectionHead plate="Plate 03" name="Guardrails" />
 
-        <div className="mt-16 grid gap-8 lg:grid-cols-12">
+        <div className="mt-14 grid gap-8 lg:grid-cols-12">
           <Reveal className="lg:col-span-8">
             <h2 id="guardrails-title" className="display t-h2">
               Careful with production, by design.
             </h2>
           </Reveal>
           <Reveal className="lg:col-span-4 lg:self-end" delay={100}>
-            <p className="lede">Mistakes happen at 2 a.m. Plasma makes the dangerous ones hard.</p>
+            <p className="lede">Plasma stops dangerous statements before they run.</p>
           </Reveal>
         </div>
 
-        <Reveal className="mt-20 grid gap-8 lg:grid-cols-12" delay={60}>
+        <Reveal className="mt-16 grid gap-8 lg:grid-cols-12" delay={60}>
           {/* The dial */}
           <Plate className="h-full lg:col-span-6" frameClassName="h-full">
             <div className="flex h-full flex-col p-6 sm:p-9">
@@ -195,7 +197,7 @@ export function Guardrails() {
                 </div>
               </div>
               <p className="label mt-auto pt-8 normal-case tracking-normal text-ink-2">
-                Arrow keys move between levels.
+                Use the arrow keys to change the level.
               </p>
             </div>
           </Plate>
@@ -259,7 +261,7 @@ export function Guardrails() {
           </Plate>
         </Reveal>
 
-        <dl className="mt-20 grid gap-x-8 gap-y-10 sm:grid-cols-2 lg:grid-cols-4">
+        <dl className="mt-16 grid gap-x-8 gap-y-10 sm:grid-cols-2 lg:grid-cols-3">
           {CELLS.map(([t, d], n) => (
             <Reveal key={t} delay={n * 70} className="border-t border-ink pt-4">
               <dt className="label text-ink">

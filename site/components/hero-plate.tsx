@@ -25,10 +25,10 @@ interface Callout {
 }
 
 const COPY = [
-  ['Capsule', "Engine, server, database and schema. Tinted when you're connected."],
-  ['Sidebar', 'Tables, views and functions, fuzzy-filterable.'],
-  ['Grid', 'Edit inline, then review and commit as one transaction.'],
-  ['Details', 'The selected row as a form.'],
+  ['Capsule', 'Shows the engine, server, database and schema. The color shows the connection status.'],
+  ['Sidebar', 'Shows tables, views and functions. Type to filter them.'],
+  ['Grid', 'Edit cells, then commit all changes in one transaction.'],
+  ['Details', 'Shows the selected row as a form.'],
 ] as const;
 
 /**

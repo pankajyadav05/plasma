@@ -19,9 +19,9 @@ const martian = Martian_Mono({
   display: 'swap',
 });
 
-const TITLE = 'Plasma: a calm desktop client for Postgres, Redis & OpenSearch';
+const TITLE = 'Plasma: desktop client for SQL, Redis and OpenSearch';
 const DESCRIPTION =
-  'Plasma is an open-source desktop client for Postgres, Redis and OpenSearch. Native-feeling, keyboard-first, and careful with production. Apache-2.0.';
+  'Plasma is a free, open-source desktop client for Postgres, MySQL, SQLite, ClickHouse, DuckDB, Redis and OpenSearch. It stops dangerous changes before they run.';
 const SITE = 'https://plasma.codifyit.dev';
 
 export const metadata: Metadata = {
@@ -39,7 +39,7 @@ export const metadata: Metadata = {
         url: '/og.png',
         width: 1200,
         height: 630,
-        alt: 'Plasma, a calm desktop client for Postgres, Redis and OpenSearch',
+        alt: 'Plasma, a desktop client for SQL, Redis and OpenSearch',
       },
     ],
   },
@@ -50,7 +50,7 @@ export const metadata: Metadata = {
     images: [
       {
         url: '/og.png',
-        alt: 'Plasma, a calm desktop client for Postgres, Redis and OpenSearch',
+        alt: 'Plasma, a desktop client for SQL, Redis and OpenSearch',
       },
     ],
   },

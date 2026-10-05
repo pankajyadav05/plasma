@@ -17,6 +17,10 @@
   --color-pg: #336791;
   --color-redis: #d82c20;
   --color-os: #005eb8;
+  --color-mysql: #00758f;
+  --color-sqlite: #0f80cc;
+  --color-clickhouse: #c9a400;
+  --color-duckdb: #8a6d00;
 
   --font-display: var(--font-archivo), 'Helvetica Neue', Arial, sans-serif;
   --font-sans: var(--font-archivo), 'Helvetica Neue', Arial, sans-serif;

@@ -15,16 +15,13 @@ interface Row {
 }
 
 const ROWS: Row[] = [
-  { ref: '01.1', name: 'SQL editor', spec: 'Run the statement under your cursor (⌘↵), your selection, or the whole script (⇧⌘↵).', shot: 'pg-editor' },
-  { ref: '01.2', name: 'Results', spec: 'Each statement gets its own result tab, with real row counts and timings.', shot: 'pg-editor' },
-  { ref: '01.3', name: 'Inline editing', spec: 'Changes are staged, shown as SQL, and committed together in one transaction.', shot: 'pg-workbench' },
-  { ref: '01.4', name: 'Structure', spec: 'Add columns, indexes and constraints, with Preview SQL before anything runs.', shot: 'pg-structure' },
-  { ref: '01.5', name: 'ER diagram', spec: "See a schema's tables and foreign keys, drag them around, and export to PNG or SVG.", shot: 'pg-er' },
-  { ref: '01.6', name: 'Import', spec: 'CSV, TSV, JSON, NDJSON or a .sql file. Streams in batches and rolls back on error.', shot: 'pg-import' },
-  { ref: '01.7', name: 'Backup & restore', spec: 'pg_dump and pg_restore with a version check, progress and cancel.', shot: 'pg-import' },
-  { ref: '01.8', name: 'Roles', spec: 'Users, memberships and table privileges, staged with Preview SQL.', shot: 'pg-roles' },
-  { ref: '01.9', name: 'Search in database', spec: 'Find a value across every table, then jump to the exact row.', shot: 'pg-search' },
-  { ref: '01.10', name: 'Split panes', spec: 'Two tabs side by side. ⌥⌘] moves between them.', shot: 'pg-split' },
+  { ref: '01.1', name: 'SQL editor', spec: 'Run the statement at the cursor, a selection or the full script. Each statement gets a result tab.', shot: 'pg-editor' },
+  { ref: '01.2', name: 'Grid editing', spec: 'Edit cells, then examine the SQL. Plasma commits all changes in one transaction.', shot: 'pg-workbench' },
+  { ref: '01.3', name: 'Structure', spec: 'Add columns, indexes and constraints. Examine the SQL before it runs.', shot: 'pg-structure' },
+  { ref: '01.4', name: 'ER diagram', spec: 'See the tables and foreign keys of a schema. Export the diagram as PNG or SVG.', shot: 'pg-er' },
+  { ref: '01.5', name: 'Import', spec: 'Import CSV, TSV, JSON or SQL files. If an error occurs, Plasma rolls back the import.', shot: 'pg-import' },
+  { ref: '01.6', name: 'Search', spec: 'Find a value in all tables. Go directly to the row.', shot: 'pg-search' },
+  { ref: '01.7', name: 'Command palette', spec: 'Open tables, queries and commands from the keyboard.', shot: 'palette' },
 ];
 
 function Shot({ c, on, priority }: { c: Captures[CaptureKey]; on: boolean; priority?: boolean }) {
@@ -51,11 +48,11 @@ export function Workbench({ captures }: { captures: Captures }) {
   const shots = Array.from(new Set(ROWS.map((r) => r.shot)));
 
   return (
-    <section id="workbench" aria-labelledby="workbench-title" className="py-28 md:py-44">
+    <section id="workbench" aria-labelledby="workbench-title" className="py-24 md:py-32">
       <div className="wrap">
         <SectionHead plate="Plate 01" name="The workbench" />
 
-        <div className="mt-16 grid gap-16 lg:grid-cols-12 lg:gap-10 xl:gap-16">
+        <div className="mt-14 grid gap-16 lg:grid-cols-12 lg:gap-10 xl:gap-16">
           <div className="lg:col-span-5">
             <div className="lg:sticky lg:top-28">
               <Reveal>
@@ -63,8 +60,8 @@ export function Workbench({ captures }: { captures: Captures }) {
                   The workbench.
                 </h2>
                 <p className="lede mt-8">
-                  Tabs for every table and query, a sidebar that knows your schema, and a grid that behaves like a
-                  spreadsheet without forgetting it&apos;s a database.
+                  Each table and query opens in a tab. The sidebar shows your schema. The grid works like a
+                  spreadsheet.
                 </p>
               </Reveal>
 

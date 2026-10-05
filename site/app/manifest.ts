@@ -6,7 +6,7 @@ export default function manifest(): MetadataRoute.Manifest {
   return {
     name: 'Plasma',
     short_name: 'Plasma',
-    description: 'A calm desktop client for Postgres, Redis and OpenSearch.',
+    description: 'A desktop client for SQL, Redis and OpenSearch.',
     start_url: '/',
     display: 'browser',
     background_color: '#F3F0E8',

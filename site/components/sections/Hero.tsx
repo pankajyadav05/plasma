@@ -1,17 +1,17 @@
-import { HeroCta } from '@/components/hero-cta';
 import { HeroPlate } from '@/components/hero-plate';
 import type { Captures } from '@/lib/captures';
+import { ENGINE_LIST } from '@/lib/engines';
 
-const LINES = ['One calm', 'workbench', 'for your data.'];
+const LINES = ['One workbench', 'for all your', 'databases.'];
 
 export function Hero({ captures }: { captures: Captures }) {
   return (
-    <section id="top" aria-labelledby="hero-title" className="relative pt-10 pb-28 md:pt-16 md:pb-40">
+    <section id="top" aria-labelledby="hero-title" className="relative pt-10 pb-24 md:pt-16 md:pb-32">
       <div className="wrap">
         <p className="label h-fade flex flex-wrap gap-x-3" style={{ '--d': '0ms' } as React.CSSProperties}>
           <span>Plate 00</span>
           <span className="text-ink-3">·</span>
-          <span>Desktop client for Postgres, Redis &amp; OpenSearch</span>
+          <span>Desktop client for SQL, Redis and OpenSearch</span>
         </p>
 
         <h1 id="hero-title" className="display t-hero mt-8 md:mt-10">
@@ -36,14 +36,22 @@ export function Hero({ captures }: { captures: Captures }) {
           style={{ '--d': '520ms' } as React.CSSProperties}
         >
           <p className="lede lg:col-span-6">
-            Plasma is an open-source desktop client for Postgres, Redis and OpenSearch. Native-feeling,
-            keyboard-first, and careful with production.
+            Plasma is a free, open-source desktop client. It connects to seven database engines. It stops
+            dangerous changes before they run.
           </p>
           <div className="lg:col-span-5 lg:col-start-8">
-            <HeroCta />
-            <p className="label mt-8 normal-case tracking-[0.02em] text-ink-2">
-              Apache-2.0 · macOS (Apple Silicon) · Windows x64
-            </p>
+            <p className="label">Engines</p>
+            <ul className="mt-4 flex flex-wrap gap-2" aria-label="Supported engines">
+              {ENGINE_LIST.map((e) => (
+                <li
+                  key={e.name}
+                  className="mono inline-flex items-center gap-2 rounded-full border border-rule bg-paper-2/70 py-1.5 pl-2.5 pr-3.5 text-[12px] font-medium tracking-[0.02em] text-ink"
+                >
+                  <span className={`h-2 w-2 rounded-full ${e.chip}`} aria-hidden="true" />
+                  {e.name}
+                </li>
+              ))}
+            </ul>
           </div>
         </div>
       </div>

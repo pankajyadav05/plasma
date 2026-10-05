@@ -15,7 +15,7 @@ const links = [
 
 export function Topbar() {
   const [scrolled, setScrolled] = useState(false);
-  const { primary, releases } = usePlatform();
+  const { primary } = usePlatform();
 
   useEffect(() => {
     const on = () => setScrolled(window.scrollY > 8);
@@ -33,7 +33,6 @@ export function Topbar() {
       <div className="wrap flex h-16 items-center justify-between gap-6">
         <a href="#top" className="group flex items-baseline gap-3 rounded-sm" aria-label="Plasma, back to top">
           <Wordmark className="text-[26px]" />
-          <span className="label hidden translate-y-[-2px] text-ink-2 sm:inline">{releases.latestVersion ? `v${releases.latestVersion}` : ''}</span>
         </a>
 
         <nav aria-label="Primary" className="hidden md:block">
