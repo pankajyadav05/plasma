@@ -61,22 +61,12 @@ nodeGypRebuild: false
 buildDependenciesFromSource: false
 npmRebuild: false
 
-# Electron fuses (SC-28), flipped by electron-builder right before signing, i.e.
-# after the asar integrity data is embedded. Verify a packaged app with
-# `node scripts/verify-fuses.mjs <path-to-binary>`.
-electronFuses:
-  runAsNode: false
-  enableNodeOptionsEnvironmentVariable: false
-  enableNodeCliInspectArguments: false
-  onlyLoadAppFromAsar: true
-  # Electron honours this on macOS and Windows only; Linux ignores the fuse.
-  enableEmbeddedAsarIntegrityValidation: true
-  # Flipping fuses edits the Electron framework binary after its (linker,
-  # ad-hoc) signature was made. With `mac.identity: null` electron-builder
-  # never re-signs, so macOS killed 3.1.2 at launch: "SIGKILL (Code Signature
-  # Invalid)" in electron::fuses::IsRunAsNodeEnabled. This re-signs the .app
-  # ad-hoc right after the flip (macOS builds only; a no-op elsewhere).
-  resetAdHocDarwinSignature: true
+# Electron fuses (SC-28) are flipped in scripts/after-pack.cjs (same values for
+# every platform, mac re-signed ad-hoc afterwards), not with `electronFuses`
+# here: on Linux the hook also renames the Electron binary, and electron-builder
+# flips fuses after afterPack. Verify a packaged app with
+# `node scripts/verify-fuses.mjs <path-to-binary>` (Linux: plasma.bin).
+afterPack: scripts/after-pack.cjs
 
 win:
   # Platform `files` must lead with a positive pattern: a list that starts with
@@ -207,6 +197,9 @@ appImage:
 
 deb:
   artifactName: ${productName}-${version}-${arch}.${ext}
+  # Installed on Ubuntu 24.04+ so the Chromium sandbox can use user
+  # namespaces; it attaches to the launcher and to plasma.bin.
+  appArmorProfile: build/apparmor-profile
   depends:
     - libgtk-3-0
     - libnotify4

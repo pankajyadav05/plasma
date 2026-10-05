@@ -1,0 +1,13 @@
+abi <abi/4.0>,
+include <tunables/global>
+
+# Installed by the .deb (Ubuntu 24.04+): lets Plasma's Chromium sandbox use user
+# namespaces. /opt/Plasma/plasma is the launcher script and plasma.bin the
+# Electron binary it starts (scripts/after-pack.cjs), so the profile attaches
+# to both.
+profile plasma "/opt/Plasma/plasma{,.bin}" flags=(unconfined) {
+  userns,
+
+  # Site-specific additions and overrides. See local/README for details.
+  include if exists <local/plasma>
+}

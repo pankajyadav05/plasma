@@ -2,7 +2,7 @@
 /**
  * Asserts that a packaged Plasma binary has the hardened Electron fuses (SC-28).
  *
- *   node scripts/verify-fuses.mjs release/linux-unpacked/plasma
+ *   node scripts/verify-fuses.mjs release/linux-unpacked/plasma.bin
  *   node scripts/verify-fuses.mjs "release/win-unpacked/Plasma.exe"
  *   node scripts/verify-fuses.mjs release/mac-arm64/Plasma.app
  *

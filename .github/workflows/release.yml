@@ -303,7 +303,7 @@ jobs:
         run: pnpm run dist:linux
 
       - name: Check Electron fuses on the packaged binary
-        run: node scripts/verify-fuses.mjs release/linux-unpacked/plasma
+        run: node scripts/verify-fuses.mjs release/linux-unpacked/plasma.bin
 
       - name: Upload Linux artifacts
         uses: actions/upload-artifact@v4
@@ -330,7 +330,9 @@ jobs:
           export PLASMA_USER_DATA="$RUNNER_TEMP/plasma-smoke"
           export PLASMA_DISABLE_UPDATER=1
           mkdir -p "$PLASMA_USER_DATA"
-          xvfb-run -a release/Plasma-*.AppImage --appimage-extract-and-run --no-sandbox &
+          # No --no-sandbox: the bundled launcher must decide that itself
+          # (Ubuntu 24.04+ blocks the sandbox for AppImages).
+          xvfb-run -a release/Plasma-*.AppImage --appimage-extract-and-run &
           READY=""
           for i in $(seq 1 90); do
             if [ -f "$PLASMA_USER_DATA/plasma.db" ] && sqlite3 "$PLASMA_USER_DATA/plasma.db" ".tables" | grep -q connections; then
