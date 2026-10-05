@@ -69,7 +69,7 @@ export type EntityKind =
   | 'type'
   | 'extension';
 /** Drives what the main right-side canvas renders. Switched from IconRail. */
-export type CanvasMode = 'database' | 'history' | 'settings' | 'monitor';
+export type CanvasMode = 'database' | 'history' | 'settings' | 'monitor' | 'connections';
 /** Which slot of the right rail is currently expanded. null = collapsed. */
 export type RightPanelMode = 'details' | 'query' | 'role' | 'rls' | 'ai' | null;
 

@@ -32,9 +32,9 @@ import { SidebarResizer } from './SidebarResizer';
 import { TopBar } from './TopBar';
 
 // Heavy feature modules load on demand so the first-load chunk stays small.
-const ConnectionDialog = lazyNamed(
-  () => import('@/features/connection-manager/ConnectionDialog'),
-  'ConnectionDialog',
+const ConnectionsCanvas = lazyNamed(
+  () => import('@/features/connection-manager/ConnectionsCanvas'),
+  'ConnectionsCanvas',
 );
 const BackupDialog = lazyNamed(() => import('@/features/backup/BackupDialog'), 'BackupDialog');
 const SqliteBackupDialog = lazyNamed(
@@ -93,6 +93,7 @@ const ShortcutCheatSheet = lazyNamed(
  *   - disconnected         → DisconnectedHome (full window, slim topbar)
  *   - canvasMode=settings  → SettingsCanvas (full window, close button)
  *   - canvasMode=history   → HistoryCanvas (full window, close button)
+ *   - canvasMode=connections → ConnectionsCanvas (full window, close button)
  *   - default              → standard shell (rail + sidebar + tabs + grid)
  *
  * "Full window" pages skip the icon rail and sidebar entirely so they
@@ -100,7 +101,6 @@ const ShortcutCheatSheet = lazyNamed(
  * browser layout.
  */
 export function AppShell() {
-  const dialogOpen = useSession((s) => s.dialogOpen);
   const connectionState = useSession((s) => s.connectionState);
   const overlay = useWorkbench((s) => s.overlay);
   const setOverlay = useWorkbench((s) => s.setOverlay);
@@ -128,6 +128,11 @@ export function AppShell() {
 
       if (e.key === 'Escape' && !inInput) {
         const m = useSession.getState().canvasMode;
+        if (m === 'connections') {
+          e.preventDefault();
+          useSession.getState().closeDialog();
+          return;
+        }
         if (m === 'settings' || m === 'history' || m === 'monitor') {
           e.preventDefault();
           useSession.getState().setCanvasMode('database');
@@ -160,6 +165,9 @@ export function AppShell() {
   const settingsWhileDisconnected = useSession(
     (s) => s.canvasMode === 'settings' && s.connectionState !== 'connected',
   );
+  const connectionsWhileDisconnected = useSession(
+    (s) => s.canvasMode === 'connections' && s.connectionState !== 'connected',
+  );
 
   return (
     <>
@@ -172,6 +180,10 @@ export function AppShell() {
               <Suspense fallback={null}>
                 <SettingsCanvas />
               </Suspense>
+            ) : connectionsWhileDisconnected ? (
+              <Suspense fallback={null}>
+                <ConnectionsCanvas />
+              </Suspense>
             ) : (
               <DisconnectedHome />
             )}
@@ -182,11 +194,6 @@ export function AppShell() {
       </div>
 
       {/* Overlays */}
-      {dialogOpen && (
-        <Suspense fallback={null}>
-          <ConnectionDialog />
-        </Suspense>
-      )}
       <CommandPalette />
       <DeleteConfirmDialog />
       <ProdGateDialog />
@@ -250,7 +257,10 @@ function ConnectedShell() {
   // sidebar + main area, but the IconRail (left) stays visible so the
   // user never loses navigation context.
   const fullPage =
-    canvasMode === 'settings' || canvasMode === 'history' || canvasMode === 'monitor';
+    canvasMode === 'settings' ||
+    canvasMode === 'history' ||
+    canvasMode === 'monitor' ||
+    canvasMode === 'connections';
 
   return (
     <div className="flex min-h-0 flex-1 bg-[var(--wb-content)]">
@@ -285,6 +295,8 @@ function ConnectedShell() {
           <HistoryCanvas />
         ) : canvasMode === 'monitor' ? (
           <HealthCanvas />
+        ) : canvasMode === 'connections' ? (
+          <ConnectionsCanvas />
         ) : (
           <EngineCanvas />
         )}

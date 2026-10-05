@@ -86,12 +86,7 @@ export function TopBar() {
   const connected = useSession((s) => s.connectionState === 'connected');
   const engine = useSession((s) => s.activeConfig?.engine ?? 'postgres');
   const overlayOpen = useSession(
-    (s) =>
-      s.dialogOpen ||
-      s.paletteOpen ||
-      s.settingsOpen ||
-      s.historyOpen ||
-      s.deleteConfirmConnectionId !== null,
+    (s) => s.paletteOpen || s.settingsOpen || s.historyOpen || s.deleteConfirmConnectionId !== null,
   );
 
   return (
@@ -442,7 +437,9 @@ function StatusCapsule() {
           ? 'History'
           : canvasMode === 'settings'
             ? 'Settings'
-            : null
+            : canvasMode === 'connections'
+              ? 'Connections'
+              : null
       : tab
         ? tab.kind === 'table' && tab.tableName
           ? tab.tableName

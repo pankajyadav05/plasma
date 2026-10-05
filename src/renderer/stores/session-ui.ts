@@ -23,8 +23,13 @@ export interface UiSlice {
   editMode: boolean;
 
   // ── dialogs & overlays ──
+  /** True while the full-window Connections screen is showing (canvasMode 'connections'). */
   dialogOpen: boolean;
   dialogPrefill: ConnectionConfig | null;
+  /** Bumped on every openDialog so the screen reloads even for an identical prefill. */
+  dialogNonce: number;
+  /** Where closeDialog returns to. */
+  canvasModeBeforeConnections: CanvasMode;
   paletteOpen: boolean;
   settingsOpen: boolean;
   historyOpen: boolean;
@@ -63,6 +68,8 @@ export const createUiSlice: SliceCreator<UiSlice> = (set, get) => ({
   editMode: false,
   dialogOpen: false,
   dialogPrefill: null,
+  dialogNonce: 0,
+  canvasModeBeforeConnections: 'database',
   paletteOpen: false,
   settingsOpen: false,
   historyOpen: false,
@@ -70,8 +77,26 @@ export const createUiSlice: SliceCreator<UiSlice> = (set, get) => ({
 
   // ── dialog / palette / settings toggles ──
 
-  openDialog: (prefill) => set({ dialogOpen: true, dialogPrefill: prefill ?? null }),
-  closeDialog: () => set({ dialogOpen: false, dialogPrefill: null }),
+  openDialog: (prefill) => {
+    const { canvasMode, canvasModeBeforeConnections, dialogNonce } = get();
+    set({
+      dialogOpen: true,
+      dialogPrefill: prefill ?? null,
+      dialogNonce: dialogNonce + 1,
+      canvasModeBeforeConnections:
+        canvasMode === 'connections' ? canvasModeBeforeConnections : canvasMode,
+      canvasMode: 'connections',
+    });
+  },
+  closeDialog: () => {
+    const { canvasMode, canvasModeBeforeConnections } = get();
+    set({
+      dialogOpen: false,
+      dialogPrefill: null,
+      canvasMode: canvasMode === 'connections' ? canvasModeBeforeConnections : canvasMode,
+      canvasModeBeforeConnections: 'database',
+    });
+  },
 
   setPaletteOpen: (open) => set({ paletteOpen: open }),
   togglePalette: () => set({ paletteOpen: !get().paletteOpen }),
@@ -83,6 +108,12 @@ export const createUiSlice: SliceCreator<UiSlice> = (set, get) => ({
   // ── canvas mode + entity filtering ──
 
   setCanvasMode(mode) {
+    if (mode === 'connections') {
+      if (get().canvasMode !== 'connections') get().openDialog();
+      return;
+    }
+    // Leaving the Connections screen by any route clears its state.
+    if (get().dialogOpen) set({ dialogOpen: false, dialogPrefill: null });
     set({ canvasMode: mode });
     if (mode === 'history') {
       void get().loadHistory();

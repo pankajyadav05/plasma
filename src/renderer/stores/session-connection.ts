@@ -406,6 +406,8 @@ function beginSession(
     connectionState: 'connected',
     dialogOpen: false,
     dialogPrefill: null,
+    // A successful Connect leaves the Connections screen for the database.
+    ...(get().canvasMode === 'connections' ? { canvasMode: 'database' as const } : {}),
   });
 }
 
