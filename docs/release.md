@@ -47,10 +47,16 @@ One-time setup (repo → Settings):
 - **Environments**: `production` is created on first use; add yourself as a
   required reviewer so a publish waits for your click.
 
-Run it: Actions → Release → Run workflow → branch `main` (or the version tag)
-→ `platforms`. Bump and push the version first (`pnpm ship:minor`). Leave out
-any platform already published for this version (versioned files are
-immutable), e.g. after a local `release:mac`, pick `windows+linux`.
+Run it: Actions → Release → Run workflow → branch `main` → `platforms`
+(and `bump`, patch by default). No manual version bump: the `version` job
+(scripts/release-version.mjs) picks one step above the highest version the
+feed serves for the chosen platforms, skips versions that are already tagged
+or half-published, commits `vX.Y.Z` to main and tags it; every build then
+checks out that tag. Example: Linux serves 3.1.4 and Windows/macOS 3.1.3, so
+`all` releases 3.1.5.
+
+Running from a `v*` tag (made with `pnpm ship:*`) keeps the tag's version and
+stops at once if it is already published for the chosen platforms.
 
 ## What the upload script guarantees
 

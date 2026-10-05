@@ -6,6 +6,7 @@
  *   pnpm run release:patch   # 0.0.2 → 0.0.3
  *   pnpm run release:minor   # 0.0.2 → 0.1.0
  *   pnpm run release:major   # 0.0.2 → 1.0.0
+ *   node scripts/release.mjs 3.1.5   # exact version (the Release workflow)
  *
  * Does:
  *   1. Bumps package.json version (in-place, preserves formatting)
@@ -28,8 +29,9 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = resolve(__dirname, '..');
 
 const kind = process.argv[2];
-if (!['patch', 'minor', 'major'].includes(kind)) {
-  console.error('usage: node scripts/release.mjs <patch|minor|major>');
+const exact = /^\d+\.\d+\.\d+$/.test(kind ?? '') ? kind : null;
+if (!exact && !['patch', 'minor', 'major'].includes(kind)) {
+  console.error('usage: node scripts/release.mjs <patch|minor|major|x.y.z>');
   process.exit(1);
 }
 
@@ -40,6 +42,7 @@ const pkg = JSON.parse(pkgRaw);
 
 const [maj, min, pat] = pkg.version.split('.').map(Number);
 const next =
+  exact ? exact :
   kind === 'major' ? `${maj + 1}.0.0` :
   kind === 'minor' ? `${maj}.${min + 1}.0` :
                      `${maj}.${min}.${pat + 1}`;

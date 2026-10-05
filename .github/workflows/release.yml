@@ -5,9 +5,12 @@ name: Release
 # feed from `main` or from a `v*` tag whose version equals package.json (see
 # the `guard` job). Local releases (pnpm release:mac / release:ship) still work.
 #
-# `platforms` picks what to build and publish. Versioned files on the feed are
-# immutable, so a platform already published for this version (e.g. a local
-# Mac release) must be left out, or the upload refuses.
+# `platforms` picks what to build and publish. From `main` the version is
+# picked for you (scripts/release-version.mjs): one step above the highest
+# version the feed serves for those platforms, skipping versions that are
+# already tagged or half-published; the bump is committed and tagged as the
+# release commit. From a `v*` tag the tag's version is used as is, and the run
+# refuses if it is already published for those platforms.
 on:
   workflow_dispatch:
     inputs:
@@ -21,6 +24,14 @@ on:
           - windows
           - mac
           - linux
+      bump:
+        description: Version step when releasing from main (the version is picked from the feed)
+        type: choice
+        default: patch
+        options:
+          - patch
+          - minor
+          - major
 
 permissions:
   contents: write
@@ -67,47 +78,65 @@ jobs:
             exit 1
           fi
 
-  # Versioned files on the feed are immutable. Refuse up front (not after the
-  # builds) when a chosen platform already has this version published.
-  feed-check:
-    name: Version not yet published
+  version:
+    name: Pick the version
     needs: [guard]
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.pick.outputs.version }}
+      ref: ${{ steps.pick.outputs.ref }}
     steps:
-      - name: Checkout
+      - name: Checkout (with tags)
         uses: actions/checkout@v4
-      - name: Check the feed for this version
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Pick, bump and tag
+        id: pick
         env:
           PLATFORMS: ${{ inputs.platforms }}
-          FEED: https://pub-05a2064511bc41689f299b542b07b67f.r2.dev
+          BUMP: ${{ inputs.bump }}
         run: |
-          V="$(node -p "require('./package.json').version")"
-          files=""
-          case "$PLATFORMS" in
-            all) files="Plasma-Setup-$V-x64.exe Plasma-$V-arm64.dmg Plasma-$V-x86_64.AppImage" ;;
-            windows+linux) files="Plasma-Setup-$V-x64.exe Plasma-$V-x86_64.AppImage" ;;
-            windows) files="Plasma-Setup-$V-x64.exe" ;;
-            mac) files="Plasma-$V-arm64.dmg" ;;
-            linux) files="Plasma-$V-x86_64.AppImage" ;;
-          esac
-          taken=""
-          for f in $files; do
-            code="$(curl -s -o /dev/null -w '%{http_code}' -I "$FEED/$f")"
-            if [ "$code" = "200" ]; then taken="$taken $f"; fi
-          done
-          if [ -n "$taken" ]; then
-            echo "::error::$V is already published for:$taken. Bump the version (pnpm ship:patch) or leave those platforms out."
-            exit 1
+          set -euo pipefail
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            V="${GITHUB_REF_NAME#v}"
+            node scripts/release-version.mjs --platforms="$PLATFORMS" --check="$V"
+            echo "version=$V" >> "$GITHUB_OUTPUT"
+            echo "ref=$GITHUB_REF" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
-          echo "$V is not published yet for: $files"
+          V="$(node scripts/release-version.mjs --platforms="$PLATFORMS" --bump="$BUMP")"
+          CUR="$(node -p "require('./package.json').version")"
+          git config user.name "Pankaj Yadav"
+          git config user.email "pankajyadav05@users.noreply.github.com"
+          if [ "$V" != "$CUR" ]; then
+            node scripts/release.mjs "$V"
+            git commit -m "v$V"
+            # Fails (and stops the release) if main moved since this run started.
+            git push origin HEAD:main
+          fi
+          if ! git rev-parse -q --verify "refs/tags/v$V" >/dev/null; then
+            git tag "v$V"
+            git push origin "refs/tags/v$V"
+          fi
+          echo "::notice::Releasing $V for $PLATFORMS"
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "ref=refs/tags/v$V" >> "$GITHUB_OUTPUT"
 
   verify:
     name: Typecheck + tests
-    needs: [guard, feed-check]
+    needs: [guard, version]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.ref }}
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -130,12 +159,14 @@ jobs:
         run: pnpm run test
 
   build-windows:
-    needs: [verify]
+    needs: [verify, version]
     if: contains(fromJSON('["all","windows+linux","windows"]'), inputs.platforms)
     runs-on: windows-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.ref }}
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -200,7 +231,7 @@ jobs:
           Write-Host "plasma.db created: $((Get-Item $db).Length) bytes"
 
   build-macos:
-    needs: [verify]
+    needs: [verify, version]
     if: contains(fromJSON('["all","mac"]'), inputs.platforms)
     runs-on: macos-latest
     env:
@@ -209,6 +240,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.ref }}
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -312,12 +345,14 @@ jobs:
           if [ -f "$LOG" ]; then cat "$LOG"; else echo "no app log at $LOG"; fi
 
   build-linux:
-    needs: [verify]
+    needs: [verify, version]
     if: contains(fromJSON('["all","windows+linux","linux"]'), inputs.platforms)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.ref }}
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -384,7 +419,7 @@ jobs:
           echo "tables: $(sqlite3 "$PLASMA_USER_DATA/plasma.db" '.tables')"
 
   publish:
-    needs: [guard, build-windows, smoke-windows, build-macos, smoke-macos, build-linux, smoke-linux]
+    needs: [guard, version, build-windows, smoke-windows, build-macos, smoke-macos, build-linux, smoke-linux]
     # Platforms left out are skipped jobs, not failures; anything that ran must
     # have passed. Belt and braces: `guard` already failed any other ref.
     if: >-
@@ -396,6 +431,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.ref }}
 
       - name: Download build artifacts
         uses: actions/download-artifact@v4
@@ -452,10 +489,11 @@ jobs:
           curl -fsS -X POST "$VERCEL_DEPLOY_HOOK" > /dev/null
           echo "site redeploy triggered"
 
+      # Every release gets its page, on the tag the version job made or used.
       - name: Create GitHub Release
-        if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: v${{ needs.version.outputs.version }}
           generate_release_notes: true
           files: |
             release/Plasma-Setup-*.exe
