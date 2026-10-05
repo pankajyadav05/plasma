@@ -444,6 +444,26 @@ for (const name of MANIFESTS) {
 const binaries = toUpload.filter((a) => !MANIFESTS.includes(a.name));
 const manifestUploads = toUpload.filter((a) => MANIFESTS.includes(a.name));
 
+// Preflight: every versioned file must be new, or byte-for-byte the size
+// already published (a re-run). Checked before uploading anything, so a
+// conflict on the last file cannot leave the first ones half-published.
+if (!verifyOnly) {
+  const conflicts = [];
+  for (const { name } of binaries) {
+    const size = statSync(resolve(releaseDir, name)).size;
+    const head = await fetch(`${publicBase}/${name}?noCache=${Date.now()}`, { method: 'HEAD' });
+    if (head.status === 404) continue;
+    const remote = Number(head.headers.get('content-length'));
+    if (!head.ok || remote !== size) conflicts.push(`${name}: published ${remote} bytes, this build ${size}`);
+  }
+  if (conflicts.length > 0) {
+    console.error(`[upload] ${version} is already published with different files; nothing was uploaded:`);
+    for (const c of conflicts) console.error(`  - ${c}`);
+    console.error('[upload] versioned artifacts are immutable; bump the version, or leave those platforms out.');
+    process.exit(1);
+  }
+}
+
 for (const { name, contentType } of binaries) {
   const filePath = resolve(releaseDir, name);
   const size = statSync(filePath).size;

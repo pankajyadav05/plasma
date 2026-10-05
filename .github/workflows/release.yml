@@ -67,9 +67,43 @@ jobs:
             exit 1
           fi
 
+  # Versioned files on the feed are immutable. Refuse up front (not after the
+  # builds) when a chosen platform already has this version published.
+  feed-check:
+    name: Version not yet published
+    needs: [guard]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Check the feed for this version
+        env:
+          PLATFORMS: ${{ inputs.platforms }}
+          FEED: https://pub-05a2064511bc41689f299b542b07b67f.r2.dev
+        run: |
+          V="$(node -p "require('./package.json').version")"
+          files=""
+          case "$PLATFORMS" in
+            all) files="Plasma-Setup-$V-x64.exe Plasma-$V-arm64.dmg Plasma-$V-x86_64.AppImage" ;;
+            windows+linux) files="Plasma-Setup-$V-x64.exe Plasma-$V-x86_64.AppImage" ;;
+            windows) files="Plasma-Setup-$V-x64.exe" ;;
+            mac) files="Plasma-$V-arm64.dmg" ;;
+            linux) files="Plasma-$V-x86_64.AppImage" ;;
+          esac
+          taken=""
+          for f in $files; do
+            code="$(curl -s -o /dev/null -w '%{http_code}' -I "$FEED/$f")"
+            if [ "$code" = "200" ]; then taken="$taken $f"; fi
+          done
+          if [ -n "$taken" ]; then
+            echo "::error::$V is already published for:$taken. Bump the version (pnpm ship:patch) or leave those platforms out."
+            exit 1
+          fi
+          echo "$V is not published yet for: $files"
+
   verify:
     name: Typecheck + tests
-    needs: [guard]
+    needs: [guard, feed-check]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
