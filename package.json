@@ -1,6 +1,6 @@
 {
   "name": "plasma",
-  "version": "3.1.5",
+  "version": "3.2.0",
   "description": "A quiet place for queries. A modern Electron-based Postgres client.",
   "homepage": "https://plasma.sh",
   "private": true,
