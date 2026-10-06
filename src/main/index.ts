@@ -235,6 +235,13 @@ if (process.env.PLASMA_USER_DATA) {
 // the worker. The lock is per userData dir, so isolated E2E runs coexist.
 const hasInstanceLock = app.requestSingleInstanceLock();
 if (!hasInstanceLock) {
+  // The running instance gets 'second-instance' and comes forward. Say so,
+  // or `pnpm dev` just stops: on macOS (case-insensitive disk) the dev
+  // profile `plasma` is the installed app's `Plasma`, so an open Plasma.app
+  // holds the lock.
+  console.error(
+    `Plasma is already running with this profile (${app.getPath('userData')}). Quit it first, or set PLASMA_USER_DATA to another folder to run alongside it.`,
+  );
   app.quit();
 } else {
   app.on('second-instance', () => {
