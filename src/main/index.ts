@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { readFile, stat } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isAgentReadSql } from '@shared/ai-readonly-sql';
 import { sshUnsupportedReason } from '@shared/connection-endpoint';
 import { CONNECTION_LOST, ConnectionLostError } from '@shared/connection-loss';
 import { assertOsSingleIndexName, isReadOnlyOsSql } from '@shared/os-write-policy';
@@ -58,6 +59,7 @@ import { assertTlsAllowedForTag, resolveTls, withTunnelServername } from '@share
 import { BrowserWindow, app, dialog, ipcMain, nativeImage } from 'electron';
 import {
   cancelAiChat,
+  cancelAllAiChats,
   capAiToolJson,
   isAiRowDataAllowed,
   isAiSchemaAllowed,
@@ -65,7 +67,9 @@ import {
   isReadOnlySql,
   serializeAiToolRows,
   setAiToolExecutor,
+  shapeAgentActionResult,
   startAiChat,
+  submitAiActionResult,
 } from './ai';
 import { type AuditDeps, recordAuditStatements, registerAuditIpc } from './audit-ipc';
 import {
@@ -839,6 +843,13 @@ function describeUnsaved(state: AppUnsavedState): string | null {
 }
 
 function attachWindowGuards(win: BrowserWindow): void {
+  // Agent cards wait for a click in the renderer. When the page reloads, the
+  // process dies or the window closes nobody can answer them: release the chat.
+  win.webContents.on('did-start-navigation', (_e, _url, inPlace, isMainFrame) => {
+    if (isMainFrame && !inPlace) cancelAllAiChats();
+  });
+  win.webContents.on('render-process-gone', () => cancelAllAiChats());
+  win.on('closed', () => cancelAllAiChats());
   win.on('close', (e) => {
     if (closeConfirmed) return;
     const detail = describeUnsaved(unsavedState);
@@ -1655,24 +1666,50 @@ function registerIpcHandlers() {
     const parsed = AiChatRequest.parse(raw);
     const settings = SettingsShape.parse(getAllSettings());
     // Keys live in the encrypted vault (C3). Prefers the OpenRouter key and
-    // falls back to the legacy claudeApiKey slot from v0.0.10.
-    const apiKey = getApiKey();
+    // falls back to the legacy claudeApiKey slot from v0.0.10. A local model
+    // needs none, and nothing is read from the vault for it.
+    const provider = settings.aiProvider;
+    const apiKey = provider === 'local' ? '' : getApiKey();
     // Row-data tools only when the active connection opted in (C18).
     // SC-05: bind the chat to the connection it started on and re-check the
     // opt-in every time a tool is about to run (the user may switch to prod
     // or revoke the opt-in between rounds).
     const chatConnectionId = activeConnectionId;
+    const sameConnection = () =>
+      Boolean(chatConnectionId) && activeConnectionId === chatConnectionId;
     const result = await startAiChat(mainWindow, parsed, apiKey, settings.openrouterModel, {
+      provider,
+      localUrl: settings.aiLocalUrl,
+      localModel: settings.aiLocalModel,
       allowRowData: isAiRowDataAllowed(chatConnectionId, settings.connectionAiRowData),
       allowSchema: isAiSchemaAllowed(chatConnectionId, settings),
       toolGuard: () => {
-        if (!chatConnectionId || activeConnectionId !== chatConnectionId) {
+        if (!sameConnection()) {
           return 'the active connection changed since this chat started';
         }
         const live = SettingsShape.parse(getAllSettings());
         return isAiRowDataAllowed(chatConnectionId, live.connectionAiRowData)
           ? null
           : 'row-data access is not enabled for this connection';
+      },
+      // Agent actions: the user's click decides; only the connection must still be the chat's.
+      actionGuard: () =>
+        sameConnection() ? null : 'the active connection changed since this chat started',
+      // What the user's decision sends back to the model: rows only while the
+      // opt-in holds right now, on this same connection, masked and capped.
+      shapeActionResult: (res) => {
+        const live = SettingsShape.parse(getAllSettings());
+        return shapeAgentActionResult(res, {
+          rowData:
+            sameConnection() && isAiRowDataAllowed(chatConnectionId, live.connectionAiRowData),
+          schema: isAiSchemaAllowed(chatConnectionId, live),
+          maskRows: (columns, rows) =>
+            maskRowsForAi(
+              chatConnectionId,
+              columns.map((name) => ({ name })),
+              rows,
+            ),
+        });
       },
     });
     if (!result.accepted && result.reason) {
@@ -1686,6 +1723,66 @@ function registerIpcHandlers() {
       });
     }
     return { accepted: result.accepted };
+  });
+
+  // The user's decision on an agent action card. Validated in `ai.ts`; a
+  // result nobody waits on is ignored.
+  ipcMain.handle(IpcChannel.AiActionResult, (_e, raw: unknown): void => {
+    submitAiActionResult(raw);
+  });
+
+  // The agent's run_query: one read-only statement on the aux client inside a
+  // read-only session, then shown in a tab. History and audit say it was the AI.
+  ipcMain.handle(IpcChannel.AiRunReadOnly, async (_e, raw: unknown): Promise<QueryResult> => {
+    const sql = typeof raw === 'string' ? raw : '';
+    if (!isSqlEngine(activeEngine)) throw new Error('no SQL connection');
+    if (!isSingleSqlStatement(sql) || !isAgentReadSql(sql)) {
+      throw new Error('rejected: only one read-only statement is allowed here');
+    }
+    const executedAt = Date.now();
+    try {
+      const res = await callWorker({ kind: 'aiQuery', sql }, 'queryResult');
+      try {
+        recordHistory({
+          connectionId: activeConnectionId,
+          sql,
+          rowCount: res.result.rowCount,
+          durationMs: res.result.durationMs,
+          error: null,
+          executedAt,
+        });
+      } catch (err) {
+        logger.error('[plasma] history write failed (non-fatal):', err);
+      }
+      recordAuditStatements(auditDeps, [
+        {
+          sql,
+          source: 'ai',
+          affectedRows: res.result.rowCount,
+          durationMs: res.result.durationMs,
+          ts: executedAt,
+        },
+      ]);
+      return res.result;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      try {
+        recordHistory({
+          connectionId: activeConnectionId,
+          sql,
+          rowCount: null,
+          durationMs: null,
+          error: message,
+          executedAt,
+        });
+      } catch (histErr) {
+        logger.error('[plasma] history write failed (non-fatal):', histErr);
+      }
+      recordAuditStatements(auditDeps, [
+        { sql, source: 'ai', error: message, ts: executedAt, durationMs: Date.now() - executedAt },
+      ]);
+      throw err;
+    }
   });
 
   ipcMain.handle(IpcChannel.AiCancel, async (_e, requestId: unknown): Promise<void> => {

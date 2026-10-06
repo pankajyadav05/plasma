@@ -9,7 +9,7 @@ import { buildFixSqlPrompt, parseFixSqlResponse } from '@shared/ai-tasks';
 import type { FixSqlSuggestion } from '@shared/ai-tasks';
 import { Check, Copy, Sparkles } from 'lucide-react';
 import { useState } from 'react';
-import { AiKeyNotice, AiThinking, useAiRun, useHasAiKey } from './ai-ui';
+import { AiKeyNotice, AiThinking, useAiConfigured, useAiRun } from './ai-ui';
 
 interface Result {
   fix: FixSqlSuggestion | null;
@@ -33,7 +33,7 @@ export function FixWithAi({
   sql: string;
   error: string;
 }) {
-  const hasKey = useHasAiKey();
+  const hasKey = useAiConfigured();
   const { state, start, reset } = useAiRun<Result>();
   const [applied, setApplied] = useState<string | null>(null);
 

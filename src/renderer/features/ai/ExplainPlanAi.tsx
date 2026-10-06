@@ -10,7 +10,7 @@ import {
 } from '@shared/ai-tasks';
 import { Copy, FilePlus2, Sparkles } from 'lucide-react';
 import { useEffect, useState } from 'react';
-import { AiKeyNotice, AiThinking, useAiRun, useHasAiKey } from './ai-ui';
+import { AiKeyNotice, AiThinking, useAiConfigured, useAiRun } from './ai-ui';
 
 /**
  * "Explain this plan": a plain-English walk-through of the EXPLAIN output
@@ -30,7 +30,7 @@ export function ExplainPlanAi({
   /** Called after a suggestion was opened in the editor (the dialog closes). */
   onOpened: () => void;
 }) {
-  const hasKey = useHasAiKey();
+  const hasKey = useAiConfigured();
   const { state, start } = useAiRun<PlanExplanation>();
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: one request per mount (the parent re-keys on plan changes)

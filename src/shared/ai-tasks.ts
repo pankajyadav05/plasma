@@ -9,8 +9,14 @@
  */
 import type { SchemaInfo } from './protocol';
 import { splitSqlStatementRanges } from './sql-split';
+import {
+  HIDDEN_FILTER_VALUE,
+  type TableViewSpec,
+  isEmptyTableView,
+  validateTableView,
+} from './table-view';
 
-export type AiTask = 'fix-sql' | 'explain-plan' | 'nl-filter';
+export type AiTask = 'fix-sql' | 'explain-plan' | 'nl-filter' | 'nl-view';
 
 // ─── System prompts (main prepends the schema when policy allows) ────
 
@@ -43,6 +49,23 @@ Rules:
 - If the request cannot be expressed with those filters (OR logic, expressions, functions, joins), set "filters" to [] and put a single SQL boolean expression in "where" (no WHERE keyword, no semicolon, no comments, only listed columns). Otherwise "where" is null.
 - If the request cannot be understood, return {"filters":[],"where":null,"explanation":"<why>"}.`;
 
+const NL_VIEW_SYSTEM = `You change how ONE database table is shown in a grid: which columns, the sort order, the filters and the page size. You are given the table, today's date, the columns with their types and the CURRENT view.
+
+Reply with ONLY a JSON object, no prose, no code fence:
+{"columns":["<exact column name>"]|null,"sort":[{"column":"<exact column name>","direction":"asc"|"desc"}]|null,"filters":[{"column":"<exact column name>","op":"<operator>","value":"<text>"}]|null,"limit":<whole number 1-1000>|null,"where":null,"explanation":"<one short sentence>"}
+
+Rules:
+- Return the COMPLETE desired view. Keep everything the user did not ask to change: copy the current columns, sort and filters into your answer (or use null for a part that stays exactly as it is). A part set to null or left out is unchanged.
+- "columns" is the list of columns to show, in order, spelled exactly; it must keep at least one. null shows what is shown now. To show every column, list them all.
+- "sort": "latest" / "newest" / "most recent" on a date or timestamp column means direction "desc"; "oldest" means "asc". [] removes the sort.
+- "filters" are ANDed. Allowed operators: =, !=, >, <, >=, <=, LIKE, ILIKE, NOT LIKE, NOT ILIKE, IN, NOT IN, BETWEEN, IS NULL, IS NOT NULL. "value" is always a string. LIKE/ILIKE values are wrapped in % by the app, so do not add them. IN takes "a, b, c". BETWEEN takes "low, high". Use "" for IS NULL / IS NOT NULL. [] removes all filters.
+- Dates and timestamps are ISO text (YYYY-MM-DD or YYYY-MM-DD HH:MM:SS). Resolve relative dates ("last week", "yesterday") against the "today" date you are given.
+- "limit" is how many rows to show ("10 rows", "top 5"); 1 to 1000.
+- A current filter value may be shown as <hidden> (it is kept private). To keep such a filter, repeat it with the value "<hidden>" exactly; a filter you leave out of "filters" is removed. Never invent a value for it.
+- Use only the listed columns, spelled exactly.
+- If the filtering cannot be expressed with those filters (OR logic, expressions, functions, joins), set "filters" to [] and put a single SQL boolean expression in "where" (no WHERE keyword, no semicolon, no comments, only listed columns). Otherwise "where" is null.
+- If the request cannot be understood, return {"columns":null,"sort":null,"filters":null,"limit":null,"where":null,"explanation":"<why>"}.`;
+
 export function taskSystemPrompt(task: AiTask): string {
   switch (task) {
     case 'fix-sql':
@@ -51,12 +74,20 @@ export function taskSystemPrompt(task: AiTask): string {
       return EXPLAIN_PLAN_SYSTEM;
     case 'nl-filter':
       return NL_FILTER_SYSTEM;
+    case 'nl-view':
+      return NL_VIEW_SYSTEM;
   }
 }
 
 /** Output budget per task so a runaway answer cannot burn the user's key. */
 export function taskMaxTokens(task: AiTask): number {
-  return task === 'explain-plan' ? 1800 : task === 'fix-sql' ? 1200 : 500;
+  return task === 'explain-plan'
+    ? 1800
+    : task === 'fix-sql'
+      ? 1200
+      : task === 'nl-view'
+        ? 800
+        : 500;
 }
 
 // ─── Relevant schema ─────────────────────────────────────────────────
@@ -364,6 +395,88 @@ export function parseNlFilterResponse(
     kind: 'none',
     explanation: explanation || 'That request could not be turned into a filter.',
   };
+}
+
+// ─── Natural-language table view ─────────────────────────────────────
+
+/** The view a table tab shows right now, as the prompt describes it. */
+export interface NlCurrentView {
+  /** Visible columns, in order. */
+  columns: string[];
+  sort: Array<{ column: string; direction: 'asc' | 'desc' }>;
+  filters: NlFilterRow[];
+  pageSize: number;
+}
+
+export function buildNlViewPrompt(input: {
+  request: string;
+  schema: string;
+  table: string;
+  columns: NlFilterColumn[];
+  today: string;
+  current: NlCurrentView;
+  /** Filter values go to the model only with the connection's row-data opt-in. */
+  showValues?: boolean;
+}): string {
+  const cols = input.columns
+    .slice(0, 80)
+    .map((c) => `- ${c.name} (${c.dataType})`)
+    .join('\n');
+  const c = input.current;
+  const sort =
+    c.sort.length > 0 ? c.sort.map((s) => `${s.column} ${s.direction}`).join(', ') : 'none';
+  const filters =
+    c.filters.length > 0
+      ? c.filters
+          .map(
+            (f) =>
+              `${f.column} ${f.op}${f.op === 'IS NULL' || f.op === 'IS NOT NULL' ? '' : ` ${input.showValues ? f.value : HIDDEN_FILTER_VALUE}`}`,
+          )
+          .join('; ')
+      : 'none';
+  return `Table: ${input.schema}.${input.table}\nToday: ${input.today}\nColumns:\n${cols}\n\nCurrent view:\n- Visible columns: ${c.columns.join(', ') || '(all)'}\n- Sort: ${sort}\n- Filters: ${filters}\n- Page size: ${c.pageSize}\n\nRequest: ${clip(input.request.trim(), 500)}`;
+}
+
+export type NlViewSuggestion =
+  | { kind: 'view'; view: TableViewSpec; explanation: string }
+  | { kind: 'where'; where: string; explanation: string }
+  | { kind: 'none'; explanation: string };
+
+/**
+ * Parse the model's JSON into a validated view. A proposal that names a
+ * column that does not exist is never applied partially: it falls back to
+ * the WHERE fragment (only when no filters were given) or to nothing.
+ */
+export function parseNlViewResponse(
+  text: string,
+  columns: readonly NlFilterColumn[],
+): NlViewSuggestion {
+  const obj = extractJsonObject(text);
+  if (!obj) return { kind: 'none', explanation: 'The assistant did not return a usable answer.' };
+  const explanation = typeof obj.explanation === 'string' ? obj.explanation.trim() : '';
+  const where = typeof obj.where === 'string' ? obj.where.trim() : '';
+  const hasFilters = Array.isArray(obj.filters) && obj.filters.length > 0;
+  if (where && !hasFilters) {
+    if (isSafeWhereFragment(where)) return { kind: 'where', where, explanation };
+    return {
+      kind: 'none',
+      explanation: explanation || 'That request could not be turned into a view.',
+    };
+  }
+  const checked = validateTableView(
+    { columns: obj.columns, sort: obj.sort, filters: obj.filters, limit: obj.limit },
+    columns,
+  );
+  if (!checked.ok) {
+    return {
+      kind: 'none',
+      explanation: `${explanation ? `${explanation} ` : ''}(${checked.error})`,
+    };
+  }
+  if (isEmptyTableView(checked.view)) {
+    return { kind: 'none', explanation: explanation || 'Nothing to change in the view.' };
+  }
+  return { kind: 'view', view: checked.view, explanation };
 }
 
 // ─── Shared text helpers ─────────────────────────────────────────────

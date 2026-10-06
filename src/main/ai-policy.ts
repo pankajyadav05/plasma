@@ -21,7 +21,11 @@ export function isAiRowDataAllowed(
   return connectionAiRowData?.[connectionId] === true;
 }
 
+import { describeDbErrorSafely } from '@shared/db-error-class';
+import type { AiActionResult } from '@shared/protocol';
+
 export { isAiSchemaAllowed } from '@shared/ai-schema-policy';
+export { isReadOnlySql } from '@shared/ai-readonly-sql';
 
 /**
  * Serialize tool rows with row + byte caps. Always labels truncation so
@@ -175,27 +179,45 @@ export function isReadOnlyRedisCommand(parts: readonly string[]): boolean {
 }
 
 /**
- * Pre-filter for tool-driven queries (U04/C18). Allows EXPLAIN / SELECT /
- * SHOW / WITH / VALUES / TABLE, rejects data-modifying CTEs and functions
- * with side effects outside the transaction. The worker's `aiQuery` is the
- * real boundary: single statement, inside `BEGIN … READ ONLY`.
+ * The tool message the model gets for an agent action the user decided on.
+ * `{outcome, note}` always; for data `{columns, rowCount}`, and the rows ONLY
+ * while `rowData` is true (the connection's opt-in, checked by the caller at
+ * that moment), masked by `maskRows` and capped like every other tool result.
+ *
+ * Database error text can quote row values, so without the opt-in a failure
+ * is reduced to a value-free category (`duplicate key (23505)`): the renderer's
+ * `dbError` is never forwarded, and a note that came from the database is
+ * replaced. Without schema sharing, result column names are left out too.
  */
-export function isReadOnlySql(sql: string): boolean {
-  const stripped = sql
-    .replace(/\/\*[\s\S]*?\*\//g, '')
-    .replace(/--.*$/gm, '')
-    .trim()
-    .toLowerCase();
-  if (!/^(select|explain|show|with|values|table)\b/.test(stripped)) return false;
-  // Data-modifying CTEs (`WITH x AS (DELETE …)`) — the worker's READ ONLY
-  // transaction rejects them too, this just fails fast.
-  if (/\b(insert|update|delete|merge)\b/.test(stripped) && stripped.startsWith('with'))
-    return false;
-  // Functions that act outside the transaction, so READ ONLY doesn't stop
-  // them (kill sessions, read server files, reach other hosts, …).
-  // Checked on the raw text too, so a `'--'` string can't hide a call.
-  return !UNSAFE_SQL_FUNCTIONS.test(stripped) && !UNSAFE_SQL_FUNCTIONS.test(sql.toLowerCase());
+export function shapeAgentActionResult(
+  res: AiActionResult,
+  opts: {
+    rowData: boolean;
+    maskRows: (columns: string[], rows: unknown[][]) => unknown[][];
+    /** Schema names may go to the provider; default true. */
+    schema?: boolean;
+  },
+): string {
+  let note = res.note?.trim() ?? '';
+  if (res.outcome === 'failed' && !opts.rowData) {
+    note = res.dbError
+      ? describeDbErrorSafely(res.dbError)
+      : (note.split('\n')[0]?.slice(0, 300) ?? '');
+  } else if (res.outcome === 'failed' && res.dbError) {
+    note = (res.dbError.split('\n')[0] ?? note).slice(0, 500);
+  } else {
+    note = note.slice(0, 500);
+  }
+  const extra = { outcome: res.outcome, ...(note ? { note } : {}) };
+  if (!res.data) return JSON.stringify(extra);
+  const { rows, rowCount } = res.data;
+  const columns = res.data.columns;
+  if (!opts.rowData) {
+    return JSON.stringify({
+      ...extra,
+      ...(opts.schema === false ? {} : { columns }),
+      rowCount,
+    });
+  }
+  return serializeAiToolRows({ columns, rows: opts.maskRows(columns, rows), rowCount, extra });
 }
-
-const UNSAFE_SQL_FUNCTIONS =
-  /\b(pg_terminate_backend|pg_cancel_backend|pg_reload_conf|pg_rotate_logfile|pg_promote|pg_read_file|pg_read_binary_file|pg_ls_\w+|pg_stat_file|lo_import|lo_export|dblink\w*|set_config|pg_sleep\w*|pg_advisory\w*|pg_notify|pg_switch_wal|pg_create_\w+|pg_drop_\w+|pg_replication_\w+|query_to_xml\w*|pg_file_\w+)"?\s*\(/;

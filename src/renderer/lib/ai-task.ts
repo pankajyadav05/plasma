@@ -31,10 +31,11 @@ export function routeAiTaskEvent(evt: AiChatEvent): boolean {
   } else if (evt.kind === 'done') {
     pending.delete(evt.requestId);
     p.resolve(p.text);
-  } else {
+  } else if (evt.kind === 'error') {
     pending.delete(evt.requestId);
     p.reject(new Error(evt.message));
   }
+  // `action` events belong to agent chats, never to one-shot tasks.
   return true;
 }
 
@@ -94,7 +95,9 @@ export async function runAiTask(opts: {
       const p = pending.get(requestId);
       pending.delete(requestId);
       p?.reject(
-        new Error('The assistant request was rejected. Check your OpenRouter key in Settings.'),
+        new Error(
+          'The assistant request was rejected. Check Settings, AI: an OpenRouter key, or a local model and its URL.',
+        ),
       );
     }
     return await done;

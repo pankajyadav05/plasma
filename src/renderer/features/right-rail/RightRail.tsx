@@ -5,6 +5,7 @@ import { IconButton, MenuItem, Pill, Segmented } from '@/components/ui/workbench
 import { SidebarResizer } from '@/features/app-shell/SidebarResizer';
 import { MonacoEditor } from '@/features/editor/MonacoEditor';
 import { SidebarSearch } from '@/features/sidebar/sidebar-parts';
+import { aiConfigured } from '@/lib/ai-config';
 import { cn } from '@/lib/cn';
 import { ipc } from '@/lib/ipc';
 import { lazyNamed } from '@/lib/lazy';
@@ -245,14 +246,7 @@ function QueryPanel() {
   const formatActiveSql = useSession((s) => s.formatActiveSql);
   const theme = useSession((s) => s.settings.theme);
   const fontSize = useSession((s) => s.settings.editorFontSize);
-  const hasApiKey = useSession((s) =>
-    Boolean(
-      s.settings.hasOpenrouterApiKey ||
-        s.settings.hasClaudeApiKey ||
-        s.settings.openrouterApiKey ||
-        s.settings.claudeApiKey,
-    ),
-  );
+  const hasApiKey = useSession((s) => aiConfigured(s.settings));
 
   if (!tab) {
     return <PanelEmpty title="No active tab" hint="Open a table or write a query." />;

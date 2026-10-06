@@ -169,7 +169,8 @@ export function persistTableColumnState(
   const key = columnStateKey(connId, tab.tableSchema, tab.tableName);
   const entry = {
     widths: widthsByName,
-    hidden: [...tab.hiddenColumns],
+    // Columns an agent view hid are not the user's choice.
+    hidden: [...tab.hiddenColumns].filter((c) => !tab.agentHiddenColumns?.has(c)),
     sticky: [...tab.stickyColumns],
   };
   const hasAny =

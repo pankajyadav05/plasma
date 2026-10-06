@@ -25,3 +25,6 @@ export function isAiSchemaAllowed(
   }
   return true;
 }
+
+/** Tables beyond this many are left out of the schema prompt (the "What is sent" line counts the same). */
+export const AI_SCHEMA_MAX_TABLES = 80;

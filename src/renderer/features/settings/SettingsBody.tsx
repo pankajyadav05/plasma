@@ -741,61 +741,123 @@ function AiSection() {
   const settings = useSession((s) => s.settings);
   const clearAiApiKey = useSession((s) => s.clearAiApiKey);
   const updateSettings = useSession((s) => s.updateSettings);
+  const local = settings.aiProvider === 'local';
   return (
     <Rows>
       <Row
-        label="OpenRouter API key"
-        htmlFor="openrouter-key"
+        label="Provider"
         hint={
-          <>
-            Bring your own key — encrypted with the OS keychain and never shown again. One key gives
-            access to Claude, GPT, Gemini, Qwen and more. The schema is sent as a system prompt (see
-            below). Row data is only sent when you enable &quot;Allow AI tools to read row
-            data&quot; on a connection (off by default); tool results are capped by rows and bytes.
-          </>
+          local
+            ? 'A model on this machine: no key, no account, and no data leaves your computer.'
+            : 'OpenRouter reaches Claude, GPT, Gemini, Qwen and more with one key. Or run a model on this machine.'
         }
       >
-        <div className="flex items-center gap-2">
-          <DebouncedSettingsInput
-            id="openrouter-key"
-            type="password"
-            value={settings.openrouterApiKey}
-            onCommit={(v) => void updateSettings({ openrouterApiKey: v })}
-            placeholder={
-              settings.hasOpenrouterApiKey || settings.hasClaudeApiKey
-                ? 'Saved — paste a new key to replace'
-                : 'sk-or-…'
-            }
-          />
-          {(settings.hasOpenrouterApiKey || settings.hasClaudeApiKey) && (
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => void clearAiApiKey()}
-              aria-label="Remove saved API key"
-            >
-              Remove key
-            </Button>
-          )}
-        </div>
-      </Row>
-      <Row
-        label="Model"
-        htmlFor="openrouter-model"
-        hint={
-          <>
-            Any OpenRouter model id, e.g. <code>anthropic/claude-sonnet-4.5</code>,{' '}
-            <code>openai/gpt-4o</code>, <code>google/gemini-2.5-pro</code>.
-          </>
-        }
-      >
-        <DebouncedSettingsInput
-          id="openrouter-model"
-          value={settings.openrouterModel}
-          onCommit={(v) => void updateSettings({ openrouterModel: v })}
-          placeholder="anthropic/claude-sonnet-4.5"
+        <Segmented<'openrouter' | 'local'>
+          ariaLabel="AI provider"
+          variant="track"
+          value={local ? 'local' : 'openrouter'}
+          onChange={(v) => void updateSettings({ aiProvider: v })}
+          options={[
+            { value: 'openrouter', label: 'OpenRouter' },
+            { value: 'local', label: 'Local model' },
+          ]}
         />
       </Row>
+      {local ? (
+        <>
+          <Row
+            label="Server URL"
+            htmlFor="ai-local-url"
+            hint={
+              <>
+                Ollama: <code>http://127.0.0.1:11434/v1</code>. LM Studio:{' '}
+                <code>http://127.0.0.1:1234/v1</code>. Only localhost addresses are accepted.
+              </>
+            }
+          >
+            <DebouncedSettingsInput
+              id="ai-local-url"
+              value={settings.aiLocalUrl}
+              onCommit={(v) => void updateSettings({ aiLocalUrl: v })}
+              placeholder="http://127.0.0.1:11434/v1"
+            />
+          </Row>
+          <Row
+            label="Model"
+            htmlFor="ai-local-model"
+            hint={
+              <>
+                The model name your server knows, e.g. <code>llama3.1</code> or <code>qwen2.5</code>
+                . Pick one that supports tool calling for the agent.
+              </>
+            }
+          >
+            <DebouncedSettingsInput
+              id="ai-local-model"
+              value={settings.aiLocalModel}
+              onCommit={(v) => void updateSettings({ aiLocalModel: v })}
+              placeholder="llama3.1"
+            />
+          </Row>
+        </>
+      ) : (
+        <>
+          <Row
+            label="OpenRouter API key"
+            htmlFor="openrouter-key"
+            hint={
+              <>
+                Bring your own key — encrypted with the OS keychain and never shown again. One key
+                gives access to Claude, GPT, Gemini, Qwen and more. The schema is sent as a system
+                prompt (see below). Row data is only sent when you enable &quot;Allow AI tools to
+                read row data&quot; on a connection (off by default); tool results are capped by
+                rows and bytes.
+              </>
+            }
+          >
+            <div className="flex items-center gap-2">
+              <DebouncedSettingsInput
+                id="openrouter-key"
+                type="password"
+                value={settings.openrouterApiKey}
+                onCommit={(v) => void updateSettings({ openrouterApiKey: v })}
+                placeholder={
+                  settings.hasOpenrouterApiKey || settings.hasClaudeApiKey
+                    ? 'Saved — paste a new key to replace'
+                    : 'sk-or-…'
+                }
+              />
+              {(settings.hasOpenrouterApiKey || settings.hasClaudeApiKey) && (
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => void clearAiApiKey()}
+                  aria-label="Remove saved API key"
+                >
+                  Remove key
+                </Button>
+              )}
+            </div>
+          </Row>
+          <Row
+            label="Model"
+            htmlFor="openrouter-model"
+            hint={
+              <>
+                Any OpenRouter model id, e.g. <code>anthropic/claude-sonnet-4.5</code>,{' '}
+                <code>openai/gpt-4o</code>, <code>google/gemini-2.5-pro</code>.
+              </>
+            }
+          >
+            <DebouncedSettingsInput
+              id="openrouter-model"
+              value={settings.openrouterModel}
+              onCommit={(v) => void updateSettings({ openrouterModel: v })}
+              placeholder="anthropic/claude-sonnet-4.5"
+            />
+          </Row>
+        </>
+      )}
       <CheckRow
         id="ai-send-schema"
         label="Schema context"
@@ -803,6 +865,14 @@ function AiSection() {
         hint="Included in the AI system prompt so answers fit your database. Production-tagged connections send it only after you enable AI access on that connection."
         checked={settings.aiSendSchema !== false}
         onChange={(v) => void updateSettings({ aiSendSchema: v })}
+      />
+      <CheckRow
+        id="ai-auto-apply-views"
+        label="Agent"
+        text="Apply view changes without asking"
+        hint="When the agent shows a table with new columns, sort, filters or page size, apply it at once (with Undo). Running queries and changing data always ask first."
+        checked={settings.aiAutoApplyViews === true}
+        onChange={(v) => void updateSettings({ aiAutoApplyViews: v })}
       />
     </Rows>
   );

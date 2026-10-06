@@ -1,3 +1,4 @@
+import type { TableViewSnapshot } from '@/features/ai/table-view-apply';
 /**
  * Shared types of the session store. The state is split into slices (one
  * `createXSlice` module per domain, composed by `session.ts`); each slice
@@ -5,8 +6,10 @@
  * `session.ts` re-exports the public names from here.
  */
 import type { Filter, TableSort } from '@/lib/table-query';
-import type { AiMessage, QueryResult } from '@shared/protocol';
+import type { AgentActionInput, AgentActionStatus } from '@shared/agent-actions';
+import type { AgentActionName, AiMessage, QueryResult } from '@shared/protocol';
 import type { VariableValue } from '@shared/sql-variables';
+import type { TableViewColumn, TableViewSpec } from '@shared/table-view';
 import type { StateCreator } from 'zustand';
 import type { AiSlice } from './session-ai';
 import type { ConnectionSlice } from './session-connection';
@@ -81,6 +84,42 @@ export interface AiTurn extends AiMessage {
   streaming?: boolean;
   /** Server-side error captured for this turn, if any. */
   error?: string;
+  /**
+   * Assistant turns: the text and the agent's action cards in the order they
+   * happened. `content` stays the plain text of the turn.
+   */
+  parts?: AiPart[];
+}
+
+export type AiPart = { kind: 'text'; text: string } | { kind: 'action'; actionId: string };
+
+/** One action card of the agent (AI panel). Lives in `aiActions`, keyed by `id`. */
+export interface AgentAction {
+  id: string;
+  /** The chat request and the model's tool call id: the key main waits on. */
+  requestId: string;
+  callId: string;
+  name: AgentActionName;
+  action: AgentActionInput;
+  status: AgentActionStatus;
+  /** show_table: the validated view and the columns it was checked against. */
+  view?: TableViewSpec;
+  viewColumns?: TableViewColumn[];
+  /** propose_change: 'preview' = Safe Run first, 'run' = no preview, approving runs it. */
+  mode?: 'preview' | 'run';
+  /** Reject note, failure reason, rows affected, Safe Run progress: the one line under the card. */
+  note?: string;
+  /** show_table: what Undo restores, and the tab it applies to. */
+  snapshot?: TableViewSnapshot;
+  tabId?: string;
+  undone?: boolean;
+  /** run_query: the engine runs it in a read-only session (it cannot change data). */
+  sandboxed?: boolean;
+  /** The database's own error text; goes to the model only with the row-data opt-in. */
+  dbError?: string;
+  /** Editor tab generation / Safe Run token before the card started its run (to tell its run apart). */
+  startGen?: number;
+  safeRunPrev?: number;
 }
 
 /**

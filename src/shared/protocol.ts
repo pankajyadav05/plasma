@@ -1833,6 +1833,13 @@ export const SettingsShape = z.object({
   openrouterApiKey: z.string().default(''),
   hasOpenrouterApiKey: z.boolean().optional(),
   openrouterModel: z.string().default('anthropic/claude-sonnet-4.5'),
+  /** Where AI requests go: OpenRouter (key) or a model server on this machine (Ollama, LM Studio). */
+  aiProvider: z.enum(['openrouter', 'local']).catch('openrouter').default('openrouter'),
+  /** Base URL of a local OpenAI-compatible server; main only talks to loopback addresses. */
+  aiLocalUrl: z.string().default('http://127.0.0.1:11434/v1'),
+  aiLocalModel: z.string().default(''),
+  /** Agent: apply "show table" view changes without asking (writes and queries still ask). */
+  aiAutoApplyViews: z.boolean().catch(false).default(false),
   /** Legacy field kept for backwards compat with v0.0.10 settings rows. */
   claudeApiKey: z.string().default(''),
   hasClaudeApiKey: z.boolean().optional(),
@@ -2096,14 +2103,59 @@ export const AiChatRequest = z.object({
    * swaps in the task's system prompt (see `@shared/ai-tasks`) and never
    * offers row-data tools; the schema is still gated by `aiSendSchema`.
    */
-  task: z.enum(['fix-sql', 'explain-plan', 'nl-filter']).optional(),
+  task: z.enum(['fix-sql', 'explain-plan', 'nl-filter', 'nl-view']).optional(),
+  /**
+   * Agent turn (AI panel): on a SQL engine the model may propose actions on
+   * the workbench. Each one waits for the user's click in the renderer.
+   */
+  agent: z.boolean().optional(),
+  /** What the user is looking at (built by the renderer); sent only when schema sharing is allowed. */
+  context: z.string().max(8000).optional(),
 });
 export type AiChatRequest = z.infer<typeof AiChatRequest>;
+
+/** What the agent can ask the workbench to do (each needs the user's approval). */
+export const AgentActionName = z.enum([
+  'show_table',
+  'run_query',
+  'propose_change',
+  'open_in_editor',
+]);
+export type AgentActionName = z.infer<typeof AgentActionName>;
 
 export type AiChatEvent =
   | { kind: 'delta'; requestId: string; text: string }
   | { kind: 'done'; requestId: string }
-  | { kind: 'error'; requestId: string; message: string };
+  | { kind: 'error'; requestId: string; message: string }
+  | {
+      kind: 'action';
+      requestId: string;
+      callId: string;
+      name: AgentActionName;
+      args: Record<string, unknown>;
+    };
+
+/** The renderer's answer to an `action` event; main feeds it back to the model. */
+export const AiActionResult = z.object({
+  requestId: z.string(),
+  callId: z.string(),
+  outcome: z.enum(['applied', 'rejected', 'failed', 'cancelled']),
+  note: z.string().max(2000).optional(),
+  /**
+   * The database's own error text, when the failure came from the database.
+   * It can quote row values, so main never forwards it without the row-data
+   * opt-in (the model gets a value-free category instead).
+   */
+  dbError: z.string().max(4000).optional(),
+  data: z
+    .object({
+      columns: z.array(z.string()),
+      rows: z.array(z.array(z.unknown())).max(200),
+      rowCount: z.number(),
+    })
+    .optional(),
+});
+export type AiActionResult = z.infer<typeof AiActionResult>;
 
 // ─── EXPLAIN result ──────────────────────────────────────────────────
 
@@ -2290,6 +2342,10 @@ export const IpcChannel = {
   // AI (OpenRouter)
   AiChat: 'plasma:ai:chat',
   AiCancel: 'plasma:ai:cancel',
+  /** The renderer's answer to an agent action card (applied / rejected / …). */
+  AiActionResult: 'plasma:ai:action-result',
+  /** The agent's read-only query: runs in a read-only session (`aiQuery`), result shown in a tab. */
+  AiRunReadOnly: 'plasma:ai:run-readonly',
   /** Renderer-facing event channel for streamed AI deltas. */
   AiEvent: 'plasma:ai:event',
   // SQL formatting (kept main-side so we can swap engines later without
@@ -2528,6 +2584,10 @@ export interface PlasmaAPI {
     chat(req: AiChatRequest): Promise<{ accepted: boolean }>;
     /** Abort an in-flight streamed chat completion. */
     cancel(requestId: string): Promise<void>;
+    /** Answer an agent `action` event (the user approved, rejected, … the card). */
+    actionResult(res: AiActionResult): Promise<void>;
+    /** Run ONE read-only statement in a read-only session (never the primary's autocommit). */
+    runReadOnly(sql: string): Promise<QueryResult>;
   };
   sql: {
     /** Pretty-print a SQL string. Falls back to the input on parse errors. */

@@ -1,24 +1,30 @@
 import { Pill } from '@/components/ui/workbench';
+import { aiConfigured } from '@/lib/ai-config';
 import { cn } from '@/lib/cn';
 import { useSession } from '@/stores/session';
 import { Loader2, Sparkles } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-/** True when an OpenRouter (or legacy) key is stored. */
-export function useHasAiKey(): boolean {
-  return useSession((s) => Boolean(s.settings.hasOpenrouterApiKey || s.settings.hasClaudeApiKey));
+/** True when AI is ready: an OpenRouter (or legacy) key is stored, or a local model is chosen. */
+export function useAiConfigured(): boolean {
+  return useSession((s) => aiConfigured(s.settings));
 }
 
-/** Shown in place of an AI entry point while no key is configured. */
+/** Shown in place of an AI entry point while AI is not set up. */
 export function AiKeyNotice({ className }: { className?: string }) {
   const setCanvasMode = useSession((s) => s.setCanvasMode);
+  const local = useSession((s) => s.settings.aiProvider === 'local');
   return (
     <div
       className={cn('flex items-center gap-2 text-[12px] text-[var(--wb-text-2)]', className)}
       data-testid="ai-key-notice"
     >
       <Sparkles className="h-3.5 w-3.5 shrink-0" />
-      <span>Add an OpenRouter key in Settings to use AI.</span>
+      <span>
+        {local
+          ? 'Choose a local model in Settings to use AI.'
+          : 'Add an OpenRouter key in Settings to use AI.'}
+      </span>
       <Pill onClick={() => setCanvasMode('settings')}>Open Settings</Pill>
     </div>
   );

@@ -3,10 +3,12 @@ import {
   buildExplainPlanPrompt,
   buildFixSqlPrompt,
   buildNlFilterPrompt,
+  buildNlViewPrompt,
   isSafeWhereFragment,
   parseExplainPlanResponse,
   parseFixSqlResponse,
   parseNlFilterResponse,
+  parseNlViewResponse,
   relevantSchema,
   summarizePlanForAi,
   taskMaxTokens,
@@ -362,5 +364,125 @@ describe('system prompts and schema reduction', () => {
 
   it('falls back to the first tables when nothing matches', () => {
     expect(relevantSchema(schema, 'select nothing').tables).toHaveLength(4);
+  });
+});
+
+describe('nl-view', () => {
+  const cols = [
+    { name: 'id', dataType: 'integer' },
+    { name: 'a', dataType: 'text' },
+    { name: 'b', dataType: 'text' },
+    { name: 'c', dataType: 'text' },
+    { name: 'created_at', dataType: 'timestamp with time zone' },
+  ];
+
+  it('puts the table, today, the columns and the CURRENT view in the prompt', () => {
+    const p = buildNlViewPrompt({
+      request: 'only the latest 10',
+      schema: 'public',
+      table: 'orders',
+      columns: cols,
+      today: '2026-10-06',
+      current: {
+        columns: ['id', 'a'],
+        sort: [{ column: 'created_at', direction: 'asc' }],
+        filters: [
+          { column: 'a', op: '=', value: 'x' },
+          { column: 'b', op: 'IS NULL', value: '' },
+        ],
+        pageSize: 50,
+      },
+      showValues: true,
+    });
+    expect(p).toContain('Table: public.orders');
+    expect(p).toContain('Today: 2026-10-06');
+    expect(p).toContain('- created_at (timestamp with time zone)');
+    expect(p).toContain('Visible columns: id, a');
+    expect(p).toContain('Sort: created_at asc');
+    expect(p).toContain('Filters: a = x; b IS NULL');
+    expect(p).toContain('Page size: 50');
+    expect(p).toContain('Request: only the latest 10');
+  });
+
+  it('hides filter values unless row data is allowed, keeping column and operator (P0-2)', () => {
+    const base = {
+      request: 'x',
+      schema: 'public',
+      table: 'orders',
+      columns: cols,
+      today: '2026-10-06',
+      current: {
+        columns: ['id'],
+        sort: [],
+        filters: [
+          { column: 'a', op: '=' as const, value: 'alice@corp.com' },
+          { column: 'b', op: 'IS NULL' as const, value: '' },
+        ],
+        pageSize: 50,
+      },
+    };
+    const hidden = buildNlViewPrompt(base);
+    expect(hidden).not.toContain('alice@corp.com');
+    expect(hidden).toContain('Filters: a = <hidden>; b IS NULL');
+    expect(buildNlViewPrompt({ ...base, showValues: true })).toContain('a = alice@corp.com');
+    expect(taskSystemPrompt('nl-view')).toContain('<hidden>');
+  });
+
+  it('asks for the complete view as JSON only', () => {
+    const sys = taskSystemPrompt('nl-view');
+    expect(sys).toContain('COMPLETE desired view');
+    expect(sys).toContain('ONLY a JSON object');
+    expect(taskMaxTokens('nl-view')).toBeGreaterThan(taskMaxTokens('nl-filter'));
+  });
+
+  it('accepts "show 10 rows, only columns a, b, c, latest created first"', () => {
+    const r = parseNlViewResponse(
+      '{"columns":["a","b","c"],"sort":[{"column":"created_at","direction":"desc"}],"filters":null,"limit":10,"where":null,"explanation":"ok"}',
+      cols,
+    );
+    expect(r).toEqual({
+      kind: 'view',
+      view: {
+        columns: ['a', 'b', 'c'],
+        sort: [{ column: 'created_at', direction: 'desc' }],
+        limit: 10,
+      },
+      explanation: 'ok',
+    });
+  });
+
+  it('reads a fenced answer and keeps unchanged parts out of the view', () => {
+    const r = parseNlViewResponse('```json\n{"limit":5,"explanation":"five"}\n```', cols);
+    expect(r).toEqual({ kind: 'view', view: { limit: 5 }, explanation: 'five' });
+  });
+
+  it('rejects unknown columns instead of applying part of the view', () => {
+    const r = parseNlViewResponse('{"columns":["a","nope"],"limit":10,"explanation":"e"}', cols);
+    expect(r.kind).toBe('none');
+    if (r.kind === 'none') expect(r.explanation).toContain('"nope"');
+  });
+
+  it('enforces the limit bounds', () => {
+    expect(parseNlViewResponse('{"limit":0}', cols).kind).toBe('none');
+    expect(parseNlViewResponse('{"limit":1001}', cols).kind).toBe('none');
+    expect(parseNlViewResponse('{"limit":1000}', cols).kind).toBe('view');
+  });
+
+  it('falls back to a safe WHERE fragment, never an unsafe one', () => {
+    const ok = parseNlViewResponse(
+      '{"filters":[],"where":"a = 1 OR b = 2","explanation":"or"}',
+      cols,
+    );
+    expect(ok).toEqual({ kind: 'where', where: 'a = 1 OR b = 2', explanation: 'or' });
+    const bad = parseNlViewResponse('{"where":"a = 1; drop table x"}', cols);
+    expect(bad.kind).toBe('none');
+  });
+
+  it('says so when nothing changes or the answer is not JSON', () => {
+    expect(parseNlViewResponse('{"columns":null,"explanation":"unclear"}', cols)).toEqual({
+      kind: 'none',
+      explanation: 'unclear',
+    });
+    expect(parseNlViewResponse('sorry', cols).kind).toBe('none');
   });
 });

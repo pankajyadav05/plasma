@@ -114,6 +114,8 @@ const api: PlasmaAPI = {
   ai: {
     chat: (req) => ipcRenderer.invoke(IpcChannel.AiChat, req),
     cancel: (requestId) => ipcRenderer.invoke(IpcChannel.AiCancel, requestId),
+    actionResult: (res) => ipcRenderer.invoke(IpcChannel.AiActionResult, res),
+    runReadOnly: (sql) => ipcRenderer.invoke(IpcChannel.AiRunReadOnly, sql),
   },
   sql: {
     format: (sql) => ipcRenderer.invoke(IpcChannel.FormatSql, sql),

@@ -1,10 +1,14 @@
+import { normalizeAction } from '@shared/agent-actions';
+import { buildAgentSystemPrompt } from '@shared/agent-prompt';
+import { AI_SCHEMA_MAX_TABLES } from '@shared/ai-schema-policy';
 import { taskMaxTokens, taskSystemPrompt } from '@shared/ai-tasks';
-import type {
-  AiChatEvent,
-  AiChatRequest,
-  AiMessage,
-  ConnectionEngine,
-  SchemaInfo,
+import {
+  AiActionResult,
+  type AiChatEvent,
+  type AiChatRequest,
+  type AiMessage,
+  type ConnectionEngine,
+  type SchemaInfo,
 } from '@shared/protocol';
 import { isSqlEngine } from '@shared/sql-dialect';
 import type { BrowserWindow } from 'electron';
@@ -21,6 +25,7 @@ export {
   isReadOnlyRedisCommand,
   isReadOnlySql,
   serializeAiToolRows,
+  shapeAgentActionResult,
 } from './ai-policy';
 
 /**
@@ -63,16 +68,137 @@ export function resolveAiEndpoint(override: string | undefined): string {
   return DEFAULT_ENDPOINT;
 }
 
+/**
+ * Endpoint of a local OpenAI-compatible server (Ollama, LM Studio). Nothing
+ * leaves the machine: only http(s) on localhost / 127.0.0.1 / [::1] is
+ * accepted, and a URL that already ends in `/chat/completions` is used as is.
+ */
+export function resolveLocalAiEndpoint(
+  raw: string | undefined,
+): { ok: true; endpoint: string } | { ok: false; error: string } {
+  const text = (raw ?? '').trim();
+  if (!text) return { ok: false, error: 'No local model URL set. Add it in Settings, AI.' };
+  let url: URL;
+  try {
+    url = new URL(text);
+  } catch {
+    return { ok: false, error: `"${text}" is not a valid URL for the local model.` };
+  }
+  const loopback = ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname);
+  if (!loopback || (url.protocol !== 'http:' && url.protocol !== 'https:')) {
+    return {
+      ok: false,
+      error:
+        'The local model URL must be http or https on localhost, 127.0.0.1 or [::1]. Nothing was sent.',
+    };
+  }
+  if (url.username || url.password) {
+    return { ok: false, error: 'The local model URL must not contain a user name or password.' };
+  }
+  const path = url.pathname.replace(/\/+$/, '');
+  const full = path.endsWith('/chat/completions') ? path : `${path}/chat/completions`;
+  return { ok: true, endpoint: `${url.origin}${full}` };
+}
+
 const ENDPOINT = resolveAiEndpoint(process.env.PLASMA_AI_ENDPOINT);
 const REFERER = 'https://plasma.sh';
 const TITLE = 'Plasma';
 const MAX_TOOL_ROUNDS = 5;
+/** Agent turns chain more calls: look, propose, adjust. */
+const MAX_AGENT_TOOL_ROUNDS = 8;
 
 const inflight = new Map<string, AbortController>();
 
+type PendingAction = { requestId: string; resolve: (res: AiActionResult) => void };
+/** Agent actions waiting for the user's click, keyed `requestId:callId`. */
+const pendingActions = new Map<string, PendingAction>();
+const actionKey = (requestId: string, callId: string) => `${requestId}:${callId}`;
+
+/** Resolve every action of `requestId` that still waits on the user as cancelled. */
+function cancelPendingActions(requestId: string): void {
+  for (const [key, p] of [...pendingActions.entries()]) {
+    if (p.requestId !== requestId) continue;
+    pendingActions.delete(key);
+    p.resolve({
+      requestId,
+      callId: key.slice(requestId.length + 1),
+      outcome: 'cancelled',
+      note: 'The chat was stopped.',
+    });
+  }
+}
+
+/**
+ * The renderer went away (reload, crash, window closed): nobody can answer the
+ * cards any more. Abort every chat and resolve every waiting action as cancelled.
+ */
+export function cancelAllAiChats(): void {
+  for (const [id, ctl] of [...inflight.entries()]) {
+    ctl.abort();
+    inflight.delete(id);
+  }
+  for (const requestId of new Set([...pendingActions.values()].map((p) => p.requestId))) {
+    cancelPendingActions(requestId);
+  }
+}
+
+/**
+ * The renderer's answer to an `action` event. Validated here; a result for a
+ * key nobody waits on (stale, replayed, forged) is ignored.
+ */
+export function submitAiActionResult(raw: unknown): boolean {
+  const parsed = AiActionResult.safeParse(raw);
+  if (!parsed.success) {
+    // A result for a card main waits on must never be dropped silently: the
+    // loop would hang. Answer the model with a failure instead.
+    const r = raw as { requestId?: unknown; callId?: unknown } | null;
+    if (r && typeof r.requestId === 'string' && typeof r.callId === 'string') {
+      const key = actionKey(r.requestId, r.callId);
+      const waiting = pendingActions.get(key);
+      if (waiting) {
+        pendingActions.delete(key);
+        waiting.resolve({
+          requestId: r.requestId,
+          callId: r.callId,
+          outcome: 'failed',
+          note: 'The app sent an invalid result for this action.',
+        });
+        return true;
+      }
+    }
+    return false;
+  }
+  const key = actionKey(parsed.data.requestId, parsed.data.callId);
+  const waiting = pendingActions.get(key);
+  if (!waiting) return false;
+  pendingActions.delete(key);
+  waiting.resolve(parsed.data);
+  return true;
+}
+
 export type AiChatOptions = {
+  /** Where the request goes. Default: OpenRouter. `local` needs no API key. */
+  provider?: 'openrouter' | 'local';
+  /** Base URL of the local server (provider `local`). */
+  localUrl?: string;
+  /** Model name on the local server (provider `local`); required. */
+  localModel?: string;
   /** When false (default), tools that egress row data are not offered. */
   allowRowData?: boolean;
+  /**
+   * Re-checked immediately before EVERY agent action is shown to the user:
+   * a refusal message when the active connection is no longer the chat's,
+   * null when the action may be proposed. (Unlike `toolGuard` this does not
+   * depend on the row-data opt-in: actions never egress rows by themselves.)
+   */
+  actionGuard?: () => string | null;
+  /**
+   * Turn the renderer's answer to an action into the tool message the model
+   * sees. Main supplies this where the connection and settings are known, so
+   * rows are masked and capped there and only included while the row-data
+   * opt-in holds. The default never includes rows.
+   */
+  shapeActionResult?: (res: AiActionResult) => string;
   /**
    * SC-20: schema names / sample keys / cluster summaries are sent as the
    * system prompt only when allowed for the connection (default: no).
@@ -90,12 +216,17 @@ export type AiChatOptions = {
 
 /** Names of the tools offered for `engine` (a model may only call these). */
 export function offeredToolNames(engine: ConnectionEngine): Set<string> {
+  return namesOf(toolsForEngine(engine));
+}
+
+function namesOf(tools: readonly unknown[]): Set<string> {
   return new Set(
-    (toolsForEngine(engine) as ReadonlyArray<{ function: { name: string } }>).map(
-      (t) => t.function.name,
-    ),
+    (tools as ReadonlyArray<{ function: { name: string } }>).map((t) => t.function.name),
   );
 }
+
+/** Tool names handled by the renderer (the user decides), not by `toolExecutor`. */
+const ACTION_TOOL_NAMES = new Set(['show_table', 'run_query', 'propose_change', 'open_in_editor']);
 
 export type AiToolExecutor = (name: string, args: Record<string, unknown>) => Promise<string>;
 
@@ -123,6 +254,109 @@ const TOOLS_POSTGRES = [
         properties: {
           sql: { type: 'string', description: 'A read-only SQL statement.' },
         },
+        required: ['sql'],
+      },
+    },
+  },
+] as const;
+
+const FILTER_PARAM = {
+  type: 'object',
+  properties: {
+    column: { type: 'string', description: 'Exact column name.' },
+    op: {
+      type: 'string',
+      description:
+        'One of: =, !=, >, <, >=, <=, LIKE, ILIKE, NOT LIKE, NOT ILIKE, IN, NOT IN, BETWEEN, IS NULL, IS NOT NULL.',
+    },
+    value: {
+      type: 'string',
+      description:
+        'Text value. IN takes "a, b, c", BETWEEN takes "low, high", LIKE is wrapped in % by the app. Empty for IS [NOT] NULL.',
+    },
+  },
+  required: ['column', 'op', 'value'],
+} as const;
+
+/**
+ * Agent tools (AI panel). Offered on SQL engines when the request is an
+ * agent turn. Each call becomes a card the user approves in the renderer.
+ */
+const TOOLS_AGENT = [
+  {
+    type: 'function',
+    function: {
+      name: 'show_table',
+      description:
+        'Open one table in a grid tab with a view the user can review: which columns, sort order, filters and page size. Parts you leave out or set to null stay as they are. Does not change data.',
+      parameters: {
+        type: 'object',
+        properties: {
+          schema: { type: 'string' },
+          table: { type: 'string' },
+          columns: {
+            type: ['array', 'null'],
+            items: { type: 'string' },
+            description: 'Columns to show, in order (exact names, at least one).',
+          },
+          sort: {
+            type: ['array', 'null'],
+            items: {
+              type: 'object',
+              properties: {
+                column: { type: 'string' },
+                direction: { type: 'string', enum: ['asc', 'desc'] },
+              },
+              required: ['column', 'direction'],
+            },
+          },
+          filters: { type: ['array', 'null'], items: FILTER_PARAM, description: 'ANDed filters.' },
+          limit: { type: ['integer', 'null'], description: 'Rows per page, 1 to 1000.' },
+        },
+        required: ['schema', 'table'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'run_query',
+      description:
+        'Run ONE read-only SQL query (SELECT / WITH / EXPLAIN / SHOW / VALUES / TABLE) in a new editor tab so the user sees the result. The user approves it first. Writes are rejected.',
+      parameters: {
+        type: 'object',
+        properties: {
+          sql: { type: 'string', description: 'Exactly one read-only statement.' },
+          title: { type: 'string', description: 'Short tab title.' },
+        },
+        required: ['sql'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'propose_change',
+      description:
+        'Propose ONE statement that changes data or schema (INSERT, UPDATE, DELETE, DDL). The user reviews it and decides; on Postgres it is previewed in a transaction first. Read-only SQL is rejected: use run_query.',
+      parameters: {
+        type: 'object',
+        properties: {
+          sql: { type: 'string', description: 'Exactly one statement.' },
+          summary: { type: 'string', description: 'One sentence: what it does and how many rows.' },
+        },
+        required: ['sql', 'summary'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'open_in_editor',
+      description: 'Put SQL in a new editor tab without running it.',
+      parameters: {
+        type: 'object',
+        properties: { sql: { type: 'string' } },
         required: ['sql'],
       },
     },
@@ -201,7 +435,16 @@ export async function startAiChat(
   defaultModel: string,
   options: AiChatOptions = {},
 ): Promise<{ accepted: boolean; reason?: string }> {
-  if (!apiKey || apiKey.trim().length === 0) {
+  if (options.provider === 'local') {
+    const local = resolveLocalAiEndpoint(options.localUrl);
+    if (!local.ok) return { accepted: false, reason: local.error };
+    if (!options.localModel?.trim()) {
+      return {
+        accepted: false,
+        reason: 'No local model set. Enter the model name in Settings, AI.',
+      };
+    }
+  } else if (!apiKey || apiKey.trim().length === 0) {
     return { accepted: false, reason: 'no OpenRouter API key configured' };
   }
   if (!win || win.isDestroyed()) {
@@ -211,7 +454,10 @@ export async function startAiChat(
   // Pre-cancel any prior request reusing the same id (rare, but the
   // renderer may submit on enter twice via key repeat).
   const existing = inflight.get(req.requestId);
-  if (existing) existing.abort();
+  if (existing) {
+    existing.abort();
+    cancelPendingActions(req.requestId);
+  }
 
   const controller = new AbortController();
   inflight.set(req.requestId, controller);
@@ -228,6 +474,8 @@ export function cancelAiChat(requestId: string): void {
     ctl.abort();
     inflight.delete(requestId);
   }
+  // Stop / clear while a card waits: the loop must not hang on the user.
+  cancelPendingActions(requestId);
 }
 
 async function pump(
@@ -262,31 +510,57 @@ async function pump(
 
   const engine = req.engine ?? 'postgres';
   const allowSchema = options.allowSchema === true;
+  const local = options.provider === 'local';
   // One-shot tasks (Fix with AI, Explain plan, NL filter) are Postgres-only,
   // use their own system prompt and never get row-data tools.
   const task = engine === 'postgres' ? req.task : undefined;
-  const messages: InternalMsg[] = task
-    ? buildTaskMessages(task, req.messages, allowSchema ? req.schema : null)
-    : buildMessages(
-        req.messages,
-        engine,
-        allowSchema ? req.schema : null,
-        allowSchema ? req.engineContext : undefined,
-      );
-  const model = req.model?.trim() ? req.model : defaultModel;
   // U06: only offer row-data tools when the active connection opted in.
   const allowRowData = options.allowRowData === true && !task;
-  const tools = allowRowData ? toolsForEngine(engine) : [];
+  // Agent actions are offered on SQL engines whatever the row-data opt-in
+  // says: they put the user's click between the model and every effect, and
+  // what they send back is gated separately (`shapeActionResult`).
+  const agentMode = req.agent === true && !task && isSqlEngine(engine);
+  const messages: InternalMsg[] = task
+    ? buildTaskMessages(task, req.messages, allowSchema ? req.schema : null)
+    : agentMode
+      ? buildAgentMessages(
+          req.messages,
+          engine,
+          allowSchema ? req.schema : null,
+          allowSchema ? req.context : undefined,
+          allowRowData,
+        )
+      : buildMessages(
+          req.messages,
+          engine,
+          allowSchema ? req.schema : null,
+          allowSchema ? req.engineContext : undefined,
+        );
+  const model = local
+    ? (options.localModel ?? '').trim()
+    : req.model?.trim()
+      ? req.model
+      : defaultModel;
+  const tools: readonly unknown[] = [
+    ...(agentMode ? TOOLS_AGENT : []),
+    ...(allowRowData ? toolsForEngine(engine) : []),
+  ];
   const fetchImpl = options.fetchImpl ?? fetch;
+  const endpoint = local
+    ? (() => {
+        const r = resolveLocalAiEndpoint(options.localUrl);
+        return r.ok ? r.endpoint : ENDPOINT;
+      })()
+    : ENDPOINT;
+  const maxRounds = agentMode ? MAX_AGENT_TOOL_ROUNDS : MAX_TOOL_ROUNDS;
 
   try {
-    for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
-      const isLastAllowedRound = round === MAX_TOOL_ROUNDS;
+    for (let round = 0; round <= maxRounds; round++) {
+      const isLastAllowedRound = round === maxRounds;
       // Stream the final round (when we want text streaming for UX).
       // For tool-call rounds we still stream so partial deltas appear
       // for any text the model emits before/after tool calls.
-      const offeredTools =
-        toolExecutor && allowRowData && !isLastAllowedRound && tools.length > 0 ? tools : null;
+      const offeredTools = !isLastAllowedRound && tools.length > 0 ? tools : null;
       const body = buildOpenRouterBody({
         model,
         messages,
@@ -295,24 +569,42 @@ async function pump(
         stream: true,
       });
 
-      const res = await fetchImpl(ENDPOINT, {
-        method: 'POST',
-        signal: controller.signal,
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          'Content-Type': 'application/json',
-          'HTTP-Referer': REFERER,
-          'X-Title': TITLE,
-        },
-        body,
-      });
+      // A local server gets no key and none of OpenRouter's headers.
+      const headers: Record<string, string> = local
+        ? { 'Content-Type': 'application/json' }
+        : {
+            Authorization: `Bearer ${apiKey}`,
+            'Content-Type': 'application/json',
+            'HTTP-Referer': REFERER,
+            'X-Title': TITLE,
+          };
+      let res: Response;
+      try {
+        res = await fetchImpl(endpoint, {
+          method: 'POST',
+          signal: controller.signal,
+          headers,
+          body,
+          // A local server must not be able to bounce the request (schema,
+          // context, row samples) to another host.
+          ...(local ? { redirect: 'error' as const } : {}),
+        });
+      } catch (err) {
+        if (controller.signal.aborted || !local) throw err;
+        send({
+          kind: 'error',
+          requestId: req.requestId,
+          message: `Could not reach the local model at ${options.localUrl?.trim() ?? endpoint}. Is Ollama (or LM Studio) running?`,
+        });
+        return;
+      }
 
       if (!res.ok || !res.body) {
         const text = await res.text().catch(() => '');
         send({
           kind: 'error',
           requestId: req.requestId,
-          message: `OpenRouter HTTP ${res.status}: ${text || res.statusText}`,
+          message: `${local ? 'Local model' : 'OpenRouter'} HTTP ${res.status}: ${text || res.statusText}`,
         });
         return;
       }
@@ -378,13 +670,13 @@ async function pump(
 
       // SC-05: a model (or provider) can return tool_calls nobody offered;
       // those are dropped, never executed.
-      const offered = offeredTools ? offeredToolNames(engine) : new Set<string>();
+      const offered = offeredTools ? namesOf(offeredTools) : new Set<string>();
       for (const [idx, c] of [...toolCalls.entries()]) {
         if (!offered.has(c.name)) toolCalls.delete(idx);
       }
 
       if (controller.signal.aborted) return;
-      if (toolCalls.size === 0 || finishReason !== 'tool_calls' || !toolExecutor) {
+      if (toolCalls.size === 0 || finishReason !== 'tool_calls') {
         // Final turn — done.
         send({ kind: 'done', requestId: req.requestId });
         return;
@@ -417,10 +709,24 @@ async function pump(
         }
         let result: string;
         try {
-          const refusal = options.toolGuard?.() ?? null;
-          result = refusal
-            ? JSON.stringify({ error: `rejected: ${refusal}` })
-            : await toolExecutor(call.name, parsedArgs);
+          if (ACTION_TOOL_NAMES.has(call.name)) {
+            result = await runAgentAction({
+              send,
+              req,
+              call,
+              args: parsedArgs,
+              options,
+              signal: controller.signal,
+              windowGone: () => win.isDestroyed(),
+            });
+          } else {
+            const refusal = options.toolGuard?.() ?? null;
+            result = refusal
+              ? JSON.stringify({ error: `rejected: ${refusal}` })
+              : toolExecutor
+                ? await toolExecutor(call.name, parsedArgs)
+                : JSON.stringify({ error: 'tools are not available' });
+          }
         } catch (err) {
           result = JSON.stringify({
             error: err instanceof Error ? err.message : String(err),
@@ -429,12 +735,12 @@ async function pump(
         if (controller.signal.aborted) return;
         messages.push({ role: 'tool', tool_call_id: call.id, content: result });
       }
-      // Cosmetic delta so the user sees something happened between rounds.
-      send({
-        kind: 'delta',
-        requestId: req.requestId,
-        text: assistantText.endsWith('\n') ? '' : '\n',
-      });
+      // Keep the next round's text off the end of this one. A tool the main
+      // process refused shows no card, so the break cannot rely on one (the
+      // renderer drops the newline at the start of a part after a card).
+      if (assistantText && !assistantText.endsWith('\n')) {
+        send({ kind: 'delta', requestId: req.requestId, text: '\n' });
+      }
     }
 
     // Hit MAX_TOOL_ROUNDS — finalize anyway.
@@ -444,8 +750,58 @@ async function pump(
     const message = err instanceof Error ? err.message : String(err);
     send({ kind: 'error', requestId: req.requestId, message });
   } finally {
-    inflight.delete(req.requestId);
+    // Only drop our own controller: a retry may have registered a new one.
+    if (inflight.get(req.requestId) === controller) inflight.delete(req.requestId);
+    cancelPendingActions(req.requestId);
   }
+}
+
+/** The tool message for an action result when main supplied no shaper: never rows. */
+function defaultActionResult(res: AiActionResult): string {
+  return JSON.stringify({
+    outcome: res.outcome,
+    ...(res.note ? { note: res.note } : {}),
+    ...(res.data ? { columns: res.data.columns, rowCount: res.data.rowCount } : {}),
+  });
+}
+
+/**
+ * One agent action: validate the call, re-check the connection, hand it to
+ * the renderer as an `action` event and wait for the user's decision. A call
+ * that fails validation is answered to the model at once; the user is never
+ * asked about it.
+ */
+async function runAgentAction(input: {
+  send: (evt: AiChatEvent) => void;
+  req: AiChatRequest;
+  call: { id: string; name: string };
+  args: Record<string, unknown>;
+  options: AiChatOptions;
+  signal: AbortSignal;
+  windowGone: () => boolean;
+}): Promise<string> {
+  const { send, req, call, args, options, signal } = input;
+  const normalized = normalizeAction(call.name, args);
+  if (!normalized.ok) return JSON.stringify({ error: `rejected: ${normalized.error}` });
+  const refusal = options.actionGuard?.() ?? null;
+  if (refusal) return JSON.stringify({ error: `rejected: ${refusal}` });
+
+  // Stop can land before the card is even shown: nothing to ask then.
+  if (signal.aborted || input.windowGone())
+    return JSON.stringify({ outcome: 'cancelled', note: 'The chat was stopped.' });
+  const key = actionKey(req.requestId, call.id);
+  const answered = new Promise<AiActionResult>((resolve) => {
+    pendingActions.set(key, { requestId: req.requestId, resolve });
+  });
+  send({
+    kind: 'action',
+    requestId: req.requestId,
+    callId: call.id,
+    name: normalized.action.name,
+    args,
+  });
+  const res = await answered;
+  return (options.shapeActionResult ?? defaultActionResult)(res);
 }
 
 /**
@@ -493,6 +849,37 @@ function buildMessages(
   return out;
 }
 
+const SQL_FLAVOUR: Partial<Record<ConnectionEngine, string>> = {
+  postgres: 'Postgres',
+  sqlite: 'SQLite',
+  mysql: 'MySQL/MariaDB',
+  clickhouse: 'ClickHouse',
+  duckdb: 'DuckDB',
+};
+
+/** Messages for an agent turn: the agent prompt (schema and tab context only when allowed), then the chat. */
+function buildAgentMessages(
+  messages: AiMessage[],
+  engine: ConnectionEngine,
+  schema: SchemaInfo | null | undefined,
+  context: string | undefined,
+  rowData: boolean,
+): Array<{ role: 'system' | 'user' | 'assistant'; content: string }> {
+  const ddl = schema ? compactSchema(schema) : '';
+  const system = buildAgentSystemPrompt({
+    flavour: SQL_FLAVOUR[engine] ?? 'SQL',
+    ddl: ddl || null,
+    context: context?.trim() ? context : null,
+    rowData,
+  });
+  return [
+    { role: 'system', content: system },
+    ...messages
+      .filter((m) => m.role !== 'system')
+      .map((m) => ({ role: m.role, content: m.content })),
+  ];
+}
+
 /**
  * Messages for a one-shot task: the task's system prompt, then (only when
  * the schema is allowed to leave the machine) the relevant schema, then the
@@ -513,7 +900,7 @@ export function buildTaskMessages(
   ];
 }
 
-const MAX_TABLES = 80;
+const MAX_TABLES = AI_SCHEMA_MAX_TABLES;
 const MAX_COLS_PER_TABLE = 24;
 
 function compactSchema(schema: SchemaInfo, opts: { withIndexes?: boolean } = {}): string {

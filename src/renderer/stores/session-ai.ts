@@ -1,8 +1,44 @@
 /** AI assistant slice (bring-your-own-key chat streamed from main). */
+import { buildAgentContext } from '@/lib/ai-context';
 import { ipc } from '@/lib/ipc';
-import type { AiMessage } from '@shared/protocol';
+import { actionHistoryLine } from '@shared/agent-actions';
+import type { AiChatEvent, AiMessage } from '@shared/protocol';
+import { isSqlEngine } from '@shared/sql-dialect';
+import { createAgentActions } from './session-ai-actions';
 import { freshId } from './session-tab-model';
-import type { AiTurn, SessionState, SliceCreator } from './session-types';
+import type { AgentAction, AiPart, AiTurn, SessionState, SliceCreator } from './session-types';
+
+/**
+ * A turn as the model sees it in later requests: its text, and one line per
+ * action card with how it ended (`[show_table public.orders: applied]`).
+ */
+export function turnHistoryContent(turn: AiTurn, actions: Record<string, AgentAction>): string {
+  if (turn.role !== 'assistant' || !turn.parts) return turn.content;
+  const lines: string[] = [];
+  for (const p of turn.parts) {
+    if (p.kind === 'text') {
+      if (p.text.trim()) lines.push(p.text.trim());
+      continue;
+    }
+    const a = actions[p.actionId];
+    if (a)
+      lines.push(
+        actionHistoryLine(a.action, a.status, a.status === 'rejected' ? a.note : undefined),
+      );
+  }
+  return lines.join('\n');
+}
+
+/** Append streamed text to the turn's last text part (a new part after a card). */
+export function appendTurnText(parts: AiPart[] | undefined, text: string): AiPart[] {
+  const list = parts ?? [];
+  const last = list[list.length - 1];
+  if (last && last.kind === 'text') {
+    return [...list.slice(0, -1), { kind: 'text', text: last.text + text }];
+  }
+  const fresh = text.replace(/^\s+/, '');
+  return fresh ? [...list, { kind: 'text', text: fresh }] : list;
+}
 
 export interface AiSlice {
   // ── AI chat (OpenRouter sidecar) ──
@@ -12,158 +48,203 @@ export interface AiSlice {
   aiRequestId: string | null;
   /** Connection the current `aiChat` belongs to (G3: chat is per connection). */
   aiChatConnectionId: string | null;
+  /** The agent's action cards, by id (turns reference them through `parts`). */
+  aiActions: Record<string, AgentAction>;
   aiAsk(prompt: string, opts?: { withSchema?: boolean }): Promise<void>;
   aiCancel(): Promise<void>;
   aiClear(): void;
   /** Apply a streamed delta event from the main process. */
-  aiApplyEvent(
-    evt:
-      | { kind: 'delta'; requestId: string; text: string }
-      | { kind: 'done'; requestId: string }
-      | { kind: 'error'; requestId: string; message: string },
-  ): void;
+  aiApplyEvent(evt: AiChatEvent): void;
+  /** Approve a pending card: the action runs now, through the normal paths. */
+  aiApproveAction(id: string): Promise<void>;
+  /** Reject a pending card; the optional note goes back to the model. */
+  aiRejectAction(id: string, note?: string): void;
+  /** Undo an applied view change. */
+  aiUndoAction(id: string): Promise<void>;
 }
 
-export const createAiSlice: SliceCreator<AiSlice> = (set, get) => ({
-  aiChat: [],
-  aiPending: false,
-  aiRequestId: null,
-  aiChatConnectionId: null,
+export const createAiSlice: SliceCreator<AiSlice> = (set, get, api) => {
+  const actions = createAgentActions(api);
 
-  async aiAsk(prompt, opts) {
-    const trimmed = prompt.trim();
-    if (!trimmed) return;
-    const state = get();
-    if (state.aiPending) return; // single-flight per chat
-    // G3: a different connection starts a fresh conversation.
-    const connectionId = state.activeConfig?.id ?? null;
-    const history = state.aiChatConnectionId === connectionId ? state.aiChat : [];
+  // The connection a card was proposed for is gone: nothing may run on a new one.
+  api.subscribe((state, prev) => {
+    if (
+      prev.connectionGen === state.connectionGen &&
+      prev.connectionState === state.connectionState &&
+      prev.activeConfig?.id === state.activeConfig?.id
+    ) {
+      return;
+    }
+    if (Object.keys(state.aiActions).length > 0) {
+      actions.cancelAll('The connection changed.');
+    }
+  });
 
-    const userTurn: AiTurn = {
-      id: freshId(),
-      role: 'user',
-      content: trimmed,
-    };
-    const placeholder: AiTurn = {
-      id: freshId(),
-      role: 'assistant',
-      content: '',
-      streaming: true,
-    };
-    const requestId = freshId();
-    set({
-      aiChat: [...history, userTurn, placeholder],
-      aiChatConnectionId: connectionId,
-      aiPending: true,
-      aiRequestId: requestId,
-      rightPanelMode: 'ai',
-    });
+  return {
+    aiChat: [],
+    aiPending: false,
+    aiRequestId: null,
+    aiChatConnectionId: null,
+    aiActions: {},
 
-    // Strip Plasma-only fields before sending — main only needs role +
-    // content per OpenAI/OpenRouter chat shape.
-    const messages: AiMessage[] = [...history, userTurn].map((t) => ({
-      role: t.role,
-      content: t.content,
-    }));
+    async aiAsk(prompt, opts) {
+      const trimmed = prompt.trim();
+      if (!trimmed) return;
+      const state = get();
+      if (state.aiPending) return; // single-flight per chat
+      // G3: a different connection starts a fresh conversation.
+      const connectionId = state.activeConfig?.id ?? null;
+      const sameChat = state.aiChatConnectionId === connectionId;
+      const history = sameChat ? state.aiChat : [];
 
-    const engine = state.activeConfig?.engine ?? 'postgres';
-    const engineContext = buildEngineContext(state);
-
-    try {
-      const res = await ipc.ai.chat({
-        requestId,
-        messages,
-        engine,
-        engineContext,
-        schema:
-          engine === 'postgres'
-            ? opts?.withSchema === false
-              ? null
-              : (state.schema ?? null)
-            : null,
-        model: state.settings.openrouterModel || undefined,
+      const userTurn: AiTurn = {
+        id: freshId(),
+        role: 'user',
+        content: trimmed,
+      };
+      const placeholder: AiTurn = {
+        id: freshId(),
+        role: 'assistant',
+        content: '',
+        streaming: true,
+        parts: [],
+      };
+      const requestId = freshId();
+      set({
+        aiChat: [...history, userTurn, placeholder],
+        aiActions: sameChat ? state.aiActions : {},
+        aiChatConnectionId: connectionId,
+        aiPending: true,
+        aiRequestId: requestId,
+        rightPanelMode: 'ai',
       });
-      if (!res.accepted) {
+
+      // Strip Plasma-only fields before sending — main only needs role +
+      // content per OpenAI/OpenRouter chat shape. An assistant turn carries
+      // one line per action card so the model knows how each one ended.
+      const messages: AiMessage[] = [...history, userTurn].map((t) => ({
+        role: t.role,
+        content: turnHistoryContent(t, state.aiActions),
+      }));
+
+      const engine = state.activeConfig?.engine ?? 'postgres';
+      const sql = isSqlEngine(engine);
+      const engineContext = buildEngineContext(state);
+      const rowData = connectionId
+        ? state.settings.connectionAiRowData?.[connectionId] === true
+        : false;
+      const context = sql ? buildAgentContext(state, { rowData }) : undefined;
+
+      try {
+        const res = await ipc.ai.chat({
+          requestId,
+          messages,
+          engine,
+          engineContext,
+          // Main sends the schema only when the policy allows it (SC-20).
+          schema: sql ? (opts?.withSchema === false ? null : (state.schema ?? null)) : null,
+          model: state.settings.openrouterModel || undefined,
+          ...(sql ? { agent: true } : {}),
+          ...(context ? { context } : {}),
+        });
+        if (!res.accepted) {
+          set((s) => ({
+            aiChat: s.aiChat.map((t) =>
+              t.id === placeholder.id ? { ...t, streaming: false, error: 'request rejected' } : t,
+            ),
+            aiPending: false,
+            aiRequestId: null,
+          }));
+        }
+      } catch (err) {
         set((s) => ({
           aiChat: s.aiChat.map((t) =>
-            t.id === placeholder.id ? { ...t, streaming: false, error: 'request rejected' } : t,
+            t.id === placeholder.id
+              ? {
+                  ...t,
+                  streaming: false,
+                  error: err instanceof Error ? err.message : String(err),
+                }
+              : t,
           ),
           aiPending: false,
           aiRequestId: null,
         }));
       }
-    } catch (err) {
-      set((s) => ({
-        aiChat: s.aiChat.map((t) =>
-          t.id === placeholder.id
-            ? {
-                ...t,
-                streaming: false,
-                error: err instanceof Error ? err.message : String(err),
-              }
-            : t,
-        ),
-        aiPending: false,
-        aiRequestId: null,
-      }));
-    }
-  },
+    },
 
-  async aiCancel() {
-    const id = get().aiRequestId;
-    if (!id) return;
-    try {
-      await ipc.ai.cancel(id);
-    } finally {
-      set((s) => ({
-        aiPending: false,
-        aiRequestId: null,
-        aiChat: s.aiChat.map((t) => (t.streaming ? { ...t, streaming: false } : t)),
-      }));
-    }
-  },
+    async aiCancel() {
+      const id = get().aiRequestId;
+      if (!id) return;
+      // Cards stop first (main resolves its side of them when it cancels the request).
+      actions.cancelAll('The chat was stopped.', { send: false });
+      try {
+        await ipc.ai.cancel(id);
+      } finally {
+        set((s) => ({
+          aiPending: false,
+          aiRequestId: null,
+          aiChat: s.aiChat.map((t) => (t.streaming ? { ...t, streaming: false } : t)),
+        }));
+      }
+    },
 
-  aiClear() {
-    void get().aiCancel();
-    set({ aiChat: [] });
-  },
+    aiClear() {
+      void get().aiCancel();
+      actions.cancelAll('The conversation was cleared.', { send: false });
+      set({ aiChat: [], aiActions: {} });
+    },
 
-  aiApplyEvent(evt) {
-    const state = get();
-    if (state.aiRequestId !== evt.requestId) return; // stale stream
-    if (evt.kind === 'delta') {
-      // Append delta to the last assistant turn (streaming placeholder).
-      const idx = [...state.aiChat]
-        .reverse()
-        .findIndex((t) => t.streaming && t.role === 'assistant');
-      if (idx === -1) return;
-      const realIdx = state.aiChat.length - 1 - idx;
-      set({
-        aiChat: state.aiChat.map((t, i) =>
-          i === realIdx ? { ...t, content: t.content + evt.text } : t,
-        ),
-      });
-      return;
-    }
-    if (evt.kind === 'done') {
-      set({
-        aiPending: false,
-        aiRequestId: null,
-        aiChat: state.aiChat.map((t) => (t.streaming ? { ...t, streaming: false } : t)),
-      });
-      return;
-    }
-    if (evt.kind === 'error') {
+    aiApplyEvent(evt) {
+      const state = get();
+      if (state.aiRequestId !== evt.requestId) return; // stale stream
+      if (evt.kind === 'action') {
+        void actions.handleActionEvent(evt);
+        return;
+      }
+      if (evt.kind === 'delta') {
+        // Append delta to the last assistant turn (streaming placeholder).
+        const idx = [...state.aiChat]
+          .reverse()
+          .findIndex((t) => t.streaming && t.role === 'assistant');
+        if (idx === -1) return;
+        const realIdx = state.aiChat.length - 1 - idx;
+        set({
+          aiChat: state.aiChat.map((t, i) =>
+            i === realIdx
+              ? { ...t, content: t.content + evt.text, parts: appendTurnText(t.parts, evt.text) }
+              : t,
+          ),
+        });
+        return;
+      }
+      // done / error: nothing may still wait on the user.
+      actions.cancelAll(
+        evt.kind === 'error' ? 'The assistant stopped with an error.' : 'The chat ended.',
+        { send: false },
+      );
+      if (evt.kind === 'done') {
+        set({
+          aiPending: false,
+          aiRequestId: null,
+          aiChat: get().aiChat.map((t) => (t.streaming ? { ...t, streaming: false } : t)),
+        });
+        return;
+      }
       set({
         aiPending: false,
         aiRequestId: null,
-        aiChat: state.aiChat.map((t) =>
+        aiChat: get().aiChat.map((t) =>
           t.streaming ? { ...t, streaming: false, error: evt.message } : t,
         ),
       });
-    }
-  },
-});
+    },
+
+    aiApproveAction: (id) => actions.approve(id),
+    aiRejectAction: (id, note) => actions.reject(id, note),
+    aiUndoAction: (id) => actions.undo(id),
+  };
+};
 
 /**
  * Compose a short, engine-specific context blob for the AI system

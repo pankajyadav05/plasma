@@ -320,14 +320,20 @@ export const createTableSlice: SliceCreator<TableSlice> = (set, get) => ({
   async setHiddenColumns(hidden) {
     const tab = activeTab(get());
     if (!tab || tab.kind !== 'table') return;
-    patchActiveTab(set, get, { hiddenColumns: hidden });
+    patchActiveTab(set, get, { hiddenColumns: hidden, agentHiddenColumns: new Set() });
     await runTableDataQuery(set, get, tab.id);
   },
 
   async toggleColumnHidden(column) {
     const tab = activeTab(get());
     if (!tab) return;
-    patchActiveTab(set, get, { hiddenColumns: toggled(tab.hiddenColumns, column) });
+    // A column the user toggles is their choice from now on, whatever hid it before.
+    const agentHidden = new Set<string>(tab.agentHiddenColumns ?? []);
+    agentHidden.delete(column);
+    patchActiveTab(set, get, {
+      hiddenColumns: toggled(tab.hiddenColumns, column),
+      agentHiddenColumns: agentHidden,
+    });
     if (tab.kind === 'table') {
       await runTableDataQuery(set, get, tab.id);
       persistTableColumnState(set, get);
@@ -337,7 +343,7 @@ export const createTableSlice: SliceCreator<TableSlice> = (set, get) => ({
   async showAllColumns() {
     const tab = activeTab(get());
     if (!tab) return;
-    patchActiveTab(set, get, { hiddenColumns: new Set() });
+    patchActiveTab(set, get, { hiddenColumns: new Set(), agentHiddenColumns: new Set() });
     if (tab.kind === 'table') {
       await runTableDataQuery(set, get, tab.id);
       persistTableColumnState(set, get);

@@ -1,10 +1,15 @@
 import { Button } from '@/components/ui/button';
 import { IconButton, Pill } from '@/components/ui/workbench';
 import { markAiApplied } from '@/lib/ai-applied';
+import { aiBadgeLabel, aiBadgeTitle, aiConfigured, describeAiSends } from '@/lib/ai-config';
+import { buildAgentContext } from '@/lib/ai-context';
+import { aiSchemaAllowed } from '@/lib/ai-task';
 import { cn } from '@/lib/cn';
 import { type AiTurn, useActiveTab, useSession } from '@/stores/session';
+import { isSqlEngine } from '@shared/sql-dialect';
 import { Loader2, Send, Sparkles, Square, Trash2 } from 'lucide-react';
 import { type KeyboardEvent, useEffect, useRef, useState } from 'react';
+import { AgentActionCard } from './AgentActionCard';
 
 /**
  * AI sidecar panel. Lives in the RightRail under the 'ai' mode.
@@ -32,14 +37,25 @@ export function AiPanel() {
   const runQuery = useSession((s) => s.runQuery);
   const addTab = useSession((s) => s.addTab);
   const setCanvasMode = useSession((s) => s.setCanvasMode);
-  const hasApiKey = useSession((s) =>
-    Boolean(s.settings.hasOpenrouterApiKey || s.settings.hasClaudeApiKey),
-  );
-  const model = useSession((s) => s.settings.openrouterModel);
+  const settings = useSession((s) => s.settings);
+  const hasApiKey = aiConfigured(settings);
+  const local = settings.aiProvider === 'local';
+  const sqlEngine = useSession((s) => isSqlEngine(s.activeConfig?.engine ?? 'postgres'));
+  const schemaAllowed = useSession((s) => aiSchemaAllowed(s));
+  const tableCount = useSession((s) => s.schema?.tables.length ?? 0);
+  const hasContext = useSession((s) => buildAgentContext(s) !== undefined);
   const allowAiRowData = useSession((s) => {
     const id = s.activeConfig?.id;
     if (!id) return false;
     return s.settings.connectionAiRowData?.[id] === true;
+  });
+  const sends = describeAiSends({
+    settings,
+    sql: sqlEngine,
+    schemaAllowed,
+    tableCount,
+    hasContext,
+    rowData: allowAiRowData,
   });
   const tab = useActiveTab();
 
@@ -95,9 +111,9 @@ export function AiPanel() {
         <Sparkles className="h-3.5 w-3.5 text-[var(--wb-text-2)]" />
         <span
           className="truncate text-[12px] text-[var(--wb-text-2)]"
-          title={`${model} via OpenRouter (your API key)`}
+          title={aiBadgeTitle(settings)}
         >
-          {modelLabel(model)}
+          {aiBadgeLabel(settings)}
         </span>
         <div className="flex-1" />
         {aiChat.length > 0 && (
@@ -109,7 +125,12 @@ export function AiPanel() {
 
       <div ref={scrollerRef} className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
         {empty && (
-          <EmptyState hasKey={hasApiKey} onOpenSettings={() => setCanvasMode('settings')} />
+          <EmptyState
+            hasKey={hasApiKey}
+            local={local}
+            agent={sqlEngine}
+            onOpenSettings={() => setCanvasMode('settings')}
+          />
         )}
         {aiChat.map((turn) => (
           <ChatTurn key={turn.id} turn={turn} onInsert={handleInsert} onRun={handleRun} />
@@ -123,9 +144,13 @@ export function AiPanel() {
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={onKey}
             placeholder={
-              hasApiKey
-                ? 'Ask for a query, paste an error, or describe what you want to find…'
-                : 'Add an OpenRouter API key in Settings to enable AI'
+              !hasApiKey
+                ? local
+                  ? 'Choose a local model in Settings to enable AI'
+                  : 'Add an OpenRouter API key in Settings to enable AI'
+                : sqlEngine
+                  ? 'Ask, or tell the agent what to do: show the latest 10 orders…'
+                  : 'Ask for a query, paste an error, or describe what you want to find…'
             }
             disabled={!hasApiKey}
             rows={3}
@@ -154,25 +179,40 @@ export function AiPanel() {
             </IconButton>
           )}
         </div>
-        <p className="mt-1.5 px-1 text-[11px] leading-snug text-[var(--wb-text-3)]">
-          {allowAiRowData
-            ? 'Schema + capped tool row samples may be sent to OpenRouter when tools run.'
-            : 'Schema names are sent as the system prompt (Settings → AI). Enable "Allow AI tools to read row data" on this connection to let tools send capped row samples.'}
+        <p
+          className="mt-1.5 px-1 text-[11px] leading-snug text-[var(--wb-text-3)]"
+          data-testid="ai-what-is-sent"
+          title="What the next message sends. Change it in Settings, AI, and per connection."
+        >
+          Sent: {sends}
         </p>
       </div>
     </div>
   );
 }
 
-function EmptyState({ hasKey, onOpenSettings }: { hasKey: boolean; onOpenSettings: () => void }) {
+function EmptyState({
+  hasKey,
+  local,
+  agent,
+  onOpenSettings,
+}: {
+  hasKey: boolean;
+  local: boolean;
+  agent: boolean;
+  onOpenSettings: () => void;
+}) {
   if (!hasKey) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-2 px-4 text-center">
         <Sparkles className="h-6 w-6 text-[var(--wb-text-3)]" />
-        <div className="text-[16px] text-[var(--wb-text-2)]">No API key</div>
+        <div className="text-[16px] text-[var(--wb-text-2)]">
+          {local ? 'No local model' : 'No API key'}
+        </div>
         <div className="text-[12px] text-[var(--wb-text-3)]">
-          The assistant uses your own OpenRouter key (it reaches Claude, GPT, Gemini and other
-          models). Add it in Settings → AI.
+          {local
+            ? 'Name the model your local server runs (Ollama or LM Studio) in Settings → AI. Everything stays on this machine.'
+            : 'The assistant uses your own OpenRouter key (it reaches Claude, GPT, Gemini and other models), or a model on this machine. Set it up in Settings → AI.'}
         </div>
         <Pill className="mt-1" onClick={onOpenSettings} data-testid="ai-open-settings">
           Open Settings
@@ -185,8 +225,9 @@ function EmptyState({ hasKey, onOpenSettings }: { hasKey: boolean; onOpenSetting
       <Sparkles className="h-6 w-6 text-[var(--wb-text-3)]" />
       <div className="text-[16px] text-[var(--wb-text-2)]">Ask anything about this database.</div>
       <div className="text-[12px] text-[var(--wb-text-3)]">
-        Try: "top 5 customers by revenue last 30 days" or "why might my query be slow on the orders
-        table?"
+        {agent
+          ? 'Try: "show the latest 10 orders, only id, total, created_at", "top 5 customers by revenue last 30 days", or "why might my query be slow on the orders table?" The agent asks before it opens, runs or changes anything.'
+          : 'Try: "top 5 customers by revenue last 30 days" or "why might my query be slow on the orders table?"'}
       </div>
     </div>
   );
@@ -202,25 +243,48 @@ function ChatTurn({
   onRun: (code: string) => void;
 }) {
   const isUser = turn.role === 'user';
+  const hasCards = Boolean(turn.parts?.some((p) => p.kind === 'action'));
+  // A card waiting on the user is not "thinking".
+  const waitingOnUser = useSession((s) =>
+    Boolean(
+      turn.parts?.some((p) => {
+        if (p.kind !== 'action') return false;
+        const st = s.aiActions[p.actionId]?.status;
+        return st === 'pending' || st === 'running';
+      }),
+    ),
+  );
+  const parts = turn.parts ?? [{ kind: 'text' as const, text: turn.content }];
   return (
     <div className={cn('mb-4 flex flex-col gap-1', isUser ? 'items-end' : 'items-start')}>
       <div
         className={cn(
-          'max-w-[92%] rounded-[8px] px-3 py-2 text-[13px] text-[var(--wb-text)]',
+          'rounded-[8px] px-3 py-2 text-[13px] text-[var(--wb-text)]',
+          hasCards ? 'w-[96%]' : 'max-w-[92%]',
           isUser
             ? 'bg-[var(--wb-selected)]'
             : 'bg-[var(--wb-control)]/60 shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--wb-text)_6%,transparent)]',
         )}
       >
         {isUser ? (
-          <span className="whitespace-pre-wrap">{turn.content}</span>
+          <span className="whitespace-pre-wrap [overflow-wrap:anywhere]">{turn.content}</span>
         ) : (
-          <AssistantContent
-            content={turn.content}
-            streaming={turn.streaming}
-            onInsert={onInsert}
-            onRun={onRun}
-          />
+          <div className="flex flex-col gap-2">
+            {parts.map((p, i) =>
+              p.kind === 'action' ? (
+                <AgentActionCard key={p.actionId} actionId={p.actionId} />
+              ) : p.text.trim() === '' ? null : (
+                <AssistantContent
+                  // biome-ignore lint/suspicious/noArrayIndexKey: part order is stable
+                  key={i}
+                  content={p.text.replace(/^\s+/, '')}
+                  onInsert={onInsert}
+                  onRun={onRun}
+                />
+              ),
+            )}
+            {turn.streaming && !waitingOnUser && <StreamingDot />}
+          </div>
         )}
         {turn.error && (
           <div className="mt-2 rounded-sm border border-destructive/40 bg-destructive/10 px-2 py-1 font-mono text-[11px] text-destructive">
@@ -242,12 +306,10 @@ function ChatTurn({
  */
 function AssistantContent({
   content,
-  streaming,
   onInsert,
   onRun,
 }: {
   content: string;
-  streaming?: boolean;
   onInsert: (code: string) => void;
   onRun: (code: string) => void;
 }) {
@@ -266,12 +328,11 @@ function AssistantContent({
           />
         ) : (
           // biome-ignore lint/suspicious/noArrayIndexKey: chunk order is stable
-          <p key={i} className="whitespace-pre-wrap leading-relaxed">
+          <p key={i} className="whitespace-pre-wrap leading-relaxed [overflow-wrap:anywhere]">
             {p.text}
           </p>
         ),
       )}
-      {streaming && <StreamingDot />}
     </div>
   );
 }
@@ -359,26 +420,3 @@ function parseFences(input: string): Part[] {
 }
 
 const EMPTY_CHAT: AiTurn[] = [];
-
-const PROVIDER_NAMES: Record<string, string> = {
-  anthropic: 'Anthropic',
-  openai: 'OpenAI',
-  google: 'Google',
-  'meta-llama': 'Meta',
-  mistralai: 'Mistral',
-  qwen: 'Qwen',
-  deepseek: 'DeepSeek',
-  'x-ai': 'xAI',
-};
-
-/**
- * Badge label for an OpenRouter model id: "anthropic/claude-sonnet-4.5" →
- * "Anthropic · claude-sonnet-4.5". The request always goes through
- * OpenRouter; the prefix names the model's actual provider (G3).
- */
-export function modelLabel(model: string): string {
-  const slash = model.indexOf('/');
-  if (slash === -1) return model;
-  const vendor = model.slice(0, slash);
-  return `${PROVIDER_NAMES[vendor] ?? vendor} · ${model.slice(slash + 1)}`;
-}

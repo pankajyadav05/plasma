@@ -41,7 +41,14 @@ import { SelectionStatsChip } from './SelectionStats';
 import { SortPopover } from './SortPopover';
 import { isErrorTabActive } from './result-view';
 
-const PAGE_SIZES = [50, 100, 300, 500, 1000] as const;
+const PAGE_SIZES: readonly number[] = [50, 100, 300, 500, 1000];
+
+/** The presets, plus the tab's own size when it is not one of them (e.g. the agent asked for 10 rows). */
+function pageSizeChoices(current: number): number[] {
+  return PAGE_SIZES.includes(current)
+    ? [...PAGE_SIZES]
+    : [...PAGE_SIZES, current].sort((a, b) => a - b);
+}
 
 /**
  * The single bar under every result — TablePlus's footer:
@@ -421,7 +428,7 @@ function RowRange() {
         <PopoverContent side="top" sideOffset={6} className="w-[264px] p-3">
           <div className="mb-2 text-[12px] font-medium text-[var(--wb-text-2)]">Rows per page</div>
           <div className="mb-3 flex flex-nowrap gap-1">
-            {PAGE_SIZES.map((n) => (
+            {pageSizeChoices(tab.pageSize).map((n) => (
               <button
                 key={n}
                 type="button"
