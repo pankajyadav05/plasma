@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { AiModel, AiModelsResult } from './ai-models';
 import type {
   AuditEntry,
   AuditExportRequest,
@@ -1832,7 +1833,11 @@ export const SettingsShape = z.object({
    */
   openrouterApiKey: z.string().default(''),
   hasOpenrouterApiKey: z.boolean().optional(),
-  openrouterModel: z.string().default('anthropic/claude-sonnet-4.5'),
+  openrouterModel: z.string().default('anthropic/claude-sonnet-5.5'),
+  /** Model ids starred in the picker. */
+  aiFavoriteModels: z.array(z.string()).catch([]).default([]),
+  /** The last 5 models used, newest first. */
+  aiRecentModels: z.array(z.string()).catch([]).default([]),
   /** Where AI requests go: OpenRouter (key) or a model server on this machine (Ollama, LM Studio). */
   aiProvider: z.enum(['openrouter', 'local']).catch('openrouter').default('openrouter'),
   /** Base URL of a local OpenAI-compatible server; main only talks to loopback addresses. */
@@ -2114,6 +2119,10 @@ export const AiChatRequest = z.object({
 });
 export type AiChatRequest = z.infer<typeof AiChatRequest>;
 
+export const AiListModelsRequest = z.object({ refresh: z.boolean().optional() });
+export type AiListModelsRequest = z.infer<typeof AiListModelsRequest>;
+export type { AiModel, AiModelsResult };
+
 /** What the agent can ask the workbench to do (each needs the user's approval). */
 export const AgentActionName = z.enum([
   'show_table',
@@ -2342,6 +2351,8 @@ export const IpcChannel = {
   // AI (OpenRouter)
   AiChat: 'plasma:ai:chat',
   AiCancel: 'plasma:ai:cancel',
+  /** The model list for the picker: OpenRouter's live catalogue (cached) or a local server's. */
+  AiListModels: 'plasma:ai:list-models',
   /** The renderer's answer to an agent action card (applied / rejected / …). */
   AiActionResult: 'plasma:ai:action-result',
   /** The agent's read-only query: runs in a read-only session (`aiQuery`), result shown in a tab. */
@@ -2584,6 +2595,8 @@ export interface PlasmaAPI {
     chat(req: AiChatRequest): Promise<{ accepted: boolean }>;
     /** Abort an in-flight streamed chat completion. */
     cancel(requestId: string): Promise<void>;
+    /** Models for the picker: OpenRouter's catalogue (6 h cache) or the local server's list. */
+    listModels(opts?: AiListModelsRequest): Promise<AiModelsResult>;
     /** Answer an agent `action` event (the user approved, rejected, … the card). */
     actionResult(res: AiActionResult): Promise<void>;
     /** Run ONE read-only statement in a read-only session (never the primary's autocommit). */

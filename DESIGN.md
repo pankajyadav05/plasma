@@ -107,6 +107,8 @@ are 13px semibold, sentence case. Tabular numerals for data.
 
 Chrome uses the workbench wrappers; forms and dialogs use `Button`.
 
+- `features/ai/ModelPicker.tsx` — the assistant's model selector (composer chip and Settings → AI field): 560×440 popover, 44px vendor rail (monogram tiles tinted from `--chart-*`, accent bar on the active one), search, two-line rows, Legacy group, refresh footer. Only `--wb-*` / `--chart-*` / `--status-warn` / `--icon-star` tokens.
+
 ## 5. Motion
 
 Motion is a seasoning. Durations: 80ms (hover / focus), 140ms (press,

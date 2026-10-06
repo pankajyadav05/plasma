@@ -17,6 +17,7 @@ import {
 } from '@shared/pg-backup';
 import {
   AiChatRequest,
+  AiListModelsRequest,
   type AppMeta,
   AppUnsavedState,
   CommitEditBatchRequest,
@@ -71,6 +72,7 @@ import {
   startAiChat,
   submitAiActionResult,
 } from './ai';
+import { listLocalModels, listOpenRouterModels, resolveModelsUrl } from './ai-models';
 import { type AuditDeps, recordAuditStatements, registerAuditIpc } from './audit-ipc';
 import {
   ConnectionRecovery,
@@ -1790,6 +1792,19 @@ function registerIpcHandlers() {
       ]);
       throw err;
     }
+  });
+
+  ipcMain.handle(IpcChannel.AiListModels, async (_e, raw: unknown) => {
+    const { refresh } = AiListModelsRequest.parse(raw ?? {});
+    const settings = SettingsShape.parse(getAllSettings());
+    if (settings.aiProvider === 'local') return listLocalModels(settings.aiLocalUrl);
+    return listOpenRouterModels(
+      { refresh },
+      {
+        cachePath: join(app.getPath('userData'), 'ai-models.json'),
+        url: resolveModelsUrl(process.env.PLASMA_AI_MODELS_URL),
+      },
+    );
   });
 
   ipcMain.handle(IpcChannel.AiCancel, async (_e, requestId: unknown): Promise<void> => {

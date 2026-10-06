@@ -1,7 +1,7 @@
 import { Button } from '@/components/ui/button';
 import { IconButton, Pill } from '@/components/ui/workbench';
 import { markAiApplied } from '@/lib/ai-applied';
-import { aiBadgeLabel, aiBadgeTitle, aiConfigured, describeAiSends } from '@/lib/ai-config';
+import { aiConfigured, describeAiSends } from '@/lib/ai-config';
 import { buildAgentContext } from '@/lib/ai-context';
 import { aiSchemaAllowed } from '@/lib/ai-task';
 import { cn } from '@/lib/cn';
@@ -10,6 +10,7 @@ import { isSqlEngine } from '@shared/sql-dialect';
 import { Loader2, Send, Sparkles, Square, Trash2 } from 'lucide-react';
 import { type KeyboardEvent, useEffect, useRef, useState } from 'react';
 import { AgentActionCard } from './AgentActionCard';
+import { ModelPicker } from './ModelPicker';
 
 /**
  * AI sidecar panel. Lives in the RightRail under the 'ai' mode.
@@ -109,12 +110,7 @@ export function AiPanel() {
     <div className="flex h-full flex-col">
       <div className="flex h-8 shrink-0 items-center gap-2 border-b border-[color-mix(in_srgb,var(--wb-text)_8%,transparent)] pl-3 pr-2">
         <Sparkles className="h-3.5 w-3.5 text-[var(--wb-text-2)]" />
-        <span
-          className="truncate text-[12px] text-[var(--wb-text-2)]"
-          title={aiBadgeTitle(settings)}
-        >
-          {aiBadgeLabel(settings)}
-        </span>
+        <span className="truncate text-[12px] text-[var(--wb-text-2)]">Assistant</span>
         <div className="flex-1" />
         {aiChat.length > 0 && (
           <IconButton variant="plain" label="Clear conversation" onClick={aiClear}>
@@ -179,8 +175,11 @@ export function AiPanel() {
             </IconButton>
           )}
         </div>
+        <div className="mt-1.5 flex min-w-0 items-center">
+          <ModelPicker />
+        </div>
         <p
-          className="mt-1.5 px-1 text-[11px] leading-snug text-[var(--wb-text-3)]"
+          className="mt-1 px-1 text-[11px] leading-snug text-[var(--wb-text-3)]"
           data-testid="ai-what-is-sent"
           title="What the next message sends. Change it in Settings, AI, and per connection."
         >

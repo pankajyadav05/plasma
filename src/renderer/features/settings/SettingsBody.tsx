@@ -22,6 +22,7 @@ import { LINT_RULES, LINT_RULE_IDS } from '@shared/pg-migration-lint';
 import type { Settings } from '@shared/protocol';
 import { Download, Loader2, RotateCw } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ModelPicker } from '../ai/ModelPicker';
 import { CliToolField } from './CliToolField';
 
 type ThemeName = Settings['themeName'];
@@ -784,20 +785,15 @@ function AiSection() {
           </Row>
           <Row
             label="Model"
-            htmlFor="ai-local-model"
             hint={
               <>
-                The model name your server knows, e.g. <code>llama3.1</code> or <code>qwen2.5</code>
-                . Pick one that supports tool calling for the agent.
+                The models your server has loaded. Type a name, e.g. <code>llama3.1</code> or{' '}
+                <code>qwen2.5</code>, to use one that is not listed. Pick one that supports tool
+                calling for the agent.
               </>
             }
           >
-            <DebouncedSettingsInput
-              id="ai-local-model"
-              value={settings.aiLocalModel}
-              onCommit={(v) => void updateSettings({ aiLocalModel: v })}
-              placeholder="llama3.1"
-            />
+            <ModelPicker variant="field" />
           </Row>
         </>
       ) : (
@@ -841,20 +837,14 @@ function AiSection() {
           </Row>
           <Row
             label="Model"
-            htmlFor="openrouter-model"
             hint={
               <>
-                Any OpenRouter model id, e.g. <code>anthropic/claude-sonnet-4.5</code>,{' '}
-                <code>openai/gpt-4o</code>, <code>google/gemini-2.5-pro</code>.
+                The live OpenRouter list, newest first. To use one that is not listed, type its id
+                in the search, e.g. <code>anthropic/claude-sonnet-5.5</code>.
               </>
             }
           >
-            <DebouncedSettingsInput
-              id="openrouter-model"
-              value={settings.openrouterModel}
-              onCommit={(v) => void updateSettings({ openrouterModel: v })}
-              placeholder="anthropic/claude-sonnet-4.5"
-            />
+            <ModelPicker variant="field" />
           </Row>
         </>
       )}
