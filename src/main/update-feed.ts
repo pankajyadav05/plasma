@@ -61,3 +61,17 @@ export function macDownloadUrl(feedBaseUrl: string | null, version: string, arch
   if (!SAFE_VERSION.test(version)) return SITE_DOWNLOAD_URL;
   return `${feedBaseUrl}/Plasma-${version}-${arch}.dmg`;
 }
+
+/**
+ * Direct .deb URL from the file list of a signature verified manifest, for
+ * Debian installs that must be updated by hand. Plain file names only; the
+ * download page when the release has no .deb.
+ */
+export function debDownloadUrlFromManifest(
+  feedBaseUrl: string | null,
+  files: readonly { url: string }[],
+): string {
+  if (feedBaseUrl == null) return SITE_DOWNLOAD_URL;
+  const deb = files.find((f) => /^[\w.-]+\.deb$/.test(f.url));
+  return deb ? `${feedBaseUrl}/${deb.url}` : SITE_DOWNLOAD_URL;
+}

@@ -6,9 +6,11 @@ import { DataFilesDialogs } from '@/features/data-files/DataFilesDialogs';
 import { type CommandId, runCommand } from '@/features/keymap/commands';
 import { WorkspaceDialogs } from '@/features/workspace/WorkspaceDialogs';
 import { routeAiTaskEvent } from '@/lib/ai-task';
+import { announceUpdateOutcome, planResume } from '@/lib/update-launch';
 import { handleDroppedDataFiles } from '@/stores/data-files';
 import { useReconnect } from '@/stores/reconnect';
 import { useSession } from '@/stores/session';
+import { flushPersistedTabs, restoreTabsOnceFor } from '@/stores/session-tabs';
 import { useWorkspace } from '@/stores/workspace';
 import type { LaunchAction } from '@shared/deep-link';
 import { ConnectionRecovered, type DataFilePickResult } from '@shared/protocol';
@@ -60,6 +62,25 @@ export function App() {
       }
 
       const { savedConnections, connectionState, settings } = useSession.getState();
+      // Did an update just restart Plasma? Say how it went, and bring the session back
+      // even when "Connect on launch" / "Restore tabs on launch" are off: that restart
+      // was not the user's choice to close.
+      const update = await window.plasma.update.launchInfo().catch(() => null);
+      announceUpdateOutcome(update);
+      const resume = planResume(
+        update,
+        savedConnections,
+        useWorkspace.getState().snapshot?.profiles.map((p) => p.id) ?? [],
+      );
+      if (resume && connectionState === 'idle') {
+        restoreTabsOnceFor(resume.kind === 'saved' ? resume.id : resume.connectionId);
+        if (resume.kind === 'saved') {
+          useReconnect.getState().start({ id: resume.id, name: resume.name }, 'launch');
+        } else {
+          await useWorkspace.getState().connectProfile(resume.profileId);
+        }
+        return;
+      }
       if (savedConnections.length === 0 && connectionState === 'idle') {
         session.openDialog();
         return;
@@ -82,6 +103,16 @@ export function App() {
       ...MENU_COMMANDS.map(([channel, id]) =>
         window.plasmaEvents.on(channel, () => runCommand(id)),
       ),
+      // Main is about to restart for an update: write the tab strip down now and say
+      // which connection is live, so the next launch can bring both back.
+      window.plasmaEvents.on('plasma:update:prepare', () => {
+        (document.activeElement as HTMLElement | null)?.blur?.(); // commit a field mid-edit
+        flushPersistedTabs();
+        const s = session();
+        void window.plasma.update.prepared({
+          connectionId: s.connectionState === 'connected' ? (s.activeConfig?.id ?? null) : null,
+        });
+      }),
       window.plasmaEvents.on('plasma:workspace:changed', (...args: unknown[]) => {
         useWorkspace.getState().setSnapshot((args[0] ?? null) as WorkspaceSnapshot | null);
       }),

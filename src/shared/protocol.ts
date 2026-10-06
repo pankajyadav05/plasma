@@ -265,6 +265,10 @@ export const AppUnsavedState = z.object({
   pendingEdits: z.number().int().nonnegative(),
   /** A query is still executing in some tab. */
   runningQuery: z.boolean().optional(),
+  /** A Safe Run holds a transaction open, waiting for Commit / Roll back. */
+  safeRunPending: z.boolean().optional(),
+  /** SQL tabs with unsaved text that the tab persistence cannot bring back after a restart. */
+  unsavedSqlTabs: z.number().int().nonnegative().optional(),
 });
 export type AppUnsavedState = z.infer<typeof AppUnsavedState>;
 
@@ -2371,6 +2375,12 @@ export const IpcChannel = {
   UpdateCheck: 'plasma:update:check',
   UpdateInstall: 'plasma:update:install',
   UpdateStatus: 'plasma:update:status',
+  /** Main → renderer: flush what must survive a restart (tabs, focused field). */
+  UpdatePrepareEvent: 'plasma:update:prepare',
+  /** Renderer → main: the flush is done; carries the live connection id. */
+  UpdatePrepared: 'plasma:update:prepared',
+  /** Renderer → main, once per launch: how the previous update restart ended. */
+  UpdateLaunchInfo: 'plasma:update:launchInfo',
   // Dev sanity checks
   PingMain: 'plasma:ping:main',
   PingWorker: 'plasma:ping:worker',
@@ -2391,7 +2401,7 @@ export const IpcChannel = {
 export type UpdateStatus =
   | { kind: 'idle' }
   | { kind: 'checking' }
-  | { kind: 'not-available'; version: string }
+  | { kind: 'not-available'; version: string; checkedAt?: number }
   | { kind: 'available'; version: string; releaseNotes?: string | null }
   | {
       kind: 'downloading';
@@ -2401,14 +2411,30 @@ export type UpdateStatus =
       total: number;
     }
   | { kind: 'downloaded'; version: string; releaseNotes?: string | null }
+  /** The user confirmed; main is shutting down and handing over to the installer. */
+  | { kind: 'restarting'; version: string }
   /**
-   * macOS only: a new version exists but this build cannot install it —
-   * Squirrel.Mac rejects updates that do not satisfy the installed app's
-   * designated requirement, which unsigned releases never do. `downloadUrl`
-   * points at the .dmg for `version`. See docs/mac-auto-update.md.
+   * This build cannot install the update itself (portable EXE, .deb, a macOS
+   * app that was never moved to Applications, no signed manifest). The button
+   * opens `downloadUrl`; `reason` says why. See docs/mac-auto-update.md.
    */
-  | { kind: 'available-manual'; version: string; downloadUrl: string }
+  | { kind: 'available-manual'; version: string; downloadUrl: string; reason?: string }
   | { kind: 'error'; message: string };
+
+/** How the previous update restart ended, handed to the renderer once per launch. */
+export interface UpdateLaunchInfo {
+  /** The restart was started by an update: reconnect and restore tabs even if those settings are off. */
+  resume: boolean;
+  /** Saved connection that was live when the update restarted the app. */
+  connectionId: string | null;
+  outcome: 'none' | 'updated' | 'failed';
+  /** The running version (for `updated`) or the version that was expected (for `failed`). */
+  version: string | null;
+  /** `failed` only: where the installer wrote its log, when it has one. */
+  logPath: string | null;
+  /** `failed` only: where to download the build by hand. */
+  downloadUrl: string | null;
+}
 
 // ─── Ping (dev sanity check) ─────────────────────────────────────────
 
@@ -2696,12 +2722,18 @@ export interface PlasmaAPI {
     /** Trigger an explicit check now. Returns the status post-check. */
     check(): Promise<UpdateStatus>;
     /**
-     * Install the downloaded update + restart. On `available-manual` it opens
-     * the .dmg download instead; no-op for every other status.
+     * Restart to install the downloaded update. Main lists what would be lost
+     * and asks first when something is at stake; with nothing at stake it
+     * restarts at once. On `available-manual` it opens the download instead;
+     * no-op for every other status.
      */
     install(): Promise<void>;
     /** Read the most recent status snapshot (no network). */
     status(): Promise<UpdateStatus>;
+    /** Answer to `plasma:update:prepare`: tabs are flushed; carries the live connection. */
+    prepared(info: { connectionId: string | null }): Promise<void>;
+    /** Once per launch: whether an update restart just happened, and how it ended. */
+    launchInfo(): Promise<UpdateLaunchInfo>;
   };
   /** D1: team workspaces (`.plasma/` folders). */
   workspace: import('./workspace').WorkspaceApi;

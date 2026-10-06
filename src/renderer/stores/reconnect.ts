@@ -2,6 +2,8 @@ import { ipc } from '@/lib/ipc';
 import { create } from 'zustand';
 import { useSession } from './session';
 import { pendingEditCount } from './session-pending-edits';
+import { safeRunPending } from './session-safe-run';
+import { unrestorableDirtyTabs } from './session-tabs';
 
 /**
  * Auto-connect / auto-reconnect state machine.
@@ -139,14 +141,23 @@ useSession.subscribe((state, prev) => {
 });
 
 // C32: keep main's quit / close guard informed about what would be lost.
+// The same numbers feed the "Restart to update" confirmation.
 let lastUnsaved = '';
+let lastTabs: unknown = null;
+let lastUnsavedTabs = 0;
 useSession.subscribe((state) => {
+  if (state.tabs !== lastTabs) {
+    lastTabs = state.tabs;
+    lastUnsavedTabs = unrestorableDirtyTabs(state);
+  }
   const next = {
     openTransaction: state.txnState !== 'none',
     pendingEdits: pendingEditCount(state.pendingEditsByTab),
     runningQuery: (state.tabs ?? []).some((t) => t.queryRunState === 'running'),
+    safeRunPending: safeRunPending(state.safeRun),
+    unsavedSqlTabs: lastUnsavedTabs,
   };
-  const key = `${next.openTransaction}:${next.pendingEdits}:${next.runningQuery}`;
+  const key = `${next.openTransaction}:${next.pendingEdits}:${next.runningQuery}:${next.safeRunPending}:${next.unsavedSqlTabs}`;
   if (key === lastUnsaved) return;
   lastUnsaved = key;
   try {

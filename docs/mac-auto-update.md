@@ -11,7 +11,8 @@ did not pass validation: code has no resources but signature indicates they
 must be present
 ```
 
-Windows is unaffected — NSIS updates do not go through any of this.
+Windows is unaffected: NSIS updates do not go through any of this. (This was the
+behaviour before Plasma gained its own macOS installer; see "What the app does now".)
 
 ## Why it happens
 
@@ -61,34 +62,91 @@ certificate leaf[subject.OU] = "<TEAMID>"
 ## What the app does now
 
 `src/main/mac-signature.ts` classifies the running bundle at launch by reading
-its own Mach-O and resource envelope (no `codesign` subprocess — `/usr/bin/
-codesign` is an Xcode Command Line Tools shim and is not usable on stock user
-machines):
+its own Mach-O and resource envelope (no `codesign` subprocess is needed for the
+classification):
 
 | classification | meaning |
 | --- | --- |
-| `certificate` | signed by a real identity — Squirrel can install |
-| `adhoc` | ad-hoc signed bundle — requirement is build-specific |
-| `bundle-unsigned` | signed Mach-O, unsigned bundle (what ships today) |
+| `certificate` | signed by a real identity: Squirrel can install |
+| `adhoc` | ad-hoc signed bundle: requirement is build-specific |
+| `bundle-unsigned` | signed Mach-O, unsigned bundle |
 | `unsigned` | no signature at all |
 | `unreadable` | executable missing or unparseable |
 
-Anything other than `certificate` puts the updater in **manual mode**
-(`src/main/updater.ts`):
+Anything other than `certificate` means Squirrel is never used. Instead Plasma
+installs updates **itself** (`src/main/mac-self-update.ts`), with the same
+integrity guarantee as every other platform: the ed25519 signed manifest
+(docs/release.md), not Apple code signing.
 
-- `autoDownload` / `autoInstallOnAppQuit` are off, so the app no longer pulls
-  ~110 MB every poll cycle for a payload ShipIt will reject.
-- `update-available` broadcasts `{ kind: 'available-manual', version,
-  downloadUrl }`. The URL is `<publish url>/Plasma-<version>-<arch>.dmg`, read
-  from the `app-update.yml` baked into the bundle, so it always points at the
-  bucket that build publishes to.
-- Settings → About and the status-bar pill show **Download v\<version\>**;
-  clicking opens that .dmg in the browser.
-- `plasma:update:install` only calls `quitAndInstall` when a download really
-  completed; on `available-manual` it opens the .dmg instead.
+### The self-install flow (no Developer ID)
 
-Checking still happens, so users are told a new version exists — they just
-install it by dragging it to /Applications.
+1. **Check.** The signed `latest-mac.yml` is verified. Without a verified
+   manifest (no key embedded, or an unsigned legacy release) there is no
+   self-install, only the manual download below.
+2. **Download.** The arm64 `Plasma-<v>-arm64.zip` named in the signed manifest
+   streams to `<userData>/pending-update/`, hashed while it streams. It gets its
+   final name only if the sha512 equals the signed one; anything else is deleted
+   and the update is refused. The status shows progress like on other platforms.
+3. **Unpack and check.** `ditto -x -k` into `pending-update/stage-<v>-<id>/`.
+   The bundle must have our `CFBundleIdentifier` (read from the running app),
+   `CFBundleShortVersionString` equal to the announced version, and pass
+   `codesign --verify --deep --strict` (the ad-hoc signature added in
+   `after-pack.cjs` is fine). Any failure removes the staging folder and falls
+   back to the manual download with the reason.
+4. **Can this app replace itself?** The running bundle (from
+   `process.execPath` up to `*.app`) must not run from App Translocation
+   (`/AppTranslocation/`) or a read-only volume (a mounted dmg), and its parent
+   folder must be writable by the user. Otherwise the top bar offers "Update"
+   (manual download) and Settings says **"Move Plasma to Applications to get
+   automatic updates."**
+5. **Restart to update.** One click when nothing is at stake; otherwise main
+   lists what would be lost first (pending grid edits, an open transaction, a
+   running query, a pending Safe Run, SQL tabs that cannot be restored). Then:
+   the renderer flushes the tab strip, a restart marker is written
+   (`<userData>/update-restart.json`: connection, workspace, expected version),
+   the workers are stopped (session disconnected, tunnels closed, local store
+   closed), and a detached `/bin/sh` helper is started from the staging folder
+   and Plasma quits.
+6. **The helper** (`buildHelperScript`; log: `<userData>/logs/update-helper.log`)
+   waits for Plasma's PID to exit (it logs after 60 s and keeps waiting quietly for up to 30 min), refuses to touch anything if Plasma was reopened by hand in the meantime, then:
+   - moves the new bundle next to the old one as `Plasma.app.new-<id>` (same
+     volume; `ditto` copy if `mv` fails);
+   - renames the old bundle to `Plasma.app.old-<id>`, renames the new one into
+     place;
+   - removes `com.apple.quarantine` (files our own process wrote do not have it,
+     so Gatekeeper does not prompt again) and runs `open -n`;
+   - on any failure puts the old bundle back and reopens it;
+   - on success moves the old bundle into the staging folder (so no stale copy can stay in Applications) and deletes that folder.
+   It only ever deletes names it created (`.old-`, `.new-`, `.bad-` + id next to
+   the app, and the staging folder if it holds `.plasma-stage` and sits inside
+   `pending-update/`); every other path is refused. All paths are single-quoted
+   literals, so spaces and quotes are safe.
+7. **Next launch.** The marker says which version was expected. If the running
+   version is older, the app shows "The update could not be installed" with the
+   log path and the manual download. If it is the new version, a toast says
+   "Updated to Plasma X · What's new". Either way the connection and tabs come
+   back, even with "Connect on launch" / "Restore tabs on launch" off.
+
+### Keychain prompt after an update
+
+Plasma's `safeStorage` key lives in the login keychain ("Plasma Safe Storage").
+Its access list follows the app's code signature. With ad-hoc signing every
+build has a different signature, so macOS may ask **once after each update** to
+allow Plasma to use that item. Click "Always Allow". The fix is a stable
+signing certificate (below): the signature, and with it the access list, then
+stays the same across releases.
+
+### Manual download (fallback)
+
+`available-manual` carries the `.dmg` URL (`<publish url>/Plasma-<version>-<arch>.dmg`,
+taken from the signed manifest when there is one) and a `reason`. Settings →
+Updates and the top-bar "Update" pill open it. This is what Intel Macs, apps
+running from a dmg or from Downloads, and builds without a verified manifest get.
+
+### Certificate-signed builds
+
+When `mac-signature.ts` reports `certificate` (a future Developer ID build),
+Squirrel.Mac is used again, behind the same "Restart to update" button.
 
 ## Enabling real auto-update
 

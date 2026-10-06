@@ -12,7 +12,7 @@ import { SectionHeading } from '@/components/ui/view-parts';
 import { Segmented } from '@/components/ui/workbench';
 import { PgBinDirField } from '@/features/backup/PgBinDirField';
 import { isMac } from '@/lib/platform';
-import { describeUpdateStatus } from '@/lib/update-status';
+import { describeCheckedAt, describeUpdateStatus } from '@/lib/update-status';
 import { useUpdate } from '@/lib/use-update';
 import { SAFE_MODE_LABEL, SAFE_MODE_LEVELS } from '@/stores/safe-mode';
 import { useSession } from '@/stores/session';
@@ -1128,16 +1128,21 @@ function DebouncedSettingsInput({
 }
 
 /**
- * About — app version, "Check for updates" and a restart-to-install
- * action that mirrors the toolbar's update badge.
+ * Updates — current version, when the feed was last checked, what the updater
+ * is doing, "Check now" and, once a download is ready, "Restart to update"
+ * (the same action as the top-bar pill: main asks first when something would
+ * be lost).
  */
 function UpdateField() {
-  const { status, check, install } = useUpdate();
+  const { status, lastCheckedAt, check, install } = useUpdate();
   const [appVersion, setAppVersion] = useState<string>('');
   const [checking, setChecking] = useState(false);
+  const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {
     void window.plasma.app.meta().then((m) => setAppVersion(m.version));
+    const t = setInterval(() => setNow(Date.now()), 30_000);
+    return () => clearInterval(t);
   }, []);
 
   const onCheck = async () => {
@@ -1146,10 +1151,18 @@ function UpdateField() {
       await check();
     } finally {
       setChecking(false);
+      setNow(Date.now());
     }
   };
 
   const statusLine = describeUpdateStatus(status, appVersion);
+  const ready = status.kind === 'downloaded' || status.kind === 'restarting';
+  const checkDisabled =
+    checking ||
+    status.kind === 'checking' ||
+    status.kind === 'downloading' ||
+    status.kind === 'downloaded' ||
+    status.kind === 'restarting';
 
   return (
     <div className="flex flex-col gap-2 rounded-[8px] bg-[var(--wb-control)] px-3 py-2.5">
@@ -1159,37 +1172,46 @@ function UpdateField() {
           <div className="font-mono text-[12px] tabular-nums text-[var(--wb-text-2)]">
             v{appVersion || '—'}
           </div>
+          <div className="text-[12px] text-[var(--wb-text-2)]">
+            Last checked: {describeCheckedAt(lastCheckedAt, now)}
+          </div>
         </div>
-        {status.kind === 'downloaded' ? (
-          <Button variant="primary" size="sm" onClick={() => void install()}>
-            <Download />
-            Restart & install v{status.version}
-          </Button>
-        ) : status.kind === 'available-manual' ? (
-          <Button
-            variant="primary"
-            size="sm"
-            onClick={() => void install()}
-            title="Opens the .dmg in your browser — unsigned macOS builds cannot self-install"
-          >
-            <Download />
-            Download v{status.version}
-          </Button>
-        ) : (
+        <div className="flex items-center gap-2">
+          {ready ? (
+            <Button
+              variant="primary"
+              size="sm"
+              disabled={status.kind === 'restarting'}
+              onClick={() => void install()}
+            >
+              <Download />
+              Restart to update{status.kind === 'downloaded' ? ` to v${status.version}` : ''}
+            </Button>
+          ) : status.kind === 'available-manual' ? (
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={() => void install()}
+              title={status.reason ?? 'Opens the download page in your browser'}
+            >
+              <Download />
+              Download v{status.version}
+            </Button>
+          ) : null}
           <Button
             variant="outline"
             size="sm"
             onClick={() => void onCheck()}
-            disabled={checking || status.kind === 'checking' || status.kind === 'downloading'}
+            disabled={checkDisabled}
           >
             {checking || status.kind === 'checking' ? (
               <Loader2 className="animate-spin" />
             ) : (
               <RotateCw />
             )}
-            Check for updates
+            Check now
           </Button>
-        )}
+        </div>
       </div>
       <p className="text-[12px] text-[var(--wb-text-2)]" aria-live="polite">
         {statusLine}

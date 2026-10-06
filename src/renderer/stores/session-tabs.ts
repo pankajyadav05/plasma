@@ -224,6 +224,39 @@ interface SubscribableStore<S> {
 
 const PERSIST_DEBOUNCE_MS = 600;
 
+let flushActive: (() => void) | null = null;
+
+/** Write any debounced tab-strip save now (an update restart must not wait 600 ms). */
+export function flushPersistedTabs(): void {
+  flushActive?.();
+}
+
+/**
+ * SQL tabs whose unsaved text would not survive a restart: every dirty tab
+ * when nothing is being persisted (no live SQL connection), or the ones over
+ * `MAX_SQL_CHARS` that persistence skips. Feeds the "what would be lost" list.
+ */
+export function unrestorableDirtyTabs(
+  state: Pick<PersistableState, 'tabs' | 'activeConfig' | 'tabsConnectionId'>,
+): number {
+  const dirty = (state.tabs ?? []).filter(isTabDirty);
+  if (dirty.length === 0) return 0;
+  const connId = state.activeConfig?.id;
+  const engine = state.activeConfig?.engine ?? 'postgres';
+  const persisted = Boolean(connId) && engineCaps(engine).sql && state.tabsConnectionId === connId;
+  return persisted ? dirty.filter((t) => t.sql.length > MAX_SQL_CHARS).length : dirty.length;
+}
+
+let restoreOnceFor: string | null = null;
+
+/**
+ * An update restart was not the user's choice to close: bring the saved tabs
+ * back for this connection even when "Restore tabs on launch" is off.
+ */
+export function restoreTabsOnceFor(connectionId: string | null): void {
+  restoreOnceFor = connectionId;
+}
+
 /**
  * Write tabs to localStorage (debounced) whenever they change, keyed by
  * the connection the tabs were adopted for. Tabs only persist once
@@ -258,8 +291,10 @@ export function installTabPersistence<S extends PersistableState>(
 
   const onUnload = () => flush();
   globalThis.addEventListener?.('beforeunload', onUnload);
+  flushActive = flush;
   return () => {
     flush();
+    if (flushActive === flush) flushActive = null;
     unsub();
     globalThis.removeEventListener?.('beforeunload', onUnload);
   };
@@ -597,7 +632,9 @@ export function adoptConnectionTabs(
   }
   const pageSize = state.settings.defaultPageSize;
   // Settings → "Restore tabs on launch" (restoreWorkspace, default on).
-  const restore = state.settings.restoreWorkspace !== false;
+  const forced = connId != null && restoreOnceFor === connId;
+  if (forced) restoreOnceFor = null;
+  const restore = state.settings.restoreWorkspace !== false || forced;
   const persisted = restore && connId && engineCaps(engine).sql ? loadPersistedTabs(connId) : null;
   const pristine =
     state.tabs.length === 1 &&

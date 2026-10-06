@@ -94,3 +94,33 @@ export function installLauncher(opts: {
   symlinkSync(script, dest);
   return { installedAt: dest, onPath: dirOnPath(dir, pathEnv), kind: 'symlink' };
 }
+
+const quoteForWrapper = (p: string) => p.replace(/(["\\$`])/g, '\\$1');
+
+/**
+ * After an AppImage update renamed the file, point the installed `plasma`
+ * wrapper (written by `installLauncher`) at the new one. Only wrappers that
+ * are ours and name `oldAppImage` are rewritten; returns the paths changed.
+ */
+export function repointAppImageWrappers(
+  dirs: readonly string[],
+  oldAppImage: string,
+  newAppImage: string,
+): string[] {
+  const changed: string[] = [];
+  const from = `PLASMA_APP="${quoteForWrapper(oldAppImage)}"`;
+  const to = `PLASMA_APP="${quoteForWrapper(newAppImage)}"`;
+  for (const dir of dirs) {
+    const dest = join(dir, 'plasma');
+    try {
+      if (linkTarget(dest) !== null || !lstatSync(dest).isFile()) continue;
+      const text = readFileSync(dest, 'utf8');
+      if (!text.includes('command-line companion for the Plasma') || !text.includes(from)) continue;
+      writeFileSync(dest, text.replace(from, to), { mode: 0o755 });
+      changed.push(dest);
+    } catch {
+      // not installed there, or not writable (system folder): nothing to do
+    }
+  }
+  return changed;
+}

@@ -14,7 +14,7 @@ import type { UpdateStatus } from '@shared/protocol';
 export function describeUpdateStatus(status: UpdateStatus, appVersion: string): string {
   switch (status.kind) {
     case 'idle':
-      return 'Click "Check for updates" to fetch the latest manifest.';
+      return 'Click "Check now" to look for a new version.';
     case 'checking':
       return 'Checking for updates…';
     case 'not-available': {
@@ -26,14 +26,28 @@ export function describeUpdateStatus(status: UpdateStatus, appVersion: string): 
     case 'available':
       return `Update v${status.version} found — downloading in the background.`;
     case 'available-manual':
-      return `Update v${status.version} is available, but this macOS build is unsigned and cannot install itself — download the .dmg and replace Plasma in /Applications.`;
+      return `Update v${status.version} is available. ${status.reason ?? 'Download it to update.'}`;
     case 'downloading':
       return `Downloading update — ${Math.round(status.percent)}% (${formatBytes(status.bytesPerSecond)}/s)`;
     case 'downloaded':
-      return `Update v${status.version} downloaded — restart to install.`;
+      return `Update v${status.version} is ready — restart to install.`;
+    case 'restarting':
+      return `Restarting to install v${status.version}…`;
     case 'error':
-      return `Update check failed: ${status.message}`;
+      return `Update problem: ${status.message}`;
   }
+}
+
+/** "just now", "5 minutes ago", "yesterday"; the date after that. */
+export function describeCheckedAt(at: number | null, now: number): string {
+  if (at == null) return 'not checked yet';
+  const sec = Math.max(0, Math.round((now - at) / 1000));
+  if (sec < 45) return 'just now';
+  const min = Math.round(sec / 60);
+  if (min < 60) return `${min} minute${min === 1 ? '' : 's'} ago`;
+  const hours = Math.round(min / 60);
+  if (hours < 24) return `${hours} hour${hours === 1 ? '' : 's'} ago`;
+  return new Date(at).toLocaleDateString();
 }
 
 /**

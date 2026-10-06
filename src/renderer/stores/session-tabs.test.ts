@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { QueryTab } from './session';
 import {
+  MAX_SQL_CHARS,
+  adoptConnectionTabs,
   duplicateTitle,
+  flushPersistedTabs,
   installTabPersistence,
   isPreviewTab,
   isTabDirty,
@@ -9,7 +12,9 @@ import {
   nextSqlTabTitle,
   parsePersistedTabs,
   restoreTabs,
+  restoreTabsOnceFor,
   serializeTabs,
+  unrestorableDirtyTabs,
 } from './session-tabs';
 
 function tab(partial: Partial<QueryTab>): QueryTab {
@@ -208,5 +213,153 @@ describe('installTabPersistence', () => {
     vi.advanceTimersByTime(1000);
     expect(loadPersistedTabs('c1')?.tabs[0]?.sql).toBe('select 10');
     stop();
+  });
+});
+
+describe('flushPersistedTabs (update restart)', () => {
+  const store = new Map<string, string>();
+  beforeEach(() => {
+    vi.useFakeTimers();
+    store.clear();
+    vi.stubGlobal('localStorage', {
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => store.set(k, v),
+      removeItem: (k: string) => store.delete(k),
+    });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it('writes the pending tab strip at once instead of after the debounce', () => {
+    type S = {
+      tabs: QueryTab[];
+      activeTabId: string;
+      tabsConnectionId: string | null;
+      activeConfig: { id?: string; engine?: string } | null;
+    };
+    let state: S = {
+      tabs: [],
+      activeTabId: '',
+      tabsConnectionId: 'c1',
+      activeConfig: { id: 'c1' },
+    };
+    const listeners: Array<(s: S, p: S) => void> = [];
+    const stop = installTabPersistence({
+      getState: () => state,
+      subscribe: (l) => {
+        listeners.push(l);
+        return () => undefined;
+      },
+    });
+    const prev = state;
+    state = { ...state, tabs: [tab({ id: 'x', sql: 'select unsaved' })], activeTabId: 'x' };
+    for (const l of listeners) l(state, prev);
+    expect(store.size).toBe(0);
+
+    flushPersistedTabs();
+
+    expect(loadPersistedTabs('c1')?.tabs[0]?.sql).toBe('select unsaved');
+    stop();
+    expect(() => flushPersistedTabs()).not.toThrow();
+  });
+});
+
+describe('unrestorableDirtyTabs', () => {
+  const live = { activeConfig: { id: 'c1', engine: 'postgres' }, tabsConnectionId: 'c1' };
+
+  it('is zero when every dirty tab is written to disk', () => {
+    expect(
+      unrestorableDirtyTabs({
+        ...live,
+        tabs: [tab({ sql: 'select 1' }), tab({ sql: '', cleanSql: '' })],
+      }),
+    ).toBe(0);
+  });
+
+  it('counts a buffer that persistence skips for being too large', () => {
+    expect(
+      unrestorableDirtyTabs({
+        ...live,
+        tabs: [tab({ sql: 'x'.repeat(MAX_SQL_CHARS + 1) }), tab({ sql: 'select 1' })],
+      }),
+    ).toBe(1);
+  });
+
+  it('counts every dirty tab when nothing is persisted (no live SQL connection)', () => {
+    const tabs = [tab({ sql: 'select 1' }), tab({ sql: 'select 2' }), tab({ sql: '' })];
+    expect(unrestorableDirtyTabs({ activeConfig: null, tabsConnectionId: null, tabs })).toBe(2);
+    expect(
+      unrestorableDirtyTabs({
+        activeConfig: { id: 'r', engine: 'redis' },
+        tabsConnectionId: 'r',
+        tabs,
+      }),
+    ).toBe(2);
+    // tabs adopted for another connection are not saved under this one
+    expect(unrestorableDirtyTabs({ ...live, tabsConnectionId: 'other', tabs })).toBe(2);
+  });
+});
+
+describe('restoring tabs after an update restart', () => {
+  const store = new Map<string, string>();
+  beforeEach(() => {
+    store.clear();
+    vi.stubGlobal('localStorage', {
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => store.set(k, v),
+      removeItem: (k: string) => store.delete(k),
+    });
+    store.set(
+      'plasma.tabs.v1.c1',
+      JSON.stringify({
+        v: 1,
+        activeIndex: 1,
+        tabs: [
+          { kind: 'sql', title: 'query-1.sql', sql: 'select 1' },
+          { kind: 'sql', title: 'query-2.sql', sql: 'select unsaved' },
+        ],
+      }),
+    );
+  });
+  afterEach(() => {
+    restoreTabsOnceFor(null);
+    vi.unstubAllGlobals();
+  });
+
+  function adopt(restoreSetting: boolean, connectionId = 'c1') {
+    let state = {
+      activeConfig: { id: connectionId },
+      tabsConnectionId: null as string | null,
+      tabs: [tab({ id: 'start' })],
+      activeTabId: 'start',
+      settings: { restoreWorkspace: restoreSetting, defaultPageSize: 50 },
+      setActiveTab: vi.fn(),
+    };
+    const set = (patch: Record<string, unknown>) => {
+      state = { ...state, ...patch } as typeof state;
+    };
+    adoptConnectionTabs(set as never, (() => state) as never, 'postgres');
+    return state;
+  }
+
+  it('leaves tabs alone when "Restore tabs on launch" is off', () => {
+    expect(adopt(false).tabs.map((t) => t.id)).toEqual(['start']);
+  });
+
+  it('brings them back, active tab included, when the restart was an update', () => {
+    restoreTabsOnceFor('c1');
+    const state = adopt(false);
+    expect(state.tabs.map((t) => t.sql)).toEqual(['select 1', 'select unsaved']);
+    expect(state.activeTabId).toBe(state.tabs[1]?.id);
+  });
+
+  it('applies to that connection only, and only once', () => {
+    restoreTabsOnceFor('c2');
+    expect(adopt(false, 'c1').tabs.map((t) => t.id)).toEqual(['start']);
+    restoreTabsOnceFor('c1');
+    adopt(false, 'c1');
+    expect(adopt(false, 'c1').tabs.map((t) => t.id)).toEqual(['start']);
   });
 });

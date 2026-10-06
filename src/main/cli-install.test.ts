@@ -15,6 +15,7 @@ import {
   dirOnPath,
   installLauncher,
   installTargets,
+  repointAppImageWrappers,
   windowsInstructions,
 } from './cli-install';
 
@@ -87,5 +88,42 @@ describe('helpers', () => {
     expect(windowsInstructions('C:\\Program Files\\Plasma\\resources\\bin\\plasma.cmd')).toContain(
       'C:\\Program Files\\Plasma\\resources\\bin',
     );
+  });
+});
+
+describe('repointAppImageWrappers (AppImage renamed by an update)', () => {
+  const OLD = '/home/u/Apps/Plasma-3.2.0-x86_64.AppImage';
+  const NEW = '/home/u/Apps/Plasma-3.2.2-x86_64.AppImage';
+
+  it('rewrites our wrapper so the CLI still reaches the app', () => {
+    const bin = join(dir, 'bin');
+    installLauncher({ script, dir: bin, appImage: OLD });
+    const changed = repointAppImageWrappers([bin, join(dir, 'missing')], OLD, NEW);
+    expect(changed).toEqual([join(bin, 'plasma')]);
+    const text = readFileSync(join(bin, 'plasma'), 'utf8');
+    expect(text).toContain(`PLASMA_APP="${NEW}"`);
+    expect(text).not.toContain(OLD);
+    expect(statSync(join(bin, 'plasma')).mode & 0o111).not.toBe(0);
+  });
+
+  it('copes with a path that needs escaping', () => {
+    const bin = join(dir, 'bin');
+    const odd = '/home/u/My $Apps/Plasma "x".AppImage';
+    installLauncher({ script, dir: bin, appImage: odd });
+    repointAppImageWrappers([bin], odd, NEW);
+    expect(readFileSync(join(bin, 'plasma'), 'utf8')).toContain(`PLASMA_APP="${NEW}"`);
+  });
+
+  it('leaves symlink installs, other apps and wrappers for another AppImage alone', () => {
+    const linked = join(dir, 'linked');
+    installLauncher({ script, dir: linked });
+    const other = join(dir, 'other');
+    mkdirSync(other);
+    writeFileSync(join(other, 'plasma'), `#!/bin/sh\n# someone else's\nPLASMA_APP="${OLD}"\n`);
+    const unrelated = join(dir, 'unrelated');
+    installLauncher({ script, dir: unrelated, appImage: '/elsewhere/Plasma.AppImage' });
+    expect(repointAppImageWrappers([linked, other, unrelated], OLD, NEW)).toEqual([]);
+    expect(readFileSync(join(other, 'plasma'), 'utf8')).toContain(OLD);
+    expect(readlinkSync(join(linked, 'plasma'))).toBe(script);
   });
 });

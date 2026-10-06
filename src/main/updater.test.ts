@@ -109,6 +109,15 @@ function launch(options: { platform: string; arch?: string; signature: string })
   initUpdater(new BrowserWindow());
 }
 
+/** Click "Restart to update"; the renderer answers main's prepare request at once. */
+async function clickRestart() {
+  const done = handlers['plasma:update:install']?.();
+  await vi.advanceTimersByTimeAsync(0);
+  await handlers['plasma:update:prepared']?.({}, { connectionId: null });
+  await vi.advanceTimersByTimeAsync(300); // the storage flush settles
+  await done;
+}
+
 describe('initUpdater on macOS', () => {
   it('offers a manual .dmg download when the bundle is not certificate-signed', async () => {
     launch({ platform: 'darwin', arch: 'arm64', signature: 'bundle-unsigned' });
@@ -121,6 +130,8 @@ describe('initUpdater on macOS', () => {
       kind: 'available-manual',
       version: '0.0.21',
       downloadUrl: `${FEED_URL}/Plasma-0.0.21-arm64.dmg`,
+      // The test process is not inside a Plasma.app, so it cannot replace itself either.
+      reason: 'Move Plasma to Applications to get automatic updates.',
     });
 
     await handlers['plasma:update:install']?.();
@@ -151,7 +162,8 @@ describe('initUpdater on macOS', () => {
     });
 
     autoUpdater.emit('update-downloaded', { version: '0.0.21' });
-    await handlers['plasma:update:install']?.();
+    await clickRestart();
+    // Nothing verified this download (no signing key in this suite): the installer keeps its windows.
     expect(autoUpdater.quitAndInstall).toHaveBeenCalledWith(false, true);
   });
 });

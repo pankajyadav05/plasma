@@ -96,10 +96,34 @@ protected by a detached ed25519 signature:
    - only then downloads (`autoDownload` is held back until this passes);
    - after the download, hashes the file on disk and compares it with the
      signed sha512 before the update can be installed (install-on-quit is armed
-     only after this check; "Restart & install" requires a verified download);
-   - on macOS builds that cannot self-install, takes the `.dmg` URL from the
-     verified manifest instead of guessing it.
+     only after this check), and hashes it again at the moment of "Restart to
+     update";
+   - on macOS builds without a Developer ID, downloads the arm64 `.zip` named in
+     the verified manifest itself and installs it with Plasma's own helper
+     (docs/mac-auto-update.md); when that is impossible it takes the `.dmg` URL
+     from the verified manifest instead of guessing it.
    A refused update shows "Update refused: <reason>" and is never installed.
+
+A verified manifest plus a matching file is what allows a **silent** install
+(no installer windows, relaunch afterwards) and install-on-quit, without any OS
+code signing (`installPlan` in `update-policy.ts`). An update that is only
+tolerated because it predates `SIGNED_UPDATES_REQUIRED_FROM` keeps the old,
+manual behaviour.
+
+### What each platform does with a verified update
+
+| Platform | Download | "Restart to update" | Plain quit |
+|---|---|---|---|
+| Windows NSIS (per-user) | background, as soon as verified | stop workers, write restart marker, `quitAndInstall(true, true)` (silent, relaunch) | installs silently |
+| Windows all-users install, portable | none | "Update" opens the download page | nothing |
+| Linux AppImage | background | same; electron-updater swaps the file (a hard-link backup protects it) and starts the new one | installs |
+| Linux .deb / any OS package (decided from `resources/package-type`, never from env) | none | "Update" opens the `.deb` from the signed manifest (root install of a user-writable file is not done) | nothing |
+| macOS, Developer ID | background (Squirrel) | `quitAndInstall` | Squirrel |
+| macOS, no Developer ID | Plasma downloads + unpacks the zip itself | detached `/bin/sh` helper swaps the bundle | nothing |
+
+Publishing requirements this relies on: `latest-mac.yml` must list the
+`Plasma-<v>-arm64.zip` (it does; `release:upload` publishes it), and
+`latest-linux.yml` the AppImage and `.deb`.
 
 ### One-time setup
 

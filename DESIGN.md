@@ -108,6 +108,7 @@ are 13px semibold, sentence case. Tabular numerals for data.
 Chrome uses the workbench wrappers; forms and dialogs use `Button`.
 
 - `features/ai/ModelPicker.tsx` — the assistant's model selector (composer chip and Settings → AI field): 560×440 popover, 44px vendor rail (monogram tiles tinted from `--chart-*`, accent bar on the active one), search, two-line rows, Legacy group, refresh footer. Only `--wb-*` / `--chart-*` / `--status-warn` / `--icon-star` tokens.
+- `features/app-shell/UpdateBadge.tsx` + `UpdateToasts.tsx` — updates in the top bar: a 16px progress ring while downloading (fixed 24px box, no text jitter), an accent pill (`--wb-accent-fill` under white text) "Restart to update" when ready, an outline "Update" pill when only a manual download is possible, a muted `--status-warn` icon on error (message + "try again" in the tooltip). One-time toasts bottom-right (`--wb-content` surface, `--wb-toolbar-group-edge` hairline): "Plasma X is ready", "Updated to Plasma X", "The update could not be installed". Polite live region; every action is a button.
 
 ## 5. Motion
 

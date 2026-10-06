@@ -38,6 +38,7 @@ import { forwardRef, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { BrandMark } from './BrandMark';
 import { LiveAnnouncer } from './LiveAnnouncer';
 import { UpdateBadge } from './UpdateBadge';
+import { UpdateToasts } from './UpdateToasts';
 import { WindowControls } from './WindowControls';
 
 const isMac = window.plasma?.platform === 'darwin';
@@ -106,6 +107,7 @@ export function TopBar() {
 
       {!isMac && <WindowControls />}
       <LiveAnnouncer />
+      <UpdateToasts />
     </header>
   );
 }

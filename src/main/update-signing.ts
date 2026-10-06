@@ -1,5 +1,5 @@
 import { createHash, createPublicKey, verify } from 'node:crypto';
-import { createReadStream } from 'node:fs';
+import { closeSync, createReadStream, openSync, readSync } from 'node:fs';
 
 /**
  * Detached ed25519 signatures over the update manifests (SC-01).
@@ -174,6 +174,37 @@ export function sha512OfFile(path: string): Promise<string> {
       .on('data', (chunk) => hash.update(chunk))
       .on('end', () => resolve(hash.digest('base64')));
   });
+}
+
+/** Base64 sha512 of a file, synchronously (for the quit path, which cannot wait). */
+export function sha512OfFileSync(path: string): string {
+  const hash = createHash('sha512');
+  const fd = openSync(path, 'r');
+  try {
+    const buf = Buffer.allocUnsafe(1024 * 1024);
+    for (;;) {
+      const n = readSync(fd, buf, 0, buf.length, null);
+      if (n === 0) break;
+      hash.update(buf.subarray(0, n));
+    }
+  } finally {
+    closeSync(fd);
+  }
+  return hash.digest('base64');
+}
+
+/** Synchronous `checkDownloadedFile`: a reason to refuse, or null. Never throws. */
+export function checkDownloadedFileSync(filePath: string, signed: ParsedManifest): string | null {
+  const name = filePath.split(/[\\/]/).pop() ?? filePath;
+  const match = signed.files.find((f) => f.url === name || decodeURIComponent(f.url) === name);
+  if (match == null) return `${name} is not in the signed manifest`;
+  try {
+    return sha512OfFileSync(filePath) === match.sha512
+      ? null
+      : `${name} does not match the signed sha512`;
+  } catch (err) {
+    return `could not read ${name} (${err instanceof Error ? err.message : String(err)})`;
+  }
 }
 
 /** Checks a downloaded file against the sha512 the signed manifest lists for it. */

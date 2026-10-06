@@ -35,6 +35,7 @@ export const eventChannels = [
   'plasma:datafile:dropped',
   'plasma:window:maximizedChanged',
   'plasma:update:status',
+  'plasma:update:prepare',
   'plasma:ai:event',
   'plasma:redis:pubsub',
   'plasma:query:chunk',

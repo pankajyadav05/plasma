@@ -167,6 +167,8 @@ const api: PlasmaAPI = {
     check: () => ipcRenderer.invoke(IpcChannel.UpdateCheck),
     install: () => ipcRenderer.invoke(IpcChannel.UpdateInstall),
     status: () => ipcRenderer.invoke(IpcChannel.UpdateStatus),
+    prepared: (info) => ipcRenderer.invoke(IpcChannel.UpdatePrepared, info),
+    launchInfo: () => ipcRenderer.invoke(IpcChannel.UpdateLaunchInfo),
   },
   workspace: {
     openDialog: () => ipcRenderer.invoke(WorkspaceChannel.OpenDialog),

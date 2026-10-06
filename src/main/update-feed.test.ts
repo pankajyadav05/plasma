@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   SITE_DOWNLOAD_URL,
+  debDownloadUrlFromManifest,
   macDownloadUrl,
   macDownloadUrlFromManifest,
   parseFeedBaseUrl,
@@ -89,5 +90,23 @@ describe('macDownloadUrlFromManifest', () => {
     expect(macDownloadUrlFromManifest('https://cdn.example.com', files, '3.1.0', 'x64')).toBe(
       SITE_DOWNLOAD_URL,
     );
+  });
+});
+
+describe('debDownloadUrlFromManifest', () => {
+  const files = [{ url: 'Plasma-3.2.2-x86_64.AppImage' }, { url: 'Plasma-3.2.2-amd64.deb' }];
+  it('points at the .deb listed in the signed manifest', () => {
+    expect(debDownloadUrlFromManifest('https://cdn.example.com/p', files)).toBe(
+      'https://cdn.example.com/p/Plasma-3.2.2-amd64.deb',
+    );
+  });
+  it('falls back to the download page without a feed, a .deb or a plain file name', () => {
+    expect(debDownloadUrlFromManifest(null, files)).toBe(SITE_DOWNLOAD_URL);
+    expect(debDownloadUrlFromManifest('https://cdn.example.com/p', [files[0]!])).toBe(
+      SITE_DOWNLOAD_URL,
+    );
+    expect(
+      debDownloadUrlFromManifest('https://cdn.example.com/p', [{ url: '../evil/x.deb' }]),
+    ).toBe(SITE_DOWNLOAD_URL);
   });
 });

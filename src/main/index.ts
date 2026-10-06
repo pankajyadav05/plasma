@@ -57,6 +57,7 @@ import { isSqlEngine } from '@shared/sql-dialect';
 import { isSingleSqlStatement, looksLikeWriteSql } from '@shared/sql-statements';
 import { isUninferableParamError } from '@shared/sql-variables';
 import { assertTlsAllowedForTag, resolveTls, withTunnelServername } from '@shared/tls';
+import { describeLoss, joinLoss } from '@shared/unsaved-summary';
 import { BrowserWindow, app, dialog, ipcMain, nativeImage } from 'electron';
 import {
   cancelAiChat,
@@ -147,7 +148,8 @@ import {
   openTunnel,
   setHostKeyPrompt,
 } from './ssh-tunnel';
-import { disposeUpdater, initUpdater } from './updater';
+import { installHandoverPending } from './update-restart';
+import { type UpdaterHost, disposeUpdater, initUpdater } from './updater';
 import {
   clearApiKeys,
   confirmWeakSecretStorage,
@@ -235,7 +237,17 @@ if (process.env.PLASMA_USER_DATA) {
 
 // C34: one instance per profile — a second one would share plasma.db and
 // the worker. The lock is per userData dir, so isolated E2E runs coexist.
-const hasInstanceLock = app.requestSingleInstanceLock();
+let hasInstanceLock = app.requestSingleInstanceLock();
+if (!hasInstanceLock && installHandoverPending(app.getPath('userData'), Date.now())) {
+  // An update restart: the installer (or the AppImage swap) starts the new
+  // version while the old one is still shutting down and holds the lock. Wait
+  // for it instead of quitting, which would leave the user with no window.
+  const pause = new Int32Array(new SharedArrayBuffer(4));
+  for (let attempt = 0; attempt < 24 && !hasInstanceLock; attempt++) {
+    Atomics.wait(pause, 0, 0, 500);
+    hasInstanceLock = app.requestSingleInstanceLock();
+  }
+}
 if (!hasInstanceLock) {
   // The running instance gets 'second-instance' and comes forward. Say so,
   // or `pnpm dev` just stops: on macOS (case-insensitive disk) the dev
@@ -461,7 +473,7 @@ app
     registerWorkspaceIpc(workspaceRuntime, () => mainWindow);
     handleStartupArgv(workspaceRuntime);
     // C33: the updater follows whichever window is current (macOS reopen).
-    initUpdater(() => mainWindow);
+    initUpdater(() => mainWindow, updaterHost);
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) {
@@ -842,14 +854,49 @@ let unsavedState: AppUnsavedState = { openTransaction: false, pendingEdits: 0 };
 let closeConfirmed = false;
 
 function describeUnsaved(state: AppUnsavedState): string | null {
-  const parts: string[] = [];
-  if (state.openTransaction) parts.push('an open transaction (it will be rolled back)');
-  if (state.pendingEdits > 0) {
-    parts.push(`${state.pendingEdits} unsaved grid edit${state.pendingEdits === 1 ? '' : 's'}`);
-  }
-  if (state.runningQuery) parts.push('a query that is still running (it will be cancelled)');
-  return parts.length > 0 ? `You have ${parts.join(' and ')}.` : null;
+  const parts = describeLoss(state);
+  return parts.length > 0 ? `You have ${joinLoss(parts)}.` : null;
 }
+
+/**
+ * What the updater needs from the app. `shutdownForUpdate` is the clean stop
+ * before the installer takes over: the user already confirmed what would be
+ * lost, so the close guard is released, the session is disconnected (rolling
+ * back any open transaction), tunnels and the worker end and the local store
+ * is closed, all with a time limit so a stuck server cannot block the update.
+ */
+const updaterHost: UpdaterHost = {
+  getUnsaved: () => unsavedState,
+  getActiveConnectionId: () => activeConnectionId,
+  getWorkspaceRoot: () =>
+    workspaceRuntime.workspace.isOpen ? workspaceRuntime.workspace.rootPath : null,
+  reopenWorkspace: (root) => {
+    // Only a folder the user approved before; the marker alone never opens anything new.
+    if (!workspaceRuntime.recents.has(root)) return;
+    workspaceRuntime.recents.add(workspaceRuntime.workspace.open(root).root);
+  },
+  async shutdownForUpdate() {
+    closeConfirmed = true;
+    cancelAllAiChats();
+    cancelAllJobs();
+    const stopSession = serializeSessionChange(async () => {
+      sessionEpoch++;
+      clearSession();
+      await callWorker({ kind: 'disconnect' }, 'disconnected').catch(() => undefined);
+    });
+    await Promise.race([stopSession, new Promise<void>((r) => setTimeout(r, 6000))]).catch((err) =>
+      logger.warn('[plasma] session stop before update failed', err),
+    );
+    closeAllTunnels();
+    workerSupervisor.stop();
+    closeDb();
+  },
+  relaunchAfterFailedInstall() {
+    logger.error('[plasma] the update did not start; relaunching the current version');
+    app.relaunch(process.env.APPIMAGE ? { execPath: process.env.APPIMAGE } : undefined);
+    app.exit(0);
+  },
+};
 
 function attachWindowGuards(win: BrowserWindow): void {
   // Agent cards wait for a click in the renderer. When the page reloads, the
