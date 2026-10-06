@@ -2,6 +2,7 @@ import { IconButton, Pill } from '@/components/ui/workbench';
 import { markAiApplied } from '@/lib/ai-applied';
 import { aiConfigured, describeAiSends } from '@/lib/ai-config';
 import { buildAgentContext } from '@/lib/ai-context';
+import type { AiImage } from '@/lib/ai-images';
 import { aiSchemaAllowed } from '@/lib/ai-task';
 import { cn } from '@/lib/cn';
 import { type AiTurn, useActiveTab, useSession } from '@/stores/session';
@@ -10,6 +11,7 @@ import { Loader2, Sparkles, Trash2 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { AgentActionCard } from './AgentActionCard';
 import { AiComposer } from './AiComposer';
+import { ImageGrid } from './AiImages';
 
 /**
  * AI sidecar panel. Lives in the RightRail under the 'ai' mode.
@@ -49,6 +51,8 @@ export function AiPanel() {
     if (!id) return false;
     return s.settings.connectionAiRowData?.[id] === true;
   });
+  const [draft, setDraft] = useState('');
+  const [images, setImages] = useState<AiImage[]>([]);
   const sends = describeAiSends({
     settings,
     sql: sqlEngine,
@@ -56,6 +60,7 @@ export function AiPanel() {
     tableCount,
     hasContext,
     rowData: allowAiRowData,
+    images: images.length,
   });
   const tab = useActiveTab();
   const connectionName = useSession((s) => s.activeConfig?.name ?? 'Not connected');
@@ -66,7 +71,6 @@ export function AiPanel() {
         ? `${connectionName} · ${tab.title}`
         : connectionName;
 
-  const [draft, setDraft] = useState('');
   const scrollerRef = useRef<HTMLDivElement>(null);
 
   // Autoscroll on new content while streaming. The full chat array is a
@@ -80,9 +84,17 @@ export function AiPanel() {
   }, [aiChat, aiChat.length]);
 
   const submit = () => {
-    if (!draft.trim() || aiPending) return;
-    void aiAsk(draft);
+    if ((!draft.trim() && images.length === 0) || aiPending) return;
+    const text = draft;
+    const sent = images;
     setDraft('');
+    setImages([]);
+    // A send that does not start puts the draft back (unless the user already typed anew).
+    void aiAsk(text, { images: sent }).then((ok) => {
+      if (ok) return;
+      setDraft((d) => (d.trim() ? d : text));
+      setImages((cur) => (cur.length > 0 ? cur : sent));
+    });
   };
 
   // E5: never overwrite the user's work — reuse the active tab only when
@@ -142,6 +154,8 @@ export function AiPanel() {
         agent={sqlEngine}
         sends={sends}
         context={trayContext}
+        images={images}
+        onImages={setImages}
         placeholder={
           !hasApiKey
             ? local
@@ -232,7 +246,12 @@ function ChatTurn({
         )}
       >
         {isUser ? (
-          <span className="whitespace-pre-wrap [overflow-wrap:anywhere]">{turn.content}</span>
+          <>
+            {turn.images && turn.images.length > 0 && <ImageGrid images={turn.images} />}
+            {turn.content && (
+              <span className="whitespace-pre-wrap [overflow-wrap:anywhere]">{turn.content}</span>
+            )}
+          </>
         ) : (
           <div className="flex flex-col gap-2">
             {parts.map((p, i) =>

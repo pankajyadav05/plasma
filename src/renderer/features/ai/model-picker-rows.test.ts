@@ -137,3 +137,26 @@ describe('buildPickerItems', () => {
     expect(typed).toEqual([{ kind: 'use', key: 'use:qwen2.5', id: 'qwen2.5' }]);
   });
 });
+
+describe('buildPickerItems, images only', () => {
+  const withVision = [
+    m('anthropic', 'Claude Opus 5.5', 3, { vision: true }),
+    m('anthropic', 'Claude Haiku 5', 4),
+    m('openai', 'GPT-6', 10, { vision: true }),
+  ];
+  const input = { ...base, models: withVision, visionOnly: true };
+
+  it('lists only models that accept images', () => {
+    const list = names(buildPickerItems({ ...input, tab: 'anthropic' }));
+    expect(list).toContain('Claude Opus 5.5');
+    expect(list).not.toContain('Claude Haiku 5');
+  });
+
+  it('filters search results and the start tab too', () => {
+    expect(names(buildPickerItems({ ...input, query: 'claude' }))).not.toContain('Claude Haiku 5');
+    const start = names(
+      buildPickerItems({ ...input, recents: ['anthropic/claude-haiku-5'], currentId: '' }),
+    );
+    expect(start).not.toContain('Claude Haiku 5');
+  });
+});

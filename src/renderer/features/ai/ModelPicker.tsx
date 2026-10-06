@@ -37,6 +37,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
 } from 'react';
 import {
   type PickerItem,
@@ -57,6 +58,30 @@ import { VENDOR_LOGOS } from './vendor-logos';
 // ───────────────────────── Data ─────────────────────────
 
 const loaded = new Map<string, AiModelsResult>();
+const loadListeners = new Set<() => void>();
+let loadVersion = 0;
+function noteLoaded(key: string, r: AiModelsResult) {
+  loaded.set(key, r);
+  loadVersion++;
+  for (const l of loadListeners) l();
+}
+const subscribeLoaded = (l: () => void) => {
+  loadListeners.add(l);
+  return () => void loadListeners.delete(l);
+};
+const loadedVersion = () => loadVersion;
+
+/** Whether the current model reads images: unknown for a local model or one not in the list. */
+export function useCurrentModelVision(): { name: string; state: 'yes' | 'no' | 'unknown' } {
+  const provider = useSession((s) => s.settings.aiProvider);
+  const orModel = useSession((s) => s.settings.openrouterModel);
+  useSyncExternalStore(subscribeLoaded, loadedVersion);
+  if (provider === 'local') return { name: 'The local model', state: 'unknown' };
+  const id = orModel?.trim() ?? '';
+  const found = loaded.get('or')?.models.find((m) => m.id === id);
+  if (!found) return { name: id ? stubModel(id).name : 'This model', state: 'unknown' };
+  return { name: found.name, state: found.vision ? 'yes' : 'no' };
+}
 
 /** The model list for the active provider; stale-while-revalidate from main's cache. */
 function useAiModelList(key: string, open: boolean) {
@@ -71,7 +96,7 @@ function useAiModelList(key: string, open: boolean) {
       try {
         const r = await ipc.ai.listModels(refresh ? { refresh: true } : {});
         if (mine !== seq.current) return;
-        loaded.set(key, r);
+        noteLoaded(key, r);
         setResult(r);
       } catch (err) {
         if (mine !== seq.current) return;
@@ -192,10 +217,18 @@ function VendorMark({
 export function ModelPicker({
   variant = 'composer',
   className,
+  open: openProp,
+  onOpenChange,
+  imagesAttached = false,
 }: {
   /** `composer`: a quiet chip under the chat input. `field`: a full-width settings field. */
   variant?: 'composer' | 'field';
   className?: string;
+  /** Controlled open state (the composer opens it from its image warning). */
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  /** The draft has images: the picker offers (and starts with) an "Images" filter. */
+  imagesAttached?: boolean;
 }) {
   const provider = useSession((s) => s.settings.aiProvider);
   const localUrl = useSession((s) => s.settings.aiLocalUrl);
@@ -207,7 +240,12 @@ export function ModelPicker({
 
   const local = provider === 'local';
   const currentId = (local ? localModel : orModel)?.trim() ?? '';
-  const [open, setOpen] = useState(false);
+  const [openState, setOpenState] = useState(false);
+  const open = openProp ?? openState;
+  const setOpen = (v: boolean) => {
+    setOpenState(v);
+    onOpenChange?.(v);
+  };
   const { result, loading, refresh } = useAiModelList(local ? `local:${localUrl}` : 'or', open);
   const models = result?.models ?? EMPTY_MODELS;
 
@@ -297,6 +335,7 @@ export function ModelPicker({
           onChoose={choose}
           onToggleFavorite={toggleFavorite}
           onRefresh={() => void refresh()}
+          imagesAttached={imagesAttached && !local}
         />
       </PopoverContent>
     </Popover>
@@ -320,10 +359,14 @@ type BodyProps = {
   onChoose: (id: string) => void;
   onToggleFavorite: (id: string) => void;
   onRefresh: () => void;
+  imagesAttached: boolean;
 };
 
 function PickerBody(props: BodyProps) {
-  const { models, result, loading, local, currentId, favorites, recents } = props;
+  const { result, loading, local, currentId, favorites, recents } = props;
+  const models = props.models;
+  // With images in the draft only models that read them are useful: start filtered.
+  const [visionOnly, setVisionOnly] = useState(props.imagesAttached);
   const [query, setQuery] = useState('');
   const [tab, setTab] = useState<PickerTab>('start');
   const [legacyOpen, setLegacyOpen] = useState<Set<string>>(() => new Set());
@@ -345,10 +388,14 @@ function PickerBody(props: BodyProps) {
         legacyOpen,
         local,
         now,
+        visionOnly,
       }),
-    [models, tab, query, favorites, recents, currentId, legacyOpen, local, now],
+    [models, tab, query, favorites, recents, currentId, legacyOpen, local, now, visionOnly],
   );
-  const rail = useMemo(() => railEntries(models), [models]);
+  const rail = useMemo(
+    () => railEntries(visionOnly ? models.filter((m) => m.vision) : models),
+    [models, visionOnly],
+  );
 
   const selectable = useMemo(() => items.filter((i) => i.kind !== 'header'), [items]);
   const numbers = useMemo(() => {
@@ -447,37 +494,61 @@ function PickerBody(props: BodyProps) {
       )}
       <div className="flex min-w-0 flex-1 flex-col">
         <div className="shrink-0 border-b border-[var(--wb-separator)] p-2">
-          <div className="relative">
-            <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--wb-text-3)]" />
-            <Input
-              ref={inputRef}
-              value={query}
-              onChange={(e) => {
-                setQuery(e.target.value);
-                setHiKey(null);
-              }}
-              placeholder={local ? 'Search or type a model name' : 'Search models'}
-              aria-label="Search models"
-              role="combobox"
-              aria-expanded
-              aria-controls="model-picker-list"
-              aria-activedescendant={hiItem ? optionId(hiItem.key) : undefined}
-              autoComplete="off"
-              spellCheck={false}
-              className="h-7 pl-7 pr-7"
-            />
-            {query && (
+          <div className="flex items-center gap-1.5">
+            <div className="relative min-w-0 flex-1">
+              <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--wb-text-3)]" />
+              <Input
+                ref={inputRef}
+                value={query}
+                onChange={(e) => {
+                  setQuery(e.target.value);
+                  setHiKey(null);
+                }}
+                placeholder={local ? 'Search or type a model name' : 'Search models'}
+                aria-label="Search models"
+                role="combobox"
+                aria-expanded
+                aria-controls="model-picker-list"
+                aria-activedescendant={hiItem ? optionId(hiItem.key) : undefined}
+                autoComplete="off"
+                spellCheck={false}
+                className="h-7 pl-7 pr-7"
+              />
+              {query && (
+                <button
+                  type="button"
+                  aria-label="Clear search"
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => {
+                    setQuery('');
+                    inputRef.current?.focus();
+                  }}
+                  className="absolute right-1 top-1/2 grid h-5 w-5 -translate-y-1/2 place-items-center rounded-[4px] text-[var(--wb-text-3)] hover:bg-[var(--wb-control-hover)] hover:text-[var(--wb-text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              )}
+            </div>
+            {props.imagesAttached && (
               <button
                 type="button"
-                aria-label="Clear search"
-                onMouseDown={(e) => e.preventDefault()}
+                aria-pressed={visionOnly}
+                aria-label="Only models that accept images"
+                data-testid="ai-picker-images-filter"
                 onClick={() => {
-                  setQuery('');
-                  inputRef.current?.focus();
+                  setVisionOnly((v) => !v);
+                  setHiKey(null);
                 }}
-                className="absolute right-1 top-1/2 grid h-5 w-5 -translate-y-1/2 place-items-center rounded-[4px] text-[var(--wb-text-3)] hover:bg-[var(--wb-control-hover)] hover:text-[var(--wb-text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                className={cn(
+                  'inline-flex h-7 shrink-0 items-center gap-1 rounded-[6px] px-2 text-[12px] leading-none transition-colors duration-100',
+                  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                  visionOnly
+                    ? 'bg-[color-mix(in_oklab,var(--wb-accent)_16%,transparent)] text-[var(--wb-accent-text)]'
+                    : 'bg-[var(--wb-control)] text-[var(--wb-text-2)] hover:bg-[var(--wb-control-hover)]',
+                )}
               >
-                <X className="h-3 w-3" />
+                <Eye aria-hidden className="h-3 w-3" />
+                Images
               </button>
             )}
           </div>

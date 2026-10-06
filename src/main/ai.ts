@@ -1,5 +1,6 @@
 import { normalizeAction } from '@shared/agent-actions';
 import { buildAgentSystemPrompt } from '@shared/agent-prompt';
+import { type AiContent, capHistoryImages, contentText, countImages } from '@shared/ai-images';
 import { AI_SCHEMA_MAX_TABLES } from '@shared/ai-schema-policy';
 import { taskMaxTokens, taskSystemPrompt } from '@shared/ai-tasks';
 import {
@@ -496,7 +497,8 @@ async function pump(
   // turns and `role: 'tool'` for results. We never expose these to the
   // renderer — the chat UI only sees user and assistant text.
   type InternalMsg =
-    | { role: 'system' | 'user'; content: string }
+    | { role: 'system'; content: string }
+    | { role: 'user'; content: AiContent }
     | {
         role: 'assistant';
         content: string;
@@ -536,6 +538,7 @@ async function pump(
           allowSchema ? req.schema : null,
           allowSchema ? req.engineContext : undefined,
         );
+  const sentImages = !task && req.messages.some((m) => countImages(m.content) > 0);
   const model = local
     ? (options.localModel ?? '').trim()
     : req.model?.trim()
@@ -604,7 +607,11 @@ async function pump(
         send({
           kind: 'error',
           requestId: req.requestId,
-          message: `${local ? 'Local model' : 'OpenRouter'} HTTP ${res.status}: ${text || res.statusText}`,
+          message: `${local ? 'Local model' : 'OpenRouter'} HTTP ${res.status}: ${text || res.statusText}${
+            local && sentImages
+              ? ' (This message has images. The local model may not support images.)'
+              : ''
+          }`,
         });
         return;
       }
@@ -809,13 +816,24 @@ async function runAgentAction(input: {
  * system prompt + any optional context the renderer prepared (compact
  * Postgres DDL, Redis keyspace overview, OpenSearch cluster summary).
  */
+type ChatMsg =
+  | { role: 'system' | 'assistant'; content: string }
+  | { role: 'user'; content: AiContent };
+
+/** Images ride only on user turns; every other role is plain text. */
+function chatMsg(m: AiMessage): ChatMsg {
+  return m.role === 'user'
+    ? { role: 'user', content: m.content }
+    : { role: m.role, content: contentText(m.content) };
+}
+
 function buildMessages(
   messages: AiMessage[],
   engine: ConnectionEngine,
   schema?: SchemaInfo | null,
   engineContext?: string,
-): Array<{ role: 'system' | 'user' | 'assistant'; content: string }> {
-  const out: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [];
+): ChatMsg[] {
+  const out: ChatMsg[] = [];
 
   let systemContent: string | null = null;
 
@@ -845,7 +863,7 @@ function buildMessages(
     out.push({ role: 'system', content: systemContent });
   }
 
-  for (const m of messages) out.push({ role: m.role, content: m.content });
+  for (const m of capHistoryImages(messages)) out.push(chatMsg(m));
   return out;
 }
 
@@ -864,7 +882,7 @@ function buildAgentMessages(
   schema: SchemaInfo | null | undefined,
   context: string | undefined,
   rowData: boolean,
-): Array<{ role: 'system' | 'user' | 'assistant'; content: string }> {
+): ChatMsg[] {
   const ddl = schema ? compactSchema(schema) : '';
   const system = buildAgentSystemPrompt({
     flavour: SQL_FLAVOUR[engine] ?? 'SQL',
@@ -874,9 +892,9 @@ function buildAgentMessages(
   });
   return [
     { role: 'system', content: system },
-    ...messages
+    ...capHistoryImages(messages)
       .filter((m) => m.role !== 'system')
-      .map((m) => ({ role: m.role, content: m.content })),
+      .map(chatMsg),
   ];
 }
 
@@ -889,14 +907,15 @@ export function buildTaskMessages(
   task: NonNullable<AiChatRequest['task']>,
   messages: AiMessage[],
   schema?: SchemaInfo | null,
-): Array<{ role: 'system' | 'user' | 'assistant'; content: string }> {
+): ChatMsg[] {
   const ddl = schema ? compactSchema(schema, { withIndexes: task === 'explain-plan' }) : '';
   const system = `${taskSystemPrompt(task)}${ddl ? `\n\n--- SCHEMA ---\n${ddl}` : ''}`;
   return [
     { role: 'system', content: system },
+    // Tasks are text-only: any image is left out.
     ...messages
       .filter((m) => m.role !== 'system')
-      .map((m) => ({ role: m.role, content: m.content })),
+      .map((m) => ({ role: m.role, content: contentText(m.content) })),
   ];
 }
 

@@ -1,19 +1,38 @@
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { type AiImage, imageFilesOf, isAcceptedImageType, processImageFile } from '@/lib/ai-images';
 import { cn } from '@/lib/cn';
 import { useSession } from '@/stores/session';
+import { AI_MAX_IMAGES_PER_MESSAGE } from '@shared/ai-images';
 import {
+  AlertTriangle,
   ArrowUp,
   Check,
   ChevronDown,
   Database,
   Eye,
   Hand,
+  ImagePlus,
   Lock,
   LockOpen,
+  Paperclip,
   Square,
+  X,
 } from 'lucide-react';
-import { type KeyboardEvent, type ReactNode, useLayoutEffect, useRef } from 'react';
-import { ModelPicker } from './ModelPicker';
+import {
+  type ClipboardEvent,
+  type Dispatch,
+  type DragEvent,
+  type KeyboardEvent,
+  type ReactNode,
+  type SetStateAction,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from 'react';
+import { ImagePreview, imageLabel } from './AiImages';
+import { ModelPicker, useCurrentModelVision } from './ModelPicker';
+
+const ACCEPT = 'image/png,image/jpeg,image/webp,image/gif';
 
 /**
  * The Assistant's input: one rounded card holding the text area and a control
@@ -31,7 +50,12 @@ export function AiComposer({
   agent,
   sends,
   context,
+  images,
+  onImages,
 }: {
+  /** Images attached to the draft (they live with it). */
+  images: AiImage[];
+  onImages: Dispatch<SetStateAction<AiImage[]>>;
   draft: string;
   onDraft: (v: string) => void;
   onSubmit: () => void;
@@ -48,6 +72,15 @@ export function AiComposer({
   context: string;
 }) {
   const ref = useRef<HTMLTextAreaElement>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [processing, setProcessing] = useState<Array<{ id: string; name: string }>>([]);
+  const [notices, setNotices] = useState<Array<{ id: string; text: string }>>([]);
+  const [dragging, setDragging] = useState(false);
+  const [preview, setPreview] = useState<number | null>(null);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const vision = useCurrentModelVision();
+  const noVision = images.length > 0 && vision.state === 'no';
+  const slots = AI_MAX_IMAGES_PER_MESSAGE - images.length - processing.length;
 
   // Grow with the text up to ~8 lines, then scroll.
   // biome-ignore lint/correctness/useExhaustiveDependencies: re-measure on every draft change
@@ -58,30 +91,230 @@ export function AiComposer({
     el.style.height = `${Math.min(el.scrollHeight, 168)}px`;
   }, [draft]);
 
-  const onKey = (e: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
-      e.preventDefault();
-      onSubmit();
+  const notify = (text: string) =>
+    setNotices((n) => [...n, { id: `n-${Date.now().toString(36)}-${n.length}`, text }]);
+
+  /** Prepare files in the renderer and add them to the draft, up to the per-message limit. */
+  const attach = (files: File[]) => {
+    if (!enabled || files.length === 0) return;
+    const usable = files.filter((f) => isAcceptedImageType(f.type));
+    if (usable.length < files.length) {
+      notify('Only png, jpeg, webp and gif images can be attached.');
+    }
+    const take = usable.slice(0, Math.max(0, slots));
+    if (usable.length > take.length) {
+      notify(`Up to ${AI_MAX_IMAGES_PER_MESSAGE} images per message. The rest were skipped.`);
+    }
+    for (const file of take) {
+      const id = `p-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+      const name = file.name || 'Pasted image';
+      setProcessing((p) => [...p, { id, name }]);
+      processImageFile(file)
+        .then((img) => onImages((cur) => [...cur, img].slice(0, AI_MAX_IMAGES_PER_MESSAGE)))
+        .catch((err: unknown) =>
+          notify(`${name}: ${err instanceof Error ? err.message : 'could not be attached.'}`),
+        )
+        .finally(() => setProcessing((p) => p.filter((x) => x.id !== id)));
     }
   };
 
-  const canSend = enabled && draft.trim().length > 0;
+  const onPaste = (e: ClipboardEvent<HTMLTextAreaElement>) => {
+    const files = imageFilesOf(e.clipboardData);
+    if (files.length === 0) return; // text paste works as always
+    // Image and text together: the image is attached and the text is pasted as usual.
+    if (!e.clipboardData.getData('text/plain')) e.preventDefault();
+    attach(files);
+  };
+
+  const hasFiles = (e: DragEvent) => Array.from(e.dataTransfer.types).includes('Files');
+  const onDragOver = (e: DragEvent) => {
+    if (!enabled || !hasFiles(e)) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+    setDragging(true);
+  };
+  const onDragLeave = (e: DragEvent) => {
+    // Moving between children also fires leave: only a real exit counts.
+    if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragging(false);
+  };
+  const onDrop = (e: DragEvent) => {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    setDragging(false);
+    if (!enabled) return;
+    const all = Array.from(e.dataTransfer.files);
+    if (all.length === 0) return;
+    attach(all);
+  };
+
+  const canSend =
+    enabled &&
+    (draft.trim().length > 0 || images.length > 0) &&
+    !noVision &&
+    processing.length === 0;
+
+  const onKey = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+      e.preventDefault();
+      if (canSend) submit();
+    }
+  };
+
+  const submit = () => {
+    setNotices([]);
+    onSubmit();
+  };
+
+  const hasTray = images.length > 0 || processing.length > 0;
 
   return (
     <div className="shrink-0 px-2.5 pb-2.5 pt-1">
       <div
+        data-testid="ai-composer-card"
+        data-dragging={dragging ? 'true' : undefined}
+        onDragEnter={onDragOver}
+        onDragOver={onDragOver}
+        onDragLeave={onDragLeave}
+        onDrop={onDrop}
         className={cn(
           'relative z-[1] flex flex-col rounded-[14px] bg-[var(--wb-field)] transition-shadow duration-150',
           'shadow-[inset_0_0_0_1px_color-mix(in_oklab,var(--wb-text)_11%,transparent),0_1px_2px_color-mix(in_oklab,black_6%,transparent)]',
           'focus-within:shadow-[inset_0_0_0_1px_color-mix(in_oklab,var(--wb-accent)_55%,transparent),0_0_0_3px_color-mix(in_oklab,var(--wb-accent)_14%,transparent)]',
+          dragging &&
+            'shadow-[inset_0_0_0_1.5px_var(--wb-accent),0_0_0_3px_color-mix(in_oklab,var(--wb-accent)_14%,transparent)]',
           !enabled && 'opacity-70',
         )}
       >
+        {dragging && (
+          <div
+            data-testid="ai-drop-overlay"
+            className="pointer-events-none absolute inset-0 z-10 grid place-items-center rounded-[14px] bg-[color-mix(in_oklab,var(--wb-field)_88%,transparent)]"
+          >
+            <span className="inline-flex items-center gap-2 text-[12.5px] text-[var(--wb-text)]">
+              <ImagePlus aria-hidden className="h-4 w-4 text-[var(--wb-accent-text)]" />
+              Drop images to attach
+            </span>
+          </div>
+        )}
+        {hasTray && (
+          <ul
+            className="flex flex-wrap gap-2 px-2.5 pb-0.5 pt-2.5"
+            data-testid="ai-image-tray"
+            aria-label="Attached images"
+          >
+            {images.map((img, i) => (
+              <li key={img.id} className="group relative h-[52px] w-[52px]">
+                <button
+                  type="button"
+                  data-testid="ai-image-tile"
+                  aria-label={`Preview image ${i + 1}: ${img.name}`}
+                  title={imageLabel(img)}
+                  onClick={() => setPreview(i)}
+                  className="h-full w-full cursor-zoom-in overflow-hidden rounded-[8px] bg-[var(--wb-control)] shadow-[inset_0_0_0_1px_color-mix(in_oklab,var(--wb-text)_14%,transparent)] transition-[filter,transform] duration-150 hover:brightness-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring active:scale-[0.97]"
+                >
+                  <img
+                    src={img.dataUrl}
+                    alt=""
+                    draggable={false}
+                    className="h-full w-full object-cover"
+                  />
+                </button>
+                <button
+                  type="button"
+                  data-testid="ai-image-remove"
+                  aria-label={`Remove image ${i + 1}`}
+                  title={`Remove image ${i + 1}`}
+                  onClick={() => {
+                    onImages((cur) => cur.filter((x) => x.id !== img.id));
+                    ref.current?.focus();
+                  }}
+                  className={cn(
+                    'absolute -right-1.5 -top-1.5 grid h-[18px] w-[18px] place-items-center rounded-full bg-[var(--wb-text)] text-[var(--wb-field)] shadow-[0_0_0_1.5px_var(--wb-field)] transition-opacity duration-100',
+                    'before:absolute before:-inset-1.5 before:content-[""]',
+                    'opacity-0 group-focus-within:opacity-100 group-hover:opacity-100 focus-visible:opacity-100',
+                    'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                  )}
+                >
+                  <X aria-hidden className="h-2.5 w-2.5" strokeWidth={2.6} />
+                </button>
+              </li>
+            ))}
+            {processing.map((p) => (
+              <li
+                key={p.id}
+                data-testid="ai-image-processing"
+                title={`Preparing ${p.name}`}
+                className="h-[52px] w-[52px] animate-pulse rounded-[8px] bg-[var(--wb-control)] motion-reduce:animate-none"
+              >
+                <span className="sr-only">Preparing {p.name}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+        {notices.length > 0 && (
+          <output className="flex flex-col gap-1 px-2.5 pt-2">
+            {notices.map((n) => (
+              <div
+                key={n.id}
+                data-testid="ai-image-error"
+                className="flex items-start gap-1.5 rounded-[6px] bg-[color-mix(in_oklab,var(--status-warn)_14%,transparent)] py-1 pl-2 pr-1 text-[11.5px] leading-snug text-[var(--wb-text)]"
+              >
+                <AlertTriangle
+                  aria-hidden
+                  className="mt-[2px] h-3 w-3 shrink-0 text-[var(--status-warn)]"
+                />
+                <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">{n.text}</span>
+                <button
+                  type="button"
+                  aria-label="Dismiss message"
+                  onClick={() => setNotices((cur) => cur.filter((x) => x.id !== n.id))}
+                  className="grid h-4 w-4 shrink-0 place-items-center rounded-[4px] text-[var(--wb-text-2)] hover:bg-[var(--wb-control-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  <X aria-hidden className="h-3 w-3" />
+                </button>
+              </div>
+            ))}
+          </output>
+        )}
+        {noVision && (
+          <div
+            role="alert"
+            data-testid="ai-image-warning"
+            className="mx-2.5 mt-2 rounded-[8px] bg-[color-mix(in_oklab,var(--status-warn)_14%,transparent)] px-2.5 py-1.5 text-[12px] leading-snug text-[var(--wb-text)]"
+          >
+            <span className="flex items-start gap-1.5">
+              <AlertTriangle
+                aria-hidden
+                className="mt-[2px] h-3 w-3 shrink-0 text-[var(--status-warn)]"
+              />
+              <span>{vision.name} can't read images.</span>
+            </span>
+            <span className="mt-1 flex items-center gap-1 pl-[18px]">
+              <button
+                type="button"
+                data-testid="ai-image-switch-model"
+                onClick={() => setPickerOpen(true)}
+                className="rounded-[5px] px-1.5 py-0.5 text-[var(--wb-accent-text)] hover:bg-[var(--wb-control-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                Switch model
+              </button>
+              <button
+                type="button"
+                data-testid="ai-image-remove-all"
+                onClick={() => onImages([])}
+                className="rounded-[5px] px-1.5 py-0.5 text-[var(--wb-text-2)] hover:bg-[var(--wb-control-hover)] hover:text-[var(--wb-text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                Remove images
+              </button>
+            </span>
+          </div>
+        )}
         <textarea
           ref={ref}
           value={draft}
           onChange={(e) => onDraft(e.target.value)}
           onKeyDown={onKey}
+          onPaste={onPaste}
           placeholder={placeholder}
           disabled={!enabled}
           rows={2}
@@ -90,7 +323,12 @@ export function AiComposer({
         />
         <div className="@container/controls flex min-w-0 items-center gap-0.5 px-2 pb-2">
           <div className="flex min-w-0 flex-1 items-center gap-0.5 overflow-hidden">
-            <ModelPicker className="min-w-0 shrink" />
+            <ModelPicker
+              className="min-w-0 shrink"
+              open={pickerOpen}
+              onOpenChange={setPickerOpen}
+              imagesAttached={images.length > 0}
+            />
             {agent && (
               <>
                 <Divider />
@@ -100,17 +338,57 @@ export function AiComposer({
             <Divider />
             <RowDataControl />
           </div>
+          <input
+            ref={fileRef}
+            type="file"
+            accept={ACCEPT}
+            multiple
+            hidden
+            tabIndex={-1}
+            aria-hidden
+            data-testid="ai-attach-input"
+            onChange={(e) => {
+              attach(Array.from(e.target.files ?? []));
+              e.target.value = '';
+            }}
+          />
+          <button
+            type="button"
+            data-testid="ai-attach-button"
+            aria-label="Attach images"
+            title={
+              slots <= 0
+                ? `Up to ${AI_MAX_IMAGES_PER_MESSAGE} images per message`
+                : 'Attach images (png, jpeg, webp, gif; a GIF sends its first frame). You can also paste or drop them.'
+            }
+            disabled={!enabled || slots <= 0}
+            onClick={() => fileRef.current?.click()}
+            className={cn(
+              'ml-1 grid h-7 w-7 shrink-0 cursor-pointer place-items-center rounded-full text-[var(--wb-text-2)] transition-colors duration-100',
+              'hover:bg-[var(--wb-control-hover)] hover:text-[var(--wb-text)]',
+              'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+              'disabled:cursor-default disabled:opacity-45 disabled:hover:bg-transparent disabled:hover:text-[var(--wb-text-2)]',
+            )}
+          >
+            <Paperclip aria-hidden className="h-3.5 w-3.5" />
+          </button>
           {pending ? (
             <RoundButton label="Stop" onClick={onStop} tone="stop">
               <Square className="h-2.5 w-2.5 fill-current" />
             </RoundButton>
           ) : (
-            <RoundButton label="Send (Enter)" onClick={onSubmit} disabled={!canSend}>
+            <RoundButton label="Send (Enter)" onClick={submit} disabled={!canSend}>
               <ArrowUp className="h-3.5 w-3.5" strokeWidth={2.4} />
             </RoundButton>
           )}
         </div>
       </div>
+      <ImagePreview
+        images={images}
+        index={preview !== null && preview < images.length ? preview : null}
+        onIndex={setPreview}
+        onClose={() => setPreview(null)}
+      />
       <div
         className="mx-2 -mt-2 flex min-w-0 items-center gap-2 rounded-b-[10px] bg-[var(--wb-window)] px-2.5 pb-1.5 pt-3.5 text-[11px] leading-none text-[var(--wb-text-3)] shadow-[inset_0_0_0_1px_color-mix(in_oklab,var(--wb-text)_8%,transparent)]"
         data-testid="ai-what-is-sent"
@@ -129,12 +407,14 @@ export function AiComposer({
 function trayRight(sends: string): string {
   const parts = sends.split(' · ');
   const schema = parts.find((p) => p.startsWith('Schema:') || p.startsWith('Overview:'));
-  if (!schema) return '';
-  if (schema === 'Schema: off' || schema === 'Overview: off') return 'Schema off';
-  if (schema.startsWith('Overview:')) return 'Overview';
+  const imgs = Number(parts.find((p) => p.startsWith('Images: '))?.slice(8) ?? 0);
+  const extra = imgs > 0 ? ` + ${imgs} ${imgs === 1 ? 'image' : 'images'}` : '';
+  if (!schema) return extra.replace(/^ \+ /, '');
+  if (schema === 'Schema: off' || schema === 'Overview: off') return `Schema off${extra}`;
+  if (schema.startsWith('Overview:')) return `Overview${extra}`;
   // "Schema: 2 tables" → "2 tables", plus "+ tab" when the current tab goes too.
   const tables = schema.replace('Schema: ', '');
-  return parts.includes('Current tab: sent') ? `${tables} + tab` : tables;
+  return `${parts.includes('Current tab: sent') ? `${tables} + tab` : tables}${extra}`;
 }
 
 function Divider() {

@@ -1,4 +1,11 @@
 import { z } from 'zod';
+import {
+  AI_MAX_IMAGES_PER_MESSAGE,
+  AI_MAX_IMAGES_PER_REQUEST,
+  AI_MAX_IMAGE_DATA_URL,
+  countImages,
+  isAiImageDataUrl,
+} from './ai-images';
 import type { AiModel, AiModelsResult } from './ai-models';
 import type {
   AuditEntry,
@@ -2076,16 +2083,49 @@ export type SavedQuery = Settings['savedQueries'][string][number];
  * future tool-use protocol — for v0.1 we only emit user / assistant /
  * system content.
  */
-export const AiMessage = z.object({
-  role: z.enum(['system', 'user', 'assistant']),
-  content: z.string(),
-});
+export const AiContentPart = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('text'), text: z.string() }),
+  z.object({
+    type: z.literal('image_url'),
+    // Data URLs only: nothing in Plasma fetches a remote image for the model.
+    image_url: z.object({
+      url: z
+        .string()
+        .max(AI_MAX_IMAGE_DATA_URL)
+        .refine(isAiImageDataUrl, 'Only png, jpeg, webp or gif data URLs are allowed'),
+    }),
+  }),
+]);
+export type AiContentPart = z.infer<typeof AiContentPart>;
+
+export const AiMessage = z
+  .object({
+    role: z.enum(['system', 'user', 'assistant']),
+    content: z.union([z.string(), z.array(AiContentPart)]),
+  })
+  .superRefine((m, ctx) => {
+    const n = countImages(m.content);
+    if (n > 0 && m.role !== 'user') {
+      ctx.addIssue({ code: 'custom', message: 'Only user messages can carry images' });
+    }
+    if (n > AI_MAX_IMAGES_PER_MESSAGE) {
+      ctx.addIssue({
+        code: 'custom',
+        message: `At most ${AI_MAX_IMAGES_PER_MESSAGE} images per message`,
+      });
+    }
+  });
 export type AiMessage = z.infer<typeof AiMessage>;
 
 export const AiChatRequest = z.object({
   /** Stable id per-chat so renderer can correlate streamed deltas + cancel. */
   requestId: z.string(),
-  messages: z.array(AiMessage),
+  messages: z
+    .array(AiMessage)
+    .refine(
+      (ms) => ms.reduce((n, m) => n + countImages(m.content), 0) <= AI_MAX_IMAGES_PER_REQUEST,
+      `At most ${AI_MAX_IMAGES_PER_REQUEST} images per request`,
+    ),
   /**
    * Optional schema context. When provided, main builds a compact DDL
    * snapshot and prepends it as a system prompt.

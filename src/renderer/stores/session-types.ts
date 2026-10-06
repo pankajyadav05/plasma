@@ -5,6 +5,7 @@ import type { TableViewSnapshot } from '@/features/ai/table-view-apply';
  * declares its own interface and `SessionState` is their intersection.
  * `session.ts` re-exports the public names from here.
  */
+import type { AiImage } from '@/lib/ai-images';
 import type { Filter, TableSort } from '@/lib/table-query';
 import type { AgentActionInput, AgentActionStatus } from '@shared/agent-actions';
 import type { AgentActionName, AiMessage, QueryResult } from '@shared/protocol';
@@ -78,8 +79,12 @@ export type RightPanelMode = 'details' | 'query' | 'role' | 'rls' | 'ai' | null;
 
 /** One row in the AI chat transcript. Streamed assistant messages mutate
  *  in place as deltas arrive — keep them flat strings. */
-export interface AiTurn extends AiMessage {
+export interface AiTurn extends Omit<AiMessage, 'content'> {
   id: string;
+  /** The turn's text; images are kept apart in `images`. */
+  content: string;
+  /** User turns: the images sent with the message. */
+  images?: AiImage[];
   /** True while a streamed assistant turn is still receiving deltas. */
   streaming?: boolean;
   /** Server-side error captured for this turn, if any. */

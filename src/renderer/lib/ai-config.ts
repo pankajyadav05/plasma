@@ -91,6 +91,8 @@ export function describeAiSends(input: {
   tableCount: number;
   hasContext: boolean;
   rowData: boolean;
+  /** Images in the draft: they go to the model with the next message. */
+  images?: number;
 }): string {
   const parts = [providerLine(input.settings)];
   if (input.sql) {
@@ -103,5 +105,6 @@ export function describeAiSends(input: {
     parts.push(`Overview: ${input.schemaAllowed ? 'sent' : 'off'}`);
   }
   parts.push(`Row data: ${input.rowData ? 'capped samples' : 'off'}`);
+  if (input.images) parts.push(`Images: ${input.images}`);
   return parts.join(' · ');
 }

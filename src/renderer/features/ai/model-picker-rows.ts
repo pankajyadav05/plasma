@@ -50,6 +50,8 @@ export type PickerInput = {
   /** The local server's list: one flat group, any typed name can be used. */
   local: boolean;
   now: number;
+  /** Only models that accept images. */
+  visionOnly?: boolean;
 };
 
 /** The id offered as "Use …", or null when the query is not a usable id. */
@@ -61,7 +63,9 @@ function useId(input: PickerInput, query: string): string | null {
 }
 
 export function buildPickerItems(input: PickerInput): PickerItem[] {
-  const { models, now } = input;
+  const { now } = input;
+  const visionOnly = input.visionOnly === true;
+  const models = visionOnly ? input.models.filter((m) => m.vision) : input.models;
   const byId = new Map(models.map((m) => [m.id, m]));
   const resolve = (id: string) => byId.get(id) ?? stubModel(id);
   const query = input.query.trim();
@@ -90,7 +94,7 @@ export function buildPickerItems(input: PickerInput): PickerItem[] {
   if (input.tab === 'start') {
     const shown = new Set<string>();
     const section = (key: string, label: string, list: AiModel[]) => {
-      const fresh = list.filter((m) => !shown.has(m.id));
+      const fresh = list.filter((m) => !shown.has(m.id) && (!visionOnly || m.vision));
       if (fresh.length === 0) return;
       items.push({ kind: 'header', key: `h:${key}`, label });
       for (const m of fresh) {

@@ -62,6 +62,11 @@ describe('describeAiSends', () => {
     );
   });
 
+  it('adds the images of the draft', () => {
+    expect(describeAiSends({ ...base, images: 2 })).toMatch(/Row data: off · Images: 2$/);
+    expect(describeAiSends({ ...base, images: 0 })).not.toContain('Images');
+  });
+
   it('says off when the schema may not be sent, and the tab goes with it', () => {
     expect(describeAiSends({ ...base, schemaAllowed: false })).toBe(
       'OpenRouter · anthropic/claude-sonnet-4.5 · Schema: off · Current tab: off · Row data: off',

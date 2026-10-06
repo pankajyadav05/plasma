@@ -1,7 +1,9 @@
-/** AI assistant slice (bring-your-own-key chat streamed from main). */
 import { buildAgentContext } from '@/lib/ai-context';
+/** AI assistant slice (bring-your-own-key chat streamed from main). */
+import type { AiImage } from '@/lib/ai-images';
 import { ipc } from '@/lib/ipc';
 import { actionHistoryLine } from '@shared/agent-actions';
+import { AI_MAX_IMAGES_PER_MESSAGE, type AiContent, capHistoryImages } from '@shared/ai-images';
 import type { AiChatEvent, AiMessage } from '@shared/protocol';
 import { isSqlEngine } from '@shared/sql-dialect';
 import { createAgentActions } from './session-ai-actions';
@@ -29,6 +31,17 @@ export function turnHistoryContent(turn: AiTurn, actions: Record<string, AgentAc
   return lines.join('\n');
 }
 
+/** The wire content of a turn: its history text, with its images first when it has any. */
+export function turnWireContent(turn: AiTurn, actions: Record<string, AgentAction>): AiContent {
+  const text = turnHistoryContent(turn, actions);
+  const images = turn.images ?? [];
+  if (turn.role !== 'user' || images.length === 0) return text;
+  return [
+    ...images.map((i) => ({ type: 'image_url' as const, image_url: { url: i.dataUrl } })),
+    ...(text.trim() ? [{ type: 'text' as const, text }] : []),
+  ];
+}
+
 /** Append streamed text to the turn's last text part (a new part after a card). */
 export function appendTurnText(parts: AiPart[] | undefined, text: string): AiPart[] {
   const list = parts ?? [];
@@ -50,7 +63,12 @@ export interface AiSlice {
   aiChatConnectionId: string | null;
   /** The agent's action cards, by id (turns reference them through `parts`). */
   aiActions: Record<string, AgentAction>;
-  aiAsk(prompt: string, opts?: { withSchema?: boolean }): Promise<void>;
+  /**
+   * Send a message (text, images or both). Resolves true once the request was
+   * accepted, false when it was not sent or failed to start: the caller then
+   * keeps the draft.
+   */
+  aiAsk(prompt: string, opts?: { withSchema?: boolean; images?: AiImage[] }): Promise<boolean>;
   aiCancel(): Promise<void>;
   aiClear(): void;
   /** Apply a streamed delta event from the main process. */
@@ -89,9 +107,10 @@ export const createAiSlice: SliceCreator<AiSlice> = (set, get, api) => {
 
     async aiAsk(prompt, opts) {
       const trimmed = prompt.trim();
-      if (!trimmed) return;
+      const images = (opts?.images ?? []).slice(0, AI_MAX_IMAGES_PER_MESSAGE);
+      if (!trimmed && images.length === 0) return false;
       const state = get();
-      if (state.aiPending) return; // single-flight per chat
+      if (state.aiPending) return false; // single-flight per chat
       // G3: a different connection starts a fresh conversation.
       const connectionId = state.activeConfig?.id ?? null;
       const sameChat = state.aiChatConnectionId === connectionId;
@@ -101,6 +120,7 @@ export const createAiSlice: SliceCreator<AiSlice> = (set, get, api) => {
         id: freshId(),
         role: 'user',
         content: trimmed,
+        ...(images.length > 0 ? { images } : {}),
       };
       const placeholder: AiTurn = {
         id: freshId(),
@@ -122,10 +142,12 @@ export const createAiSlice: SliceCreator<AiSlice> = (set, get, api) => {
       // Strip Plasma-only fields before sending — main only needs role +
       // content per OpenAI/OpenRouter chat shape. An assistant turn carries
       // one line per action card so the model knows how each one ended.
-      const messages: AiMessage[] = [...history, userTurn].map((t) => ({
-        role: t.role,
-        content: turnHistoryContent(t, state.aiActions),
-      }));
+      const messages: AiMessage[] = capHistoryImages(
+        [...history, userTurn].map((t) => ({
+          role: t.role,
+          content: turnWireContent(t, state.aiActions),
+        })),
+      );
 
       const engine = state.activeConfig?.engine ?? 'postgres';
       const sql = isSqlEngine(engine);
@@ -155,7 +177,9 @@ export const createAiSlice: SliceCreator<AiSlice> = (set, get, api) => {
             aiPending: false,
             aiRequestId: null,
           }));
+          return false;
         }
+        return true;
       } catch (err) {
         set((s) => ({
           aiChat: s.aiChat.map((t) =>
@@ -170,6 +194,7 @@ export const createAiSlice: SliceCreator<AiSlice> = (set, get, api) => {
           aiPending: false,
           aiRequestId: null,
         }));
+        return false;
       }
     },
 
