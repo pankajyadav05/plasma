@@ -8,18 +8,17 @@ import {
   type AiModel,
   type AiModelsResult,
   OTHER_VENDOR,
-  VENDORS,
   formatAgo,
   formatContext,
   formatPrice,
   isNew,
   pushRecent,
-  railVendor,
   stubModel,
   vendorMonogram,
 } from '@shared/ai-models';
 import {
   AlertTriangle,
+  Boxes,
   Check,
   ChevronDown,
   ChevronRight,
@@ -46,6 +45,7 @@ import {
   modelRows,
   railEntries,
 } from './model-picker-rows';
+import { VENDOR_LOGOS } from './vendor-logos';
 
 /**
  * The assistant's model selector: a vendor rail, a search field and two-line
@@ -106,56 +106,81 @@ function useAiModelList(key: string, open: boolean) {
 
 // ───────────────────────── Vendor marks ─────────────────────────
 
-/**
- * One hue per vendor, mixed into the palette's own control and text colours so
- * the tile stays readable in every palette, light and dark. (The chart tokens
- * are all one hue in some palettes, which made every tile look the same.)
- */
-const TONES: Record<string, string> = {
-  anthropic: 'oklch(0.66 0.13 45)',
-  openai: 'oklch(0.62 0.11 165)',
-  google: 'oklch(0.62 0.15 255)',
-  'x-ai': 'oklch(0.55 0.02 270)',
-  'meta-llama': 'oklch(0.6 0.15 235)',
-  mistralai: 'oklch(0.7 0.16 65)',
-  deepseek: 'oklch(0.56 0.17 275)',
-  qwen: 'oklch(0.58 0.17 300)',
-};
+/** Local model names hint at their maker ("llama3.1" → Meta). */
+const LOCAL_FAMILIES: Array<[RegExp, string]> = [
+  [/llama/i, 'meta-llama'],
+  [/qwen|qwq/i, 'qwen'],
+  [/mistral|mixtral|codestral|ministral/i, 'mistralai'],
+  [/gemma|gemini/i, 'google'],
+  [/deepseek/i, 'deepseek'],
+  [/phi-?\d/i, 'microsoft'],
+  [/gpt-oss/i, 'openai'],
+  [/granite/i, 'ibm-granite'],
+  [/command-?r|aya/i, 'cohere'],
+  [/glm/i, 'z-ai'],
+  [/kimi/i, 'moonshotai'],
+];
 
-function toneStyle(vendor: string): React.CSSProperties {
-  const tone = TONES[vendor];
-  if (!tone) {
-    return { background: 'var(--wb-control)', color: 'var(--wb-text-2)' };
+function logoKey(vendor: string, modelName?: string): string {
+  if (vendor === 'local' && modelName) {
+    return LOCAL_FAMILIES.find(([re]) => re.test(modelName))?.[1] ?? 'ollama';
   }
-  return {
-    background: `color-mix(in oklab, ${tone} 22%, var(--wb-control))`,
-    color: `color-mix(in oklab, ${tone} 55%, var(--wb-text))`,
-  };
+  return vendor;
 }
 
-function vendorLabel(id: string): string {
-  return [...VENDORS, OTHER_VENDOR].find((v) => v.id === id)?.name ?? id;
-}
-
+/** The vendor's logo; a neutral monogram tile for vendors without one. */
 function VendorMark({
   vendor,
   name,
+  modelName,
   size = 16,
 }: {
   vendor: string;
   name: string;
+  /** Local models: guess the maker from the model name. */
+  modelName?: string;
   size?: number;
 }) {
+  const logo = VENDOR_LOGOS[logoKey(vendor, modelName)];
+  if (logo) {
+    const src = `data:image/svg+xml;utf8,${encodeURIComponent(logo.svg)}`;
+    return logo.mono ? (
+      <span
+        aria-hidden
+        className="shrink-0 bg-current"
+        style={{
+          width: size,
+          height: size,
+          maskImage: `url("${src}")`,
+          WebkitMaskImage: `url("${src}")`,
+          maskSize: 'contain',
+          WebkitMaskSize: 'contain',
+          maskRepeat: 'no-repeat',
+          WebkitMaskRepeat: 'no-repeat',
+          maskPosition: 'center',
+          WebkitMaskPosition: 'center',
+        }}
+      />
+    ) : (
+      <img
+        aria-hidden
+        alt=""
+        src={src}
+        width={size}
+        height={size}
+        className="shrink-0"
+        draggable={false}
+      />
+    );
+  }
+  if (vendor === OTHER_VENDOR.id) {
+    return <Boxes aria-hidden className="shrink-0" style={{ width: size - 2, height: size - 2 }} />;
+  }
   return (
     <span
       aria-hidden
-      className="grid shrink-0 place-items-center rounded-[4px] font-semibold leading-none"
-      style={{
-        ...toneStyle(vendor),
-        width: size,
-        height: size,
-        fontSize: Math.round(size * 0.58),
-      }}
+      className="grid shrink-0 place-items-center rounded-[4px] bg-[var(--wb-control)] font-semibold leading-none text-[var(--wb-text-2)]"
+      style={{ width: size, height: size, fontSize: Math.round(size * 0.58) }}
     >
       {vendorMonogram(name)}
     </span>
@@ -202,8 +227,8 @@ export function ModelPicker({
   };
 
   const label = current ? current.name : local ? 'Choose a model' : 'Choose a model';
-  const vendorKey = current ? railVendor(current) : 'other';
-  const markName = current ? vendorLabel(vendorKey) : '?';
+  const vendorKey = current ? current.vendor : 'other';
+  const markName = current ? current.vendorName : '?';
 
   return (
     <Popover open={open} onOpenChange={setOpen} modal>
@@ -221,7 +246,7 @@ export function ModelPicker({
               className,
             )}
           >
-            <VendorMark vendor={vendorKey} name={markName} />
+            <VendorMark vendor={vendorKey} name={markName} modelName={current?.name} />
             <span className="truncate">{label}</span>
             <ChevronDown className="h-3 w-3 shrink-0 opacity-70" />
           </button>
@@ -237,7 +262,7 @@ export function ModelPicker({
               className,
             )}
           >
-            <VendorMark vendor={vendorKey} name={markName} />
+            <VendorMark vendor={vendorKey} name={markName} modelName={current?.name} />
             <span className="truncate">{label}</span>
             {current && current.id !== current.name && (
               <span className="truncate font-mono text-[11px] text-[var(--wb-text-3)]">
@@ -770,7 +795,10 @@ function Row({
             />
           )}
         </div>
-        <div className="truncate text-[11.5px] leading-[16px] text-[var(--wb-text-3)]">{meta}</div>
+        <div className="flex min-w-0 items-center gap-1.5 text-[11.5px] leading-[16px] text-[var(--wb-text-3)]">
+          <VendorMark vendor={m.vendor} name={m.vendorName} modelName={m.name} size={12} />
+          <span className="min-w-0 truncate">{meta}</span>
+        </div>
       </div>
       {number !== undefined && number <= 9 && (
         <span

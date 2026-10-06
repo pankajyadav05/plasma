@@ -75,7 +75,11 @@ export function vendorMonogram(name: string): string {
 /** "x-ai/grok-4" -> "x-ai"; ids without a slash have no vendor. */
 export function vendorOfId(id: string): string {
   const slash = id.indexOf('/');
-  return slash > 0 ? id.slice(0, slash) : '';
+  if (slash <= 0) return '';
+  // `~openai/…` ids are OpenRouter aliases of a vendor's latest model, and
+  // Meta publishes under both `meta-llama` and `meta`.
+  const prefix = id.slice(0, slash).replace(/^~/, '');
+  return prefix === 'meta' ? 'meta-llama' : prefix;
 }
 
 /** A short id for a vendor whose prefix is unknown, to show "Other" names ("inclusionAI"). */

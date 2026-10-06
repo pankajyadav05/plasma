@@ -1,4 +1,3 @@
-import { Button } from '@/components/ui/button';
 import { IconButton, Pill } from '@/components/ui/workbench';
 import { markAiApplied } from '@/lib/ai-applied';
 import { aiConfigured, describeAiSends } from '@/lib/ai-config';
@@ -7,10 +6,10 @@ import { aiSchemaAllowed } from '@/lib/ai-task';
 import { cn } from '@/lib/cn';
 import { type AiTurn, useActiveTab, useSession } from '@/stores/session';
 import { isSqlEngine } from '@shared/sql-dialect';
-import { Loader2, Send, Sparkles, Square, Trash2 } from 'lucide-react';
-import { type KeyboardEvent, useEffect, useRef, useState } from 'react';
+import { Loader2, Sparkles, Trash2 } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
 import { AgentActionCard } from './AgentActionCard';
-import { ModelPicker } from './ModelPicker';
+import { AiComposer } from './AiComposer';
 
 /**
  * AI sidecar panel. Lives in the RightRail under the 'ai' mode.
@@ -59,6 +58,13 @@ export function AiPanel() {
     rowData: allowAiRowData,
   });
   const tab = useActiveTab();
+  const connectionName = useSession((s) => s.activeConfig?.name ?? 'Not connected');
+  const trayContext =
+    tab?.kind === 'table' && tab.tableName
+      ? `${connectionName} · ${tab.tableSchema}.${tab.tableName}`
+      : tab?.kind === 'sql'
+        ? `${connectionName} · ${tab.title}`
+        : connectionName;
 
   const [draft, setDraft] = useState('');
   const scrollerRef = useRef<HTMLDivElement>(null);
@@ -72,13 +78,6 @@ export function AiPanel() {
     if (!el) return;
     el.scrollTop = el.scrollHeight;
   }, [aiChat, aiChat.length]);
-
-  const onKey = (e: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      submit();
-    }
-  };
 
   const submit = () => {
     if (!draft.trim() || aiPending) return;
@@ -133,59 +132,26 @@ export function AiPanel() {
         ))}
       </div>
 
-      <div className="shrink-0 border-t border-[color-mix(in_srgb,var(--wb-text)_8%,transparent)] p-2.5">
-        <div className="relative">
-          <textarea
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={onKey}
-            placeholder={
-              !hasApiKey
-                ? local
-                  ? 'Choose a local model in Settings to enable AI'
-                  : 'Add an OpenRouter API key in Settings to enable AI'
-                : sqlEngine
-                  ? 'Ask, or tell the agent what to do: show the latest 10 orders…'
-                  : 'Ask for a query, paste an error, or describe what you want to find…'
-            }
-            disabled={!hasApiKey}
-            rows={3}
-            className="w-full resize-none rounded-[7px] border-0 bg-[var(--wb-field)] px-2.5 py-1.5 pr-9 text-[13px] text-[var(--wb-text)] shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--wb-text)_8%,transparent)] outline-none transition-shadow placeholder:text-[var(--wb-text-3)] focus:shadow-[0_0_0_2px_color-mix(in_srgb,var(--wb-accent)_55%,transparent)] disabled:cursor-not-allowed disabled:opacity-60"
-          />
-          {aiPending ? (
-            <Button
-              variant="destructive"
-              size="icon-xs"
-              onClick={() => void aiCancel()}
-              className="absolute bottom-2 right-1.5 h-6 w-6 rounded-[6px]"
-              title="Stop"
-              aria-label="Stop"
-            >
-              <Square className="fill-current" />
-            </Button>
-          ) : (
-            <IconButton
-              label="Send"
-              title="Send (Enter)"
-              onClick={submit}
-              disabled={!draft.trim() || !hasApiKey}
-              className="absolute bottom-2 right-1.5"
-            >
-              <Send />
-            </IconButton>
-          )}
-        </div>
-        <div className="mt-1.5 flex min-w-0 items-center">
-          <ModelPicker />
-        </div>
-        <p
-          className="mt-1 px-1 text-[11px] leading-snug text-[var(--wb-text-3)]"
-          data-testid="ai-what-is-sent"
-          title="What the next message sends. Change it in Settings, AI, and per connection."
-        >
-          Sent: {sends}
-        </p>
-      </div>
+      <AiComposer
+        draft={draft}
+        onDraft={setDraft}
+        onSubmit={submit}
+        onStop={() => void aiCancel()}
+        pending={aiPending}
+        enabled={hasApiKey}
+        agent={sqlEngine}
+        sends={sends}
+        context={trayContext}
+        placeholder={
+          !hasApiKey
+            ? local
+              ? 'Choose a local model in Settings to enable AI'
+              : 'Add an OpenRouter API key in Settings to enable AI'
+            : sqlEngine
+              ? 'Ask anything, or tell the agent what to do: show the latest 10 orders…'
+              : 'Ask for a query, paste an error, or describe what you want to find…'
+        }
+      />
     </div>
   );
 }
