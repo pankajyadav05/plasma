@@ -100,10 +100,10 @@ if (env.PLASMA_LIVE_OS) {
 /** A free port nothing listens on. */
 const DEAD_PORT = 1;
 
-async function diagnose(
+async function tryDiagnose(
   t: Target,
   over: Partial<ConnectionConfig>,
-): Promise<{ cause: ConnectCause; text: string; raw: string }> {
+): Promise<{ cause: ConnectCause; text: string; raw: string } | null> {
   const config = {
     id: 'live',
     name: 'live',
@@ -137,7 +137,14 @@ async function diagnose(
   } finally {
     await driver.disconnect().catch(() => undefined);
   }
-  throw new Error('expected the connect to fail');
+  return null;
+}
+
+/** The diagnosis of a connect that must fail. */
+async function diagnose(...args: Parameters<typeof tryDiagnose>) {
+  const d = await tryDiagnose(...args);
+  if (!d) throw new Error('expected the connect to fail');
+  return d;
 }
 
 describe.skipIf(targets.length === 0 && !process.env.PLASMA_LIVE_REDIS_AUTH)(
@@ -156,8 +163,11 @@ describe.skipIf(targets.length === 0 && !process.env.PLASMA_LIVE_REDIS_AUTH)(
           expect(d.text).toContain(`${t.host}:${DEAD_PORT}`);
         }, 30_000);
 
-        it('TLS asked of a plain server is a TLS cause, not a bare socket error', async () => {
-          const d = await diagnose(t, { ssl: true, tls: { mode: 'require' } });
+        it('TLS asked of a plain server is a TLS cause, not a bare socket error', async (ctx) => {
+          const d = await tryDiagnose(t, { ssl: true, tls: { mode: 'require' } });
+          // MySQL 8 servers make their own certificate and accept TLS out of the
+          // box (the CI service does): then this server is not "plain".
+          if (!d) return ctx.skip();
           // Postgres, MySQL and ClickHouse are told outright; Redis and OpenSearch just stop answering.
           expect(['tls-not-supported', 'tls-handshake', 'tls-required', 'timeout']).toContain(
             d.cause,
