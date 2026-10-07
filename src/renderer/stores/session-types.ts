@@ -9,6 +9,7 @@ import type { AiImage } from '@/lib/ai-images';
 import type { Filter, TableSort } from '@/lib/table-query';
 import type { AgentActionInput, AgentActionStatus } from '@shared/agent-actions';
 import type { AgentActionName, AiMessage, QueryResult } from '@shared/protocol';
+import type { QueryLifecycle } from '@shared/query-lifecycle';
 import type { VariableValue } from '@shared/sql-variables';
 import type { TableViewColumn, TableViewSpec } from '@shared/table-view';
 import type { StateCreator } from 'zustand';
@@ -177,6 +178,8 @@ export interface QueryTab {
 
   // ── Common query state ──
   queryRunState: QueryRunState;
+  /** Explicit run lifecycle (queued / running / cancelling / …); `queryRunState` is its busy flag. */
+  queryLifecycle?: QueryLifecycle;
   queryResult: QueryResult | null;
   queryError: string | null;
   queryErrorSql: string | null;

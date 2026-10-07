@@ -14,6 +14,7 @@ import {
   FolderOpen,
   Gauge,
   ListOrdered,
+  Loader2,
   Play,
   Save,
   ShieldCheck,
@@ -227,6 +228,7 @@ function EditorActionBar({
   if (!tab) return null;
 
   const running = tab.queryRunState === 'running';
+  const phase = tab.queryLifecycle?.phase;
   const hasSql = tab.sql.trim().length > 0;
   const canRun = connectionState === 'connected' && (isTable || hasSql);
   const hasSelection = Boolean(cursor && cursor.selectionLength > 0);
@@ -413,8 +415,13 @@ function EditorActionBar({
         </Pill>
       )}
 
-      {running ? (
-        <Pill onClick={onRun} data-testid="run-cancel">
+      {running && (phase === 'queued' || phase === 'cancelling') ? (
+        <Pill disabled data-testid="run-cancel" data-phase={phase}>
+          <Loader2 className="animate-spin" />
+          {phase === 'queued' ? 'Queued' : 'Cancelling'}
+        </Pill>
+      ) : running ? (
+        <Pill onClick={onRun} data-testid="run-cancel" data-phase="running">
           <Square className="fill-current" />
           Cancel
           <span className="font-mono text-[12px] text-[var(--wb-text-2)]">

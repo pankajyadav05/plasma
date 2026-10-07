@@ -4,7 +4,7 @@ import { PendingEditsGateDialog } from '@/features/connection-manager/PendingEdi
 import { ProdGateDialog } from '@/features/connection-manager/ProdGateDialog';
 import { CloseTabsDialog } from '@/features/editor/CloseTabsDialog';
 import { EditorResizer } from '@/features/editor/EditorResizer';
-import { RunningPlaceholder } from '@/features/editor/RunningPlaceholder';
+import { RunProgressPanel } from '@/features/editor/RunStatus';
 import { SqlCanvas } from '@/features/editor/SqlCanvas';
 import { TabStrip } from '@/features/editor/TabStrip';
 import { VariablesBar } from '@/features/editor/VariablesBar';
@@ -459,14 +459,15 @@ function ResultBody() {
     resultCount: t?.queryResults?.length ?? 0,
     error: t?.queryError ?? null,
     running: t?.queryRunState === 'running',
-    runStartedAt: (t?.runStartedAt as number | undefined) ?? null,
+    lifecycle: t?.queryLifecycle,
     activeResultIndex: t?.activeResultIndex ?? 0,
   }));
   const view = useWorkbench((s) => (tab.id ? (s.resultViews[tab.id] ?? 'data') : 'data'));
   // VF20: while the first statement runs, keep the pane with an elapsed
   // timer instead of collapsing it.
   if (tab.kind === 'sql' && tab.running && tab.resultCount === 0 && !tab.error) {
-    return <RunningPlaceholder startedAt={tab.runStartedAt} />;
+    const lifecycle = tab.lifecycle ?? { phase: 'running' as const, since: Date.now() };
+    return <RunProgressPanel lifecycle={lifecycle} />;
   }
   if (tab.kind === 'sql' && view === 'message') return <ResultMessagesPanel />;
   if (tab.kind === 'sql' && view === 'chart') {

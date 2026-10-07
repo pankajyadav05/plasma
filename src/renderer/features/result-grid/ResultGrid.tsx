@@ -1,5 +1,6 @@
 import { Button } from '@/components/ui/button';
 import { FixWithAi } from '@/features/ai/FixWithAi';
+import { RunOutcomePanel } from '@/features/editor/RunStatus';
 import { useGridMasking } from '@/features/presentation/presentation';
 import { revealKey, useReveal } from '@/features/presentation/reveal-store';
 import { cn } from '@/lib/cn';
@@ -1453,28 +1454,25 @@ export function ResultGrid() {
     return (
       <div className="min-h-0 flex-1 overflow-auto bg-[var(--wb-content)]">
         <div className="max-w-4xl p-5">
-          <div
-            className="flex items-start gap-2.5 rounded-[8px] bg-destructive/10 px-3.5 py-3 ring-1 ring-inset ring-destructive/30"
-            role="alert"
+          <RunOutcomePanel
+            lifecycle={tab.queryLifecycle}
+            error={tab.queryError ?? ''}
+            tabId={tab.id}
           >
-            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
-            <div className="min-w-0">
-              <div className="mb-1 text-xs font-semibold text-destructive">Query failed</div>
-              <pre className="whitespace-pre-wrap break-words font-mono text-[13px] text-[var(--wb-text)]">
-                {cleanIpcError(tab.queryError ?? '')}
-              </pre>
-              {tab.queryResults.length > 0 && (
-                <div className="mt-1.5 text-[12px] text-[var(--wb-text-2)]">
-                  {tab.queryResults.length} earlier statement
-                  {tab.queryResults.length === 1 ? '' : 's'} succeeded — open{' '}
-                  {tab.queryResults.length === 1 ? 'its result tab' : 'their result tabs'} above.
-                </div>
-              )}
-            </div>
-          </div>
-          {tab.kind === 'sql' && tab.queryErrorSql && tab.queryError && (
-            <FixWithAi tabId={tab.id} sql={tab.queryErrorSql} error={tab.queryError} />
-          )}
+            {tab.queryResults.length > 0 && (
+              <div className="mt-1.5 text-[12px] text-[var(--wb-text-2)]">
+                {tab.queryResults.length} earlier statement
+                {tab.queryResults.length === 1 ? '' : 's'} succeeded — open{' '}
+                {tab.queryResults.length === 1 ? 'its result tab' : 'their result tabs'} above.
+              </div>
+            )}
+          </RunOutcomePanel>
+          {tab.kind === 'sql' &&
+            tab.queryErrorSql &&
+            tab.queryError &&
+            tab.queryLifecycle?.phase === 'failed' && (
+              <FixWithAi tabId={tab.id} sql={tab.queryErrorSql} error={tab.queryError} />
+            )}
           {tab.queryErrorSql && (
             <>
               <div className="mb-1.5 mt-4 text-[12px] font-medium text-[var(--wb-text-2)]">

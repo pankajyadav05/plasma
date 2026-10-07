@@ -20,6 +20,7 @@ import {
   AiListModelsRequest,
   type AppMeta,
   AppUnsavedState,
+  type CancelOutcome,
   CommitEditBatchRequest,
   ConnectionConfig,
   type ConnectionConfig as ConnectionConfigType,
@@ -1329,8 +1330,10 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle(IpcChannel.QueryCancel, async (): Promise<void> => {
-    await callWorker({ kind: 'cancel' }, 'cancelled');
+  ipcMain.handle(IpcChannel.QueryCancel, async (): Promise<CancelOutcome> => {
+    const res = await callWorker({ kind: 'cancel' }, 'cancelled');
+    if (res.delivered === undefined) return 'unsupported';
+    return res.delivered ? 'sent' : 'nothing-running';
   });
 
   ipcMain.handle(IpcChannel.QuerySideband, async (_e, payload: unknown): Promise<QueryResult> => {

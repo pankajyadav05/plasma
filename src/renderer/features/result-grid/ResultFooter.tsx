@@ -1,5 +1,6 @@
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { IconButton, MenuItem, Pill, Segmented } from '@/components/ui/workbench';
+import { RunStatusChip } from '@/features/editor/RunStatus';
 import { cn } from '@/lib/cn';
 import { exportTargetTable, queryFullExport, tableFullExport } from '@/lib/export';
 import { formatDuration } from '@/lib/format';
@@ -236,18 +237,22 @@ export function ResultFooter() {
         </>
       )}
 
-      {!isTable && result && !running && (
-        <span className="ml-1.5 shrink-0 text-[13px] tabular-nums text-[var(--wb-text-2)] @max-[520px]:hidden">
-          {formatDuration(
-            tab.queryResults.length > 1
-              ? tab.queryResults.reduce((sum: number, r: QueryResult) => sum + r.durationMs, 0)
-              : result.durationMs,
-          )}
-        </span>
-      )}
-      {running && (
-        <span className="ml-1.5 shrink-0 text-[13px] text-[var(--wb-text-2)]">Running…</span>
-      )}
+      <RunStatusChip
+        lifecycle={tab.queryLifecycle}
+        settledText={
+          !isTable && result && !running
+            ? `${
+                result.columns.length === 0 && result.command && result.command !== 'SELECT'
+                  ? `${result.rowCount.toLocaleString()} affected · `
+                  : ''
+              }${formatDuration(
+                tab.queryResults.length > 1
+                  ? tab.queryResults.reduce((sum: number, r: QueryResult) => sum + r.durationMs, 0)
+                  : result.durationMs,
+              )}`
+            : null
+        }
+      />
 
       <div className="flex min-w-0 flex-1 items-center justify-center gap-2">
         {showDataTools && <SelectionStatsChip tabId={tab.id} />}

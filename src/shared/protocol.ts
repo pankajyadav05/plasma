@@ -755,6 +755,14 @@ export const QueryResult = z.object({
 });
 export type QueryResult = z.infer<typeof QueryResult>;
 
+/**
+ * What `query.cancel` found: the cancel signal was `sent` to the server
+ * (the run then fails with the engine's cancel error), nothing was in
+ * flight (`nothing-running`: it already finished or never started), or the
+ * engine has no way to stop a statement (`unsupported`).
+ */
+export type CancelOutcome = 'sent' | 'nothing-running' | 'unsupported';
+
 /** Result export formats (U16). */
 export const ExportFormat = z.enum(['csv', 'json', 'sql']);
 export type ExportFormat = z.infer<typeof ExportFormat>;
@@ -2564,7 +2572,7 @@ export interface PlasmaAPI {
     safeRun(req: SafeRunStartRequest): Promise<SafeRunReport>;
     /** Commit or roll back the pending Safe Run. Idempotent after a timeout. */
     safeRunFinish(req: SafeRunFinishRequest): Promise<SafeRunOutcome>;
-    cancel(): Promise<void>;
+    cancel(): Promise<CancelOutcome>;
     /** Cancel whatever runs on the aux connection (AI tool query, lookups). */
     cancelAux(): Promise<void>;
     /**

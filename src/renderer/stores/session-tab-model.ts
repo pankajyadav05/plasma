@@ -6,6 +6,7 @@
  */
 import { ipc } from '@/lib/ipc';
 import type { PgNotice, QueryResult, SchemaInfo } from '@shared/protocol';
+import { IDLE_LIFECYCLE, lifecycleFromLegacyPatch } from '@shared/query-lifecycle';
 import type { QueryTab, SessionState } from './session-types';
 
 type SetFn = (fn: (s: SessionState) => Partial<SessionState>) => void;
@@ -37,6 +38,7 @@ export function createEmptyTab(pageSize: number, title = 'query-1.sql'): QueryTa
     kind: 'sql',
     sql: '',
     queryRunState: 'idle',
+    queryLifecycle: IDLE_LIFECYCLE,
     queryResult: null,
     queryError: null,
     queryErrorSql: null,
@@ -72,6 +74,7 @@ export function createTableTab(pageSize: number, schemaName: string, tableName: 
     kind: 'table',
     sql: '',
     queryRunState: 'idle',
+    queryLifecycle: IDLE_LIFECYCLE,
     queryResult: null,
     queryError: null,
     queryErrorSql: null,
@@ -135,7 +138,7 @@ export function patchActiveTab(
 ) {
   const activeId = get().activeTabId;
   set((state) => ({
-    tabs: state.tabs.map((t) => (t.id === activeId ? { ...t, ...patch } : t)),
+    tabs: state.tabs.map((t) => (t.id === activeId ? { ...t, ...withLifecycle(t, patch) } : t)),
   }));
 }
 
@@ -267,8 +270,25 @@ export function patchTabById(
   patch: Partial<QueryTab>,
 ) {
   set((state) => ({
-    tabs: state.tabs.map((t) => (t.id === tabId ? { ...t, ...patch } : t)),
+    tabs: state.tabs.map((t) => (t.id === tabId ? { ...t, ...withLifecycle(t, patch) } : t)),
   }));
+}
+
+/**
+ * Keep `queryLifecycle` in step with the legacy `queryRunState` flag for
+ * call sites that only flip the flag (table loads, AI runs, Safe Run). Paths
+ * that know more (cancel, connection loss, outcome unknown) set the
+ * lifecycle themselves and are left alone.
+ */
+function withLifecycle(tab: QueryTab, patch: Partial<QueryTab>): Partial<QueryTab> {
+  if ('queryLifecycle' in patch || !('queryRunState' in patch)) return patch;
+  const next = lifecycleFromLegacyPatch(
+    tab.queryLifecycle,
+    patch,
+    typeof patch.queryError === 'string' && patch.queryError.length > 0,
+    Date.now(),
+  );
+  return next ? { ...patch, queryLifecycle: next } : patch;
 }
 
 /**
@@ -288,6 +308,7 @@ export function clearTabResults(set: SetFn, extra: Partial<QueryTab> = {}): void
       sortColumn: null,
       selectedCell: null,
       selectedRows: new Set<number>(),
+      queryLifecycle: IDLE_LIFECYCLE,
       ...extra,
     })),
   }));
