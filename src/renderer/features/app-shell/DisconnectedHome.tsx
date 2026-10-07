@@ -4,9 +4,10 @@ import { ENGINE_ICON } from '@/lib/engine-meta';
 import { pickAndOpenDataFiles } from '@/stores/data-files';
 import { useSession } from '@/stores/session';
 import type { ConnectionEngine, SavedConnection } from '@shared/protocol';
-import { Cog, Copy, FileSpreadsheet, type LucideIcon, Pencil, Plus } from 'lucide-react';
+import { Bot, Cog, Copy, FileSpreadsheet, type LucideIcon, Pencil, Plus } from 'lucide-react';
 import { Fragment } from 'react';
 import { groupConnections } from '../connection-manager/connection-groups';
+import { openSettingsSection } from '../settings/settings-nav';
 import { WorkspaceHome } from '../workspace/WorkspaceHome';
 
 const ENGINE_META: Record<ConnectionEngine, { label: string; icon: LucideIcon }> = {
@@ -141,6 +142,19 @@ export function DisconnectedHome() {
                         className="grid w-10 shrink-0 cursor-pointer place-items-center text-[var(--wb-text-2)] opacity-0 transition-opacity duration-150 hover:text-[var(--wb-text)] focus-visible:opacity-100 group-hover/conn:opacity-100"
                       >
                         <Copy className="h-3.5 w-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          openSettingsSection('mcp');
+                        }}
+                        aria-label={`Allow AI tools on ${c.name}`}
+                        title="Allow AI tools…"
+                        data-testid={`allow-ai-tools-${c.id}`}
+                        className="grid w-10 shrink-0 cursor-pointer place-items-center text-[var(--wb-text-2)] opacity-0 transition-opacity duration-150 hover:text-[var(--wb-text)] focus-visible:opacity-100 group-hover/conn:opacity-100"
+                      >
+                        <Bot className="h-3.5 w-3.5" />
                       </button>
                     </li>
                   );

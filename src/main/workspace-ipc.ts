@@ -318,7 +318,8 @@ export function registerWorkspaceIpc(
       message: 'Install the "plasma" command?',
       detail: [
         'It lets you run "plasma open <url | file.sqlite | folder>" and',
-        '"plasma import <file> --into <url> --table <name>" from a terminal.',
+        '"plasma import <file> --into <url> --table <name>" from a terminal, and',
+        '"plasma mcp" lets stdio-only AI clients (Claude Desktop) reach Plasma.',
         '',
         `Your user folder (${targets[0]?.dir}) needs no administrator rights.`,
         `${targets[1]?.dir} is shared by all users and may need sudo.`,

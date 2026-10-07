@@ -26,6 +26,7 @@ const SOURCE_LABEL: Record<AuditEntry['source'], string> = {
   import: 'Import',
   ai: 'AI suggestion',
   notify: 'NOTIFY',
+  mcp: 'MCP tool',
 };
 
 const PAGE = 500;

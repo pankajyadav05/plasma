@@ -11,6 +11,7 @@ import {
   type SettingsSectionId,
   sectionMatches,
 } from './SettingsBody';
+import { takeRequestedSection } from './settings-nav';
 
 /**
  * Settings — the single preferences surface (palette, menu, rail and ⌘,
@@ -20,7 +21,9 @@ import {
  */
 export function SettingsCanvas() {
   const setCanvasMode = useSession((s) => s.setCanvasMode);
-  const [section, setSection] = useState<SettingsSectionId>('general');
+  const [section, setSection] = useState<SettingsSectionId>(
+    () => takeRequestedSection() ?? 'general',
+  );
   const [query, setQuery] = useState('');
   const visible = SETTINGS_SECTIONS.filter((s) => sectionMatches(s.id, query));
   const active = visible.some((s) => s.id === section) ? section : visible[0]?.id;

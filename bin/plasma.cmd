@@ -2,12 +2,17 @@
 rem plasma - command-line companion for the Plasma desktop app (Windows).
 rem   plasma open <connection-url | file.sqlite | folder>
 rem   plasma import <file.csv> --into <connection-url> --table <name>
+rem   plasma mcp   (stdio MCP bridge to the running Plasma)
 setlocal
 set "APP=%PLASMA_APP%"
 if "%APP%"=="" set "APP=%~dp0..\..\Plasma.exe"
 if not exist "%APP%" (
   echo plasma: cannot find Plasma.exe. Set PLASMA_APP=C:\path\to\Plasma.exe 1>&2
   exit /b 1
+)
+if /i "%~1"=="mcp" (
+  "%APP%" --plasma-mcp-bridge
+  exit /b %ERRORLEVEL%
 )
 if /i "%~1"=="open" (
   if "%~2"=="" goto usage
@@ -40,4 +45,5 @@ if /i "%~1"=="import" (
 echo Usage: 1>&2
 echo   plasma open ^<connection-url ^| file.sqlite ^| folder^> 1>&2
 echo   plasma import ^<file^> --into ^<connection-url^> --table ^<name^> 1>&2
+echo   plasma mcp 1>&2
 exit /b 2

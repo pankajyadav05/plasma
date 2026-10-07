@@ -10,6 +10,7 @@ describe('settings sections (SS1)', () => {
       'Fonts & themes',
       'Security',
       'AI',
+      'MCP server',
       'Keymap',
       'Advanced',
     ]);

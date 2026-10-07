@@ -38,6 +38,7 @@ export function windowsInstructions(scriptPath: string): string {
     'Add the launcher folder to your PATH, then open a new terminal:',
     `  setx PATH "%PATH%;${dir}"`,
     'Then run:  plasma open <connection-url | file.sqlite | folder>',
+    'MCP clients that only speak stdio use:  plasma mcp',
   ].join('\n');
 }
 

@@ -25,6 +25,7 @@ import { Download, Loader2, RotateCw } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ModelPicker } from '../ai/ModelPicker';
 import { CliToolField } from './CliToolField';
+import { McpSection } from './McpSection';
 
 type ThemeName = Settings['themeName'];
 type SafeMode = Settings['safeModeDefault'];
@@ -39,6 +40,7 @@ export type SettingsSectionId =
   | 'appearance'
   | 'security'
   | 'ai'
+  | 'mcp'
   | 'keymap'
   | 'advanced';
 
@@ -71,6 +73,11 @@ export const SETTINGS_SECTIONS: ReadonlyArray<{
     keywords: 'safe mode read-only confirm timeout presentation mask pii audit retention',
   },
   { id: 'ai', label: 'AI', keywords: 'openrouter api key model assistant' },
+  {
+    id: 'mcp',
+    label: 'MCP server',
+    keywords: 'claude code cursor codex agent external tools token port connections access',
+  },
   { id: 'keymap', label: 'Keymap', keywords: 'shortcuts keyboard bindings' },
   { id: 'advanced', label: 'Advanced', keywords: 'transaction updates version about' },
 ];
@@ -155,6 +162,8 @@ export function SettingsSection({ id }: { id: SettingsSectionId }) {
       return <SecuritySection />;
     case 'ai':
       return <AiSection />;
+    case 'mcp':
+      return <McpSection />;
     case 'keymap':
       return <KeymapSection />;
     case 'advanced':
