@@ -704,18 +704,17 @@ export function registerSqlConformance(fx: SqlFixture, opts: SqlSuiteOpts): void
       );
 
       scenario(
-        'a batch is all or nothing: the second edit fails, the first is undone',
+        'a batch is all or nothing: the second edit finds nothing, the first is undone',
         'rowEdit',
         async () => {
           const before = await userRows();
-          const err = await rejection(
-            drv.commitEditBatch(
-              1,
-              batch(upd({ name: 'changed' }, { id: 1 }), upd({ name: 'ghost' }, { id: 404 })),
-            ),
+          const res = await drv.commitEditBatch(
+            1,
+            batch(upd({ name: 'changed' }, { id: 1 }), upd({ name: 'ghost' }, { id: 404 })),
           );
-          expect(err.message).toMatch(/Edit 2 of 2/);
-          expect(err.message).toMatch(/Nothing was saved/);
+          // A row that moved is a conflict, not an error: nothing is applied, every conflict is named.
+          expect(res.applied).toBe(0);
+          expect(res.conflicts).toEqual([{ index: 1, reason: 'no-match' }]);
           expect(await userRows()).toEqual(before);
         },
       );
@@ -732,9 +731,10 @@ export function registerSqlConformance(fx: SqlFixture, opts: SqlSuiteOpts): void
         expect(await userRows()).toEqual(before);
       });
 
-      scenario('a key that matches no row is refused', 'rowEdit', async () => {
-        const err = await rejection(drv.commitEditBatch(1, batch(del({ id: 404 }))));
-        expect(err.message).toMatch(/matched no row/);
+      scenario('a key that matches no row is reported as a conflict', 'rowEdit', async () => {
+        const res = await drv.commitEditBatch(1, batch(del({ id: 404 })));
+        expect(res.applied).toBe(0);
+        expect(res.conflicts).toEqual([{ index: 0, reason: 'no-match' }]);
       });
 
       scenario('a statement matching several rows is refused and undone', 'rowEdit', async () => {

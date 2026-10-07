@@ -214,10 +214,12 @@ renderer builds with `buildUpdateSql` / `buildInsertSql` / `buildDeleteSql`
 * All statements run in one transaction (`BEGIN ... COMMIT`), or in a
   `SAVEPOINT` when the user already has a transaction open, which is **never
   committed** by the tray.
-* Every statement must report exactly one affected row. Zero ("the row changed
-  or was deleted since it was loaded") and several ("the key is not unique")
-  both roll the whole batch back; so does any database error. The message names
-  the failing edit (`Edit 2 of 3 (...)`) and ends with `Nothing was saved.`
+* Every statement must report exactly one affected row. Zero means the row changed
+  or was deleted since it was loaded: that is a **conflict**, not an error. The batch
+  runs on to name every conflicting statement, rolls everything back and resolves with
+  `applied: 0` and `conflicts: [{ index, reason }]`. Several rows (the key is not
+  unique) and any database error still reject, roll the whole batch back, name the
+  failing edit (`Edit 2 of 3 (...)`) and end with `Nothing was saved.`
 * Updating a column to the value it already has still counts as a match
   (MySQL is connected so that affected rows means matched rows).
 * `NULL`s in non-key columns are set and cleared like any other value.
