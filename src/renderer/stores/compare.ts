@@ -45,6 +45,8 @@ export interface CompareSide {
   error?: string;
   /** Run in flight since (for the elapsed timer). */
   startedAt?: number;
+  /** Names the in-flight run so Stop can interrupt it on the server. */
+  runId?: string;
   /** Primary keys of the table behind the query, when known. */
   primaryKeys: string[][];
 }
@@ -107,6 +109,16 @@ interface CompareState {
   load(tabId: string, saved: SavedComparison): void;
   remove(savedId: string): void;
   close(tabId: string): void;
+}
+
+/** Interrupt a query side that is still running (the server keeps nothing for a closed compare). */
+function abortRun(side: CompareSide | undefined): void {
+  if (!side || side.status !== 'loading' || side.origin !== 'query' || !side.runId) return;
+  const st = useSession.getState();
+  const onActive = side.connectionId === null || side.connectionId === st.activeConfig?.id;
+  // The active connection's read runs on its aux session; any other has its own.
+  const stop = onActive ? ipc.query.cancelAux() : ipc.compare.cancel(side.runId);
+  void Promise.resolve(stop).catch(() => undefined);
 }
 
 const runSeq = new Map<string, number>();
@@ -254,9 +266,12 @@ export const useCompare = create<CompareState>((set, get) => ({
       afterSidesChanged(tabId);
       return;
     }
+    abortRun(get().sessions[tabId]?.[side]);
     const connectionName = connectionNameOf(seed.connectionId);
+    const runId = crypto.randomUUID();
     patchSide(tabId, side, {
       ...emptySide(),
+      runId,
       status: 'loading',
       origin: 'query',
       connectionId: seed.connectionId,
@@ -272,6 +287,7 @@ export const useCompare = create<CompareState>((set, get) => ({
           connectionId: seed.connectionId,
           sql: seed.sql,
           maxRows: MAX_COMPARE_ROWS,
+          runId,
         });
         if (runSeq.get(`${tabId}:${side}`) !== seq) return;
         if (res.columns.length === 0) {
@@ -313,6 +329,7 @@ export const useCompare = create<CompareState>((set, get) => ({
   },
 
   clearSide(tabId, side) {
+    abortRun(get().sessions[tabId]?.[side]);
     nextSeq(runSeq, `${tabId}:${side}`);
     patchSession(tabId, () => ({
       [side]: emptySide(),
@@ -324,9 +341,24 @@ export const useCompare = create<CompareState>((set, get) => ({
   },
 
   swap(tabId) {
+    const before = get().sessions[tabId];
+    if (!before) return;
     patchSession(tabId, (s) => ({ a: s.b, b: s.a }));
-    runSeq.delete(`${tabId}:a`);
-    runSeq.delete(`${tabId}:b`);
+    // A run that was in flight belongs to the other side now: start it again there
+    // (its old result is dropped), so neither side is left "loading".
+    for (const side of ['a', 'b'] as const) {
+      const moved = get().sessions[tabId]![side];
+      if (moved.status === 'loading' && moved.origin === 'query') {
+        get().setSide(tabId, side, {
+          kind: 'query',
+          connectionId: moved.connectionId,
+          sql: moved.sql,
+          tabTitle: moved.tabTitle,
+        });
+      } else {
+        nextSeq(runSeq, `${tabId}:${side}`);
+      }
+    }
     afterSidesChanged(tabId, true);
   },
 

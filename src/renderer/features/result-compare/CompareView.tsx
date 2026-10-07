@@ -658,6 +658,15 @@ function Notices({ s }: { s: CompareSession }) {
       </Notice>,
     );
   }
+  if (d && d.pairedByPosition.length > 0) {
+    out.push(
+      <Notice key="paired" testid="compare-paired-note">
+        Columns named <span className="font-mono">{d.pairedByPosition.join(', ')}</span> appear more
+        than once, so they are paired by position: the first with the first, the second with the
+        second. Alias them in the query to match by name.
+      </Notice>,
+    );
+  }
   if (d && (d.onlyLeft.length > 0 || d.onlyRight.length > 0)) {
     out.push(
       <Notice key="cols" testid="compare-columns-note">

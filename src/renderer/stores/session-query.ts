@@ -25,6 +25,8 @@ import {
   CANCELLED_NOTE,
   type LifecycleEvent,
   type QueryLifecycle,
+  endsTransaction,
+  holdsPrimary,
   reduceLifecycle,
 } from '@shared/query-lifecycle';
 import { armProdGate, evaluateGate } from './session-prod-gate';
@@ -72,11 +74,40 @@ export interface QuerySlice {
   formatActiveSql(): Promise<void>;
 }
 
+/**
+ * Runs waiting for the primary connection. A queued run is NOT sent to the
+ * worker: its request is held here until the tab ahead settles, so it can be
+ * withdrawn (Cancel, closing the tab, a connection change) without ever running.
+ */
+const turnWaiters = new Map<string, { generation: number; release(go: boolean): void }>();
+
+/** Cancel requested for a run (`tabId:generation`); checked between a script's statements. */
+const cancelRequested = new Set<string>();
+
+/** Tunables the tests shorten. */
+export const cancelTuning = { retryMs: 250, retries: 4 };
+
+/** Release or drop queue waiters whose tab moved on. */
+function settleWaiters(tabs: QueryTab[]): void {
+  for (const [tabId, w] of [...turnWaiters]) {
+    const t = tabs.find((x) => x.id === tabId);
+    const phase = t?.queryLifecycle?.phase;
+    if (!t || t.queryGeneration !== w.generation) {
+      turnWaiters.delete(tabId);
+      w.release(false);
+    } else if (phase === 'running') {
+      turnWaiters.delete(tabId);
+      w.release(true);
+    } else if (phase !== 'queued') {
+      turnWaiters.delete(tabId);
+      w.release(false);
+    }
+  }
+}
+
 /** Queued runs start as soon as the tab holding the connection settles. */
 export function promoteQueuedTabs(tabs: QueryTab[], now: number): QueryTab[] | null {
-  const busy = tabs.some(
-    (t) => t.queryLifecycle?.phase === 'running' || t.queryLifecycle?.phase === 'cancelling',
-  );
+  const busy = tabs.some((t) => holdsPrimary(t.queryLifecycle));
   if (busy) return null;
   const next = tabs
     .filter((t) => t.queryLifecycle?.phase === 'queued')
@@ -93,6 +124,7 @@ export const createQuerySlice: SliceCreator<QuerySlice> = (set, get, api) => {
   api.subscribe((state) => {
     const promoted = promoteQueuedTabs(state.tabs, Date.now());
     if (promoted) set({ tabs: promoted });
+    settleWaiters(promoted ?? state.tabs);
   });
   return {
     txnState: 'none',
@@ -215,9 +247,7 @@ export const createQuerySlice: SliceCreator<QuerySlice> = (set, get, api) => {
       const generation = (tab.queryGeneration ?? 0) + 1;
       // Another tab already holds the connection: this run waits its turn.
       const busyElsewhere = state.tabs.some(
-        (t) =>
-          t.id !== originTabId &&
-          (t.queryLifecycle?.phase === 'running' || t.queryLifecycle?.phase === 'cancelling'),
+        (t) => t.id !== originTabId && holdsPrimary(t.queryLifecycle),
       );
       const startedAt = Date.now();
       patchTabById(set, originTabId, {
@@ -237,6 +267,23 @@ export const createQuerySlice: SliceCreator<QuerySlice> = (set, get, api) => {
         queryNotices: [],
       });
 
+      const cancelKey = `${originTabId}:${generation}`;
+      cancelRequested.delete(cancelKey);
+      if (busyElsewhere) {
+        // Hold the request until the connection is free. Anything that moves the
+        // tab on (cancel, close, re-run, connection change) releases it with `false`.
+        const go = await new Promise<boolean>((release) => {
+          turnWaiters.get(originTabId)?.release(false);
+          turnWaiters.set(originTabId, { generation, release });
+          settleWaiters(get().tabs);
+        });
+        if (!go) return;
+      }
+
+      const engine = state.activeConfig?.engine;
+      /** The statement ends a transaction, or implicitly commits (MySQL DDL). */
+      const commitLike = (sql: string) =>
+        endsTransaction(sql) || (engine === 'mysql' && looksLikeDdl(sql));
       // The statement being sent, so a lost connection can tell a read from a
       // write whose outcome is unknown.
       let sentSql = script;
@@ -260,9 +307,11 @@ export const createQuerySlice: SliceCreator<QuerySlice> = (set, get, api) => {
               now: Date.now(),
               message: 'connection lost: the connection changed while the query was running',
               isWrite: looksLikeWrite(sentSql),
+              commitLike: commitLike(sentSql),
               sql: sentSql,
             }),
-            queryError: 'connection changed while query was running — result discarded',
+            queryError:
+              current.queryError || 'connection changed while query was running — result discarded',
           });
           return;
         }
@@ -299,9 +348,29 @@ export const createQuerySlice: SliceCreator<QuerySlice> = (set, get, api) => {
               return;
             }
           }
+          // A cancel that landed between statements: stop here, do not send the rest.
+          if (i > 0 && cancelRequested.has(cancelKey)) {
+            const note = `Cancelled. ${i} of ${statements.length} statements ran; the rest did not.`;
+            const lifecycle = {
+              ...settle({ type: 'fail', now: Date.now(), message: note }),
+              message: note,
+            };
+            publishOrigin({
+              ...resultPatch(results, defaultActiveResultIndex(results)),
+              queryError: note,
+              queryErrorSql: stmt.text,
+              queryErrorRange: { start: stmt.start, end: stmt.end },
+              queryRunningRange: null,
+              queryRunState: 'idle',
+              queryLifecycle: lifecycle,
+            });
+            if (anyDdl) void get().refreshSchema();
+            return;
+          }
           sentSql = stmt.text;
           publishOrigin({
             queryRunningRange: { start: stmt.start, end: stmt.end },
+            queryRunningSql: stmt.text,
           });
           try {
             // Editor row limit (TablePlus "No limit" menu) — enforced in the
@@ -362,13 +431,18 @@ export const createQuerySlice: SliceCreator<QuerySlice> = (set, get, api) => {
               now: Date.now(),
               message: cleanIpcError(message),
               isWrite: looksLikeWrite(stmt.text),
+              commitLike: commitLike(stmt.text),
               sql: stmt.text,
             });
+            const cancelledText =
+              statements.length > 1
+                ? `Cancelled during statement ${i + 1} of ${statements.length}. ${i} ran before it.`
+                : CANCELLED_NOTE;
             publishOrigin({
               ...resultPatch(results, defaultActiveResultIndex(results)),
               queryError:
                 lifecycle.phase === 'cancelled'
-                  ? CANCELLED_NOTE
+                  ? cancelledText
                   : lifecycle.phase === 'unknown' || lifecycle.phase === 'disconnected'
                     ? `${lifecycle.message}${tag}`
                     : `${message}${tag}`,
@@ -398,12 +472,14 @@ export const createQuerySlice: SliceCreator<QuerySlice> = (set, get, api) => {
         }
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
+        cancelRequested.delete(cancelKey);
         publishOrigin({
           queryLifecycle: settle({
             type: 'fail',
             now: Date.now(),
             message: cleanIpcError(message),
             isWrite: looksLikeWrite(sentSql),
+            commitLike: commitLike(sentSql),
             sql: sentSql,
           }),
           queryError: message,
@@ -459,18 +535,17 @@ export const createQuerySlice: SliceCreator<QuerySlice> = (set, get, api) => {
     },
 
     async cancelQuery() {
-      // The connection runs one statement at a time: the cancel hits whichever
-      // tab is running, preferring the one in view.
+      // Cancel stops this tab's own run on its own connection, nothing else.
       const state = get();
-      // A queued run has nothing to cancel yet; the signal would stop the
-      // query that is holding the connection instead.
-      if (activeTab(state)?.queryLifecycle?.phase === 'queued') return;
-      const running =
-        state.tabs.find(
-          (t) => t.id === state.activeTabId && t.queryLifecycle?.phase === 'running',
-        ) ?? state.tabs.find((t) => t.queryLifecycle?.phase === 'running');
-      const tabId = running?.id;
-      const generation = running?.queryGeneration;
+      const tab = activeTab(state);
+      const life = tab?.queryLifecycle;
+      if (!tab || !life) return;
+      const tabId = tab.id;
+      const generation = tab.queryGeneration;
+      const stillOurs = () => {
+        const cur = get().tabs.find((t) => t.id === tabId);
+        return cur?.queryGeneration === generation && cur?.queryLifecycle?.phase === 'cancelling';
+      };
       const apply = (event: LifecycleEvent) => {
         const cur = get().tabs.find((t) => t.id === tabId);
         // A newer run on this tab must not inherit an old cancel's outcome.
@@ -478,24 +553,48 @@ export const createQuerySlice: SliceCreator<QuerySlice> = (set, get, api) => {
         const next = reduceLifecycle(cur.queryLifecycle, event);
         if (next !== cur.queryLifecycle) patchTabById(set, cur.id, { queryLifecycle: next });
       };
-      if (tabId) apply({ type: 'cancel', now: Date.now() });
+
+      // Waiting its turn: nothing was sent, so withdrawing it is enough.
+      if (life.phase === 'queued') {
+        const note = 'Cancelled before it started. Nothing was sent to the server.';
+        patchTabById(set, tabId, {
+          queryRunState: 'idle',
+          queryLifecycle: { phase: 'cancelled', since: Date.now(), message: note },
+          queryError: note,
+          queryErrorSql: null,
+        });
+        return;
+      }
+      if (life.phase !== 'running' && life.phase !== 'cancelling') return;
+
+      cancelRequested.add(`${tabId}:${generation}`);
+      if (life.phase === 'running') apply({ type: 'cancel', now: Date.now() });
+      const fail = (message: string) => apply({ type: 'cancelFailed', now: Date.now(), message });
       try {
-        const outcome: CancelOutcome = await ipc.query.cancel();
-        if (outcome === 'nothing-running') apply({ type: 'cancelNothing', now: Date.now() });
-        else if (outcome === 'unsupported') {
-          apply({
-            type: 'cancelFailed',
-            now: Date.now(),
-            message: 'This engine cannot stop a running statement.',
-          });
+        // An AI read runs on the aux connection: only that is stopped.
+        if (life.aux) {
+          await ipc.query.cancelAux();
+          return;
+        }
+        let outcome: CancelOutcome = await ipc.query.cancel();
+        // Nothing in flight yet (the statement is still on its way, or a script is
+        // between two statements): try again shortly instead of letting it run.
+        for (
+          let n = 0;
+          outcome === 'nothing-running' && n < cancelTuning.retries && stillOurs();
+          n++
+        ) {
+          await new Promise((r) => setTimeout(r, cancelTuning.retryMs));
+          if (!stillOurs()) return;
+          outcome = await ipc.query.cancel();
+        }
+        if (outcome === 'unsupported') fail('This engine cannot stop a running statement.');
+        else if (outcome === 'failed') {
+          fail('The server did not confirm the cancel. Try again, or disconnect to stop it.');
         }
       } catch (err) {
         console.error('[plasma] cancel failed', err);
-        apply({
-          type: 'cancelFailed',
-          now: Date.now(),
-          message: 'Could not reach the server to cancel.',
-        });
+        fail('Could not reach the server to cancel.');
       }
     },
 

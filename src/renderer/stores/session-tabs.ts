@@ -407,14 +407,20 @@ export const createTabsSlice: SliceCreator<TabsSlice> = (set, get) => ({
     if (drop.size === 0) return;
     // A closed tab's in-flight user query is cancelled; its result would be
     // dropped by the origin-tab guard anyway (U03).
-    if (
-      state.tabs.some((t) => drop.has(t.id) && t.kind === 'sql' && t.queryRunState === 'running')
-    ) {
-      try {
-        void ipc.query.cancel().catch(() => undefined);
-      } catch {
-        /* preload unavailable (tests) */
-      }
+    // A queued run was never sent (closing it just withdraws it); an aux read
+    // (AI) only stops the aux connection.
+    const closing = state.tabs.filter(
+      (t) => drop.has(t.id) && t.kind === 'sql' && t.queryRunState === 'running',
+    );
+    const stopsPrimary = closing.some(
+      (t) => t.queryLifecycle?.phase !== 'queued' && !t.queryLifecycle?.aux,
+    );
+    const stopsAux = closing.some((t) => t.queryLifecycle?.aux);
+    try {
+      if (stopsPrimary) void ipc.query.cancel().catch(() => undefined);
+      if (stopsAux) void ipc.query.cancelAux().catch(() => undefined);
+    } catch {
+      /* preload unavailable (tests) */
     }
     const remaining = state.tabs.filter((t) => !drop.has(t.id));
     if (remaining.length === 0) {

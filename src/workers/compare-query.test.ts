@@ -1,6 +1,11 @@
 import type { ConnectionConfig, QueryResult } from '@shared/protocol';
 import { describe, expect, it, vi } from 'vitest';
-import { type ReadOnlyDriver, runIsolatedReadOnlyQuery } from './test-connect';
+import {
+  COMPARE_TIMEOUT_MS,
+  type ReadOnlyDriver,
+  cancelIsolatedRun,
+  runIsolatedReadOnlyQuery,
+} from './test-connect';
 
 const config = (over: Partial<ConnectionConfig> = {}): ConnectionConfig =>
   ({
@@ -22,19 +27,27 @@ function driver(over: Partial<ReadOnlyDriver> = {}) {
   return {
     connect: vi.fn(async () => 'PostgreSQL 16'),
     disconnect: vi.fn(async () => {}),
+    cancelQuery: vi.fn(async () => true),
     aiQuery: vi.fn(async () => result),
     ...over,
   };
 }
 
 describe('runIsolatedReadOnlyQuery (Result Compare)', () => {
-  it('connects read-only, runs through the agent path with the row cap, and disconnects', async () => {
+  it('connects read-only with a timeout, runs through the agent path with the row cap, and disconnects', async () => {
     const d = driver();
-    const out = await runIsolatedReadOnlyQuery(config({ readOnly: false }), 'select 1', 5000, {
-      postgres: () => d,
-    });
+    const out = await runIsolatedReadOnlyQuery(
+      config({ readOnly: false }),
+      'select 1',
+      5000,
+      undefined,
+      { postgres: () => d },
+    );
     expect(out).toBe(result);
-    expect(d.connect).toHaveBeenCalledWith(expect.objectContaining({ readOnly: true }));
+    expect(d.connect).toHaveBeenCalledWith(
+      expect.objectContaining({ readOnly: true }),
+      COMPARE_TIMEOUT_MS,
+    );
     expect(d.aiQuery).toHaveBeenCalledWith('select 1', undefined, { maxRows: 5000 });
     expect(d.disconnect).toHaveBeenCalledOnce();
   });
@@ -42,13 +55,13 @@ describe('runIsolatedReadOnlyQuery (Result Compare)', () => {
   it('disconnects when the query fails, and when connecting fails', async () => {
     const failing = driver({ aiQuery: vi.fn(async () => Promise.reject(new Error('boom'))) });
     await expect(
-      runIsolatedReadOnlyQuery(config(), 'select 1', 10, { postgres: () => failing }),
+      runIsolatedReadOnlyQuery(config(), 'select 1', 10, undefined, { postgres: () => failing }),
     ).rejects.toThrow('boom');
     expect(failing.disconnect).toHaveBeenCalledOnce();
 
     const noConnect = driver({ connect: vi.fn(async () => Promise.reject(new Error('refused'))) });
     await expect(
-      runIsolatedReadOnlyQuery(config(), 'select 1', 10, { postgres: () => noConnect }),
+      runIsolatedReadOnlyQuery(config(), 'select 1', 10, undefined, { postgres: () => noConnect }),
     ).rejects.toThrow('refused');
     expect(noConnect.disconnect).toHaveBeenCalledOnce();
   });
@@ -57,5 +70,33 @@ describe('runIsolatedReadOnlyQuery (Result Compare)', () => {
     await expect(
       runIsolatedReadOnlyQuery(config({ engine: 'redis' }), 'select 1', 10),
     ).rejects.toThrow(/SQL connection/);
+  });
+
+  it('P2-8: a run in flight can be cancelled by id, which interrupts and closes its session only', async () => {
+    let finish!: () => void;
+    const d = driver({
+      aiQuery: vi.fn(
+        () =>
+          new Promise<QueryResult>((_resolve, reject) => {
+            finish = () => reject(new Error('interrupted'));
+          }),
+      ),
+      cancelQuery: vi.fn(async () => {
+        finish();
+        return true;
+      }),
+    });
+    const run = runIsolatedReadOnlyQuery(config(), 'select slow()', 10, 'run-1', {
+      postgres: () => d,
+    });
+    run.catch(() => undefined);
+    await new Promise((r) => setTimeout(r, 10));
+    expect(await cancelIsolatedRun('run-1')).toBe(true);
+    await expect(run).rejects.toThrow('interrupted');
+    expect(d.cancelQuery).toHaveBeenCalledOnce();
+    expect(d.disconnect).toHaveBeenCalled();
+    // Finished runs are forgotten: cancelling again is a no-op, never the live session.
+    expect(await cancelIsolatedRun('run-1')).toBe(false);
+    expect(await cancelIsolatedRun('never-started')).toBe(false);
   });
 });

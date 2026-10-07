@@ -1333,6 +1333,7 @@ function registerIpcHandlers() {
 
   ipcMain.handle(IpcChannel.QueryCancel, async (): Promise<CancelOutcome> => {
     const res = await callWorker({ kind: 'cancel' }, 'cancelled');
+    if (res.failed) return 'failed';
     if (res.delivered === undefined) return 'unsupported';
     return res.delivered ? 'sent' : 'nothing-running';
   });
@@ -1795,6 +1796,11 @@ function registerIpcHandlers() {
   // connection uses the agent's read-only path as is; any other saved
   // connection gets a throwaway read-only session (tunnel included) that is
   // closed right after, so the live session is never disturbed.
+  ipcMain.handle(IpcChannel.CompareCancel, async (_e, runId: unknown): Promise<void> => {
+    if (typeof runId !== 'string' || runId === '') return;
+    await callWorker({ kind: 'compareCancel', runId }, 'cancelled');
+  });
+
   ipcMain.handle(IpcChannel.CompareRun, async (_e, raw: unknown): Promise<QueryResult> => {
     const req = CompareRunRequest.parse(raw);
     if (!isSingleSqlStatement(req.sql) || !isAgentReadSql(req.sql)) {
@@ -1822,6 +1828,21 @@ function registerIpcHandlers() {
     let tunnelled = false;
     try {
       let effective: ConnectionConfigType = await withTlsFiles(config);
+      if (config.engine === 'duckdb' && config.duckdb?.attachConnectionIds?.length) {
+        // Saved Postgres connections attached read-only, resolved here with their stored passwords.
+        effective = {
+          ...effective,
+          duckdb: {
+            files: config.duckdb.files,
+            installPostgresExtension: config.duckdb.installPostgresExtension,
+            installExcelExtension: config.duckdb.installExcelExtension,
+            attach: buildDuckdbAttachments(config.duckdb.attachConnectionIds, {
+              load: (id) => vaultGetFull(id),
+              sshFor: (id) => getFullSshConfig(id, settings.connectionSsh) !== null,
+            }),
+          },
+        };
+      }
       const ssh = getFullSshConfig(config.id, settings.connectionSsh);
       if (ssh) {
         const refusal = sshUnsupportedReason(config);
@@ -1842,7 +1863,13 @@ function registerIpcHandlers() {
       const executedAt = Date.now();
       try {
         const res = await callWorker(
-          { kind: 'compareQuery', config: { ...effective, readOnly: true }, sql: req.sql, maxRows },
+          {
+            kind: 'compareQuery',
+            config: { ...effective, readOnly: true },
+            sql: req.sql,
+            maxRows,
+            runId: req.runId ?? randomUUID(),
+          },
           'queryResult',
         );
         try {

@@ -6,9 +6,13 @@ const settingsSet = vi.fn(async (_patch?: unknown) => ({}) as unknown);
 
 vi.mock('@/lib/ipc', () => ({
   ipc: {
-    compare: { run: (...a: unknown[]) => compareRun(...a) },
+    compare: { run: (...a: unknown[]) => compareRun(...a), cancel: vi.fn(async () => undefined) },
     export: { save: (...a: unknown[]) => exportSave(...a) },
-    query: { run: vi.fn(), cancel: vi.fn(async () => 'sent') },
+    query: {
+      run: vi.fn(),
+      cancel: vi.fn(async () => 'sent'),
+      cancelAux: vi.fn(async () => undefined),
+    },
     sql: { format: vi.fn() },
     conn: { test: vi.fn(), connect: vi.fn(), disconnect: vi.fn() },
     schema: { introspect: vi.fn() },
@@ -115,11 +119,14 @@ describe('compare store (C2)', () => {
       );
     await settle(id);
     const s = useCompare.getState().sessions[id]!;
-    expect(compareRun).toHaveBeenCalledWith({
-      connectionId: 'prod',
-      sql: 'select * from t',
-      maxRows: 200_000,
-    });
+    expect(compareRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        connectionId: 'prod',
+        sql: 'select * from t',
+        maxRows: 200_000,
+        runId: expect.any(String),
+      }),
+    );
     expect(s.a).toMatchObject({ origin: 'tab', connectionName: 'staging', rowCount: 3 });
     expect(s.b).toMatchObject({ origin: 'query', connectionName: 'production', rowCount: 3 });
     expect(s.options.keys).toEqual(['id']);

@@ -85,6 +85,8 @@ export interface DiffResult {
   onlyRight: string[];
   /** Ignored columns that were found. */
   ignored: string[];
+  /** Names that occur more than once on the left; their columns are paired by position. */
+  pairedByPosition: string[];
   summary: DiffSummary;
   rows: DiffRow[];
   /** Per column: how many changed cells. */
@@ -170,7 +172,39 @@ function stableStringify(v: unknown): string {
 const NULL_TOKEN = '\u0000null';
 
 /** A cell reduced to a comparable token (equal tokens = equal cells, tolerance aside). */
-export function cellToken(value: unknown, numeric: boolean, o: CompareOptions): string {
+/** timestamptz / `timestamp with time zone`: the same instant reads differently per session TimeZone. */
+export function isInstantType(typeName: string | undefined): boolean {
+  return !!typeName && /^(timestamptz|timestamp\s+with\s+time\s+zone)/i.test(typeName.trim());
+}
+
+const INSTANT_RE =
+  /^(\d{4})-(\d\d)-(\d\d)[ T](\d\d):(\d\d):(\d\d)(?:\.(\d{1,9}))?\s*(Z|[+-]\d\d(?::?\d\d)?(?::?\d\d)?)$/i;
+
+/** `epochSeconds.micros` of a Postgres timestamptz text, or null when it is not one. */
+export function instantToken(text: string): string | null {
+  const m = INSTANT_RE.exec(text.trim());
+  if (!m) return null;
+  const [, y, mo, d, h, mi, sec, frac = '', tz = 'Z'] = m;
+  let offset = 0;
+  if (tz.toUpperCase() !== 'Z') {
+    const sign = tz.startsWith('-') ? -1 : 1;
+    const parts = tz.slice(1).replace(/:/g, '');
+    const hh = Number(parts.slice(0, 2));
+    const mm = Number(parts.slice(2, 4) || 0);
+    const ss = Number(parts.slice(4, 6) || 0);
+    offset = sign * (hh * 3600 + mm * 60 + ss);
+  }
+  const base = Date.UTC(Number(y), Number(mo) - 1, Number(d), Number(h), Number(mi), Number(sec));
+  const seconds = base / 1000 - offset;
+  return `t:${seconds}.${frac.padEnd(6, '0').slice(0, 9).replace(/0+$/, '') || '0'}`;
+}
+
+export function cellToken(
+  value: unknown,
+  numeric: boolean,
+  o: CompareOptions,
+  instant = false,
+): string {
   if (value === null || value === undefined) return NULL_TOKEN;
   if (typeof value === 'number' || typeof value === 'bigint') {
     return `n:${typeof value === 'bigint' ? String(value) : canonicalFromNumber(value)}`;
@@ -182,6 +216,10 @@ export function cellToken(value: unknown, numeric: boolean, o: CompareOptions): 
   }
   if (typeof value === 'object') return `j:${stableStringify(value)}`;
   let s = String(value);
+  if (instant) {
+    const t = instantToken(s);
+    if (t) return t;
+  }
   if (numeric) {
     const d = canonicalDecimal(s);
     if (d !== null) return `n:${d}`;
@@ -191,30 +229,72 @@ export function cellToken(value: unknown, numeric: boolean, o: CompareOptions): 
   return `s:${s}`;
 }
 
-function tokenNumber(token: string): number | null {
-  if (!token.startsWith('n:')) return null;
-  const n = Number(token.slice(2));
-  return Number.isFinite(n) ? n : null;
+function splitDecimal(d: string): { neg: boolean; digits: string; scale: number } {
+  const neg = d.startsWith('-');
+  const body = neg ? d.slice(1) : d;
+  const [int = '0', frac = ''] = body.split('.');
+  return { neg, digits: int + frac, scale: frac.length };
+}
+
+/** |a - b| <= tol, in exact decimal arithmetic (no float rounding for big ints or long decimals). */
+export function decimalWithin(a: string, b: string, tol: string): boolean {
+  const x = splitDecimal(a);
+  const y = splitDecimal(b);
+  const t = splitDecimal(tol);
+  const scale = Math.max(x.scale, y.scale, t.scale);
+  const big = (v: { neg: boolean; digits: string; scale: number }) => {
+    const n = BigInt(v.digits + '0'.repeat(scale - v.scale));
+    return v.neg ? -n : n;
+  };
+  const diff = big(x) - big(y);
+  return (diff < 0n ? -diff : diff) <= big(t);
 }
 
 /** Equal tokens, or numbers within the tolerance. */
-function tokensEqual(a: string, b: string, tolerance: number): boolean {
+function tokensEqual(a: string, b: string, tolerance: string | null): boolean {
   if (a === b) return true;
-  if (tolerance > 0) {
-    const x = tokenNumber(a);
-    const y = tokenNumber(b);
-    if (x !== null && y !== null) return Math.abs(x - y) <= tolerance;
+  if (tolerance !== null && a.startsWith('n:') && b.startsWith('n:')) {
+    return decimalWithin(a.slice(2), b.slice(2), tolerance);
   }
   return false;
 }
 
 // ───────────────────────────── the diff ─────────────────────────────
 
+/** Columns whose name (any case) appears more than once. */
+export function duplicateNames(columns: string[]): string[] {
+  const seen = new Map<string, number>();
+  for (const c of columns) seen.set(c.toLowerCase(), (seen.get(c.toLowerCase()) ?? 0) + 1);
+  return columns.filter(
+    (c, i) =>
+      seen.get(c.toLowerCase())! > 1 &&
+      columns.findIndex((x) => x.toLowerCase() === c.toLowerCase()) === i,
+  );
+}
+
+/**
+ * The right-hand column of the k-th left column named `name`: the k-th right
+ * column of that name. Same-named columns (a join of two `id`s) pair by
+ * position instead of all collapsing onto the first.
+ */
+function pairRight(left: CompareSource, right: CompareSource, li: number): number {
+  const lower = left.columns[li]!.toLowerCase();
+  let k = 0;
+  for (let i = 0; i < li; i++) if (left.columns[i]!.toLowerCase() === lower) k++;
+  let seen = 0;
+  for (let i = 0; i < right.columns.length; i++) {
+    if (right.columns[i]!.toLowerCase() !== lower) continue;
+    if (seen === k) return i;
+    seen++;
+  }
+  return -1;
+}
+
+/** The only index of a column name unique in `source`, else -1 (used for key suggestions). */
 function resolveColumns(source: CompareSource, name: string): number {
-  const exact = source.columns.indexOf(name);
-  if (exact >= 0) return exact;
   const lower = name.toLowerCase();
-  return source.columns.findIndex((c) => c.toLowerCase() === lower);
+  const hits = source.columns.flatMap((c, i) => (c.toLowerCase() === lower ? [i] : []));
+  return hits.length === 1 ? hits[0]! : -1;
 }
 
 const defaultYield = () => new Promise<void>((r) => setTimeout(r, 0));
@@ -241,9 +321,16 @@ export async function compareResults(
   const onlyLeft: string[] = [];
   const ignored: string[] = [];
   const usedRight = new Set<number>();
-  left.columns.forEach((name, li) => {
-    const ri = resolveColumns(right, name);
-    if (ignore.has(name.toLowerCase())) {
+  const dupes = new Set(duplicateNames(left.columns).map((c) => c.toLowerCase()));
+  const nth = new Map<string, number>();
+  left.columns.forEach((rawName, li) => {
+    const lower = rawName.toLowerCase();
+    const occurrence = nth.get(lower) ?? 0;
+    nth.set(lower, occurrence + 1);
+    // `id`, `id (2)`: a display name per column, so keys and React keys stay unique.
+    const name = occurrence === 0 ? rawName : `${rawName} (${occurrence + 1})`;
+    const ri = pairRight(left, right, li);
+    if (ignore.has(lower)) {
       ignored.push(name);
       if (ri >= 0) usedRight.add(ri);
       return;
@@ -260,6 +347,7 @@ export async function compareResults(
   const onlyRight = right.columns.filter(
     (name, ri) => !usedRight.has(ri) && !ignore.has(name.toLowerCase()),
   );
+  const pairedByPosition = [...dupes];
   if (columns.length === 0) {
     throw new CompareError('no-columns', 'The two results have no column in common to compare.');
   }
@@ -286,12 +374,18 @@ export async function compareResults(
     rightIndex: order.map((i) => rightIndex[i]!),
   };
   const keyIndexes = keyNames.map((_, i) => i);
+  const instant = ordered.columns.map(
+    (_, i) =>
+      isInstantType(left.types?.[ordered.leftIndex[i]!]) ||
+      isInstantType(right.types?.[ordered.rightIndex[i]!]),
+  );
   const numeric = ordered.columns.map(
     (_, i) =>
       isNumericType(left.types?.[ordered.leftIndex[i]!]) ||
       isNumericType(right.types?.[ordered.rightIndex[i]!]),
   );
 
+  const tolText = o.tolerance > 0 ? canonicalFromNumber(o.tolerance) : null;
   const sliceRows = run.sliceRows ?? 4000;
   const yieldFn = run.yieldFn ?? defaultYield;
   const total = left.rows.length + right.rows.length;
@@ -306,7 +400,7 @@ export async function compareResults(
   // Tokens per row, per compared column; keys joined into one string.
   const tokensOf = (row: unknown[], side: 'l' | 'r'): string[] => {
     const idx = side === 'l' ? ordered.leftIndex : ordered.rightIndex;
-    return idx.map((ci, i) => cellToken(row[ci], numeric[i]!, o));
+    return idx.map((ci, i) => cellToken(row[ci], numeric[i]!, o, instant[i]!));
   };
   const keyOf = (tokens: string[]): string =>
     keyIndexes.length > 0 ? keyIndexes.map((i) => tokens[i]).join('\u0001') : tokens.join('\u0001');
@@ -387,7 +481,7 @@ export async function compareResults(
       const rt = rightTokens[ris[0]!]!;
       const changed: number[] = [];
       for (let c = 0; c < lt.length; c++) {
-        if (!tokensEqual(lt[c]!, rt[c]!, o.tolerance)) {
+        if (!tokensEqual(lt[c]!, rt[c]!, tolText)) {
           changed.push(c);
           changedPerColumn[c]!++;
         }
@@ -434,6 +528,7 @@ export async function compareResults(
     onlyLeft,
     onlyRight,
     ignored,
+    pairedByPosition,
     summary,
     rows,
     changedPerColumn,
@@ -478,9 +573,15 @@ export function suggestKeys(
   ignore: string[] = [],
 ): KeySuggestion[] {
   const skip = new Set(ignore.map((c) => c.toLowerCase()));
+  const dup = new Set(
+    [...duplicateNames(left.columns), ...(right ? duplicateNames(right.columns) : [])].map((c) =>
+      c.toLowerCase(),
+    ),
+  );
   const shared = left.columns.filter(
     (c) =>
       !skip.has(c.toLowerCase()) &&
+      !dup.has(c.toLowerCase()) &&
       (right === null || right.columns.some((r) => r.toLowerCase() === c.toLowerCase())),
   );
   const opts: CompareOptions = DEFAULT_COMPARE_OPTIONS;
@@ -559,7 +660,14 @@ export function diffToTable(
     else columns.push(`${d.columns[c]} (A)`, `${d.columns[c]} (B)`);
   }
   const rows: unknown[][] = [];
-  for (const r of d.rows) {
+  const expand = (r: DiffRow): DiffRow[] =>
+    r.kind === 'duplicate'
+      ? [
+          ...(r.lis ?? []).map((li) => ({ ...r, li, ri: -1 })),
+          ...(r.ris ?? []).map((ri) => ({ ...r, li: -1, ri })),
+        ]
+      : [r];
+  for (const r of d.rows.flatMap(expand)) {
     if (!kinds.has(r.kind)) continue;
     const out: unknown[] = [r.kind, r.changed.map((c) => d.columns[c]).join(', ')];
     for (let c = 0; c < d.columns.length; c++) {

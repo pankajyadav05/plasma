@@ -108,8 +108,11 @@ export function RunStatusChip({
 }) {
   const busy = lifecycle ? isBusyPhase(lifecycle.phase) : false;
   const now = useNow(busy);
+  const cancelQuery = useSession((s) => s.cancelQuery);
+  const disconnect = useSession((s) => s.disconnect);
   if (!lifecycle || lifecycle.phase === 'idle') return null;
   const { phase } = lifecycle;
+  const stuck = cancelIsStuck(lifecycle, now) || Boolean(lifecycle.cancelNote);
   if (phase === 'succeeded') {
     return settledText ? (
       <span
@@ -138,6 +141,27 @@ export function RunStatusChip({
       {busy && <span className="font-mono">{formatElapsed(runElapsed(lifecycle, now))}</span>}
       {!busy && lifecycle.elapsedMs != null && (
         <span className="font-mono">{formatElapsed(lifecycle.elapsedMs)}</span>
+      )}
+      {phase === 'cancelling' && stuck && (
+        <>
+          <button
+            type="button"
+            onClick={() => void cancelQuery()}
+            data-testid="chip-cancel-again"
+            className="underline-offset-2 hover:underline"
+          >
+            Cancel again
+          </button>
+          <button
+            type="button"
+            onClick={() => void disconnect()}
+            data-testid="chip-disconnect-to-stop"
+            className="underline-offset-2 hover:underline"
+            title={lifecycle.cancelNote ?? 'Drop the connection to stop the statement'}
+          >
+            Disconnect to stop it
+          </button>
+        </>
       )}
     </span>
   );

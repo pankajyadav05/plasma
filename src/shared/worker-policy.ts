@@ -76,16 +76,19 @@ const OS_DEADLINE_SLACK_MS = 10_000;
  */
 export function cancelRequestFor(req: WorkerRequest, id: string): WorkerRequest | null {
   switch (req.kind) {
-    case 'aiQuery':
     case 'commitEditBatch':
     case 'applyDdl':
     case 'explain':
     case 'safeRunStart':
     case 'query':
       return { kind: 'cancel', id };
+    // aiQuery runs on the aux connection: stopping it must not touch the primary query.
+    case 'aiQuery':
     case 'introspect':
     case 'sidebandQuery':
       return { kind: 'cancelAux', id };
+    case 'compareQuery':
+      return { kind: 'compareCancel', id, runId: req.runId };
     case 'importRun':
       return { kind: 'importCancel', id, jobId: req.job.jobId };
     case 'osRequest':

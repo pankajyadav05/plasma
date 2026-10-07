@@ -50,7 +50,7 @@ import {
 } from './pg-txn';
 import { plasmaPgTypes } from './pg-type-parsers';
 import { introspectPostgres } from './postgres-introspect';
-import type { AiQueryOpts } from './sql-engine';
+import { type AiQueryOpts, CancelFailedError } from './sql-engine';
 
 /** Rows counted past the display cap before Safe Run stops counting. */
 const SAFE_RUN_COUNT_CEILING = 1_000_000;
@@ -962,11 +962,13 @@ export class PostgresDriver {
           );
         }),
       ]);
-      return res.rows[0]?.ok === true;
+      if (res.rows[0]?.ok === true) return true;
+      throw new CancelFailedError('the server refused pg_cancel_backend');
     } catch (err) {
+      if (err instanceof CancelFailedError) throw err;
       if (!isServerError(err)) this.markConnectionLost(`cancel (${which}) unanswered`);
       console.error(`[plasma] pg_cancel_backend (${which}) failed:`, err);
-      return false;
+      throw new CancelFailedError(err instanceof Error ? err.message : String(err));
     } finally {
       clearTimeout(timer);
     }

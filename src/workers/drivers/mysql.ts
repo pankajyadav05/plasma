@@ -23,6 +23,7 @@ import { type MysqlRawSchema, buildMysqlSchema, mysqlIntrospectQueries } from '.
 import { runEditBatch } from './pg-txn';
 import {
   type AiQueryOpts,
+  CancelFailedError,
   type ExportBatch,
   type SqlEditUpdate,
   type SqlEngineDriver,
@@ -326,7 +327,7 @@ export class MysqlDriver implements SqlEngineDriver {
           const cells = row.map((v, i) => normalizeMysqlCell(v, fields[i]?.columnType));
           if (appendBoundedRows(state, [cells], maxRows, maxBytes)) {
             capped = true;
-            if (!internal) void this.killStatement(conn);
+            if (!internal) void this.killStatement(conn).catch(() => undefined);
           }
         } else if (row && typeof row === 'object') {
           header = row as typeof header;
@@ -372,13 +373,14 @@ export class MysqlDriver implements SqlEngineDriver {
   private async killStatement(conn: CbConnection): Promise<boolean> {
     const aux = this.aux;
     const id = (conn as unknown as { threadId?: number }).threadId;
-    if (!aux || !id || conn === aux) return false;
+    if (!aux || !id || conn === aux)
+      throw new CancelFailedError('no side connection to send KILL QUERY');
     this.killing = true;
     try {
       await this.exec(aux, `KILL QUERY ${Number(id)}`, [], true);
       return true;
-    } catch {
-      return false;
+    } catch (err) {
+      throw new CancelFailedError(err instanceof Error ? err.message : String(err));
     } finally {
       // The interrupted statement's error arrives a moment later.
       setTimeout(() => {

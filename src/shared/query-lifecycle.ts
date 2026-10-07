@@ -39,6 +39,8 @@ export interface QueryLifecycle {
   finishedBeforeCancel?: boolean;
   /** Unknown / disconnected: the statement text, for "Check the data". */
   sql?: string;
+  /** The run uses the aux connection (AI read-only runs): it never holds the primary one. */
+  aux?: boolean;
 }
 
 export const IDLE_LIFECYCLE: QueryLifecycle = { phase: 'idle', since: 0 };
@@ -51,8 +53,31 @@ export type LifecycleEvent =
   | { type: 'cancelNothing'; now: number }
   | { type: 'cancelFailed'; now: number; message: string }
   | { type: 'succeed'; now: number }
-  | { type: 'fail'; now: number; message: string; isWrite?: boolean; sql?: string }
+  | {
+      type: 'fail';
+      now: number;
+      message: string;
+      isWrite?: boolean;
+      /** The statement ends a transaction (or implicitly commits): a lost reply is never "rolled back". */
+      commitLike?: boolean;
+      sql?: string;
+    }
   | { type: 'reset' };
+
+/** True for a run that holds the primary connection (queued runs wait for it). */
+export function holdsPrimary(l: QueryLifecycle | undefined): boolean {
+  return (l?.phase === 'running' || l?.phase === 'cancelling') && !l.aux;
+}
+
+/** COMMIT, END, COMMIT PREPARED, PREPARE TRANSACTION, … (also `AND CHAIN`): reply lost = outcome unknown. */
+export function endsTransaction(sql: string): boolean {
+  const s = sql
+    .replace(/--.*$/gm, ' ')
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')
+    .trim()
+    .toLowerCase();
+  return /^(commit|end|prepare\s+transaction|release)\b/.test(s);
+}
 
 /** Phases in which work is (or may be) in flight on the connection. */
 export function isBusyPhase(phase: QueryPhase): boolean {
@@ -71,18 +96,24 @@ export const CANCELLED_NOTE = 'Cancelled before it finished.';
 /** What a failed run turned into: the phase plus the user-facing text. */
 export function classifyFailure(
   message: string,
-  opts: { isWrite?: boolean; wasCancelling?: boolean },
+  opts: { isWrite?: boolean; wasCancelling?: boolean; commitLike?: boolean },
 ): { phase: 'failed' | 'cancelled' | 'disconnected' | 'unknown'; message: string } {
   const lost = isConnectionLostMessage(message) || /^connection lost/i.test(message);
-  if (NOT_APPLIED_UNKNOWN.test(message)) {
-    // Main refused to replay a statement the dead session may have run.
+  const rolledBack = TXN_ROLLED_BACK.test(message);
+  if (opts.commitLike && (lost || NOT_APPLIED_UNKNOWN.test(message))) {
+    // The COMMIT may have reached the server before the reply was lost.
     return {
-      phase: TXN_ROLLED_BACK.test(message) ? 'disconnected' : 'unknown',
-      message,
+      phase: 'unknown',
+      message:
+        'The connection dropped while this statement was committing. The transaction may or may not have been committed.',
     };
   }
+  if (NOT_APPLIED_UNKNOWN.test(message)) {
+    // Main refused to replay a statement the dead session may have run.
+    return { phase: rolledBack ? 'disconnected' : 'unknown', message };
+  }
   if (lost) {
-    if (opts.isWrite && !TXN_ROLLED_BACK.test(message)) {
+    if (opts.isWrite && !rolledBack) {
       return {
         phase: 'unknown',
         message:
@@ -91,7 +122,7 @@ export function classifyFailure(
     }
     return {
       phase: 'disconnected',
-      message: TXN_ROLLED_BACK.test(message)
+      message: rolledBack
         ? message
         : 'The connection dropped while this query was running. Nothing was changed by a read.',
     };
@@ -137,6 +168,7 @@ export function reduceLifecycle(prev: QueryLifecycle, event: LifecycleEvent): Qu
       if (!isBusyPhase(prev.phase)) return prev;
       const c = classifyFailure(event.message, {
         isWrite: event.isWrite,
+        commitLike: event.commitLike,
         wasCancelling: prev.phase === 'cancelling',
       });
       return {

@@ -36,6 +36,7 @@ vi.mock('@/lib/ipc', () => ({
 }));
 
 import { useSession } from './session';
+import { cancelTuning } from './session-query';
 
 const ok = {
   columns: [{ name: 'n', dataTypeId: 23 }],
@@ -131,17 +132,19 @@ describe('C1 query lifecycle in the store', () => {
     expect(useSession.getState().tabs[0]?.queryRunState).toBe('idle');
   });
 
-  it('cancel that finds nothing running goes back to running, then the result wins', async () => {
+  it('cancel that finds nothing in flight keeps trying, then the result wins', async () => {
+    cancelTuning.retryMs = 1;
     queryCancel.mockResolvedValue('nothing-running');
     const d = deferred<typeof ok>();
     queryRun.mockReturnValueOnce(d.promise);
     const p = useSession.getState().runQuery();
     await flush();
     await useSession.getState().cancelQuery();
-    expect(phaseOf('a')?.phase).toBe('running');
+    expect(queryCancel).toHaveBeenCalledTimes(1 + cancelTuning.retries);
+    expect(phaseOf('a')?.phase).toBe('cancelling');
     d.resolve(ok);
     await p;
-    expect(phaseOf('a')?.phase).toBe('succeeded');
+    expect(phaseOf('a')).toMatchObject({ phase: 'succeeded', finishedBeforeCancel: true });
   });
 
   it('a result that arrives after the cancel request still succeeds (cancel after finish race)', async () => {

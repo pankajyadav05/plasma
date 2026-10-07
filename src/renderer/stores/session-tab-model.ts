@@ -6,7 +6,14 @@
  */
 import { ipc } from '@/lib/ipc';
 import type { PgNotice, QueryResult, SchemaInfo } from '@shared/protocol';
-import { IDLE_LIFECYCLE, lifecycleFromLegacyPatch } from '@shared/query-lifecycle';
+import {
+  IDLE_LIFECYCLE,
+  endsTransaction,
+  isBusyPhase,
+  lifecycleFromLegacyPatch,
+  reduceLifecycle,
+} from '@shared/query-lifecycle';
+import { looksLikeWrite } from './session-sql-heuristics';
 import type { QueryTab, SessionState } from './session-types';
 
 type SetFn = (fn: (s: SessionState) => Partial<SessionState>) => void;
@@ -292,25 +299,72 @@ function withLifecycle(tab: QueryTab, patch: Partial<QueryTab>): Partial<QueryTa
 }
 
 /**
+ * What a connection reset does to a tab's run. A run still in flight is not
+ * erased: it ends as disconnected (a read) or outcome unknown (a write that may
+ * have landed), and the late failure from its request cannot change that.
+ * An earlier "outcome unknown" is kept, since the user still has to check the data.
+ */
+function settleOnReset(t: QueryTab, now: number): Partial<QueryTab> | null {
+  const life = t.queryLifecycle;
+  if (life?.phase === 'unknown') return {};
+  if (!life || !isBusyPhase(life.phase)) return null;
+  const sql: string = (t.queryRunningSql as string | undefined) ?? '';
+  const queued = life.phase === 'queued';
+  const settled = reduceLifecycle(life, {
+    type: 'fail',
+    now,
+    message: queued
+      ? 'connection lost: the connection changed before this query started'
+      : 'connection lost: the connection changed while the query was running',
+    isWrite: !queued && sql !== '' && looksLikeWrite(sql),
+    commitLike: !queued && sql !== '' && endsTransaction(sql),
+    sql: sql || undefined,
+  });
+  const message = queued
+    ? 'The connection changed before this query started, so it did not run.'
+    : (settled.message ?? 'The connection changed while the query was running.');
+  return {
+    queryLifecycle: queued ? { ...settled, message } : settled,
+    queryError: message,
+    queryErrorSql: sql || null,
+    queryRunState: 'idle',
+    queryRunningRange: null,
+  };
+}
+
+/**
  * Drop the results, selections and paging every tab holds — they reference
  * a connection that is gone. `extra` adds fields the caller also resets.
  */
 export function clearTabResults(set: SetFn, extra: Partial<QueryTab> = {}): void {
+  const now = Date.now();
   set((state) => ({
-    tabs: state.tabs.map((t) => ({
-      ...t,
-      queryResult: null,
-      queryResults: [],
-      activeResultIndex: 0,
-      queryNotices: [],
-      queryError: null,
-      page: 0,
-      sortColumn: null,
-      selectedCell: null,
-      selectedRows: new Set<number>(),
-      queryLifecycle: IDLE_LIFECYCLE,
-      ...extra,
-    })),
+    tabs: state.tabs.map((t) => {
+      const kept = settleOnReset(t, now);
+      const base = {
+        ...t,
+        queryResult: null,
+        queryResults: [],
+        activeResultIndex: 0,
+        queryNotices: [],
+        page: 0,
+        sortColumn: null,
+        selectedCell: null,
+        selectedRows: new Set<number>(),
+      };
+      if (kept === null) {
+        return { ...base, queryError: null, queryLifecycle: IDLE_LIFECYCLE, ...extra };
+      }
+      // Busy runs and unknown outcomes keep their status; the rest of `extra` still applies.
+      const {
+        queryRunState: _state,
+        queryRunningRange: _range,
+        queryLifecycle: _life,
+        queryError: _error,
+        ...rest
+      } = extra;
+      return { ...base, ...rest, ...kept };
+    }),
   }));
 }
 

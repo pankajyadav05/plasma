@@ -21,6 +21,17 @@ export interface SqlQueryOpts {
   rowCeiling?: number;
 }
 
+/**
+ * A cancel was attempted and the server did not confirm it (no answer, refused).
+ * Distinct from `false` ("nothing was in flight"): the statement may still run.
+ */
+export class CancelFailedError extends Error {
+  override readonly name = 'CancelFailedError';
+  constructor(reason: string) {
+    super(`cancel failed: ${reason}`);
+  }
+}
+
 /** Read options for the agent / compare path: the agent's 1000-row default, or the caller's cap. */
 export function aiReadOpts(opts?: AiQueryOpts): SqlQueryOpts {
   return opts?.maxRows ? { maxRows: opts.maxRows, rowCeiling: opts.maxRows } : { maxRows: 1000 };

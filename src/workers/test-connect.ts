@@ -47,7 +47,9 @@ export async function runIsolatedTestConnect(
 }
 
 /** The slice of a SQL driver a one-off compare read needs. */
-export type ReadOnlyDriver = TestableDriver & {
+export type ReadOnlyDriver = Omit<TestableDriver, 'connect'> & {
+  connect(config: ConnectionConfig, statementTimeoutMs?: number): Promise<string>;
+  cancelQuery(): Promise<boolean>;
   aiQuery(sql: string, params?: unknown[], opts?: AiQueryOpts): Promise<QueryResult>;
 };
 
@@ -59,6 +61,27 @@ const SQL_ENGINES = new Set<ConnectionEngine>([
   'duckdb',
 ]);
 
+/** Compare runs in flight, so a deadline or "Stop" can interrupt them (never the live session). */
+const isolatedRuns = new Map<string, ReadOnlyDriver>();
+
+/** Per-statement timeout of an isolated compare session (ClickHouse, DuckDB, SQLite have no other). */
+export const COMPARE_TIMEOUT_MS = 120_000;
+
+/** Interrupt a compare run and close its session. False when it already ended. */
+export async function cancelIsolatedRun(runId: string): Promise<boolean> {
+  const driver = isolatedRuns.get(runId);
+  if (!driver) return false;
+  isolatedRuns.delete(runId);
+  let delivered = false;
+  try {
+    delivered = await driver.cancelQuery();
+  } finally {
+    // The run may be stuck on a dead peer: closing the session ends it either way.
+    await driver.disconnect().catch(() => undefined);
+  }
+  return delivered;
+}
+
 /**
  * Result Compare against another saved connection: open a throwaway driver
  * in a read-only session, run ONE statement through the same read-only path
@@ -69,6 +92,7 @@ export async function runIsolatedReadOnlyQuery(
   config: ConnectionConfig,
   sql: string,
   maxRows: number,
+  runId?: string,
   overrides: Partial<Record<ConnectionEngine, () => ReadOnlyDriver>> = {},
 ): Promise<QueryResult> {
   const engine: ConnectionEngine = config.engine ?? 'postgres';
@@ -76,10 +100,12 @@ export async function runIsolatedReadOnlyQuery(
   const driver = (
     overrides[engine] ?? (defaultFactories[engine] as unknown as () => ReadOnlyDriver)
   )();
+  if (runId) isolatedRuns.set(runId, driver);
   try {
-    await driver.connect({ ...config, readOnly: true });
+    await driver.connect({ ...config, readOnly: true }, COMPARE_TIMEOUT_MS);
     return await driver.aiQuery(sql, undefined, { maxRows });
   } finally {
+    if (runId) isolatedRuns.delete(runId);
     await driver.disconnect().catch(() => undefined);
   }
 }
