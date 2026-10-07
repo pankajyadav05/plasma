@@ -30,6 +30,7 @@ vi.mock('@/lib/ipc', () => ({
       chat: (r: unknown) => aiChat(r),
       cancel: (id: string) => aiCancel(id),
       actionResult: (r: unknown) => actionResult(r),
+      actionApproved: vi.fn(async () => undefined),
       runReadOnly: (sql: string) => runReadOnly(sql),
     },
   },

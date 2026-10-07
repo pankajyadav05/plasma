@@ -7,7 +7,14 @@
 const { chmodSync, existsSync, renameSync, writeFileSync } = require('node:fs');
 const { join } = require('node:path');
 
-/** SC-28. Verify a packaged binary with `node scripts/verify-fuses.mjs <binary>`. */
+/**
+ * `runAsNode` stays off, so ELECTRON_RUN_AS_NODE does nothing in a packaged
+ * build. The stdio MCP bridge (`plasma mcp`) therefore starts the app binary
+ * with `--plasma-mcp-bridge`, which src/main/index.ts handles before it takes
+ * the single-instance lock or opens a window. The Linux launcher below passes
+ * every argument through, so nothing else is needed here.
+ *
+ * SC-28. Verify a packaged binary with `node scripts/verify-fuses.mjs <binary>`. */
 const FUSES = {
   runAsNode: false,
   enableNodeOptionsEnvironmentVariable: false,

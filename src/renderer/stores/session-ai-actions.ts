@@ -94,6 +94,8 @@ function affectedNote(r: QueryResult): string {
 export interface AgentActionApi {
   handleActionEvent(evt: ActionEvent): Promise<void>;
   approve(id: string): Promise<void>;
+  /** Main took an undecided card back (expired, access turned off). */
+  withdraw(requestId: string, callId: string, reason: string): void;
   reject(id: string, note?: string): void;
   undo(id: string): Promise<void>;
   /** remember: keep the text the user typed on the pending card. */
@@ -434,6 +436,14 @@ export function createAgentActions(api: StoreApi<SessionState>): AgentActionApi 
     }
   };
 
+  /** `agent`, or `mcp:<client>` when the card came from an external AI tool's thread. */
+  const memorySourceOf = (a: AgentAction): string => {
+    const turn = get().aiChat.find(
+      (t) => t.external && t.parts?.some((p) => p.kind === 'action' && p.actionId === a.id),
+    );
+    return turn?.external ? `mcp:${turn.external.client}`.slice(0, 84) : 'agent';
+  };
+
   /** remember / forget: the note is stored (or removed) in main; the card closes with the outcome. */
   const runMemory = async (a: AgentAction): Promise<void> => {
     const connectionId = get().aiChatConnectionId;
@@ -451,7 +461,7 @@ export function createAgentActions(api: StoreApi<SessionState>): AgentActionApi 
         settle(a.id, 'failed', 'Memory is off for this connection. Nothing was saved.');
         return;
       }
-      const res = await memory.add(connectionId, a.memoryText ?? act.text, 'agent');
+      const res = await memory.add(connectionId, a.memoryText ?? act.text, memorySourceOf(a));
       if (!isOpen(get().aiActions[a.id])) {
         if (res.ok) doneAnyway({ memoryId: res.note.id }, 'Remembered.');
         return;
@@ -459,6 +469,7 @@ export function createAgentActions(api: StoreApi<SessionState>): AgentActionApi 
       if (!res.ok) {
         // The user can fix the text and try again: the card stays open with the reason.
         patch(a.id, { status: 'pending', note: res.error });
+        void ipc.ai.actionApproved(a.requestId, a.callId, false).catch(() => undefined);
         return;
       }
       settle(a.id, 'applied', 'Remembered.', undefined, { memoryId: res.note.id });
@@ -578,6 +589,8 @@ export function createAgentActions(api: StoreApi<SessionState>): AgentActionApi 
       return;
     }
     patch(id, { status: 'running', note: undefined });
+    // An MCP proposal must not be withdrawn from here on; main waits for the real outcome.
+    void ipc.ai.actionApproved(a.requestId, a.callId).catch(() => undefined);
     try {
       await runOne(id);
     } catch (err) {
@@ -710,6 +723,14 @@ export function createAgentActions(api: StoreApi<SessionState>): AgentActionApi 
           `The app could not show this action: ${errorText(err).slice(0, 200)}`,
         );
       }
+    },
+
+    withdraw(requestId, callId, reason) {
+      const a = Object.values(get().aiActions).find(
+        (x) => x.requestId === requestId && x.callId === callId,
+      );
+      // Only an undecided card is taken back; one the user approved runs to its end.
+      if (a?.status === 'pending') settle(a.id, 'cancelled', reason);
     },
 
     editMemory(id, text) {

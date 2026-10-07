@@ -52,6 +52,8 @@ export function ipcDeadlineMs(kind: WorkerRequest['kind'], req?: WorkerRequest):
     }
     case 'compareQuery':
       return 90_000;
+    case 'compareSchema':
+      return 120_000;
     case 'ping':
       return 5_000;
     case 'connect':

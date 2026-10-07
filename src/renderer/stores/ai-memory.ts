@@ -15,7 +15,7 @@ interface MemoryState {
   add(
     connectionId: string,
     text: string,
-    source?: 'user' | 'agent',
+    source?: string,
   ): Promise<{ ok: true; note: MemoryNote } | { ok: false; error: string }>;
   update(
     connectionId: string,

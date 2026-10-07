@@ -4,6 +4,7 @@ import {
   COMPARE_TIMEOUT_MS,
   type ReadOnlyDriver,
   cancelIsolatedRun,
+  runIsolatedIntrospect,
   runIsolatedReadOnlyQuery,
 } from './test-connect';
 
@@ -98,5 +99,52 @@ describe('runIsolatedReadOnlyQuery (Result Compare)', () => {
     // Finished runs are forgotten: cancelling again is a no-op, never the live session.
     expect(await cancelIsolatedRun('run-1')).toBe(false);
     expect(await cancelIsolatedRun('never-started')).toBe(false);
+  });
+});
+
+describe('runIsolatedReadOnlyQuery timeout (MCP run_query: 30 s)', () => {
+  it('uses the timeout it is given instead of the Compare default', async () => {
+    const d = driver();
+    await runIsolatedReadOnlyQuery(
+      config(),
+      'select 1',
+      10,
+      undefined,
+      { postgres: () => d },
+      30_000,
+    );
+    expect(d.connect).toHaveBeenCalledWith(expect.objectContaining({ readOnly: true }), 30_000);
+  });
+});
+
+describe('runIsolatedIntrospect (MCP get_schema on a connection that is not open)', () => {
+  const info = {
+    schemas: [],
+    tables: [],
+    columns: [],
+    foreignKeys: [],
+    routines: [],
+    sequences: [],
+    types: [],
+    extensions: [],
+  };
+  it('connects read-only, introspects, always disconnects', async () => {
+    const d = { ...driver(), introspect: vi.fn(async () => info as never) };
+    const out = await runIsolatedIntrospect(config(), { columns: false }, { postgres: () => d });
+    expect(out).toBe(info);
+    expect(d.connect).toHaveBeenCalledWith(
+      expect.objectContaining({ readOnly: true }),
+      COMPARE_TIMEOUT_MS,
+    );
+    expect(d.introspect).toHaveBeenCalledWith({ columns: false });
+    expect(d.disconnect).toHaveBeenCalledOnce();
+    const bad = { ...driver(), introspect: vi.fn(async () => Promise.reject(new Error('nope'))) };
+    await expect(
+      runIsolatedIntrospect(config(), undefined, { postgres: () => bad }),
+    ).rejects.toThrow('nope');
+    expect(bad.disconnect).toHaveBeenCalledOnce();
+  });
+  it('refuses engines that are not SQL', async () => {
+    await expect(runIsolatedIntrospect(config({ engine: 'redis' }))).rejects.toThrow('SQL');
   });
 });

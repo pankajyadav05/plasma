@@ -3,6 +3,7 @@
 #
 #   plasma open <connection-url | file.sqlite | folder>
 #   plasma import <file.csv> --into <connection-url> --table <name>
+#   plasma mcp          (stdio MCP bridge to the running Plasma, for Claude Desktop etc.)
 #
 # It hands the request to the running app (single-instance forwarding) or
 # starts it. Nothing is parsed or trusted here beyond building arguments;
@@ -16,6 +17,7 @@ usage() {
 Usage:
   plasma open <connection-url | file.sqlite | folder | plasma://link>
   plasma import <file> --into <connection-url> --table <name>
+  plasma mcp
   plasma --help
 USAGE
 }
@@ -77,6 +79,16 @@ cmd="$1"
 [ $# -gt 0 ] && shift
 
 case "$cmd" in
+  mcp)
+    # Not detached: an MCP client talks to this process over stdin/stdout.
+    # The app binary runs as the bridge itself (the packaged app has the
+    # run-as-node fuse off, so ELECTRON_RUN_AS_NODE is not an option).
+    app=$(find_app) || {
+      echo "plasma: cannot find the Plasma app. Set PLASMA_APP=/path/to/Plasma." >&2
+      exit 1
+    }
+    exec "$app" --plasma-mcp-bridge
+    ;;
   open)
     [ $# -eq 1 ] || { usage; exit 2; }
     target="$1"

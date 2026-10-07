@@ -1,3 +1,4 @@
+import { McpChannel } from '@shared/mcp';
 import { IpcChannel, type PlasmaAPI, type Platform } from '@shared/protocol';
 import { SupportChannel } from '@shared/support-bundle';
 import { WorkspaceChannel } from '@shared/workspace';
@@ -117,6 +118,8 @@ const api: PlasmaAPI = {
     cancel: (requestId) => ipcRenderer.invoke(IpcChannel.AiCancel, requestId),
     listModels: (opts) => ipcRenderer.invoke(IpcChannel.AiListModels, opts ?? {}),
     actionResult: (res) => ipcRenderer.invoke(IpcChannel.AiActionResult, res),
+    actionApproved: (requestId, callId, approved) =>
+      ipcRenderer.invoke(IpcChannel.AiActionApproved, requestId, callId, approved),
     runReadOnly: (sql) => ipcRenderer.invoke(IpcChannel.AiRunReadOnly, sql),
   },
   compare: {
@@ -213,6 +216,12 @@ const api: PlasmaAPI = {
   cli: {
     status: () => ipcRenderer.invoke(WorkspaceChannel.CliStatus),
     install: () => ipcRenderer.invoke(WorkspaceChannel.CliInstall),
+  },
+  mcp: {
+    status: () => ipcRenderer.invoke(McpChannel.Status),
+    token: () => ipcRenderer.invoke(McpChannel.Token),
+    regenerateToken: () => ipcRenderer.invoke(McpChannel.RegenerateToken),
+    setup: () => ipcRenderer.invoke(McpChannel.Setup),
   },
   support: {
     preview: (options) => ipcRenderer.invoke(SupportChannel.Preview, options),

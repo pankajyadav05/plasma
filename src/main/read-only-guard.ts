@@ -49,6 +49,7 @@ const READ_KINDS = new Set<string>([
   'connect',
   'testConnect',
   'compareQuery', // its own read-only throwaway session
+  'compareSchema', // same, structure only
   'compareCancel',
   'disconnect',
   'setStatementTimeout',

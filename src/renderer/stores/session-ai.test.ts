@@ -11,6 +11,7 @@ vi.mock('@/lib/ipc', () => ({
       chat: (r: unknown) => aiChat(r),
       cancel: vi.fn(async () => undefined),
       actionResult: vi.fn(async () => undefined),
+      actionApproved: vi.fn(async () => undefined),
     },
   },
 }));
@@ -100,5 +101,124 @@ describe('aiAsk with images', () => {
   it('reports a rejected request as not sent', async () => {
     aiChat.mockResolvedValueOnce({ accepted: false });
     expect(await useSession.getState().aiAsk('x', { images: [image(1)] })).toBe(false);
+  });
+});
+
+describe('an MCP client proposes a change (external thread)', () => {
+  it('opens a labelled thread bound to its connection and keeps it out of what the model sees', async () => {
+    useSession.setState({ activeConfig: { id: 'c1', name: 'c', engine: 'postgres' } as never });
+    useSession.getState().aiApplyEvent({
+      kind: 'external',
+      requestId: 'mcp-1',
+      connectionId: 'c1',
+      client: 'Claude Code',
+    });
+    const s = useSession.getState();
+    expect(s.aiRequestId).toBe('mcp-1');
+    expect(s.aiChatConnectionId).toBe('c1');
+    expect(s.aiPending).toBe(true);
+    expect(s.aiChat.map((t) => [t.role, t.content, Boolean(t.external)])).toEqual([
+      ['user', 'Claude Code wants to change data', true],
+      ['assistant', '', true],
+    ]);
+    // the event that follows is not a stale stream
+    useSession.getState().aiApplyEvent({ kind: 'done', requestId: 'mcp-1' });
+    expect(useSession.getState().aiPending).toBe(false);
+    // the next question of the user does not carry the MCP thread to the model
+    await useSession.getState().aiAsk('hello');
+    const msgs = sent().messages;
+    expect(msgs.map((m) => m.role)).toEqual(['user']);
+  });
+
+  it('starts fresh when the thread is for another connection', () => {
+    useSession.setState({
+      aiChat: [{ id: 'x', role: 'user', content: 'old', streaming: false }],
+      aiChatConnectionId: 'other',
+    } as never);
+    useSession
+      .getState()
+      .aiApplyEvent({ kind: 'external', requestId: 'mcp-2', connectionId: 'c1', client: 'Cursor' });
+    expect(useSession.getState().aiChat).toHaveLength(2);
+  });
+});
+
+describe("an MCP thread never replaces the user's own chat", () => {
+  it("waits while the user's chat is busy, then plays in order", () => {
+    useSession.setState({
+      activeConfig: { id: 'c1', name: 'c', engine: 'postgres' } as never,
+      aiChat: [{ id: 'u', role: 'user', content: 'my question' }],
+      aiChatConnectionId: 'c1',
+      aiPending: true,
+      aiRequestId: 'mine',
+    } as never);
+    const s = () => useSession.getState();
+    s().aiApplyEvent({
+      kind: 'external',
+      requestId: 'mcp-1',
+      connectionId: 'c1',
+      client: 'Cursor',
+    });
+    s().aiApplyEvent({
+      kind: 'action',
+      requestId: 'mcp-1',
+      callId: 'call-1',
+      name: 'propose_change',
+      args: { sql: 'delete from t where id = 1', summary: 's' },
+    });
+    // nothing of the user's chat changed
+    expect(s().aiRequestId).toBe('mine');
+    expect(s().aiPending).toBe(true);
+    expect(s().aiChat.map((t) => t.content)).toEqual(['my question']);
+    // the user's reply finishes: the held thread opens now
+    s().aiApplyEvent({ kind: 'done', requestId: 'mine' });
+    expect(s().aiRequestId).toBe('mcp-1');
+    expect(s().aiChat.map((t) => t.content)).toEqual([
+      'my question',
+      'Cursor wants to change data',
+      '',
+    ]);
+  });
+
+  it('a second MCP thread waits for the first to be answered', () => {
+    const s = () => useSession.getState();
+    s().aiApplyEvent({ kind: 'external', requestId: 'mcp-a', connectionId: 'c1', client: 'A' });
+    s().aiApplyEvent({ kind: 'external', requestId: 'mcp-b', connectionId: 'c1', client: 'B' });
+    expect(s().aiRequestId).toBe('mcp-a');
+    s().aiApplyEvent({ kind: 'done', requestId: 'mcp-a' });
+    expect(s().aiRequestId).toBe('mcp-b');
+    expect(s().aiChat.some((t) => t.content === 'B wants to change data')).toBe(true);
+  });
+});
+
+describe('withdrawing an MCP card', () => {
+  const card = (status: 'pending' | 'running') => ({
+    id: 'card1',
+    requestId: 'mcp-9',
+    callId: 'call-1',
+    name: 'propose_change',
+    action: { name: 'propose_change', sql: 'delete from t', summary: '' },
+    status,
+  });
+  it('closes an undecided card as withdrawn and tells main', () => {
+    useSession.setState({ aiRequestId: 'mcp-9', aiActions: { card1: card('pending') } } as never);
+    useSession.getState().aiApplyEvent({
+      kind: 'withdraw',
+      requestId: 'mcp-9',
+      callId: 'call-1',
+      reason: 'Withdrawn: the request expired.',
+    });
+    const a = useSession.getState().aiActions.card1;
+    expect(a?.status).toBe('cancelled');
+    expect(a?.note).toBe('Withdrawn: the request expired.');
+  });
+  it('leaves a card the user approved alone', () => {
+    useSession.setState({ aiRequestId: 'mcp-9', aiActions: { card1: card('running') } } as never);
+    useSession.getState().aiApplyEvent({
+      kind: 'withdraw',
+      requestId: 'mcp-9',
+      callId: 'call-1',
+      reason: 'Withdrawn: the request expired.',
+    });
+    expect(useSession.getState().aiActions.card1?.status).toBe('running');
   });
 });

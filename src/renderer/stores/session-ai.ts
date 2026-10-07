@@ -86,6 +86,23 @@ export interface AiSlice {
 export const createAiSlice: SliceCreator<AiSlice> = (set, get, api) => {
   const actions = createAgentActions(api);
 
+  /**
+   * Threads an external AI tool (MCP) opened while the user's own chat was
+   * busy. Their events wait here, in order, and play when the panel is free:
+   * the user's conversation is never replaced.
+   */
+  const heldEvents: AiChatEvent[] = [];
+  const heldIds = new Set<string>();
+  const playHeld = () => {
+    while (heldEvents.length > 0) {
+      const next = heldEvents[0] as AiChatEvent;
+      if (next.kind === 'external' && get().aiPending) return;
+      heldEvents.shift();
+      if (next.kind === 'external') heldIds.delete(next.requestId);
+      get().aiApplyEvent(next);
+    }
+  };
+
   // The connection a card was proposed for is gone: nothing may run on a new one.
   api.subscribe((state, prev) => {
     if (
@@ -117,6 +134,7 @@ export const createAiSlice: SliceCreator<AiSlice> = (set, get, api) => {
       const connectionId = state.activeConfig?.id ?? null;
       const sameChat = state.aiChatConnectionId === connectionId;
       const history = sameChat ? state.aiChat : [];
+      const modelHistory = history.filter((t) => !t.external);
 
       const userTurn: AiTurn = {
         id: freshId(),
@@ -145,7 +163,7 @@ export const createAiSlice: SliceCreator<AiSlice> = (set, get, api) => {
       // content per OpenAI/OpenRouter chat shape. An assistant turn carries
       // one line per action card so the model knows how each one ended.
       const messages: AiMessage[] = capHistoryImages(
-        [...history, userTurn].map((t) => ({
+        [...modelHistory, userTurn].map((t) => ({
           role: t.role,
           content: turnWireContent(t, state.aiActions),
         })),
@@ -213,6 +231,7 @@ export const createAiSlice: SliceCreator<AiSlice> = (set, get, api) => {
           aiRequestId: null,
           aiChat: s.aiChat.map((t) => (t.streaming ? { ...t, streaming: false } : t)),
         }));
+        playHeld();
       }
     },
 
@@ -224,6 +243,46 @@ export const createAiSlice: SliceCreator<AiSlice> = (set, get, api) => {
 
     aiApplyEvent(evt) {
       const state = get();
+      if (heldIds.has(evt.requestId)) {
+        heldEvents.push(evt);
+        return;
+      }
+      if (evt.kind === 'external' && state.aiPending) {
+        heldIds.add(evt.requestId);
+        heldEvents.push(evt);
+        return;
+      }
+      if (evt.kind === 'withdraw') {
+        actions.withdraw(evt.requestId, evt.callId, evt.reason);
+        return;
+      }
+      if (evt.kind === 'external') {
+        // An MCP client proposes a change: open a labelled thread bound to its connection.
+        const same = state.aiChatConnectionId === evt.connectionId;
+        const label: AiTurn = {
+          id: freshId(),
+          role: 'user',
+          content: `${evt.client} wants to change data`,
+          external: { client: evt.client },
+        };
+        const placeholder: AiTurn = {
+          id: freshId(),
+          role: 'assistant',
+          content: '',
+          streaming: true,
+          parts: [],
+          external: { client: evt.client },
+        };
+        set({
+          aiChat: [...(same ? state.aiChat : []), label, placeholder],
+          aiActions: same ? state.aiActions : {},
+          aiChatConnectionId: evt.connectionId,
+          aiPending: true,
+          aiRequestId: evt.requestId,
+          rightPanelMode: 'ai',
+        });
+        return;
+      }
       if (state.aiRequestId !== evt.requestId) return; // stale stream
       if (evt.kind === 'action') {
         void actions.handleActionEvent(evt);
@@ -256,6 +315,7 @@ export const createAiSlice: SliceCreator<AiSlice> = (set, get, api) => {
           aiRequestId: null,
           aiChat: get().aiChat.map((t) => (t.streaming ? { ...t, streaming: false } : t)),
         });
+        playHeld();
         return;
       }
       set({
@@ -265,6 +325,7 @@ export const createAiSlice: SliceCreator<AiSlice> = (set, get, api) => {
           t.streaming ? { ...t, streaming: false, error: evt.message } : t,
         ),
       });
+      playHeld();
     },
 
     aiApproveAction: (id) => actions.approve(id),

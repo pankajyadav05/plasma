@@ -1455,6 +1455,15 @@ export const WorkerRequest = z.discriminatedUnion('kind', [
     maxRows: z.number().int().positive().max(200_000),
     /** Names this run so `compareCancel` (and a deadline) can stop it. */
     runId: z.string(),
+    /** Per-statement timeout of the throwaway session; default is the Compare one. */
+    timeoutMs: z.number().int().positive().max(600_000).optional(),
+  }),
+  // Structure of a saved connection that is not open (MCP get_schema): connect, introspect, disconnect.
+  z.object({
+    kind: z.literal('compareSchema'),
+    id: z.string(),
+    config: ConnectionConfig,
+    opts: IntrospectOpts.optional(),
   }),
   z.object({ kind: z.literal('compareCancel'), id: z.string(), runId: z.string() }),
   // LISTEN/NOTIFY tail: a dedicated listener connection, never the primary.
@@ -2002,6 +2011,16 @@ export const SettingsShape = z.object({
   connectionAiRowData: z.record(z.string(), z.boolean()).optional(),
   /** Database memory: send a connection's notes with its AI requests (default on; false = off). */
   connectionAiMemory: z.record(z.string(), z.boolean()).optional(),
+  /** MCP server for external AI tools (Claude Code, Cursor...): off until enabled. */
+  mcpEnabled: z.boolean().catch(false).default(false),
+  mcpPort: z.number().int().min(1024).max(65535).catch(47321).default(47321),
+  /** What MCP clients may do per connection; absent = off. */
+  connectionMcpAccess: z
+    .record(z.string(), z.enum(['off', 'schema', 'read', 'propose']))
+    .catch({})
+    .default({}),
+  /** Connections whose MCP results skip masking (default: masked). */
+  connectionMcpUnmasked: z.record(z.string(), z.boolean()).catch({}).default({}),
   /** SC-20: send schema names / sample keys to the AI provider (default on; prod needs the per-connection opt-in). */
   aiSendSchema: z.boolean().optional(),
   connectionSsh: z
@@ -2308,7 +2327,14 @@ export type AiChatEvent =
       callId: string;
       name: AgentActionName;
       args: Record<string, unknown>;
-    };
+    }
+  /**
+   * An external AI tool (MCP) is about to propose a change: the panel opens a
+   * thread for it, bound to `connectionId`, before the `action` event arrives.
+   */
+  | { kind: 'external'; requestId: string; connectionId: string; client: string }
+  /** Main withdraws a card nobody decided (a request that expired, access that was turned off). A card already approved ignores it. */
+  | { kind: 'withdraw'; requestId: string; callId: string; reason: string };
 
 /** The renderer's answer to an `action` event; main feeds it back to the model. */
 export const AiActionResult = z.object({
@@ -2351,7 +2377,11 @@ export type MemoryNote = z.infer<typeof MemoryNote>;
 export const MemoryAddRequest = z.object({
   connectionId: z.string().min(1),
   text: z.string().max(5000),
-  source: z.enum(['user', 'agent']).default('user'),
+  /** `user`, `agent`, or `mcp:<client name>` for a note an MCP client proposed and the user approved. */
+  source: z
+    .string()
+    .regex(/^(?:user|agent|mcp:.{1,80})$/)
+    .default('user'),
 });
 export type MemoryAddRequest = z.infer<typeof MemoryAddRequest>;
 
@@ -2559,6 +2589,8 @@ export const IpcChannel = {
   AiListModels: 'plasma:ai:list-models',
   /** The renderer's answer to an agent action card (applied / rejected / …). */
   AiActionResult: 'plasma:ai:action-result',
+  /** The user clicked Approve on a card: from here main must wait for the real outcome. */
+  AiActionApproved: 'plasma:ai:action-approved',
   /** Database memory: notes kept per saved connection. */
   MemoryList: 'plasma:memory:list',
   MemoryAdd: 'plasma:memory:add',
@@ -2854,6 +2886,8 @@ export interface PlasmaAPI {
     listModels(opts?: AiListModelsRequest): Promise<AiModelsResult>;
     /** Answer an agent `action` event (the user approved, rejected, … the card). */
     actionResult(res: AiActionResult): Promise<void>;
+    /** Tell main the user approved a card (it may be an MCP proposal that must not be withdrawn now). */
+    actionApproved(requestId: string, callId: string, approved?: boolean): Promise<void>;
     /** Run ONE read-only statement in a read-only session (never the primary's autocommit). */
     runReadOnly(sql: string): Promise<QueryResult>;
   };
@@ -2989,4 +3023,6 @@ export interface PlasmaAPI {
   cli: import('./deep-link').CliApi;
   /** "Create support bundle…": review every file, then save a zip. Nothing is uploaded. */
   support: import('./support-bundle').SupportApi;
+  /** Settings -> MCP server. */
+  mcp: import('./mcp').McpApi;
 }

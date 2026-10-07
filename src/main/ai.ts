@@ -1,8 +1,8 @@
+import { randomUUID } from 'node:crypto';
 import { normalizeAction } from '@shared/agent-actions';
 import { buildAgentSystemPrompt } from '@shared/agent-prompt';
 import { type AiContent, capHistoryImages, contentText, countImages } from '@shared/ai-images';
 import { memoryActionResult } from '@shared/ai-memory';
-import { AI_SCHEMA_MAX_TABLES } from '@shared/ai-schema-policy';
 import { taskMaxTokens, taskSystemPrompt } from '@shared/ai-tasks';
 import {
   AiActionResult,
@@ -12,6 +12,7 @@ import {
   type ConnectionEngine,
   type SchemaInfo,
 } from '@shared/protocol';
+import { compactSchema } from '@shared/schema-compact';
 import { isSqlEngine } from '@shared/sql-dialect';
 import type { BrowserWindow } from 'electron';
 import type { MemoryToolHooks } from './ai-memory';
@@ -910,6 +911,112 @@ async function runAgentAction(input: {
   return (options.shapeActionResult ?? defaultActionResult)(res);
 }
 
+/** An action an external AI tool (MCP) put in front of the user, while it waits for them. */
+interface ExternalRecord {
+  approved: boolean;
+  withdrawTimer?: ReturnType<typeof setTimeout>;
+}
+const externalActions = new Map<string, ExternalRecord>();
+
+/**
+ * The user clicked Approve on a card of `requestId`: from now on it must not be
+ * withdrawn. (`approved: false` when the card went back to waiting, e.g. a
+ * note that needs fixing.)
+ */
+export function markExternalApproved(
+  requestId: unknown,
+  callId: unknown,
+  approved: unknown = true,
+): boolean {
+  if (typeof requestId !== 'string' || typeof callId !== 'string') return false;
+  const rec = externalActions.get(actionKey(requestId, callId));
+  if (!rec) return false;
+  rec.approved = approved !== false;
+  return true;
+}
+
+export interface ExternalAction {
+  requestId: string;
+  callId: string;
+  /** The card's final answer (always arrives: Stop, a reload or a closed window also answer it). */
+  result: Promise<AiActionResult>;
+  approved(): boolean;
+  /**
+   * Take the card back. Only an undecided card can be withdrawn: false once the
+   * user approved it, and then nothing here interrupts it.
+   */
+  withdraw(reason: string): boolean;
+}
+
+export type StartExternal = { ok: true; action: ExternalAction } | { ok: false; note: string };
+
+/**
+ * An external AI tool (MCP) puts an action in front of the user: `propose_change`
+ * or `remember`. It rides the SAME round-trip as the in-app agent's cards: the
+ * panel gets an `external` event (a thread labelled with the client), then the
+ * `action` event; the card does the work through the renderer's own paths and
+ * answers through `submitAiActionResult`. Validation happens here first, so a
+ * bad call never reaches the user.
+ *
+ * Nothing in this function ever resolves a card the user approved: the real
+ * outcome is awaited, whatever the caller does meanwhile.
+ */
+export function startExternalAction(input: {
+  win: BrowserWindow | null;
+  client: string;
+  connectionId: string;
+  name: 'propose_change' | 'remember';
+  args: Record<string, unknown>;
+}): StartExternal {
+  const { win } = input;
+  if (!win || win.isDestroyed()) {
+    return { ok: false, note: 'Plasma has no open window. Open Plasma and try again.' };
+  }
+  const normalized = normalizeAction(input.name, input.args);
+  if (!normalized.ok) return { ok: false, note: `rejected: ${normalized.error}` };
+  const requestId = `mcp-${randomUUID()}`;
+  const callId = 'call-1';
+  const key = actionKey(requestId, callId);
+  const rec: ExternalRecord = { approved: false };
+  externalActions.set(key, rec);
+  const send = (evt: AiChatEvent) => {
+    if (!win.isDestroyed()) win.webContents.send('plasma:ai:event', evt);
+  };
+  const result = new Promise<AiActionResult>((resolve) => {
+    pendingActions.set(key, {
+      requestId,
+      resolve: (res) => {
+        if (rec.withdrawTimer) clearTimeout(rec.withdrawTimer);
+        externalActions.delete(key);
+        resolve(res);
+        // Closes the thread. Only ever after the card is settled, so it can not stop a run.
+        send({ kind: 'done', requestId });
+      },
+    });
+  });
+  send({ kind: 'external', requestId, connectionId: input.connectionId, client: input.client });
+  send({ kind: 'action', requestId, callId, name: input.name, args: input.args });
+  return {
+    ok: true,
+    action: {
+      requestId,
+      callId,
+      result,
+      approved: () => rec.approved,
+      withdraw(reason) {
+        if (rec.approved || !externalActions.has(key)) return false;
+        send({ kind: 'withdraw', requestId, callId, reason });
+        // The renderer answers a withdrawn card itself. If it cannot (window gone), answer here.
+        rec.withdrawTimer ??= setTimeout(() => {
+          if (rec.approved) return;
+          submitAiActionResult({ requestId, callId, outcome: 'cancelled', note: reason });
+        }, 5_000);
+        return true;
+      },
+    },
+  };
+}
+
 /**
  * Build the OpenRouter messages array. Prepends an engine-specific
  * system prompt + any optional context the renderer prepared (compact
@@ -1033,52 +1140,4 @@ export function buildTaskMessages(
       .filter((m) => m.role !== 'system')
       .map((m) => ({ role: m.role, content: contentText(m.content) })),
   ];
-}
-
-const MAX_TABLES = AI_SCHEMA_MAX_TABLES;
-const MAX_COLS_PER_TABLE = 24;
-
-function compactSchema(schema: SchemaInfo, opts: { withIndexes?: boolean } = {}): string {
-  const tables = schema.tables.slice(0, MAX_TABLES);
-  const colByTable = new Map<string, SchemaInfo['columns']>();
-  for (const c of schema.columns) {
-    const key = `${c.schema}.${c.table}`;
-    const arr = colByTable.get(key) ?? [];
-    arr.push(c);
-    colByTable.set(key, arr);
-  }
-  const fkByTable = new Map<string, string[]>();
-  for (const fk of schema.foreignKeys) {
-    const key = `${fk.schema}.${fk.table}`;
-    const arr = fkByTable.get(key) ?? [];
-    arr.push(`${fk.column} -> ${fk.refSchema}.${fk.refTable}.${fk.refColumn}`);
-    fkByTable.set(key, arr);
-  }
-  const lines: string[] = [];
-  for (const t of tables) {
-    const key = `${t.schema}.${t.name}`;
-    const cols = (colByTable.get(key) ?? [])
-      .sort((a, b) => a.ordinal - b.ordinal)
-      .slice(0, MAX_COLS_PER_TABLE);
-    const colSig = cols
-      .map(
-        (c) =>
-          `${c.name} ${c.dataType}${c.isPrimaryKey ? ' PK' : ''}${c.isNullable ? '' : ' NOT NULL'}`,
-      )
-      .join(', ');
-    lines.push(`${key} (${colSig})`);
-    const fks = fkByTable.get(key);
-    if (fks && fks.length > 0) {
-      lines.push(`  FK: ${fks.join('; ')}`);
-    }
-    if (opts.withIndexes) {
-      for (const ix of schema.indexes ?? []) {
-        if (`${ix.schema}.${ix.table}` === key) lines.push(`  INDEX: ${ix.definition}`);
-      }
-    }
-  }
-  if (schema.tables.length > MAX_TABLES) {
-    lines.push(`-- … ${schema.tables.length - MAX_TABLES} more tables omitted for brevity`);
-  }
-  return lines.join('\n');
 }

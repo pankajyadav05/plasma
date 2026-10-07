@@ -10,6 +10,7 @@ export const AUDIT_SOURCES = [
   'import',
   'ai',
   'notify',
+  'mcp',
 ] as const;
 export const AuditSource = z.enum(AUDIT_SOURCES);
 export type AuditSource = z.infer<typeof AuditSource>;

@@ -97,6 +97,8 @@ export interface AiTurn extends Omit<AiMessage, 'content'> {
    * happened. `content` stays the plain text of the turn.
    */
   parts?: AiPart[];
+  /** An external AI tool (MCP client) started this thread; the turn is a label, never sent to the model. */
+  external?: { client: string };
 }
 
 export type AiPart = { kind: 'text'; text: string } | { kind: 'action'; actionId: string };
