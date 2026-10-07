@@ -362,6 +362,9 @@ export class MysqlDriver implements SqlEngineDriver {
       let fields: Array<{ name: string; columnType?: number; characterSet?: number }> = [];
       let header: { affectedRows?: number; serverStatus?: number } | null = null;
       let capped = false;
+      // KILL QUERY targets the session, not this statement: answer only once it
+      // has been handled, or a late kill would stop the session's next statement.
+      let killDone: Promise<unknown> | null = null;
       const q = conn.query({ sql, values: params.map(toMysqlBinding), rowsAsArray: true });
       q.on('fields', (f: typeof fields | undefined) => {
         fields = f ?? [];
@@ -372,7 +375,7 @@ export class MysqlDriver implements SqlEngineDriver {
           const cells = row.map((v, i) => normalizeMysqlCell(v, fields[i]?.columnType));
           if (appendBoundedRows(state, [cells], maxRows, maxBytes)) {
             capped = true;
-            if (!internal) void this.killStatement(conn).catch(() => undefined);
+            if (!internal) killDone = this.killStatement(conn).catch(() => undefined);
           }
         } else if (row && typeof row === 'object') {
           header = row as typeof header;
@@ -398,6 +401,10 @@ export class MysqlDriver implements SqlEngineDriver {
       });
       q.on('end', () => finish());
       const finish = () => {
+        if (killDone) void killDone.then(settle);
+        else settle();
+      };
+      const settle = () => {
         // OK packets (BEGIN, COMMIT, DML …) carry the server's transaction flag;
         // a plain SELECT leaves the state as it was.
         const status = header?.serverStatus;
