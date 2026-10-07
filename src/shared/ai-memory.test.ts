@@ -12,6 +12,7 @@ import {
   isMemoryEnabled,
   isMemorySource,
   memoryActionResult,
+  memoryHasSecret,
   memoryPromptSection,
   memorySourceLabel,
   normalizeMemoryText,
@@ -168,5 +169,47 @@ describe('refs, sources, switch', () => {
     ).toEqual({
       error: 'Already remembered.',
     });
+  });
+});
+
+describe('secrets in prose and column notes', () => {
+  it('refuses a credential written as a sentence', () => {
+    for (const t of [
+      'Password for reporting role: Rep0rt!ng',
+      'the admin password is hunter2',
+      'pw for app_user is S3cretPass!',
+      'api key is Zx81kQpLm',
+      'The token = "ab12"',
+    ]) {
+      expect(checkMemoryText(t, []), t).toEqual({ ok: false, error: MEMORY_ERR_SECRET });
+    }
+  });
+
+  it('refuses text holding a value main knows, case-sensitively, ignoring short ones', () => {
+    const secrets = ['correct horse battery', 'abc'];
+    expect(memoryHasSecret('login uses correct horse battery here', secrets)).toBe(true);
+    expect(memoryHasSecret('login uses Correct Horse Battery here', secrets)).toBe(false);
+    expect(memoryHasSecret('the abc table', secrets)).toBe(false);
+    expect(checkMemoryText('use correct horse battery', [], { secrets }).ok).toBe(false);
+  });
+
+  it('accepts notes that explain a password or token column', () => {
+    for (const t of [
+      'users.password_hash: bcrypt hash, never select it',
+      'sessions.token is a uuid',
+      'sessions.token: opaque id, do not show',
+      'token_count = tokens billed',
+      'The password column holds a bcrypt hash',
+      'api_keys.secret_key: shown once, stored hashed',
+      'reset token is valid for 24 hours',
+      'secrets table: public.secrets_v2',
+    ]) {
+      expect(checkMemoryText(t, []).ok, t).toBe(true);
+    }
+  });
+
+  it('still refuses name=value credentials with identifier-shaped names', () => {
+    expect(memoryHasSecret('db_password=Pa55w0rd!x', [])).toBe(true);
+    expect(memoryHasSecret('users.password: S3cr3tValue9', [])).toBe(true);
   });
 });

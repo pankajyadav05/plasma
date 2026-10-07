@@ -7,6 +7,8 @@ import {
   ensureMemoryTable,
   listMemory,
   memoryForPrompt,
+  memoryOptionsFor,
+  secretValuesOf,
   updateMemory,
 } from './ai-memory';
 
@@ -17,7 +19,7 @@ beforeEach(() => {
 });
 
 const add = (c: string, text: string, source = 'user', now = 1000) => {
-  const r = addMemory(db, c, text, source, now);
+  const r = addMemory(db, c, text, source, { now });
   if (!r.ok) throw new Error(r.error);
   return r.note;
 };
@@ -29,7 +31,7 @@ describe('ai memory store', () => {
     expect(listMemory(db, 'c1').map((n) => n.text)).toEqual(['second', 'first']);
     expect(b.source).toBe('agent');
 
-    const u = updateMemory(db, a.id, '  first   edited ', 3000);
+    const u = updateMemory(db, a.id, '  first   edited ', { now: 3000 });
     expect(u).toMatchObject({ ok: true, note: { text: 'first edited', updatedAt: 3000 } });
     expect(listMemory(db, 'c1').map((n) => n.text)).toEqual(['first edited', 'second']);
     expect(listMemory(db, 'c1')[0]?.createdAt).toBe(1000);
@@ -103,5 +105,107 @@ describe('memoryForPrompt', () => {
     expect(memoryForPrompt(db, 'c3', {})).toBeNull();
     // Another connection's switch does not matter.
     expect(memoryForPrompt(db, 'c1', { connectionAiMemory: { c2: false } })).not.toBeNull();
+  });
+});
+
+describe('secrets main knows', () => {
+  it('refuses add and update that contain a known secret', () => {
+    const secrets = ['Vault-Pass-99'];
+    expect(addMemory(db, 'c1', 'login is via Vault-Pass-99 always', 'user', { secrets })).toEqual({
+      ok: false,
+      error: "Memory can't hold passwords or keys.",
+    });
+    const a = add('c1', 'fine');
+    expect(updateMemory(db, a.id, 'now Vault-Pass-99', { secrets }).ok).toBe(false);
+    expect(listMemory(db, 'c1')[0]?.text).toBe('fine');
+  });
+
+  it('collects secret-looking string values from a config', () => {
+    expect(
+      secretValuesOf({
+        user: 'bob',
+        password: 'pw-1234',
+        ssh: { passphrase: 'abcd-efgh', privateKeyPath: '/k' },
+      }).sort(),
+    ).toEqual(['abcd-efgh', 'pw-1234']);
+  });
+});
+
+describe('memoryOptionsFor (what an AI request gets)', () => {
+  const live = (map: Record<string, boolean> = {}) => ({ connectionAiMemory: map });
+
+  it('gives the bound connection its notes and the tools', () => {
+    add('c1', 'rule for one');
+    add('c2', 'rule for two');
+    const o = memoryOptionsFor(db, 'c1', {
+      settings: () => live(),
+      saved: true,
+      secrets: () => [],
+    });
+    expect(o.memory()?.text).toContain('rule for one');
+    expect(o.memory()?.text).not.toContain('rule for two');
+    expect(o.memoryTools).toBeDefined();
+  });
+
+  it('gives nothing when the switch is off, and no tools', () => {
+    add('c1', 'rule for one');
+    const o = memoryOptionsFor(db, 'c1', {
+      settings: () => live({ c1: false }),
+      saved: true,
+      secrets: () => [],
+    });
+    expect(o.memory()).toBeNull();
+    expect(o.memoryTools).toBeUndefined();
+  });
+
+  it('offers no tools for a connection that cannot hold notes, and nothing without one', () => {
+    const unsaved = memoryOptionsFor(db, 'ws:a:b', {
+      settings: () => live(),
+      saved: false,
+      secrets: () => [],
+    });
+    expect(unsaved.memoryTools).toBeUndefined();
+    const none = memoryOptionsFor(db, null, {
+      settings: () => live(),
+      saved: true,
+      secrets: () => [],
+    });
+    expect(none.memory()).toBeNull();
+    expect(none.memoryTools).toBeUndefined();
+  });
+
+  it('re-reads live: a deleted note or a switch turned off later is honoured', () => {
+    const n = add('c1', 'rule for one');
+    let settings = live();
+    const o = memoryOptionsFor(db, 'c1', {
+      settings: () => settings,
+      saved: true,
+      secrets: () => [],
+    });
+    expect(o.memory()).not.toBeNull();
+    expect(o.memoryTools?.resolveForget(`m:${n.id.slice(0, 6)}`)).toMatchObject({ ok: true });
+    deleteMemory(db, n.id);
+    expect(o.memory()).toBeNull();
+    add('c1', 'second');
+    settings = live({ c1: false });
+    expect(o.memory()).toBeNull();
+    expect(o.memoryTools?.checkRemember('new note')).toBe(
+      'memory is turned off for this connection',
+    );
+    expect(o.memoryTools?.resolveForget('m:abcdef')).toMatchObject({ ok: false });
+  });
+
+  it('checkRemember applies duplicates and known secrets', () => {
+    add('c1', 'orders.amount is in cents');
+    const o = memoryOptionsFor(db, 'c1', {
+      settings: () => live(),
+      saved: true,
+      secrets: () => ['Sup3rSecret'],
+    });
+    expect(o.memoryTools?.checkRemember('Orders.amount is in cents')).toBe('Already remembered.');
+    expect(o.memoryTools?.checkRemember('the key is Sup3rSecret')).toBe(
+      "Memory can't hold passwords or keys.",
+    );
+    expect(o.memoryTools?.checkRemember('something new')).toBeNull();
   });
 });

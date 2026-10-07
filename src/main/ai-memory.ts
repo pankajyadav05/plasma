@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import {
   type MemoryCheck,
   checkMemoryText,
+  findMemoryByRef,
   isMemoryEnabled,
   isMemorySource,
   memoryPromptSection,
@@ -70,8 +71,9 @@ export function checkAddMemory(
   d: Database.Database,
   connectionId: string,
   text: string,
+  secrets: readonly string[] = [],
 ): MemoryCheck {
-  return checkMemoryText(text, listMemory(d, connectionId));
+  return checkMemoryText(text, listMemory(d, connectionId), { secrets });
 }
 
 export function addMemory(
@@ -79,10 +81,11 @@ export function addMemory(
   connectionId: string,
   text: string,
   source: string,
-  now: number = Date.now(),
+  opts: { now?: number; secrets?: readonly string[] } = {},
 ): MemoryWrite {
+  const now = opts.now ?? Date.now();
   if (!isMemorySource(source)) return { ok: false, error: 'Unknown source for a note.' };
-  const checked = checkAddMemory(d, connectionId, text);
+  const checked = checkAddMemory(d, connectionId, text, opts.secrets);
   if (!checked.ok) return checked;
   const id = randomUUID().replace(/-/g, '');
   d.prepare(
@@ -98,11 +101,15 @@ export function updateMemory(
   d: Database.Database,
   id: string,
   text: string,
-  now: number = Date.now(),
+  opts: { now?: number; secrets?: readonly string[] } = {},
 ): MemoryWrite {
+  const now = opts.now ?? Date.now();
   const cur = getMemory(d, id);
   if (!cur) return { ok: false, error: 'That note is gone.' };
-  const checked = checkMemoryText(text, listMemory(d, cur.connectionId), { selfId: id });
+  const checked = checkMemoryText(text, listMemory(d, cur.connectionId), {
+    selfId: id,
+    secrets: opts.secrets,
+  });
   if (!checked.ok) return checked;
   d.prepare('UPDATE ai_memory SET text = ?, updated_at = ? WHERE id = ?').run(
     checked.text,
@@ -133,4 +140,66 @@ export function memoryForPrompt(
 ): { text: string; count: number } | null {
   if (!connectionId || !isMemoryEnabled(connectionId, settings)) return null;
   return memoryPromptSection(listMemory(d, connectionId));
+}
+
+/** What main knows about the notes, so a bad `remember` / `forget` never reaches a card. */
+export type MemoryToolHooks = {
+  /** A refusal ("Already remembered.") or null when the note may be proposed. */
+  checkRemember(text: string): string | null;
+  /** The note a model's `m:<shortid>` means, or the reason there is none. */
+  resolveForget(ref: string): { ok: true; id: string; text: string } | { ok: false; error: string };
+};
+
+/**
+ * Everything an AI request needs for memory, decided in one place: the
+ * section (re-read each time it is asked, so a deleted note or the switch
+ * turned off stops being sent within the same reply) and the tools (only
+ * while the switch is on at the start and the connection can hold notes).
+ * `settings` and `secrets` are read live.
+ */
+export function memoryOptionsFor(
+  d: Database.Database,
+  connectionId: string | null | undefined,
+  deps: {
+    settings: () => { connectionAiMemory?: Record<string, boolean> };
+    /** The connection is a row in the vault (not a workspace profile or an unsaved session). */
+    saved: boolean;
+    secrets: () => readonly string[];
+  },
+): { memory: () => { text: string; count: number } | null; memoryTools?: MemoryToolHooks } {
+  if (!connectionId) return { memory: () => null };
+  const off = () => !isMemoryEnabled(connectionId, deps.settings());
+  const memory = () => memoryForPrompt(d, connectionId, deps.settings());
+  if (!deps.saved || off()) return { memory };
+  return {
+    memory,
+    memoryTools: {
+      checkRemember: (text) => {
+        if (off()) return 'memory is turned off for this connection';
+        const r = checkAddMemory(d, connectionId, text, deps.secrets());
+        return r.ok ? null : r.error;
+      },
+      resolveForget: (ref) => {
+        if (off()) return { ok: false, error: 'memory is turned off for this connection' };
+        const note = findMemoryByRef(listMemory(d, connectionId), ref);
+        return note
+          ? { ok: true, id: note.id, text: note.text }
+          : { ok: false, error: `there is no note ${ref}` };
+      },
+    },
+  };
+}
+
+/** The string values under secret-looking keys of `value` (passwords, keys, tokens, passphrases). */
+export function secretValuesOf(value: unknown, depth = 0): string[] {
+  if (!value || typeof value !== 'object' || depth > 4) return [];
+  const out: string[] = [];
+  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+    if (typeof v === 'string') {
+      if (v.length >= 4 && /pass|secret|key|token|credential/i.test(k) && !/path|file/i.test(k)) {
+        out.push(v);
+      }
+    } else out.push(...secretValuesOf(v, depth + 1));
+  }
+  return out;
 }

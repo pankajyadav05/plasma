@@ -151,3 +151,39 @@ describe('forget card', () => {
     expect(state().aiActions[keep.id]?.status).toBe('rejected');
   });
 });
+
+describe('memory edge cases on the card', () => {
+  it('Stop with cards kept: a running remember ends applied once the write lands', async () => {
+    let finish: (v: unknown) => void = () => undefined;
+    memAdd.mockReturnValueOnce(
+      new Promise((r) => {
+        finish = r;
+      }),
+    );
+    state().aiApplyEvent(event('remember', { text: 'a rule' }));
+    await vi.waitFor(() => expect(cards()).toHaveLength(1));
+    const id = cards()[0]!.id;
+    const approving = state().aiApproveAction(id);
+    await vi.waitFor(() => expect(state().aiActions[id]?.status).toBe('running'));
+    await state().aiCancel();
+    expect(state().aiActions[id]?.status).toBe('cancelled');
+    finish({ ok: true, note: { id: 'abcdef123456' } });
+    await approving;
+    expect(state().aiActions[id]).toMatchObject({ status: 'applied', note: 'Remembered.' });
+  });
+
+  it('refuses to save when memory was switched off after the card appeared', async () => {
+    state().aiApplyEvent(event('remember', { text: 'a rule' }));
+    await vi.waitFor(() => expect(cards()).toHaveLength(1));
+    useSession.setState(
+      (s) => ({ settings: { ...s.settings, connectionAiMemory: { c1: false } } }) as never,
+    );
+    const id = cards()[0]!.id;
+    await state().aiApproveAction(id);
+    expect(memAdd).not.toHaveBeenCalled();
+    expect(state().aiActions[id]).toMatchObject({
+      status: 'failed',
+      note: 'Memory is off for this connection. Nothing was saved.',
+    });
+  });
+});

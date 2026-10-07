@@ -14,6 +14,7 @@ import {
 } from '@shared/protocol';
 import { isSqlEngine } from '@shared/sql-dialect';
 import type { BrowserWindow } from 'electron';
+import type { MemoryToolHooks } from './ai-memory';
 import { buildOpenRouterBody } from './ai-policy';
 import { logger } from './logger';
 
@@ -216,7 +217,7 @@ export type AiChatOptions = {
    * Database memory for the bound connection: the section for the system
    * prompt (null/absent = nothing to send: no notes, or the switch is off).
    */
-  memory?: { text: string; count: number } | null;
+  memory?: MemorySection | null | (() => MemorySection | null);
   /**
    * Offers `remember` / `forget` to the agent and validates them against the
    * stored notes. Absent when memory is off for the connection.
@@ -226,13 +227,8 @@ export type AiChatOptions = {
   fetchImpl?: typeof fetch;
 };
 
-/** What main knows about the notes, so a bad `remember` / `forget` never reaches a card. */
-export type MemoryToolHooks = {
-  /** A refusal ("Already remembered.") or null when the note may be proposed. */
-  checkRemember(text: string): string | null;
-  /** The note a model's `m:<shortid>` means, or the reason there is none. */
-  resolveForget(ref: string): { ok: true; id: string; text: string } | { ok: false; error: string };
-};
+type MemorySection = { text: string; count: number };
+export type { MemoryToolHooks } from './ai-memory';
 
 /** Names of the tools offered for `engine` (a model may only call these). */
 export function offeredToolNames(engine: ConnectionEngine): Set<string> {
@@ -581,25 +577,30 @@ async function pump(
   // says: they put the user's click between the model and every effect, and
   // what they send back is gated separately (`shapeActionResult`).
   const agentMode = req.agent === true && !task && isSqlEngine(engine);
-  const messages: InternalMsg[] = task
-    ? buildTaskMessages(task, req.messages, allowSchema ? req.schema : null, options.memory?.text)
-    : agentMode
-      ? buildAgentMessages(
-          req.messages,
-          engine,
-          allowSchema ? req.schema : null,
-          allowSchema ? req.context : undefined,
-          allowRowData,
-          options.memory?.text,
-          options.memoryTools !== undefined,
-        )
-      : buildMessages(
-          req.messages,
-          engine,
-          allowSchema ? req.schema : null,
-          allowSchema ? req.engineContext : undefined,
-          options.memory?.text,
-        );
+  const readMemory = (): MemorySection | null =>
+    typeof options.memory === 'function' ? options.memory() : (options.memory ?? null);
+  const build = (mem: string | undefined): InternalMsg[] =>
+    task
+      ? buildTaskMessages(task, req.messages, allowSchema ? req.schema : null, mem)
+      : agentMode
+        ? buildAgentMessages(
+            req.messages,
+            engine,
+            allowSchema ? req.schema : null,
+            allowSchema ? req.context : undefined,
+            allowRowData,
+            mem,
+            options.memoryTools !== undefined,
+          )
+        : buildMessages(
+            req.messages,
+            engine,
+            allowSchema ? req.schema : null,
+            allowSchema ? req.engineContext : undefined,
+            mem,
+          );
+  let memoryText = readMemory()?.text;
+  const messages: InternalMsg[] = build(memoryText);
   const sentImages = !task && req.messages.some((m) => countImages(m.content) > 0);
   const model = local
     ? (options.localModel ?? '').trim()
@@ -623,6 +624,21 @@ async function pump(
   try {
     for (let round = 0; round <= maxRounds; round++) {
       const isLastAllowedRound = round === maxRounds;
+      // A note deleted (or the switch turned off) while a card waited must not go out again.
+      if (round > 0) {
+        const now = readMemory()?.text;
+        if (now !== memoryText) {
+          memoryText = now;
+          const fresh = build(now)[0];
+          const hadSystem = messages[0]?.role === 'system';
+          if (fresh?.role === 'system') {
+            if (hadSystem) messages[0] = fresh as InternalMsg;
+            else messages.unshift(fresh as InternalMsg);
+          } else if (hadSystem) {
+            messages.shift();
+          }
+        }
+      }
       // Stream the final round (when we want text streaming for UX).
       // For tool-call rounds we still stream so partial deltas appear
       // for any text the model emits before/after tool calls.

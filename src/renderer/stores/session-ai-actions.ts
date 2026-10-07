@@ -17,6 +17,7 @@ import {
   type AgentActionStatus,
   normalizeAction,
 } from '@shared/agent-actions';
+import { isMemoryEnabled } from '@shared/ai-memory';
 import { agentReadSandboxed, isAgentReadSql } from '@shared/ai-readonly-sql';
 import { isAiSchemaAllowed } from '@shared/ai-schema-policy';
 import type { AiActionResult, AiChatEvent, QueryResult } from '@shared/protocol';
@@ -442,9 +443,19 @@ export function createAgentActions(api: StoreApi<SessionState>): AgentActionApi 
       return;
     }
     const memory = useMemory.getState();
+    // The write happened, so the card must say so even if Stop got here first.
+    const doneAnyway = (extra: Partial<AgentAction>, note: string) =>
+      patch(a.id, { ...extra, status: 'applied', note });
     if (act.name === 'remember') {
+      if (!isMemoryEnabled(connectionId, get().settings)) {
+        settle(a.id, 'failed', 'Memory is off for this connection. Nothing was saved.');
+        return;
+      }
       const res = await memory.add(connectionId, a.memoryText ?? act.text, 'agent');
-      if (!isOpen(get().aiActions[a.id])) return;
+      if (!isOpen(get().aiActions[a.id])) {
+        if (res.ok) doneAnyway({ memoryId: res.note.id }, 'Remembered.');
+        return;
+      }
       if (!res.ok) {
         // The user can fix the text and try again: the card stays open with the reason.
         patch(a.id, { status: 'pending', note: res.error });
@@ -455,7 +466,10 @@ export function createAgentActions(api: StoreApi<SessionState>): AgentActionApi 
     }
     if (act.name === 'forget') {
       await memory.remove(connectionId, act.id);
-      if (!isOpen(get().aiActions[a.id])) return;
+      if (!isOpen(get().aiActions[a.id])) {
+        doneAnyway({}, 'Forgotten.');
+        return;
+      }
       settle(a.id, 'applied', 'Forgotten.');
     }
   };
