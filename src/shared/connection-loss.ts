@@ -45,6 +45,8 @@ const LOST_PATTERNS = [
   "stream isn't writeable",
   'connection is already closed',
   'max retries per request limit reached',
+  // ioredis 5.x words it differently: "Reached the max retries per request limit (which is 1)"
+  'reached the max retries per request limit',
   // mysql2
   'connection lost: the server closed the connection',
   'connection is in closed state',

@@ -18,6 +18,9 @@ describe('isConnectionLostError', () => {
     'Connection is closed.',
     "Stream isn't writeable and enableOfflineQueue options is false",
     'max retries per request limit reached',
+    'Reached the max retries per request limit (which is 1). Refer to "maxRetriesPerRequest" option for details.',
+    // mysql2: the server closed the socket under a running statement
+    'Connection lost: The server closed the connection.',
     // node socket / dns
     'read ECONNRESET',
     'connect ECONNREFUSED 127.0.0.1:5432',
