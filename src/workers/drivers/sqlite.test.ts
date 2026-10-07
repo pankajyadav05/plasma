@@ -175,6 +175,19 @@ describe('queries', () => {
     await drv.query("INSERT INTO tags VALUES ('ok', 1)");
   });
 
+  it('sideband and AI queries cannot ATTACH another database file', async () => {
+    const other = join(dir, 'other.db');
+    const o = new Database(other);
+    o.exec("CREATE TABLE secret (s TEXT); INSERT INTO secret VALUES ('hidden')");
+    o.close();
+    await expect(drv.aiQuery(`ATTACH DATABASE '${other}' AS o`)).rejects.toThrow(/ATTACH/);
+    await expect(drv.sidebandQuery(`ATTACH DATABASE '${other}' AS o`)).rejects.toThrow(/ATTACH/);
+    await expect(drv.aiQuery('SELECT * FROM o.secret')).rejects.toThrow();
+    // The editor may still attach on purpose.
+    await drv.query(`ATTACH DATABASE '${other}' AS o`);
+    expect((await drv.query('SELECT s FROM o.secret')).rows).toEqual([['hidden']]);
+  });
+
   it('stops a long SELECT when cancelled', async () => {
     const run = drv.query(
       'WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c WHERE x < 3000000) SELECT x FROM c',

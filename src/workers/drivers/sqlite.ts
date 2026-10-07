@@ -101,6 +101,14 @@ function commandOf(sql: string): string {
   return leadingKeyword(sql).toUpperCase();
 }
 
+/**
+ * SQLite counts ATTACH / DETACH as read-only (they change the connection, not
+ * the file), so `stmt.readonly` lets them through. Attaching another file would
+ * make any database on disk readable to a lookup or an AI query, so the
+ * read-only paths refuse them; the editor itself may still attach.
+ */
+const CONNECTION_STATEMENTS = new Set(['ATTACH', 'DETACH']);
+
 type Statement = Database.Statement<unknown[], unknown[]>;
 
 export class SqliteDriver implements SqlEngineDriver {
@@ -135,6 +143,8 @@ export class SqliteDriver implements SqlEngineDriver {
   }
 
   async connect(config: ConnectionConfig, statementTimeoutMs?: number): Promise<string> {
+    // A second connect replaces the session: release the old file handle first.
+    await this.disconnect();
     const path = config.database;
     if (!path) throw new Error('SQLite connection has no database file');
     let stat: ReturnType<typeof statSync>;
@@ -248,6 +258,9 @@ export class SqliteDriver implements SqlEngineDriver {
       }
       let last: Omit<QueryResult, 'durationMs'> = { columns: [], rows: [], rowCount: 0 };
       for (const text of statements) {
+        if (readsOnly && CONNECTION_STATEMENTS.has(commandOf(text))) {
+          throw new Error('rejected: ATTACH and DETACH are not allowed here');
+        }
         const { stmt, bind } = this.prepare(db, text, statements.length === 1 ? params : undefined);
         if (readsOnly && !stmt.readonly) {
           throw new Error('rejected: only read-only statements are allowed here');
