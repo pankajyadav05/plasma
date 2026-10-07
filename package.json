@@ -35,6 +35,7 @@
     "typecheck": "pnpm run typecheck:node && pnpm run typecheck:web",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:conformance": "vitest run src/workers/drivers/conformance",
     "lint": "biome check src",
     "lint:fix": "biome check --write src",
     "format": "biome format --write src",

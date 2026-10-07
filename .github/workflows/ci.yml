@@ -176,7 +176,9 @@ jobs:
         shell: bash
         run: |
           set +e
-          npx vitest run --reporter=default --reporter=github-actions --reporter=json --outputFile=live-results.json 2>&1 | tee live.log
+          # The conformance suite has its own job (below): it needs its own Redis, since the
+          # live Redis suites FLUSHALL the one they share.
+          npx vitest run --exclude 'src/workers/drivers/conformance/**' --reporter=default --reporter=github-actions --reporter=json --outputFile=live-results.json 2>&1 | tee live.log
           code=${PIPESTATUS[0]}
           if [ "$code" != "0" ]; then
             # Unhandled errors and suite-level failures aren't annotated by the
@@ -186,6 +188,127 @@ jobs:
             echo "::error title=live errors::$(cat err.txt)"
           fi
           exit $code
+
+  # One suite every engine driver must pass (docs/driver-contract.md): the same
+  # scenarios against each engine, through the driver interface. The embedded
+  # engines (SQLite, DuckDB) always run; every server engine runs against its own
+  # service container, in parallel. A scenario an engine cannot pass is an
+  # explicit, documented capability flag in its fixture, never a silent skip.
+  conformance:
+    name: Driver conformance (all engines)
+    runs-on: ubuntu-latest
+    env:
+      ELECTRON_SKIP_BINARY_DOWNLOAD: 1
+      PLASMA_LIVE_PG: postgres://postgres:plasma-ci-s3cret@127.0.0.1:5432/postgres
+      PLASMA_LIVE_REDIS: redis://127.0.0.1:6379
+      PLASMA_LIVE_OS: http://127.0.0.1:9200
+      PLASMA_LIVE_MYSQL: "1"
+      PLASMA_MYSQL_HOST: 127.0.0.1
+      PLASMA_MYSQL_PORT: 3306
+      PLASMA_MYSQL_USER: root
+      PLASMA_MYSQL_PASSWORD: mysql
+      PLASMA_LIVE_MARIADB: "1"
+      PLASMA_MARIADB_HOST: 127.0.0.1
+      PLASMA_MARIADB_PORT: 3307
+      PLASMA_MARIADB_USER: root
+      PLASMA_MARIADB_PASSWORD: mariadb
+      PLASMA_LIVE_CLICKHOUSE: "1"
+      PLASMA_CLICKHOUSE_HOST: 127.0.0.1
+      PLASMA_CLICKHOUSE_PORT: 8123
+      PLASMA_CLICKHOUSE_USER: default
+      PLASMA_CLICKHOUSE_PASSWORD: clickhouse
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: plasma-ci-s3cret
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: mysql
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -pmysql"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 30
+      mariadb:
+        image: mariadb:11.4
+        env:
+          MARIADB_ROOT_PASSWORD: mariadb
+        ports:
+          - 3307:3306
+        options: >-
+          --health-cmd "mariadb-admin ping -h 127.0.0.1 -uroot -pmariadb"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 30
+      clickhouse:
+        image: clickhouse/clickhouse-server:24.8
+        env:
+          CLICKHOUSE_USER: default
+          CLICKHOUSE_PASSWORD: clickhouse
+          CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+        ports:
+          - 8123:8123
+        options: >-
+          --health-cmd "wget -q --spider http://127.0.0.1:8123/ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 30
+      opensearch:
+        image: opensearchproject/opensearch:2.17.1
+        env:
+          discovery.type: single-node
+          DISABLE_SECURITY_PLUGIN: "true"
+          DISABLE_INSTALL_DEMO_CONFIG: "true"
+          OPENSEARCH_JAVA_OPTS: -Xms512m -Xmx512m
+        ports:
+          - 9200:9200
+        options: >-
+          --health-cmd "curl -fs http://localhost:9200/_cluster/health || exit 1"
+          --health-interval 10s
+          --health-timeout 10s
+          --health-retries 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Wait for OpenSearch
+        run: |
+          for i in $(seq 1 60); do
+            curl -fs http://127.0.0.1:9200/_cluster/health && exit 0
+            sleep 2
+          done
+          echo "::error::OpenSearch did not become healthy"
+          exit 1
+      - name: Conformance suite
+        run: pnpm run test:conformance --reporter=default --reporter=github-actions
 
   # `pnpm install` is where Windows and macOS releases used to break (native
   # rebuilds, postinstall spawning .cmd files). Run it for real on both, with
