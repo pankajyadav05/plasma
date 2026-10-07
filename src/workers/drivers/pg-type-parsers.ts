@@ -1,3 +1,4 @@
+import { parseJsonKeepingBigInts } from '@shared/json-bigint';
 import pg from 'pg';
 
 /**
@@ -36,27 +37,6 @@ const identity = (value: string): string => value;
 
 type TypeParser = (value: string) => unknown;
 
-/**
- * json / jsonb: integers beyond 2^53 lose digits in a JS number, and
- * editing the cell would then write a different value back. Those (and only
- * those) come through as their exact text. Other numbers, key order and
- * duplicate keys behave as JSON.parse does.
- */
-export function parseJsonKeepingBigInts(text: string): unknown {
-  return JSON.parse(text, function reviver(_key, value, context?: { source?: string }) {
-    if (
-      typeof value === 'number' &&
-      Number.isInteger(value) &&
-      !Number.isSafeInteger(value) &&
-      typeof context?.source === 'string' &&
-      /^-?\d+$/.test(context.source)
-    ) {
-      return context.source;
-    }
-    return value;
-  } as Parameters<typeof JSON.parse>[1]);
-}
-
 function getTypeParser(oid: number, format?: 'text' | 'binary'): TypeParser {
   if (format === 'binary') {
     return pg.types.getTypeParser(oid, 'binary') as TypeParser;
@@ -71,6 +51,8 @@ function getTypeParser(oid: number, format?: 'text' | 'binary'): TypeParser {
  * nothing else in the process (tests, other libraries) is affected.
  */
 export const plasmaPgTypes = { getTypeParser } as unknown as NonNullable<pg.ClientConfig['types']>;
+
+export { parseJsonKeepingBigInts };
 
 /** Exposed for unit tests. */
 export function parsePgText(oid: number, text: string): unknown {

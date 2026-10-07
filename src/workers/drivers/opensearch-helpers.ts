@@ -6,6 +6,7 @@
  * - collision-free, request-local aggregation IDs for fieldStats
  */
 
+import { parseJsonKeepingBigInts } from '@shared/json-bigint';
 import type { OsFieldStats, OsMappingNode } from '@shared/protocol';
 
 /**
@@ -272,7 +273,8 @@ export function prepareSearchBody(bodyText: string, size: number): Record<string
   } else {
     let parsed: unknown;
     try {
-      parsed = JSON.parse(trimmed);
+      // Numbers beyond 2^53 become exact text instead of a rounded number the cluster would match.
+      parsed = parseJsonKeepingBigInts(trimmed);
     } catch (err) {
       throw new Error(
         `invalid query DSL JSON: ${err instanceof Error ? err.message : String(err)}`,

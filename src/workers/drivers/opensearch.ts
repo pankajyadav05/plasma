@@ -1,5 +1,6 @@
 import { Client, errors as osErrors } from '@opensearch-project/opensearch';
 import { AwsSigv4Signer } from '@opensearch-project/opensearch/aws';
+import { parseJsonKeepingBigInts } from '@shared/json-bigint';
 import { OS_READ_ONLY_MESSAGE, isOsReadRequest, isReadOnlyOsSql } from '@shared/os-write-policy';
 import type {
   ConnectionConfig,
@@ -220,7 +221,8 @@ export class OpenSearchDriver {
       if (params.method === 'HEAD') {
         body = statusCode < 400;
       } else if (/json/.test(contentType) && text !== '') {
-        body = JSON.parse(text);
+        // A number beyond 2^53 would lose digits in a JS number; those come back as exact text.
+        body = parseJsonKeepingBigInts(text);
       }
       if (statusCode >= 400 && !(params.method === 'HEAD' && statusCode === 404)) {
         throw new osErrors.ResponseError({
@@ -541,10 +543,12 @@ export class OpenSearchDriver {
         params.bulkBody = text.endsWith('\n') ? text : `${text}\n`;
       } else {
         try {
-          params.body = JSON.parse(text);
+          JSON.parse(text);
         } catch (err) {
           throw new Error(`invalid JSON body: ${err instanceof Error ? err.message : String(err)}`);
         }
+        // Sent as typed: parsing and re-serialising would round a number beyond 2^53.
+        params.body = text;
       }
     }
     const start = Date.now();
