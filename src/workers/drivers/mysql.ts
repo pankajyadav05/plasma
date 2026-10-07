@@ -21,7 +21,14 @@ import type { Connection as CbConnection } from 'mysql2';
 import { mysqlPlanToJson } from './explain-plan';
 import { type MysqlRawSchema, buildMysqlSchema, mysqlIntrospectQueries } from './mysql-introspect';
 import { runEditBatch } from './pg-txn';
-import type { ExportBatch, SqlEditUpdate, SqlEngineDriver, SqlQueryOpts } from './sql-engine';
+import {
+  type AiQueryOpts,
+  type ExportBatch,
+  type SqlEditUpdate,
+  type SqlEngineDriver,
+  type SqlQueryOpts,
+  aiReadOpts,
+} from './sql-engine';
 
 /**
  * MySQL / MariaDB driver (mysql2). Two connections, like the Postgres driver:
@@ -459,11 +466,11 @@ export class MysqlDriver implements SqlEngineDriver {
     return this.auxRead(sql, params, opts, opts?.timeoutMs);
   }
 
-  async aiQuery(sql: string, params?: unknown[]): Promise<QueryResult> {
+  async aiQuery(sql: string, params?: unknown[], opts?: AiQueryOpts): Promise<QueryResult> {
     if (splitSqlStatements(sql).length !== 1) {
       throw new Error('rejected: AI queries must be a single SQL statement');
     }
-    return this.auxRead(sql, params, { maxRows: 1000 }, 30_000);
+    return this.auxRead(sql, params, aiReadOpts(opts), 30_000);
   }
 
   async explain(sql: string, _analyze: boolean, params?: unknown[]): Promise<QueryResult> {

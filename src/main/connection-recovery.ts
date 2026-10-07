@@ -89,6 +89,8 @@ const POLICY_BY_KIND: Partial<Record<WorkerRequest['kind'], RecoveryPolicy>> = {
   // Session plumbing: recovery wraps these, so they must not recurse.
   connect: 'none',
   testConnect: 'none',
+  // Isolated throwaway session: never worth rebuilding the live one for.
+  compareQuery: 'none',
   disconnect: 'none',
   ping: 'none',
   setStatementTimeout: 'none',

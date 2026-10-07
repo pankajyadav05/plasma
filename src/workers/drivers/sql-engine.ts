@@ -17,6 +17,19 @@ export interface SqlQueryOpts {
   autoBegin?: boolean;
   /** Sideband only: run read-only under this timeout. */
   timeoutMs?: number;
+  /** Raise the MAX_RESULT_ROWS ceiling for this read (Result Compare); `maxRows` is then honoured up to it. */
+  rowCeiling?: number;
+}
+
+/** Read options for the agent / compare path: the agent's 1000-row default, or the caller's cap. */
+export function aiReadOpts(opts?: AiQueryOpts): SqlQueryOpts {
+  return opts?.maxRows ? { maxRows: opts.maxRows, rowCeiling: opts.maxRows } : { maxRows: 1000 };
+}
+
+/** Options of the read-only agent / compare query path. */
+export interface AiQueryOpts {
+  /** Rows to keep (default: the engine's agent cap). */
+  maxRows?: number;
 }
 
 export interface SqlEditUpdate {
@@ -41,7 +54,7 @@ export interface SqlEngineDriver {
   disconnect(): Promise<void>;
   query(sql: string, params?: unknown[], opts?: SqlQueryOpts): Promise<QueryResult>;
   sidebandQuery(sql: string, params?: unknown[], opts?: SqlQueryOpts): Promise<QueryResult>;
-  aiQuery(sql: string, params?: unknown[]): Promise<QueryResult>;
+  aiQuery(sql: string, params?: unknown[], opts?: AiQueryOpts): Promise<QueryResult>;
   explain(sql: string, analyze: boolean, params?: unknown[]): Promise<QueryResult>;
   cancelQuery(): Promise<boolean>;
   cancelAux(): Promise<boolean>;

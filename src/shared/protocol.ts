@@ -763,6 +763,17 @@ export type QueryResult = z.infer<typeof QueryResult>;
  */
 export type CancelOutcome = 'sent' | 'nothing-running' | 'unsupported';
 
+/**
+ * Result Compare: run one read-only statement on a saved connection (null =
+ * the active one). Same read-only path as the agent's run_query.
+ */
+export const CompareRunRequest = z.object({
+  connectionId: z.string().nullable(),
+  sql: z.string().min(1).max(200_000),
+  maxRows: z.number().int().positive().max(200_000).optional(),
+});
+export type CompareRunRequest = z.infer<typeof CompareRunRequest>;
+
 /** Result export formats (U16). */
 export const ExportFormat = z.enum(['csv', 'json', 'sql']);
 export type ExportFormat = z.infer<typeof ExportFormat>;
@@ -1359,6 +1370,17 @@ export const WorkerRequest = z.discriminatedUnion('kind', [
     id: z.string(),
     sql: z.string(),
     params: z.array(z.unknown()).optional(),
+    /** Result Compare: keep more than the agent's default cap. */
+    maxRows: z.number().int().positive().max(200_000).optional(),
+  }),
+  // Result Compare on another saved connection: a throwaway read-only driver,
+  // one read-only statement, then gone. Never touches the live session.
+  z.object({
+    kind: z.literal('compareQuery'),
+    id: z.string(),
+    config: ConnectionConfig,
+    sql: z.string(),
+    maxRows: z.number().int().positive().max(200_000),
   }),
   // LISTEN/NOTIFY tail: a dedicated listener connection, never the primary.
   z.object({ kind: z.literal('pgListen'), id: z.string(), channel: z.string().min(1) }),
@@ -2409,6 +2431,7 @@ export const IpcChannel = {
   AiActionResult: 'plasma:ai:action-result',
   /** The agent's read-only query: runs in a read-only session (`aiQuery`), result shown in a tab. */
   AiRunReadOnly: 'plasma:ai:run-readonly',
+  CompareRun: 'plasma:compare:run',
   /** Renderer-facing event channel for streamed AI deltas. */
   AiEvent: 'plasma:ai:event',
   // SQL formatting (kept main-side so we can swap engines later without
@@ -2658,6 +2681,10 @@ export interface PlasmaAPI {
       queryString?: string;
       query?: string;
     }): Promise<OsFieldStats[]>;
+  };
+  compare: {
+    /** One read-only statement on a saved connection, for Result Compare. */
+    run(req: CompareRunRequest): Promise<QueryResult>;
   };
   ai: {
     /**

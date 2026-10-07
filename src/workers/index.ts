@@ -21,7 +21,7 @@ import type { SqlEngineDriver } from './drivers/sql-engine';
 import { SqliteDriver } from './drivers/sqlite';
 import { ExportCancelledError, writeExportFromQueryStream, writeExportRows } from './export-file';
 import { RequestScheduler } from './request-scheduler';
-import { runIsolatedTestConnect } from './test-connect';
+import { runIsolatedReadOnlyQuery, runIsolatedTestConnect } from './test-connect';
 
 /**
  * DB worker — runs in an Electron utilityProcess.
@@ -309,7 +309,13 @@ process.parentPort.on('message', async (evt: Electron.MessageEvent) => {
         case 'aiQuery': {
           const drv = sqlDriver();
           if (!drv) return unsupported(req.id, 'aiQuery');
-          const result = await drv.aiQuery(req.sql, req.params);
+          const result = await drv.aiQuery(req.sql, req.params, { maxRows: req.maxRows });
+          send({ kind: 'queryResult', id: req.id, result });
+          break;
+        }
+        case 'compareQuery': {
+          // Isolated read-only session on another connection (Result Compare).
+          const result = await runIsolatedReadOnlyQuery(req.config, req.sql, req.maxRows);
           send({ kind: 'queryResult', id: req.id, result });
           break;
         }

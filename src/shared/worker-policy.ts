@@ -50,6 +50,8 @@ export function ipcDeadlineMs(kind: WorkerRequest['kind'], req?: WorkerRequest):
       const t = req && 'timeoutMs' in req ? req.timeoutMs : undefined;
       return t && t > 0 ? t + OS_DEADLINE_SLACK_MS : 120_000;
     }
+    case 'compareQuery':
+      return 90_000;
     case 'ping':
       return 5_000;
     case 'connect':
