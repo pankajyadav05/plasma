@@ -222,12 +222,16 @@ export class ClickhouseDriver implements SqlEngineDriver {
         // 64-bit integers and decimals as text, so nothing is rounded in JSON.
         output_format_json_quote_64bit_integers: 1,
         output_format_json_quote_decimals: 1,
+        // 12.30 stays 12.30: the scale of a Decimal(10, 2) is part of its value.
+        output_format_decimal_trailing_zeros: 1,
         ...(readonly ? { readonly: '1' as const } : {}),
       },
     });
   }
 
   async connect(config: ConnectionConfig, statementTimeoutMs?: number): Promise<string> {
+    // A second connect replaces the session: close the old clients first.
+    await this.disconnect();
     this.readOnly = config.readOnly === true;
     this.statementTimeoutMs = statementTimeoutMs ?? 0;
     const client = await this.makeClient(config, this.readOnly);
