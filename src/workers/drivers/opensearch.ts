@@ -143,10 +143,25 @@ export class OpenSearchDriver {
       cluster_name?: string;
       version?: { distribution?: string; number?: string };
     };
+    // Any HTTP server answers GET /; only OpenSearch and Elasticsearch say which version they are.
+    if (!info || typeof info !== 'object' || !info.version?.number) {
+      await client.close().catch(() => undefined);
+      throw new Error('The server answered, but it is not OpenSearch (no version in its reply)');
+    }
     this.client = client;
     this.readOnly = config.readOnly === true;
-    this.cachedVersion = info.version?.number ?? 'unknown';
+    this.cachedVersion = info.version.number;
     return this.cachedVersion;
+  }
+
+  /** Cluster health colour (`green`, `yellow`, `red`), or null when the cluster did not say. */
+  async clusterStatus(): Promise<string | null> {
+    const res = await this.transport(
+      { method: 'GET', path: '/_cluster/health', querystring: { filter_path: 'status' } },
+      { timeoutMs: 5_000 },
+    );
+    const status = (res.body as { status?: unknown } | null)?.status;
+    return typeof status === 'string' ? status : null;
   }
 
   async disconnect(): Promise<void> {

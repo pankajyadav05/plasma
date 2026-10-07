@@ -1664,13 +1664,18 @@ async function openClient(
 ): Promise<RedisClient> {
   const client = new Redis({ ...buildClientOptions(config, endpoint, db), ...extra });
   // ioredis emits 'error' before .connect() rejects; swallow them so we
-  // don't crash the worker. The reject from .connect() is enough.
-  client.on('error', () => {});
+  // don't crash the worker. The reject from .connect() usually says only
+  // "Connection is closed.", so the error that came first is kept: it is the
+  // refused connection, the unknown host or the WRONGPASS reply.
+  let cause: Error | null = null;
+  client.on('error', (err: Error) => {
+    cause ??= err;
+  });
   try {
     await client.connect();
   } catch (err) {
     client.disconnect();
-    throw err;
+    throw cause ?? err;
   }
   return client;
 }
