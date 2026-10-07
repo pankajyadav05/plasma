@@ -6,11 +6,22 @@ import { DataFilesDialogs } from '@/features/data-files/DataFilesDialogs';
 import { type CommandId, runCommand } from '@/features/keymap/commands';
 import { WorkspaceDialogs } from '@/features/workspace/WorkspaceDialogs';
 import { routeAiTaskEvent } from '@/lib/ai-task';
+import { onRecoveryRestored, recoveryContext, setPendingRecoveries } from '@/lib/crash-recovery';
+import {
+  type AnnounceDeps,
+  announceNothingToRestore,
+  announceRestored,
+  announceUnrestorable,
+  planRecoveryBoot,
+} from '@/lib/recovery-boot';
+import { flushRecoveryJournal, installRecoveryJournal } from '@/lib/recovery-journal';
 import { announceUpdateOutcome, planResume } from '@/lib/update-launch';
 import { handleDroppedDataFiles } from '@/stores/data-files';
 import { useReconnect } from '@/stores/reconnect';
 import { useSession } from '@/stores/session';
+import { discardAllPendingEdits } from '@/stores/session-pending-edits';
 import { flushPersistedTabs, restoreTabsOnceFor } from '@/stores/session-tabs';
+import { useUpdateToasts } from '@/stores/update-toasts';
 import { useWorkspace } from '@/stores/workspace';
 import type { LaunchAction } from '@shared/deep-link';
 import { ConnectionRecovered, type DataFilePickResult } from '@shared/protocol';
@@ -18,6 +29,38 @@ import type { WorkspaceSnapshot } from '@shared/workspace';
 import { useEffect } from 'react';
 
 type EventChannel = Parameters<Window['plasmaEvents']['on']>[0];
+
+let recoveryWired = false;
+
+/** B2: keep main's crash snapshot current, and say what was restored once a snapshot is back. */
+function wireCrashRecovery(): AnnounceDeps {
+  const deps: AnnounceDeps = {
+    push: (toast, ms) => useUpdateToasts.getState().push(toast, ms),
+    discardEdits: () => {
+      discardAllPendingEdits(useSession.setState);
+      useUpdateToasts.getState().dismiss('crash-recovery');
+    },
+    showLog: () => void window.plasma.recovery.showLog(),
+    hasLog: recoveryContext().hasLog,
+  };
+  if (recoveryWired) return deps;
+  recoveryWired = true;
+  installRecoveryJournal(useSession, window.plasma.recovery);
+  onRecoveryRestored((restored) => {
+    announceRestored(restored, recoveryContext().cause, {
+      ...deps,
+      hasLog: recoveryContext().hasLog,
+    });
+    // The restored state must be on disk (in the live snapshot) before the old
+    // one is let go, so a crash right now still has something to restore.
+    void flushRecoveryJournal()
+      .then((ok) =>
+        ok ? window.plasma.recovery.resolve(restored.journal.connectionId) : undefined,
+      )
+      .catch(() => undefined);
+  });
+  return deps;
+}
 
 const MENU_COMMANDS: ReadonlyArray<readonly [EventChannel, CommandId]> = [
   ['plasma:menu:newTab', 'newTab'],
@@ -72,6 +115,32 @@ export function App() {
         savedConnections,
         useWorkspace.getState().snapshot?.profiles.map((p) => p.id) ?? [],
       );
+      // B2: did Plasma crash or get killed last time? Snapshots main set aside wait here
+      // until their connection is up (adoptConnectionTabs restores them).
+      const crash = await window.plasma.recovery.launchInfo().catch(() => null);
+      if (crash) setPendingRecoveries(crash);
+      const recoveryDeps = wireCrashRecovery();
+      const recoveryPlan = resume
+        ? ({ kind: 'none' } as const)
+        : planRecoveryBoot(
+            crash,
+            savedConnections,
+            useWorkspace.getState().snapshot?.profiles.map((p) => p.id) ?? [],
+          );
+      if (recoveryPlan.kind === 'notice-only') {
+        announceNothingToRestore(recoveryPlan.cause, recoveryDeps);
+        void window.plasma.recovery.resolve();
+      } else if (recoveryPlan.kind === 'unrestorable') {
+        announceUnrestorable(recoveryPlan.journal, recoveryDeps);
+      } else if (recoveryPlan.kind === 'resume' && connectionState === 'idle') {
+        const target = recoveryPlan.plan;
+        if (target.kind === 'saved') {
+          useReconnect.getState().start({ id: target.id, name: target.name }, 'launch');
+        } else {
+          await useWorkspace.getState().connectProfile(target.profileId);
+        }
+        return;
+      }
       if (resume && connectionState === 'idle') {
         restoreTabsOnceFor(resume.kind === 'saved' ? resume.id : resume.connectionId);
         if (resume.kind === 'saved') {

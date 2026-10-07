@@ -170,6 +170,13 @@ const api: PlasmaAPI = {
     prepared: (info) => ipcRenderer.invoke(IpcChannel.UpdatePrepared, info),
     launchInfo: () => ipcRenderer.invoke(IpcChannel.UpdateLaunchInfo),
   },
+  recovery: {
+    save: (journal) => ipcRenderer.send(IpcChannel.RecoverySave, journal),
+    flush: (journal) => ipcRenderer.invoke(IpcChannel.RecoveryFlush, journal),
+    launchInfo: () => ipcRenderer.invoke(IpcChannel.RecoveryLaunchInfo),
+    resolve: (connectionId) => ipcRenderer.invoke(IpcChannel.RecoveryResolve, connectionId),
+    showLog: () => ipcRenderer.invoke(IpcChannel.RecoveryShowLog),
+  },
   workspace: {
     openDialog: () => ipcRenderer.invoke(WorkspaceChannel.OpenDialog),
     openRecent: (path) => ipcRenderer.invoke(WorkspaceChannel.OpenRecent, path),

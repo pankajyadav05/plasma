@@ -2440,6 +2440,17 @@ export const IpcChannel = {
   UpdatePrepared: 'plasma:update:prepared',
   /** Renderer → main, once per launch: how the previous update restart ended. */
   UpdateLaunchInfo: 'plasma:update:launchInfo',
+  // Crash recovery (B2)
+  /** Renderer → main (fire and forget): the live workspace snapshot, or null to clear it. */
+  RecoverySave: 'plasma:recovery:save',
+  /** Same, but answers once the snapshot is on disk. */
+  RecoveryFlush: 'plasma:recovery:flush',
+  /** Once per window load: did the last run end badly, and what is waiting to be restored. */
+  RecoveryLaunchInfo: 'plasma:recovery:launchInfo',
+  /** A connection's pending snapshot was restored or discarded (all when no id). */
+  RecoveryResolve: 'plasma:recovery:resolve',
+  /** Show the main log file in the file manager. */
+  RecoveryShowLog: 'plasma:recovery:showLog',
   // Dev sanity checks
   PingMain: 'plasma:ping:main',
   PingWorker: 'plasma:ping:worker',
@@ -2798,6 +2809,16 @@ export interface PlasmaAPI {
     prepared(info: { connectionId: string | null }): Promise<void>;
     /** Once per launch: whether an update restart just happened, and how it ended. */
     launchInfo(): Promise<UpdateLaunchInfo>;
+  };
+  /** B2: crash recovery. */
+  recovery: {
+    /** Debounced snapshots; `null` clears (deliberate disconnect). Not awaited. */
+    save(journal: import('./recovery').RecoveryJournal | null): void;
+    /** Resolves once the snapshot is durably on disk; false when main refused it. */
+    flush(journal: import('./recovery').RecoveryJournal | null): Promise<boolean>;
+    launchInfo(): Promise<import('./recovery').RecoveryLaunchInfo>;
+    resolve(connectionId?: string): Promise<void>;
+    showLog(): Promise<void>;
   };
   /** D1: team workspaces (`.plasma/` folders). */
   workspace: import('./workspace').WorkspaceApi;

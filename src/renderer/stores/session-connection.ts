@@ -1,8 +1,9 @@
+import { ipc } from '@/lib/ipc';
 /**
  * Connection-lifecycle helpers for the session store (B2 / C15 / C21 / G2).
  * Kept out of session.ts so they can be unit-tested without the store.
  */
-import { ipc } from '@/lib/ipc';
+import { suspendRecoveryJournal } from '@/lib/recovery-journal';
 import type {
   ConnectionConfig,
   ConnectionEngine,
@@ -195,6 +196,8 @@ export const createConnectionSlice: SliceCreator<ConnectionSlice> = (set, get) =
       });
       // Clear all tabs' results since they reference a now-dead connection
       clearTabResults(set);
+      // B2: a deliberate disconnect is not something to recover from.
+      suspendRecoveryJournal();
     }
   },
 

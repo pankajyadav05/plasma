@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { existsSync } from 'node:fs';
 import { readFile, stat } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -59,7 +60,7 @@ import { isSingleSqlStatement, looksLikeWriteSql } from '@shared/sql-statements'
 import { isUninferableParamError } from '@shared/sql-variables';
 import { assertTlsAllowedForTag, resolveTls, withTunnelServername } from '@shared/tls';
 import { describeLoss, joinLoss } from '@shared/unsaved-summary';
-import { BrowserWindow, app, dialog, ipcMain, nativeImage } from 'electron';
+import { BrowserWindow, app, dialog, ipcMain, nativeImage, shell } from 'electron';
 import {
   cancelAiChat,
   cancelAllAiChats,
@@ -133,6 +134,7 @@ import {
   saveSchemaSnapshot,
 } from './schema-snapshots';
 import { SessionGate, connectOrCleanUp } from './session-gate';
+import { RecoveryRuntime } from './session-recovery';
 import { applySettingsPatch, getAllSettings, getPublicSettings } from './settings';
 import { formatSql } from './sql-format';
 import {
@@ -149,7 +151,7 @@ import {
   openTunnel,
   setHostKeyPrompt,
 } from './ssh-tunnel';
-import { installHandoverPending } from './update-restart';
+import { evaluateRestartMarker, installHandoverPending, readRestartMarker } from './update-restart';
 import { type UpdaterHost, disposeUpdater, initUpdater } from './updater';
 import {
   clearApiKeys,
@@ -266,6 +268,30 @@ if (!hasInstanceLock) {
   });
 }
 
+// B2: crash recovery. The session marker says whether the last run ended
+// cleanly; a crashed run's snapshot is set aside before this run can write its
+// own. Only the instance that holds the lock owns these files.
+const recovery = new RecoveryRuntime(app.getPath('userData'));
+let previousExit: ReturnType<RecoveryRuntime['start']> = { kind: 'clean' };
+if (hasInstanceLock) {
+  try {
+    const now = Date.now();
+    previousExit = recovery.start({
+      version: app.getVersion(),
+      now,
+      pid: process.pid,
+      // An update restart ends the old process on purpose; it is not a crash.
+      updateRestart: evaluateRestartMarker(
+        readRestartMarker(app.getPath('userData')),
+        app.getVersion(),
+        now,
+      ).resume,
+    });
+  } catch {
+    // Recovery is a safety net; failing to arm it must never stop the app.
+  }
+}
+
 // D1/D2: workspaces, plasma:// links and the `plasma` launcher's arguments
 // (open-url, second-instance argv). Registered before `ready` so a link that
 // started the app is not missed.
@@ -283,6 +309,13 @@ app
     guardIpcSenders(rendererEntry());
     registerE2EHooks(() => workerSupervisor);
     logger.info('[plasma] app ready, version', app.getVersion());
+    if (previousExit.kind === 'unclean') {
+      logger.warn(
+        '[plasma] the previous run did not exit cleanly',
+        previousExit.version ? `(version ${previousExit.version})` : '',
+        previousExit.startedAt ? `started ${new Date(previousExit.startedAt).toISOString()}` : '',
+      );
+    }
 
     // On macOS, set the dock icon explicitly. BrowserWindow `icon` alone
     // doesn't touch the dock — that's handled separately by app.dock.
@@ -506,6 +539,9 @@ app.on('window-all-closed', () => {
 // C32: 'will-quit', not 'before-quit' — a window can still cancel the
 // quit from its close guard, and the worker must survive that.
 app.on('will-quit', () => {
+  // B2: reaching here is a clean quit; a crash never does. (A second instance
+  // that lost the lock must not remove the running one's marker.)
+  if (hasInstanceLock) recovery.end();
   cancelAllJobs();
   closeAllTunnels();
   workerSupervisor.stop();
@@ -891,6 +927,8 @@ const updaterHost: UpdaterHost = {
     closeAllTunnels();
     workerSupervisor.stop();
     closeDb();
+    // The installer ends this process without 'will-quit': this restart is on purpose.
+    recovery.end();
   },
   relaunchAfterFailedInstall() {
     logger.error('[plasma] the update did not start; relaunching the current version');
@@ -899,13 +937,46 @@ const updaterHost: UpdaterHost = {
   },
 };
 
+/**
+ * B2: the window's process died (crash, out of memory, killed) while the app
+ * stayed up. Its snapshot is set aside, and the window reloads so the renderer
+ * restores tabs and staged edits the same way a restart would. It never
+ * replays anything, and a window that keeps crashing is left alone.
+ */
+function handleRendererGone(win: BrowserWindow, reason: string, exitCode: number): void {
+  if (reason === 'clean-exit') return;
+  logger.error(`[plasma] the window process ended unexpectedly: ${reason} (exit code ${exitCode})`);
+  unsavedState = { openTransaction: false, pendingEdits: 0 };
+  let reload = false;
+  try {
+    reload = recovery.rendererGone(Date.now()).reload;
+  } catch (err) {
+    logger.warn('[plasma] could not set the window snapshot aside', err);
+  }
+  if (win.isDestroyed()) return;
+  if (reload) {
+    setTimeout(() => {
+      if (!win.isDestroyed()) win.webContents.reload();
+    }, 300);
+    return;
+  }
+  logger.error('[plasma] the window keeps crashing; not reloading it again');
+  dialog.showErrorBox(
+    'Plasma keeps closing its window',
+    'Your tabs and staged edits are saved and will be offered again the next time you open Plasma. Nothing was committed or re-run.',
+  );
+}
+
 function attachWindowGuards(win: BrowserWindow): void {
   // Agent cards wait for a click in the renderer. When the page reloads, the
   // process dies or the window closes nobody can answer them: release the chat.
   win.webContents.on('did-start-navigation', (_e, _url, inPlace, isMainFrame) => {
     if (isMainFrame && !inPlace) cancelAllAiChats();
   });
-  win.webContents.on('render-process-gone', () => cancelAllAiChats());
+  win.webContents.on('render-process-gone', (_e, details) => {
+    cancelAllAiChats();
+    handleRendererGone(win, details.reason, details.exitCode);
+  });
   win.on('closed', () => cancelAllAiChats());
   win.on('close', (e) => {
     if (closeConfirmed) return;
@@ -933,6 +1004,8 @@ function attachWindowGuards(win: BrowserWindow): void {
     workspaceRuntime.launch.rendererGone();
     unsavedState = { openTransaction: false, pendingEdits: 0 };
     closeConfirmed = false;
+    // The user closed the window on purpose (after the discard prompt, if any).
+    recovery.save(null);
     if (!retainedSession && !activeConnectionId) return;
     void serializeSessionChange(async () => {
       sessionEpoch++;
@@ -1162,6 +1235,34 @@ function registerIpcHandlers() {
 
   ipcMain.handle(IpcChannel.AppSetUnsavedState, (_e, raw: unknown): void => {
     unsavedState = AppUnsavedState.parse(raw);
+  });
+
+  // B2: crash recovery. The renderer keeps a snapshot of the live workspace
+  // here; after a crash the next launch asks what is waiting.
+  ipcMain.on(IpcChannel.RecoverySave, (e, raw: unknown) => {
+    if (!mainWindow || e.sender !== mainWindow.webContents) return;
+    try {
+      recovery.save(raw);
+    } catch (err) {
+      logger.warn('[plasma] could not write the recovery snapshot', err);
+    }
+  });
+  ipcMain.handle(IpcChannel.RecoveryFlush, (_e, raw: unknown): boolean => {
+    try {
+      return recovery.save(raw);
+    } catch (err) {
+      logger.warn('[plasma] could not write the recovery snapshot', err);
+      return false;
+    }
+  });
+  ipcMain.handle(IpcChannel.RecoveryLaunchInfo, () =>
+    recovery.launchInfo(existsSync(join(app.getPath('userData'), 'logs', 'main.log'))),
+  );
+  ipcMain.handle(IpcChannel.RecoveryResolve, (_e, connectionId: unknown): void => {
+    recovery.resolve(typeof connectionId === 'string' ? connectionId : undefined);
+  });
+  ipcMain.handle(IpcChannel.RecoveryShowLog, (): void => {
+    shell.showItemInFolder(join(app.getPath('userData'), 'logs', 'main.log'));
   });
 
   // Postgres-only schema introspect. For redis/opensearch the renderer
