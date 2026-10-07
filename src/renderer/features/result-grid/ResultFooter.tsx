@@ -1,6 +1,7 @@
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { IconButton, MenuItem, Pill, Segmented } from '@/components/ui/workbench';
 import { RunStatusChip } from '@/features/editor/RunStatus';
+import { CompareMenu } from '@/features/result-compare/CompareMenu';
 import { cn } from '@/lib/cn';
 import { exportTargetTable, queryFullExport, tableFullExport } from '@/lib/export';
 import { formatDuration } from '@/lib/format';
@@ -270,6 +271,7 @@ export function ResultFooter() {
           </IconButton>
           <ColumnsPopover />
           <SortPopover />
+          <CompareMenu tab={tab} />
           {moreItems && (
             <Popover open={moreOpen} onOpenChange={setMoreOpen}>
               <PopoverTrigger asChild>

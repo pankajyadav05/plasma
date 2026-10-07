@@ -45,6 +45,7 @@ export type QueryRunState = 'idle' | 'running';
  *  - os-console    → OpenSearch Dev Tools console (raw REST, O14)
  *  - er-diagram    → entity-relationship diagram of a schema / table selection
  *  - pg-listen     → Postgres LISTEN/NOTIFY tail
+ *  - result-compare → Result Compare of two result sets
  */
 export type TabKind =
   | 'sql'
@@ -60,7 +61,8 @@ export type TabKind =
   | 'os-sql'
   | 'os-console'
   | 'er-diagram'
-  | 'pg-listen';
+  | 'pg-listen'
+  | 'result-compare';
 export type TableViewMode = 'data' | 'structure' | 'definition';
 export type EntityKind =
   | 'table'

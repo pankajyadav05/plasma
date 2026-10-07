@@ -17,6 +17,7 @@ import {
   Columns2,
   Copy,
   FileCode,
+  GitCompare,
   KeyRound,
   LayoutDashboard,
   Loader2,
@@ -51,6 +52,7 @@ const TAB_ICON: Record<TabKind, LucideIcon> = {
   'os-console': Terminal,
   'er-diagram': Network,
   'pg-listen': Radio,
+  'result-compare': GitCompare,
 };
 
 /** Drag payload for moving a tab between panes. */

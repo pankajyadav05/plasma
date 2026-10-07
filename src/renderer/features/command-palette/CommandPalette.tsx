@@ -66,6 +66,11 @@ const ACTIONS: ReadonlyArray<{ id: CommandId; label: string; keywords?: string[]
   { id: 'notebook', label: 'Notebook…' },
   { id: 'schemaDiff', label: 'Schema diff…', keywords: ['compare', 'migration'] },
   {
+    id: 'compareResults',
+    label: 'Compare results…',
+    keywords: ['diff', 'staging', 'prod', 'rows', 'result compare'],
+  },
+  {
     id: 'checkMigration',
     label: 'Check migration…',
     keywords: ['lint', 'ddl', 'lock', 'concurrently', 'squawk', 'unsafe'],

@@ -48,6 +48,7 @@ const DbSearchDialog = lazyNamed(
   () => import('@/features/db-search/DbSearchDialog'),
   'DbSearchDialog',
 );
+const CompareView = lazyNamed(() => import('@/features/result-compare/CompareView'), 'CompareView');
 const PgListenView = lazyNamed(() => import('@/features/live-tail/PgListenView'), 'PgListenView');
 const ErDiagramView = lazyNamed(
   () => import('@/features/er-diagram/ErDiagramView'),
@@ -417,17 +418,23 @@ function PaneCanvas({ pane }: { pane?: PaneId } = {}) {
   const isSqlTab = kind === 'sql';
   const isDiagram = kind === 'er-diagram';
   const isListen = kind === 'pg-listen';
+  const isCompare = kind === 'result-compare';
   // Safe Run: the review replaces the result grid while one exists for this tab.
   const safeRunHere = useSession((s) => s.safeRun != null && s.safeRun.tabId === tabId) && isSqlTab;
   const hasResults = hasResultOrError || running || safeRunHere;
   const showEditor = isSqlTab && (!editorHidden || !hasResults);
-  const showGrid = !isDiagram && !isListen && (!isSqlTab || hasResults);
+  const showGrid = !isDiagram && !isListen && !isCompare && (!isSqlTab || hasResults);
   return (
     <main className="flex min-h-0 min-w-0 flex-1 flex-col bg-[var(--wb-content)]">
       <TabStrip pane={pane} />
       {isDiagram && (
         <Suspense fallback={null}>
           <ErDiagramView />
+        </Suspense>
+      )}
+      {isCompare && tabId && (
+        <Suspense fallback={null}>
+          <CompareView tabId={tabId} />
         </Suspense>
       )}
       {isListen && tabId && (

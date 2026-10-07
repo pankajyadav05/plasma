@@ -2000,6 +2000,11 @@ export const SettingsShape = z.object({
     )
     .default({}),
   /**
+   * Saved Result Compare definitions (queries, connections, keys, ignore
+   * rules). Validated on read by `parseSavedComparison`; a bad entry is dropped.
+   */
+  savedComparisons: z.array(z.unknown()).optional(),
+  /**
    * User-saved tab snapshots, keyed by connection id. Each entry captures
    * everything needed to recreate a tab — for SQL tabs the editor text,
    * for table tabs the schema/name plus filters/sort/hidden/sticky/page
