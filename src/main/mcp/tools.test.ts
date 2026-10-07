@@ -1,8 +1,9 @@
 import { MCP_MAX_ROWS } from '@shared/mcp';
 import { describe, expect, it } from 'vitest';
+import type { ProposalView } from './proposals';
 import type { ToolContext } from './protocol';
 import { conn, fakeToolsDeps, queryResult, schemaInfo } from './test-support';
-import { createMcpTools, mcpToolDefs, narrowSchema } from './tools';
+import { type McpConnectionInfo, createMcpTools, mcpToolDefs, narrowSchema } from './tools';
 
 const ctx = (client = 'Claude Code'): ToolContext => ({
   client,
@@ -11,13 +12,16 @@ const ctx = (client = 'Claude Code'): ToolContext => ({
 const text = (r: { content: Array<{ text: string }> }) => r.content[0]?.text ?? '';
 
 describe('tool definitions', () => {
-  it('lists the four tools with schemas and hints', () => {
+  it('lists the tools with schemas and hints', () => {
     const defs = mcpToolDefs();
     expect(defs.map((d) => d.name)).toEqual([
       'list_connections',
       'get_schema',
       'run_query',
       'propose_change',
+      'check_proposal',
+      'get_memory',
+      'remember',
     ]);
     expect(defs.find((d) => d.name === 'run_query')?.annotations.readOnlyHint).toBe(true);
     expect(defs.find((d) => d.name === 'propose_change')?.annotations.destructiveHint).toBe(true);
@@ -223,15 +227,32 @@ describe('run_query', () => {
 });
 
 describe('propose_change', () => {
+  const proposeDeps = (view: ProposalView, extra: Partial<McpConnectionInfo> = {}) => {
+    const created: unknown[] = [];
+    const waits: Array<{ id: string; ms: number }> = [];
+    const f = fakeToolsDeps({
+      list: [conn({ access: 'propose', openInPlasma: true, ...extra })],
+      proposals: {
+        create: (input) => {
+          created.push(input);
+          return { ok: true, id: 'p-9' };
+        },
+        wait: async (id, ms) => {
+          waits.push({ id, ms });
+          return view;
+        },
+      },
+      waitMs: 45_000,
+    });
+    return { ...f, created, waits };
+  };
+  const args = { connection: 'c1', sql: 'update t set a=1', summary: 'fix' };
+
   it('needs the connection to be open in Plasma', async () => {
     const { deps, calls } = fakeToolsDeps({
       list: [conn({ access: 'propose', openInPlasma: false })],
     });
-    const out = await createMcpTools(deps).call(
-      'propose_change',
-      { connection: 'c1', sql: 'update t set a=1', summary: 's' },
-      ctx(),
-    );
+    const out = await createMcpTools(deps).call('propose_change', args, ctx());
     expect(out.isError).toBe(true);
     expect(text(out)).toBe('Open Shop in Plasma first, then try again.');
     expect(calls.propose).toHaveLength(0);
@@ -240,49 +261,181 @@ describe('propose_change', () => {
     const { deps } = fakeToolsDeps({
       list: [conn({ access: 'propose', readOnly: true, openInPlasma: true })],
     });
-    const out = await createMcpTools(deps).call(
-      'propose_change',
-      { connection: 'c1', sql: 'update t set a=1', summary: 's' },
-      ctx(),
-    );
-    expect(out.isError).toBe(true);
+    expect((await createMcpTools(deps).call('propose_change', args, ctx())).isError).toBe(true);
   });
-  it('passes the client name through and reports each outcome', async () => {
-    const outcomes = [
-      { kind: 'applied', rowsAffected: 3 },
-      { kind: 'declined' },
-      { kind: 'timeout' },
-      { kind: 'failed', note: 'oops at db.internal.corp' },
-      {
-        kind: 'busy',
-        note: 'The AI panel in Plasma is busy with another request. Try again in a moment.',
-      },
-    ] as const;
-    const seen: unknown[] = [];
-    let i = 0;
+  it('creates a proposal with the client name and waits at most 45 s', async () => {
+    const { deps, created, waits } = proposeDeps({
+      proposal_id: 'p-9',
+      status: 'applied',
+      message: 'ok',
+      rows_affected: 3,
+    });
+    const out = await createMcpTools(deps).call('propose_change', args, ctx('Cursor'));
+    expect(JSON.parse(text(out))).toEqual({
+      proposal_id: 'p-9',
+      status: 'applied',
+      message: 'ok',
+      rows_affected: 3,
+    });
+    expect((created[0] as { client: string; kind: string }).client).toBe('Cursor');
+    expect((created[0] as { kind: string }).kind).toBe('change');
+    expect(waits).toEqual([{ id: 'p-9', ms: 45_000 }]);
+  });
+  it('answers waiting_for_approval with the id when the user has not decided', async () => {
+    const { deps } = proposeDeps({
+      proposal_id: 'p-9',
+      status: 'waiting_for_approval',
+      message: 'Waiting for the user to approve in Plasma. Call check_proposal with this id.',
+    });
+    const out = await createMcpTools(deps).call('propose_change', args, ctx());
+    expect(out.isError).toBeUndefined();
+    expect(JSON.parse(text(out))).toMatchObject({
+      proposal_id: 'p-9',
+      status: 'waiting_for_approval',
+    });
+  });
+  it('a failed outcome is an error result', async () => {
+    const { deps } = proposeDeps({
+      proposal_id: 'p-9',
+      status: 'failed',
+      message: 'duplicate key',
+    });
+    expect((await createMcpTools(deps).call('propose_change', args, ctx())).isError).toBe(true);
+  });
+  it('passes on why a proposal could not be shown', async () => {
     const { deps } = fakeToolsDeps({
       list: [conn({ access: 'propose', openInPlasma: true })],
-      propose: async (input) => {
-        seen.push(input);
-        return outcomes[i++] as never;
+      proposals: {
+        create: () => ({ ok: false, note: 'Too many proposals are waiting' }),
+        wait: async () => null,
       },
     });
-    const tools = createMcpTools(deps);
-    const call = () =>
-      tools.call(
-        'propose_change',
-        { connection: 'c1', sql: 'update t set a=1', summary: 'fix' },
-        ctx('Cursor'),
-      );
-    expect(JSON.parse(text(await call()))).toEqual({ outcome: 'applied', rowsAffected: 3 });
-    expect(JSON.parse(text(await call())).outcome).toBe('declined');
-    const timeout = await call();
-    expect(text(timeout)).toBe('No answer in Plasma; nothing was changed.');
-    const failed = await call();
-    expect(failed.isError).toBe(true);
-    expect(text(failed)).not.toContain('db.internal.corp');
-    expect((await call()).isError).toBe(true);
-    expect((seen[0] as { client: string }).client).toBe('Cursor');
+    const out = await createMcpTools(deps).call('propose_change', args, ctx());
+    expect(out.isError).toBe(true);
+    expect(text(out)).toContain('Too many');
+  });
+});
+
+describe('check_proposal', () => {
+  it('waits 45 s and reports where the proposal stands, for any outcome', async () => {
+    for (const status of [
+      'waiting_for_approval',
+      'applied',
+      'declined',
+      'failed',
+      'expired',
+    ] as const) {
+      const seen: number[] = [];
+      const { deps } = fakeToolsDeps({
+        waitMs: 45_000,
+        proposals: {
+          create: () => ({ ok: false, note: '' }),
+          wait: async (id, ms) => {
+            seen.push(ms);
+            return { proposal_id: id, status, message: 'm' };
+          },
+        },
+      });
+      const out = await createMcpTools(deps).call('check_proposal', { proposal_id: 'abc' }, ctx());
+      expect(JSON.parse(text(out)).status).toBe(status);
+      expect(seen).toEqual([45_000]);
+    }
+  });
+  it('says so for an unknown id', async () => {
+    const { deps } = fakeToolsDeps({
+      proposals: { create: () => ({ ok: false, note: '' }), wait: async () => null },
+    });
+    const out = await createMcpTools(deps).call('check_proposal', { proposal_id: 'nope' }, ctx());
+    expect(out.isError).toBe(true);
+  });
+});
+
+describe('memory tools', () => {
+  const mem = (state: 'off' | 'empty' | 'on') =>
+    fakeToolsDeps({
+      list: [conn({ access: 'schema' })],
+      memory: () =>
+        state === 'on'
+          ? { state, text: '--- Notes ---\n- [m:abc123] amount is in cents' }
+          : { state },
+    });
+  it('get_memory returns the notes in prompt form, or why there are none', async () => {
+    expect(
+      text(await createMcpTools(mem('on').deps).call('get_memory', { connection: 'c1' }, ctx())),
+    ).toContain('[m:abc123] amount is in cents');
+    expect(
+      text(await createMcpTools(mem('empty').deps).call('get_memory', { connection: 'c1' }, ctx())),
+    ).toContain('No notes');
+    const off = await createMcpTools(mem('off').deps).call(
+      'get_memory',
+      { connection: 'c1' },
+      ctx(),
+    );
+    expect(off.isError).toBe(true);
+  });
+  it('get_memory needs at least schema access and a connection that is on', async () => {
+    const { deps } = fakeToolsDeps({ list: [conn({ access: 'off' })] });
+    expect(
+      (await createMcpTools(deps).call('get_memory', { connection: 'c1' }, ctx())).isError,
+    ).toBe(true);
+  });
+  it('get_schema appends the notes only when memory is on', async () => {
+    const on = text(
+      await createMcpTools(mem('on').deps).call('get_schema', { connection: 'c1' }, ctx()),
+    );
+    expect(on).toContain('public.orders');
+    expect(on).toContain('amount is in cents');
+    const off = text(
+      await createMcpTools(mem('off').deps).call('get_schema', { connection: 'c1' }, ctx()),
+    );
+    expect(off).not.toContain('Notes');
+  });
+  it('remember needs read access and a valid note, then goes through a proposal', async () => {
+    const created: unknown[] = [];
+    const base = {
+      list: [conn({ access: 'read' })],
+      proposals: {
+        create: (i: unknown) => {
+          created.push(i);
+          return { ok: true as const, id: 'p-1' };
+        },
+        wait: async (id: string) => ({
+          proposal_id: id,
+          status: 'waiting_for_approval' as const,
+          message: 'w',
+        }),
+      },
+    };
+    const ok = fakeToolsDeps({ ...base });
+    const out = await createMcpTools(ok.deps).call(
+      'remember',
+      { connection: 'c1', text: 'amount is in cents' },
+      ctx('Codex'),
+    );
+    expect(JSON.parse(text(out)).proposal_id).toBe('p-1');
+    expect(created[0]).toMatchObject({
+      kind: 'remember',
+      client: 'Codex',
+      args: { text: 'amount is in cents' },
+    });
+    const low = fakeToolsDeps({ ...base, list: [conn({ access: 'schema' })] });
+    expect(
+      (await createMcpTools(low.deps).call('remember', { connection: 'c1', text: 'x' }, ctx()))
+        .isError,
+    ).toBe(true);
+    const dup = fakeToolsDeps({ ...base, checkRemember: () => 'Already remembered.' });
+    const d = await createMcpTools(dup.deps).call(
+      'remember',
+      { connection: 'c1', text: 'x' },
+      ctx(),
+    );
+    expect(text(d)).toBe('Already remembered.');
+    const off = fakeToolsDeps({ ...base, memory: () => ({ state: 'off' as const }) });
+    expect(
+      (await createMcpTools(off.deps).call('remember', { connection: 'c1', text: 'x' }, ctx()))
+        .isError,
+    ).toBe(true);
+    expect(created).toHaveLength(1);
   });
 });
 

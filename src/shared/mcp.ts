@@ -16,7 +16,13 @@ export const MCP_MAX_CALLS_IN_FLIGHT = 4;
 export const MCP_DEFAULT_ROWS = 200;
 export const MCP_MAX_ROWS = 1_000;
 export const MCP_QUERY_TIMEOUT_MS = 30_000;
-export const MCP_PROPOSE_TIMEOUT_MS = 10 * 60_000;
+/** How long `propose_change` / `check_proposal` wait for the user before answering "still waiting". */
+export const MCP_PROPOSE_WAIT_MS = 45_000;
+/** An undecided proposal is withdrawn after this long. */
+export const MCP_PROPOSAL_EXPIRY_MS = 10 * 60_000;
+/** A settled proposal's outcome stays available to `check_proposal` this long. */
+export const MCP_PROPOSAL_KEEP_MS = 60 * 60_000;
+export const MCP_MAX_OPEN_PROPOSALS = 5;
 export const MCP_SCHEMA_CACHE_MS = 60_000;
 export const MCP_ACTIVITY_LIMIT = 50;
 export const MCP_AUDIT_SQL_CHARS = 2_000;

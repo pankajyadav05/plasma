@@ -3,6 +3,7 @@ import { describeDbErrorSafely } from '@shared/db-error-class';
 import {
   MCP_DEFAULT_ROWS,
   MCP_MAX_ROWS,
+  MCP_PROPOSE_WAIT_MS,
   MCP_SCHEMA_CACHE_MS,
   type McpAccess,
   type McpOutcome,
@@ -14,6 +15,7 @@ import { compactSchema } from '@shared/schema-compact';
 import { isSqlEngine } from '@shared/sql-dialect';
 import { isSingleSqlStatement } from '@shared/sql-statements';
 import { serializeAiToolRows } from '../ai-policy';
+import type { ProposalKind, ProposalView } from './proposals';
 import { type McpToolDef, type McpToolResult, type ToolContext, textResult } from './protocol';
 
 /**
@@ -38,13 +40,6 @@ export interface McpConnectionInfo {
   unmasked: boolean;
   openInPlasma: boolean;
 }
-
-export type ProposeOutcome =
-  | { kind: 'applied'; note?: string; rowsAffected?: number }
-  | { kind: 'declined'; note?: string }
-  | { kind: 'failed'; note: string }
-  | { kind: 'timeout' }
-  | { kind: 'busy'; note: string };
 
 export interface McpAuditInput {
   client: string;
@@ -73,14 +68,25 @@ export interface McpToolsDeps {
     columns: ReadonlyArray<{ name: string; dataTypeName?: string | null }>,
     rows: unknown[][],
   ): unknown[][];
-  propose(input: {
-    connectionId: string;
-    connectionName: string;
-    client: string;
-    sql: string;
-    summary: string;
-    signal: AbortSignal;
-  }): Promise<ProposeOutcome>;
+  /** Proposals (change data, remember): create one, and wait for its outcome. */
+  proposals: {
+    create(input: {
+      kind: ProposalKind;
+      client: string;
+      connectionId: string;
+      connectionName: string;
+      args: Record<string, unknown>;
+    }): { ok: true; id: string } | { ok: false; note: string };
+    wait(id: string, ms: number, signal: AbortSignal): Promise<ProposalView | null>;
+  };
+  /** The connection's notes in prompt form, or why there are none to give. */
+  memory(
+    connectionId: string,
+  ): { state: 'off' } | { state: 'empty' } | { state: 'on'; text: string };
+  /** A refusal ("Already remembered.") or null when `text` may be proposed as a note. */
+  checkRemember(connectionId: string, text: string): string | null;
+  /** How long a proposal call waits for the user (default 45 s; tests shorten it). */
+  waitMs?: number;
   /** Error text with the connection's host, user and password removed. */
   scrub(connectionId: string | null, text: string): string;
   audit(entry: McpAuditInput): void;
@@ -103,7 +109,8 @@ export const MCP_INSTRUCTIONS = [
   "Plasma gives you the user's databases, only the ones they turned on for AI tools.",
   'Call list_connections first. Use get_schema before writing SQL, then run_query for read-only SELECTs.',
   'Values may be masked. Never ask for or guess passwords or hosts: you cannot get them.',
-  'To change data call propose_change: the user must approve it in Plasma, and it can only target the connection open in Plasma right now. Say what the change is for in `summary`.',
+  "Read get_memory first for the user's notes about a database; call remember to propose a new note.",
+  'To change data call propose_change: the user must approve it in Plasma, and it can only target the connection open in Plasma right now. Say what the change is for in `summary`. If the answer is waiting_for_approval, call check_proposal with the id until it is not waiting; never propose the same change again meanwhile.',
 ].join(' ');
 
 export function mcpToolDefs(): McpToolDef[] {
@@ -173,7 +180,53 @@ export function mcpToolDefs(): McpToolDef[] {
       },
       annotations: ANNOTATIONS.write,
     },
-    // TRACK M: the memory tools (get_memory, remember) are added here after both tracks merge.
+    {
+      name: 'check_proposal',
+      title: 'Check a proposal',
+      description:
+        'Ask what became of a proposal (propose_change or remember). Waits up to 45 seconds for the user, then answers waiting_for_approval, applied, declined, failed or expired. Keep calling it until it is not waiting. Outcomes stay available for an hour.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          proposal_id: {
+            type: 'string',
+            description: 'The id propose_change or remember returned.',
+          },
+        },
+        required: ['proposal_id'],
+        additionalProperties: false,
+      },
+      annotations: ANNOTATIONS.read,
+    },
+    {
+      name: 'get_memory',
+      title: 'Get notes about a database',
+      description:
+        'The notes the user (and their assistants) keep about this database: business rules, what columns mean. Read them before writing SQL.',
+      inputSchema: {
+        type: 'object',
+        properties: { connection },
+        required: ['connection'],
+        additionalProperties: false,
+      },
+      annotations: ANNOTATIONS.read,
+    },
+    {
+      name: 'remember',
+      title: 'Remember a note',
+      description:
+        'Propose a short note about this database (a business rule, what a column means). The user reviews and may edit it in Plasma before it is saved. Never put passwords, keys, tokens or personal data in a note. Returns like propose_change: call check_proposal if it is still waiting.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          connection,
+          text: { type: 'string', description: 'One short note, up to 500 characters.' },
+        },
+        required: ['connection', 'text'],
+        additionalProperties: false,
+      },
+      annotations: ANNOTATIONS.write,
+    },
   ];
 }
 
@@ -244,6 +297,13 @@ export function createMcpTools(deps: McpToolsDeps) {
     return deps.scrub(conn.id, raw).split('\n')[0]?.slice(0, 400) || describeDbErrorSafely(raw);
   };
 
+  /** Wait for a proposal's outcome (up to the wait limit) and say where it stands. */
+  async function proposalResult(id: string, signal: AbortSignal): Promise<McpToolResult> {
+    const view = await deps.proposals.wait(id, deps.waitMs ?? MCP_PROPOSE_WAIT_MS, signal);
+    if (!view) return err('No proposal with that id. It may be older than an hour.');
+    return textResult(json(view), view.status === 'failed');
+  }
+
   async function call(
     name: string,
     args: Record<string, unknown>,
@@ -305,7 +365,8 @@ export function createMcpTools(deps: McpToolsDeps) {
           });
           audit(conn, 'ok', { rows: narrow.tables.length });
           if (!text) return err('No matching tables.');
-          return textResult(text);
+          const mem = deps.memory(conn.id);
+          return textResult(mem.state === 'on' ? `${text}\n\n${mem.text}` : text);
         } catch (e) {
           const message = dbError(conn, e);
           audit(conn, 'error', { error: message });
@@ -382,45 +443,71 @@ export function createMcpTools(deps: McpToolsDeps) {
           audit(conn, 'denied', { sql, error: 'not open' });
           return err(`Open ${conn.name} in Plasma first, then try again.`);
         }
-        const out = await deps.propose({
+        const made = deps.proposals.create({
+          kind: 'change',
+          client: ctx.client,
           connectionId: conn.id,
           connectionName: conn.name,
-          client: ctx.client,
-          sql,
-          summary,
-          signal: ctx.signal,
+          args: { sql, summary },
         });
-        switch (out.kind) {
-          case 'applied':
-            audit(conn, 'ok', { sql, rows: out.rowsAffected ?? null });
-            return textResult(
-              json({
-                outcome: 'applied',
-                ...(out.note ? { note: out.note } : {}),
-                ...(out.rowsAffected !== undefined ? { rowsAffected: out.rowsAffected } : {}),
-              }),
-            );
-          case 'declined':
-            audit(conn, 'declined', { sql });
-            return textResult(
-              json({
-                outcome: 'declined',
-                note: out.note ?? 'The user declined. Nothing was changed.',
-              }),
-            );
-          case 'timeout':
-            audit(conn, 'declined', { sql, error: 'no answer' });
-            return textResult('No answer in Plasma; nothing was changed.', true);
-          case 'busy':
-            audit(conn, 'denied', { sql, error: 'busy' });
-            return err(out.note);
-          case 'failed': {
-            const message = deps.scrub(conn.id, out.note);
-            audit(conn, 'error', { sql, error: message });
-            return textResult(json({ outcome: 'failed', note: message }), true);
-          }
+        if (!made.ok) {
+          audit(conn, 'denied', { sql, error: 'not shown' });
+          return err(made.note);
         }
-        return err('Unexpected answer.');
+        audit(conn, 'ok', { sql, error: 'proposed' });
+        return proposalResult(made.id, ctx.signal);
+      }
+
+      case 'remember': {
+        const p = pick(args, 'read');
+        if (!p.ok) {
+          audit(null, 'denied', { error: 'access' });
+          return p.result;
+        }
+        const { conn } = p;
+        const note = str(args.text)?.trim() ?? '';
+        const mem = deps.memory(conn.id);
+        if (mem.state === 'off') {
+          audit(conn, 'denied', { error: 'memory off' });
+          return err(`Notes are turned off for ${conn.name} in Plasma.`);
+        }
+        const bad = deps.checkRemember(conn.id, note);
+        if (bad) {
+          audit(conn, 'denied', { error: bad });
+          return err(bad);
+        }
+        const made = deps.proposals.create({
+          kind: 'remember',
+          client: ctx.client,
+          connectionId: conn.id,
+          connectionName: conn.name,
+          args: { text: note },
+        });
+        if (!made.ok) {
+          audit(conn, 'denied', { error: 'not shown' });
+          return err(made.note);
+        }
+        audit(conn, 'ok', { error: 'proposed' });
+        return proposalResult(made.id, ctx.signal);
+      }
+
+      case 'check_proposal': {
+        const id = str(args.proposal_id)?.trim() ?? '';
+        const out = await proposalResult(id, ctx.signal);
+        audit(null, out.isError ? 'error' : 'ok', {});
+        return out;
+      }
+
+      case 'get_memory': {
+        const p = pick(args, 'schema');
+        if (!p.ok) {
+          audit(null, 'denied', { error: 'access' });
+          return p.result;
+        }
+        const mem = deps.memory(p.conn.id);
+        audit(p.conn, 'ok', {});
+        if (mem.state === 'off') return err(`Notes are turned off for ${p.conn.name} in Plasma.`);
+        return textResult(mem.state === 'empty' ? 'No notes about this database yet.' : mem.text);
       }
 
       default:

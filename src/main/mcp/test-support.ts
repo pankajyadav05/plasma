@@ -120,10 +120,18 @@ export function fakeToolsDeps(over: Partial<McpToolsDeps> & { list?: McpConnecti
     // Stands in for the real masker: hide e-mail addresses.
     maskRows: (_id, _cols, rows) =>
       rows.map((r) => r.map((v) => (typeof v === 'string' && v.includes('@') ? '•••' : v))),
-    async propose(input) {
-      calls.propose.push(input);
-      return { kind: 'applied', rowsAffected: 2 };
+    proposals: {
+      create(input) {
+        calls.propose.push(input);
+        return { ok: true, id: 'p-1' };
+      },
+      async wait(id) {
+        return { proposal_id: id, status: 'applied', message: 'Applied.', rows_affected: 2 };
+      },
     },
+    memory: () => ({ state: 'empty' }),
+    checkRemember: () => null,
+    waitMs: 5,
     scrub: (_id, text) => text.replace(/db\.internal\.corp|svc_user/g, '…'),
     audit: (e) => audits.push(e),
     now: () => Date.now(),

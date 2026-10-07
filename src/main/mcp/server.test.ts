@@ -373,4 +373,51 @@ describe('limits and shutdown', () => {
     expect(signal?.aborted).toBe(true);
     await expect(send(port, { body: rpc(2, 'ping') })).rejects.toBeTruthy();
   });
+
+  it('a dropped connection stops the wait for the user but proposes nothing new and cancels nothing', async () => {
+    let waitSignal: AbortSignal | undefined;
+    let created = 0;
+    const { port } = await start({
+      list: [conn({ access: 'propose', openInPlasma: true })],
+      waitMs: 60_000,
+      proposals: {
+        create: () => {
+          created++;
+          return { ok: true, id: 'p-1' };
+        },
+        wait: (_id, _ms, signal) =>
+          new Promise((resolve) => {
+            waitSignal = signal;
+            signal.addEventListener('abort', () =>
+              resolve({ proposal_id: 'p-1', status: 'waiting_for_approval', message: 'w' }),
+            );
+          }),
+      },
+    });
+    const body = rpc(1, 'tools/call', {
+      name: 'propose_change',
+      arguments: { connection: 'c1', sql: 'update t set a = 1', summary: 's' },
+    });
+    await new Promise<void>((resolve) => {
+      const req = request(
+        {
+          host: '127.0.0.1',
+          port,
+          path: '/mcp',
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${TOKEN}` },
+        },
+        () => undefined,
+      );
+      req.on('error', () => undefined);
+      req.end(body);
+      setTimeout(() => {
+        req.destroy();
+        resolve();
+      }, 100);
+    });
+    await new Promise((r) => setTimeout(r, 100));
+    expect(waitSignal?.aborted).toBe(true);
+    expect(created).toBe(1);
+  });
 });

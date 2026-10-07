@@ -3,8 +3,8 @@ import { existsSync } from 'node:fs';
 import { readFile, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { isMemoryEnabled } from '@shared/ai-memory';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { isMemoryEnabled } from '@shared/ai-memory';
 import { isAgentReadSql } from '@shared/ai-readonly-sql';
 import { sshUnsupportedReason } from '@shared/connection-endpoint';
 import { CONNECTION_LOST, ConnectionLostError } from '@shared/connection-loss';
@@ -76,6 +76,7 @@ import {
   isAiSchemaAllowed,
   isReadOnlyRedisCommand,
   isReadOnlySql,
+  markExternalApproved,
   serializeAiToolRows,
   setAiToolExecutor,
   shapeAgentActionResult,
@@ -119,6 +120,7 @@ import {
   recordHistory,
 } from './history';
 import { registerImportIpc } from './import-ipc';
+import { createIsolatedSessions } from './isolated-session';
 import { initLogger, logger } from './logger';
 import { startMcpHost } from './mcp/host';
 import type { McpService } from './mcp/service';
@@ -553,6 +555,8 @@ app
         fullConfig: (id) => workspaceRuntime.connectConfigFor(id) ?? vaultGetFull(id),
         settings: () => SettingsShape.parse(getAllSettings()),
         openConnectionId: () => (isSqlEngine(activeEngine) ? activeConnectionId : null),
+        ssh: (id) => getFullSshConfig(id, SettingsShape.parse(getAllSettings()).connectionSsh),
+        knownSecrets: (id) => knownSecretsFor(id),
         mainWindow: () => mainWindow,
         runIsolatedRead: (id, sql, maxRows, o) => runIsolatedRead(id, sql, maxRows, o),
         cancelIsolatedRun: async (runId) => {
@@ -569,6 +573,7 @@ app
       });
       mcpService = host.service;
       mcpReapply = host.reapply;
+      mcpRecheck = host.recheck;
     }
     registerSupportIpc({
       window: () => mainWindow,
@@ -645,8 +650,28 @@ async function runMcpBridge(): Promise<void> {
   app.exit(0);
 }
 
+/** Values main knows are secret for this connection (and the AI key): a note may not contain them. */
+function knownSecretsFor(connectionId: string | null | undefined): string[] {
+  const out: string[] = [];
+  try {
+    if (connectionId) {
+      out.push(...secretValuesOf(vaultGetFull(connectionId)));
+      const ssh = getFullSshConfig(
+        connectionId,
+        SettingsShape.parse(getAllSettings()).connectionSsh,
+      );
+      out.push(...secretValuesOf(ssh));
+    }
+    out.push(getApiKey());
+  } catch {
+    // A secret that cannot be read cannot be matched; the pattern checks still run.
+  }
+  return out.filter((s) => s.length >= 4);
+}
+
 let mcpService: McpService | null = null;
 let mcpReapply: (() => Promise<void>) | null = null;
+let mcpRecheck: (() => void) | null = null;
 
 // ─── Worker helper ────────────────────────────────────────────────────
 
@@ -715,132 +740,26 @@ async function callWorker<K extends WorkerResponse['kind']>(
  * network too), reconnect the worker, and tell the renderer which
  * generation it is now talking to (U27).
  */
-/**
- * Open a throwaway session on a saved connection (TLS files, DuckDB
- * attachments, SSH tunnel), run `fn` with its config, and always tear the
- * tunnel down. Never touches the live session. Used by Result Compare and
- * the MCP server.
- */
-async function withIsolatedSession<T>(
-  connectionId: string,
-  fn: (effective: ConnectionConfigType, config: ConnectionConfigType) => Promise<T>,
-): Promise<T> {
-  const config = workspaceRuntime.connectConfigFor(connectionId) ?? vaultGetFull(connectionId);
-  if (!config) throw new Error('That connection is not saved any more.');
-  if (!isSqlEngine(config.engine ?? 'postgres')) {
-    throw new Error(
-      'Compare needs a SQL connection (Postgres, MySQL, SQLite, ClickHouse, DuckDB).',
-    );
-  }
-  const settings = SettingsShape.parse(getAllSettings());
-  assertTlsAllowedForTag(resolveTls(config), settings.connectionTags?.[config.id]);
-  const tunnelKey = `compare:${randomUUID()}`;
-  let tunnelled = false;
-  try {
-    let effective: ConnectionConfigType = await withTlsFiles(config);
-    if (config.engine === 'duckdb' && config.duckdb?.attachConnectionIds?.length) {
-      // Saved Postgres connections attached read-only, resolved here with their stored passwords.
-      effective = {
-        ...effective,
-        duckdb: {
-          files: config.duckdb.files,
-          installPostgresExtension: config.duckdb.installPostgresExtension,
-          installExcelExtension: config.duckdb.installExcelExtension,
-          attach: buildDuckdbAttachments(config.duckdb.attachConnectionIds, {
-            load: (id) => vaultGetFull(id),
-            sshFor: (id) => getFullSshConfig(id, settings.connectionSsh) !== null,
-          }),
-        },
-      };
-    }
-    const ssh = getFullSshConfig(config.id, settings.connectionSsh);
-    if (ssh) {
-      const refusal = sshUnsupportedReason(config);
-      if (refusal) throw new Error(refusal);
-      const local = await openTunnel({
-        id: tunnelKey,
-        ssh,
-        pgHost: config.host,
-        pgPort: config.port,
-      });
-      tunnelled = true;
-      effective = {
-        ...withTunnelServername(effective, config.host),
-        host: local.host,
-        port: local.port,
-      };
-    }
-    return await fn(effective, config);
-  } finally {
-    if (tunnelled) closeTunnel(tunnelKey);
-  }
-}
+const isolated = createIsolatedSessions({
+  resolveConfig: (id) => workspaceRuntime.connectConfigFor(id) ?? vaultGetFull(id),
+  loadSaved: (id) => vaultGetFull(id),
+  settings: () => SettingsShape.parse(getAllSettings()),
+  withTlsFiles,
+  sshFor: (id, settings) => getFullSshConfig(id, settings.connectionSsh),
+  openTunnel,
+  closeTunnel,
+  callWorker: (req, kind) => callWorker(req, kind),
+  recordHistory,
+  log: (m, err) => logger.error(m, err),
+});
 
 /**
- * One read-only statement on a saved connection that is not the live one: a
- * throwaway read-only session (tunnel included) that is closed right after,
- * recorded in history. Result Compare and the MCP `run_query` both use it.
+ * One read-only statement on a saved connection that is not the live one (see
+ * `isolated-session.ts`). Result Compare and the MCP `run_query` both use it.
  */
-export function runIsolatedRead(
-  connectionId: string,
-  sql: string,
-  maxRows: number,
-  opts: { runId?: string; timeoutMs?: number } = {},
-): Promise<QueryResult> {
-  return withIsolatedSession(connectionId, async (effective) => {
-    const executedAt = Date.now();
-    try {
-      const res = await callWorker(
-        {
-          kind: 'compareQuery',
-          config: { ...effective, readOnly: true },
-          sql,
-          maxRows,
-          runId: opts.runId ?? randomUUID(),
-          ...(opts.timeoutMs ? { timeoutMs: opts.timeoutMs } : {}),
-        },
-        'queryResult',
-      );
-      try {
-        recordHistory({
-          connectionId,
-          sql,
-          rowCount: res.result.rowCount,
-          durationMs: res.result.durationMs,
-          error: null,
-          executedAt,
-        });
-      } catch (err) {
-        logger.error('[plasma] history write failed (non-fatal):', err);
-      }
-      return res.result;
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      try {
-        recordHistory({
-          connectionId,
-          sql,
-          rowCount: null,
-          durationMs: null,
-          error: message,
-          executedAt,
-        });
-      } catch {}
-      throw err;
-    }
-  });
-}
-
-/** Structure of a saved connection that is not open (MCP `get_schema`), on a throwaway session. */
-function introspectIsolated(connectionId: string): Promise<SchemaInfo> {
-  return withIsolatedSession(connectionId, async (effective) => {
-    const res = await callWorker(
-      { kind: 'compareSchema', config: { ...effective, readOnly: true } },
-      'schemaInfo',
-    );
-    return res.info;
-  });
-}
+export const runIsolatedRead = isolated.runIsolatedRead;
+/** Structure of a saved connection that is not open (MCP `get_schema`). */
+const introspectIsolated = isolated.introspectIsolated;
 
 const connectionRecovery = new ConnectionRecovery({
   session: () => retainedSession,
@@ -1562,6 +1481,7 @@ function registerIpcHandlers() {
     if (typeof id !== 'string') throw new Error('id must be a string');
     vaultDelete(id);
     deleteMemoryForConnection(getDb(), id);
+    mcpRecheck?.();
   });
 
   // ── Database memory ──
@@ -1575,24 +1495,6 @@ function registerIpcHandlers() {
     if (!memoryConnectionSaved(id))
       throw new Error('Notes can only be kept for a saved connection.');
     return id;
-  };
-  /** Values main knows are secret for this connection (and the AI key): a note may not contain them. */
-  const knownSecretsFor = (connectionId: string | null | undefined): string[] => {
-    const out: string[] = [];
-    try {
-      if (connectionId) {
-        out.push(...secretValuesOf(vaultGetFull(connectionId)));
-        const ssh = getFullSshConfig(
-          connectionId,
-          SettingsShape.parse(getAllSettings()).connectionSsh,
-        );
-        out.push(...secretValuesOf(ssh));
-      }
-      out.push(getApiKey());
-    } catch {
-      // A secret that cannot be read cannot be matched; the pattern checks still run.
-    }
-    return out.filter((s) => s.length >= 4);
   };
   ipcMain.handle(IpcChannel.MemoryList, (_e, id: unknown) =>
     listMemory(getDb(), memoryConnection(id)),
@@ -2246,6 +2148,13 @@ function registerIpcHandlers() {
 
   // The user's decision on an agent action card. Validated in `ai.ts`; a
   // result nobody waits on is ignored.
+  ipcMain.handle(
+    IpcChannel.AiActionApproved,
+    (_e, requestId: unknown, callId: unknown, approved: unknown): void => {
+      markExternalApproved(requestId, callId, approved);
+    },
+  );
+
   ipcMain.handle(IpcChannel.AiActionResult, (_e, raw: unknown): void => {
     submitAiActionResult(raw);
   });
@@ -2402,6 +2311,7 @@ function registerIpcHandlers() {
     if (merged.mcpEnabled !== prev.mcpEnabled || merged.mcpPort !== prev.mcpPort) {
       void mcpReapply?.();
     }
+    mcpRecheck?.();
     return merged;
   });
 

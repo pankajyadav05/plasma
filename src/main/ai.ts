@@ -911,75 +911,110 @@ async function runAgentAction(input: {
   return (options.shapeActionResult ?? defaultActionResult)(res);
 }
 
-/** The one MCP proposal waiting for the user (one at a time keeps the panel unambiguous). */
-let externalOpen: string | null = null;
-
-export type ExternalChangeResult =
-  | { kind: 'answered'; res: AiActionResult }
-  | { kind: 'timeout' }
-  | { kind: 'cancelled' }
-  | { kind: 'refused'; note: string };
+/** An action an external AI tool (MCP) put in front of the user, while it waits for them. */
+interface ExternalRecord {
+  approved: boolean;
+  withdrawTimer?: ReturnType<typeof setTimeout>;
+}
+const externalActions = new Map<string, ExternalRecord>();
 
 /**
- * An external AI tool (MCP) proposes a change. It rides the SAME round-trip as
- * the in-app agent's `propose_change`: the panel gets an `external` event (a
- * thread labelled with the client), then the `action` event; the card runs the
- * statement through the renderer's one write path (prod gate, read-only guard,
- * Safe Run) and answers through `submitAiActionResult`.
+ * The user clicked Approve on a card of `requestId`: from now on it must not be
+ * withdrawn. (`approved: false` when the card went back to waiting, e.g. a
+ * note that needs fixing.)
  */
-export async function requestExternalChange(input: {
+export function markExternalApproved(
+  requestId: unknown,
+  callId: unknown,
+  approved: unknown = true,
+): boolean {
+  if (typeof requestId !== 'string' || typeof callId !== 'string') return false;
+  const rec = externalActions.get(actionKey(requestId, callId));
+  if (!rec) return false;
+  rec.approved = approved !== false;
+  return true;
+}
+
+export interface ExternalAction {
+  requestId: string;
+  callId: string;
+  /** The card's final answer (always arrives: Stop, a reload or a closed window also answer it). */
+  result: Promise<AiActionResult>;
+  approved(): boolean;
+  /**
+   * Take the card back. Only an undecided card can be withdrawn: false once the
+   * user approved it, and then nothing here interrupts it.
+   */
+  withdraw(reason: string): boolean;
+}
+
+export type StartExternal = { ok: true; action: ExternalAction } | { ok: false; note: string };
+
+/**
+ * An external AI tool (MCP) puts an action in front of the user: `propose_change`
+ * or `remember`. It rides the SAME round-trip as the in-app agent's cards: the
+ * panel gets an `external` event (a thread labelled with the client), then the
+ * `action` event; the card does the work through the renderer's own paths and
+ * answers through `submitAiActionResult`. Validation happens here first, so a
+ * bad call never reaches the user.
+ *
+ * Nothing in this function ever resolves a card the user approved: the real
+ * outcome is awaited, whatever the caller does meanwhile.
+ */
+export function startExternalAction(input: {
   win: BrowserWindow | null;
   client: string;
   connectionId: string;
-  sql: string;
-  summary: string;
-  signal: AbortSignal;
-  timeoutMs: number;
-}): Promise<ExternalChangeResult> {
-  const { win, signal } = input;
+  name: 'propose_change' | 'remember';
+  args: Record<string, unknown>;
+}): StartExternal {
+  const { win } = input;
   if (!win || win.isDestroyed()) {
-    return { kind: 'refused', note: 'Plasma has no open window. Open Plasma and try again.' };
+    return { ok: false, note: 'Plasma has no open window. Open Plasma and try again.' };
   }
-  const args = { sql: input.sql, summary: input.summary };
-  const normalized = normalizeAction('propose_change', args);
-  if (!normalized.ok) return { kind: 'refused', note: `rejected: ${normalized.error}` };
-  if (inflight.size > 0 || externalOpen) {
-    return {
-      kind: 'refused',
-      note: 'The AI panel in Plasma is busy with another request. Try again in a moment.',
-    };
-  }
+  const normalized = normalizeAction(input.name, input.args);
+  if (!normalized.ok) return { ok: false, note: `rejected: ${normalized.error}` };
   const requestId = `mcp-${randomUUID()}`;
   const callId = 'call-1';
   const key = actionKey(requestId, callId);
-  externalOpen = requestId;
+  const rec: ExternalRecord = { approved: false };
+  externalActions.set(key, rec);
   const send = (evt: AiChatEvent) => {
     if (!win.isDestroyed()) win.webContents.send('plasma:ai:event', evt);
   };
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  let onAbort: (() => void) | undefined;
-  try {
-    const answered = new Promise<ExternalChangeResult>((resolve) => {
-      pendingActions.set(key, {
-        requestId,
-        resolve: (res) => resolve({ kind: 'answered', res }),
-      });
-      timer = setTimeout(() => resolve({ kind: 'timeout' }), input.timeoutMs);
-      onAbort = () => resolve({ kind: 'cancelled' });
-      if (signal.aborted) onAbort();
-      else signal.addEventListener('abort', onAbort, { once: true });
+  const result = new Promise<AiActionResult>((resolve) => {
+    pendingActions.set(key, {
+      requestId,
+      resolve: (res) => {
+        if (rec.withdrawTimer) clearTimeout(rec.withdrawTimer);
+        externalActions.delete(key);
+        resolve(res);
+        // Closes the thread. Only ever after the card is settled, so it can not stop a run.
+        send({ kind: 'done', requestId });
+      },
     });
-    send({ kind: 'external', requestId, connectionId: input.connectionId, client: input.client });
-    send({ kind: 'action', requestId, callId, name: 'propose_change', args });
-    return await answered;
-  } finally {
-    if (timer) clearTimeout(timer);
-    if (onAbort) signal.removeEventListener('abort', onAbort);
-    pendingActions.delete(key);
-    externalOpen = null;
-    // Closes the thread; a card nobody answered becomes cancelled.
-    send({ kind: 'done', requestId });
-  }
+  });
+  send({ kind: 'external', requestId, connectionId: input.connectionId, client: input.client });
+  send({ kind: 'action', requestId, callId, name: input.name, args: input.args });
+  return {
+    ok: true,
+    action: {
+      requestId,
+      callId,
+      result,
+      approved: () => rec.approved,
+      withdraw(reason) {
+        if (rec.approved || !externalActions.has(key)) return false;
+        send({ kind: 'withdraw', requestId, callId, reason });
+        // The renderer answers a withdrawn card itself. If it cannot (window gone), answer here.
+        rec.withdrawTimer ??= setTimeout(() => {
+          if (rec.approved) return;
+          submitAiActionResult({ requestId, callId, outcome: 'cancelled', note: reason });
+        }, 5_000);
+        return true;
+      },
+    },
+  };
 }
 
 /**

@@ -66,6 +66,8 @@ export interface RpcContext {
   protocolVersion: string | null;
   /** The Mcp-Session-Id header, or null. */
   sessionId: string | null;
+  /** Fires when the HTTP connection drops before the answer was sent. */
+  signal?: AbortSignal;
 }
 
 export const textResult = (text: string, isError = false): McpToolResult => ({
@@ -113,6 +115,7 @@ export function createMcpHandler(deps: McpHandlerDeps) {
     params: unknown,
     client: string,
     sessionId: string | null,
+    connection?: AbortSignal,
   ): Promise<unknown> {
     if (!isObject(params) || typeof params.name !== 'string') {
       return rpcError(id, RPC.invalidParams, 'tools/call needs a tool name.');
@@ -130,6 +133,8 @@ export function createMcpHandler(deps: McpHandlerDeps) {
     const controller = new AbortController();
     const onAll = () => controller.abort();
     all.signal.addEventListener('abort', onAll, { once: true });
+    if (connection?.aborted) controller.abort();
+    else connection?.addEventListener('abort', onAll, { once: true });
     const key = `${sessionId ?? ''}:${id}`;
     running.set(key, controller);
     try {
@@ -142,6 +147,7 @@ export function createMcpHandler(deps: McpHandlerDeps) {
       inFlight--;
       running.delete(key);
       all.signal.removeEventListener('abort', onAll);
+      connection?.removeEventListener('abort', onAll);
     }
   }
 
@@ -179,7 +185,13 @@ export function createMcpHandler(deps: McpHandlerDeps) {
         return { response: rpcResult(id, { tools: deps.tools() }) };
       case 'tools/call':
         return {
-          response: await callTool(id, msg.params, clientOf(ctx.sessionId), ctx.sessionId),
+          response: await callTool(
+            id,
+            msg.params,
+            clientOf(ctx.sessionId),
+            ctx.sessionId,
+            ctx.signal,
+          ),
         };
       default:
         return {

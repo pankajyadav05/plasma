@@ -1,13 +1,7 @@
 import { randomUUID } from 'node:crypto';
-import { type MaskRules, type MaskStyle, maskResultRows } from '@shared/masking';
-import {
-  MCP_AUDIT_SQL_CHARS,
-  MCP_PROPOSE_TIMEOUT_MS,
-  McpChannel,
-  type McpSetupInfo,
-  effectiveAccess,
-  scrubKnown,
-} from '@shared/mcp';
+import { isMemoryEnabled, memoryPromptSection } from '@shared/ai-memory';
+import type { MaskRules, MaskStyle } from '@shared/masking';
+import { MCP_AUDIT_SQL_CHARS, McpChannel, type McpSetupInfo, effectiveAccess } from '@shared/mcp';
 import type {
   ConnectionConfig,
   QueryResult,
@@ -16,14 +10,17 @@ import type {
   Settings,
 } from '@shared/protocol';
 import { type BrowserWindow, Notification, app, ipcMain } from 'electron';
-import { requestExternalChange } from '../ai';
+import { startExternalAction } from '../ai';
+import { checkAddMemory, listMemory } from '../ai-memory';
 import { appendAudit } from '../audit-log';
 import { getDb } from '../db';
 import { logger } from '../logger';
-import { redactErrorText } from '../redact';
 import { getSetting } from '../settings';
+import { maskForMcp } from './mask';
+import { type ProposalKind, ProposalStore, accessAllows } from './proposals';
+import { type ScrubSsh, scrubErrorForMcp, scrubValuesFor } from './scrub';
 import { McpService } from './service';
-import type { McpAuditInput, McpConnectionInfo, ProposeOutcome } from './tools';
+import type { McpAuditInput, McpConnectionInfo } from './tools';
 
 /**
  * Electron-side wiring of the MCP server: the numbers Plasma knows (saved
@@ -37,6 +34,10 @@ export interface McpHostDeps {
   connections(): SavedConnection[];
   fullConfig(id: string): ConnectionConfig | null;
   settings(): Settings;
+  /** The saved connection's SSH tunnel (host, user, key path, secrets), for scrubbing only. */
+  ssh(id: string): ScrubSsh | null;
+  /** Values that are secret for a connection (a note may not hold them). */
+  knownSecrets(id: string): string[];
   /** The connection open in Plasma right now (SQL engines only), or null. */
   openConnectionId(): string | null;
   mainWindow(): BrowserWindow | null;
@@ -53,7 +54,12 @@ export interface McpHostDeps {
 }
 
 /** Bring Plasma forward; an OS notification when it was not already focused. */
-function summon(win: BrowserWindow | null, client: string, connection: string): void {
+function summon(
+  win: BrowserWindow | null,
+  client: string,
+  connection: string,
+  kind: ProposalKind,
+): void {
   if (!win || win.isDestroyed()) return;
   const focused = win.isFocused();
   if (win.isMinimized()) win.restore();
@@ -62,19 +68,18 @@ function summon(win: BrowserWindow | null, client: string, connection: string): 
   if (process.platform === 'darwin') app.focus({ steal: true });
   if (!focused && Notification.isSupported()) {
     new Notification({
-      title: `${client} wants to change data`,
+      title: kind === 'change' ? `${client} wants to change data` : `${client} wants to add a note`,
       body: `Review it in Plasma (${connection}).`,
     }).show();
   }
 }
 
-function affectedFrom(res: { note?: string; data?: { rowCount: number } }): number | undefined {
-  const m = /(\d+)\s+rows?\b/.exec(res.note ?? '');
-  if (m?.[1]) return Number(m[1]);
-  return res.data?.rowCount;
-}
-
-export function startMcpHost(deps: McpHostDeps): { service: McpService; reapply(): Promise<void> } {
+export function startMcpHost(deps: McpHostDeps): {
+  service: McpService;
+  reapply(): Promise<void>;
+  recheck(): void;
+  proposals: ProposalStore;
+} {
   const info = (c: SavedConnection, s: Settings): McpConnectionInfo => {
     const readOnly = c.readOnly === true;
     return {
@@ -88,6 +93,31 @@ export function startMcpHost(deps: McpHostDeps): { service: McpService; reapply(
       openInPlasma: deps.openConnectionId() === c.id,
     };
   };
+
+  /** What an error text must not carry for this connection. */
+  const scrubValues = (id: string | null): string[] => {
+    const cfg = id ? deps.fullConfig(id) : null;
+    const attached = (cfg?.duckdb?.attachConnectionIds ?? []).map((a) => deps.fullConfig(a));
+    return scrubValuesFor(cfg, id ? deps.ssh(id) : null, attached);
+  };
+
+  // Proposals outlive the server: an approved change keeps running (and its
+  // outcome is kept) even if MCP is turned off meanwhile.
+  const proposals = new ProposalStore({
+    scrub: (id, text) => scrubErrorForMcp(text, scrubValues(id)),
+    start: (input) => {
+      const started = startExternalAction({
+        win: deps.mainWindow(),
+        client: input.client,
+        connectionId: input.connectionId,
+        name: input.kind === 'change' ? 'propose_change' : 'remember',
+        args: input.args,
+      });
+      // Only now that the card is really shown: bring Plasma forward.
+      if (started.ok) summon(deps.mainWindow(), input.client, input.connectionName, input.kind);
+      return started;
+    },
+  });
 
   const service = new McpService({
     userDataDir: deps.userDataDir,
@@ -127,67 +157,28 @@ export function startMcpHost(deps: McpHostDeps): { service: McpService; reapply(
       },
       schema: (id) => deps.introspectIsolated(id),
       maskRows(id, columns, rows) {
-        if (deps.settings().connectionMcpUnmasked?.[id] === true) return rows;
-        // Always on for MCP, whatever presentation mode says.
-        const style = getSetting<MaskStyle>('maskStyle', 'initial');
-        const rules = getSetting<Record<string, MaskRules>>('maskRules', {})[id];
-        return maskResultRows(columns, rows, { style, rules });
-      },
-      async propose(input): Promise<ProposeOutcome> {
-        summon(deps.mainWindow(), input.client, input.connectionName);
-        const r = await requestExternalChange({
-          win: deps.mainWindow(),
-          client: input.client,
-          connectionId: input.connectionId,
-          sql: input.sql,
-          summary: input.summary,
-          signal: input.signal,
-          timeoutMs: MCP_PROPOSE_TIMEOUT_MS,
+        return maskForMcp(columns, rows, {
+          unmasked: deps.settings().connectionMcpUnmasked?.[id] === true,
+          style: getSetting<MaskStyle>('maskStyle', 'initial'),
+          rules: getSetting<Record<string, MaskRules>>('maskRules', {})[id],
         });
-        switch (r.kind) {
-          case 'refused':
-            return { kind: 'busy', note: r.note };
-          case 'timeout':
-            return { kind: 'timeout' };
-          case 'cancelled':
-            return { kind: 'declined', note: 'Cancelled. Nothing was changed.' };
-        }
-        const res = r.res;
-        switch (res.outcome) {
-          case 'applied': {
-            const rows = affectedFrom(res);
-            return {
-              kind: 'applied',
-              note: res.note?.slice(0, 300),
-              ...(rows !== undefined ? { rowsAffected: rows } : {}),
-            };
-          }
-          case 'rejected':
-            return {
-              kind: 'declined',
-              note: res.note
-                ? `The user declined: ${res.note.slice(0, 300)}`
-                : 'The user declined. Nothing was changed.',
-            };
-          case 'failed': {
-            const text = res.dbError ?? res.note ?? 'The change failed.';
-            return {
-              kind: 'failed',
-              note: (redactErrorText(text).split('\n')[0] ?? '').slice(0, 400),
-            };
-          }
-          default:
-            return {
-              kind: 'failed',
-              note:
-                res.note?.slice(0, 300) ?? 'Stopped before the statement finished. Check the data.',
-            };
-        }
+      },
+      proposals: {
+        create: (input) => proposals.create(input),
+        wait: (id, ms, signal) => proposals.wait(id, ms, signal),
+      },
+      memory(id) {
+        const settings = deps.settings();
+        if (!isMemoryEnabled(id, settings)) return { state: 'off' };
+        const section = memoryPromptSection(listMemory(getDb(), id));
+        return section ? { state: 'on', text: section.text } : { state: 'empty' };
+      },
+      checkRemember(id, text) {
+        const r = checkAddMemory(getDb(), id, text, deps.knownSecrets(id));
+        return r.ok ? null : r.error;
       },
       scrub(id, text) {
-        const cfg = id ? deps.fullConfig(id) : null;
-        const db = cfg?.database && /[\\/]/.test(cfg.database) ? cfg.database : null;
-        return redactErrorText(scrubKnown(text, [cfg?.password, cfg?.host, cfg?.user, db]));
+        return scrubErrorForMcp(text, scrubValues(id));
       },
       now: () => Date.now(),
     },
@@ -195,7 +186,26 @@ export function startMcpHost(deps: McpHostDeps): { service: McpService; reapply(
 
   const apply = () => {
     const s = deps.settings();
-    return service.apply({ enabled: s.mcpEnabled === true, port: s.mcpPort });
+    const enabled = s.mcpEnabled === true;
+    // Turning MCP off takes back what nobody decided yet; an approved run goes on.
+    if (!enabled) proposals.withdrawUndecided('Withdrawn: the MCP server was turned off.');
+    return service.apply({ enabled, port: s.mcpPort });
+  };
+
+  /** Access lowered, memory turned off or the connection deleted: take back what is still undecided. */
+  const recheck = () => {
+    const s = deps.settings();
+    const byId = new Map(deps.connections().map((c) => [c.id, c]));
+    proposals.recheck((id, kind) => {
+      const c = byId.get(id);
+      if (!c) return 'Withdrawn: the connection was deleted.';
+      const access = effectiveAccess(s.connectionMcpAccess?.[id], c.readOnly === true);
+      if (!accessAllows(access, kind))
+        return 'Withdrawn: AI tool access to this connection was lowered.';
+      if (kind === 'remember' && !isMemoryEnabled(id, s))
+        return 'Withdrawn: notes were turned off.';
+      return null;
+    });
   };
 
   ipcMain.handle(McpChannel.Status, async () => {
@@ -219,5 +229,5 @@ export function startMcpHost(deps: McpHostDeps): { service: McpService; reapply(
 
   void apply();
   // Settings changes call `reapply` (port / enable switch); cheap when nothing changed.
-  return { service, reapply: apply };
+  return { service, reapply: apply, recheck, proposals };
 }

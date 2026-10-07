@@ -25,6 +25,8 @@ export interface BridgeOptions {
   stdin: Readable;
   stdout: Writable;
   stderr?: Writable;
+  /** Test seam: is this pid running. */
+  pidAlive?: (pid: number) => boolean;
 }
 
 /** Where Plasma keeps its profile when PLASMA_USER_DATA is not set (the folder that holds mcp.json wins). */
@@ -56,11 +58,32 @@ interface Endpoint {
   token: string;
 }
 
-function readEndpoint(dir: string): Endpoint | null {
+/** Whether a process with this pid is running (EPERM: someone else's, so not Plasma). */
+export function pidAlive(pid: number): boolean {
   try {
-    const port = Number(
-      (JSON.parse(readFileSync(join(dir, 'mcp.json'), 'utf8')) as { port?: unknown }).port,
-    );
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The running Plasma, from `mcp.json` + the token file. A file left behind by
+ * a crash names a pid that is gone: then nothing is sent anywhere (a stranger
+ * may hold that port by now, and it must never see the token).
+ */
+export function readEndpoint(
+  dir: string,
+  alive: (pid: number) => boolean = pidAlive,
+): Endpoint | null {
+  try {
+    const info = JSON.parse(readFileSync(join(dir, 'mcp.json'), 'utf8')) as {
+      port?: unknown;
+      pid?: unknown;
+    };
+    const port = Number(info.port);
+    if (typeof info.pid !== 'number' || !alive(info.pid)) return null;
     const token = readFileSync(join(dir, 'mcp-token'), 'utf8').trim();
     if (!Number.isInteger(port) || port < 1 || !token) return null;
     return { port, token };
@@ -110,6 +133,12 @@ function post(ep: Endpoint, body: string, headers: Record<string, string>): Prom
     req.on('error', reject);
     req.end(body);
   });
+}
+
+function errorMessage(body: Record<string, unknown>, status: number): string {
+  const e = body.error;
+  const m = isObject(e) && typeof e.message === 'string' ? e.message : '';
+  return `Plasma refused the request (${status})${m ? `: ${m}` : ''}`;
 }
 
 const isObject = (v: unknown): v is Record<string, unknown> =>
@@ -164,7 +193,7 @@ export function runBridge(opts: BridgeOptions): Promise<void> {
       Array.isArray(parsed) ||
       (isObject(parsed) && typeof parsed.method === 'string' && parsed.id !== undefined);
     const id = isObject(parsed) ? parsed.id : null;
-    const ep = readEndpoint(opts.userDataDir);
+    const ep = readEndpoint(opts.userDataDir, opts.pidAlive);
     if (!ep) {
       if (wantsAnswer) fail(id, NOT_RUNNING_MESSAGE);
       return;
@@ -195,7 +224,13 @@ export function runBridge(opts: BridgeOptions): Promise<void> {
       }
       if (reply.status === 202 || reply.body.trim() === '') return;
       try {
-        write(JSON.parse(reply.body));
+        const body = JSON.parse(reply.body) as unknown;
+        // The server's own refusals (413, 403, 400...) carry no id: give the client's request its answer.
+        if (reply.status >= 400 && isObject(body) && body.id == null) {
+          if (wantsAnswer) fail(id, errorMessage(body, reply.status));
+          return;
+        }
+        write(body);
       } catch {
         if (wantsAnswer) fail(id, 'Plasma sent an answer this bridge could not read.');
       }

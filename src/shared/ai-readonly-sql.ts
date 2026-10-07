@@ -57,10 +57,11 @@ const EXPLAIN_RUNS = /\b(create|refresh|execute|declare|truncate|drop|alter)\b/;
 /**
  * Calls with effects a read-only transaction does not stop: large objects,
  * session advisory locks, WAL messages, file readers (DuckDB, SQLite) and
- * table functions that reach files or other hosts (ClickHouse, DuckDB).
+ * table functions that reach files or other hosts (ClickHouse, DuckDB), and
+ * MySQL / MariaDB functions that read server files, sleep or take locks.
  */
 const AGENT_UNSAFE_CALLS =
-  /\b(lo_\w+|lowrite|loread|pg_try_advisory\w*|pg_advisory\w*|pg_logical_emit_message|read_\w+|glob|load_extension|readfile|writefile|url|urlcluster|s3|s3cluster|remote|remotesecure|mysql|postgresql|mongodb|file|hdfs|jdbc|odbc|azureblobstorage|input|executable|sqlite|iceberg|deltalake|hudi)\s*\(/;
+  /\b(lo_\w+|lowrite|loread|pg_try_advisory\w*|pg_advisory\w*|pg_logical_emit_message|read_\w+|glob|load_extension|readfile|writefile|url|urlcluster|s3|s3cluster|remote|remotesecure|mysql|postgresql|mongodb|file|hdfs|jdbc|odbc|azureblobstorage|input|executable|sqlite|iceberg|deltalake|hudi|load_file|sleep\w*|benchmark|get_lock|release_lock|release_all_locks|is_free_lock|is_used_lock|master_pos_wait|source_pos_wait|sys_exec|sys_eval)\s*\(/;
 
 /** Engines whose `aiQuery` runs inside a read-only session (a write is refused by the server). */
 export function agentReadSandboxed(engine: string | null | undefined): boolean {

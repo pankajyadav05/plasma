@@ -118,6 +118,8 @@ const api: PlasmaAPI = {
     cancel: (requestId) => ipcRenderer.invoke(IpcChannel.AiCancel, requestId),
     listModels: (opts) => ipcRenderer.invoke(IpcChannel.AiListModels, opts ?? {}),
     actionResult: (res) => ipcRenderer.invoke(IpcChannel.AiActionResult, res),
+    actionApproved: (requestId, callId, approved) =>
+      ipcRenderer.invoke(IpcChannel.AiActionApproved, requestId, callId, approved),
     runReadOnly: (sql) => ipcRenderer.invoke(IpcChannel.AiRunReadOnly, sql),
   },
   compare: {

@@ -152,9 +152,16 @@ export function createMcpHttpServer(opts: McpHttpOptions): McpHttpServer {
     } catch {
       return send(res, 400, rpcError(null, RPC.parse, 'Parse error.'));
     }
+    // A dropped connection stops the call's wait. It never touches a proposal: an
+    // approved one runs to its end and `check_proposal` reports it later.
+    const gone = new AbortController();
+    res.on('close', () => {
+      if (!res.writableFinished) gone.abort();
+    });
     const outcome = await opts.handler.handle(parsed, {
       protocolVersion: version,
       sessionId: header(req, 'mcp-session-id') ?? null,
+      signal: gone.signal,
     });
     send(
       res,

@@ -18,6 +18,7 @@ vi.mock('@/lib/ipc', () => ({
       chat: vi.fn(async () => ({ accepted: true })),
       cancel: vi.fn(async () => undefined),
       actionResult: (r: unknown) => actionResult(r),
+      actionApproved: vi.fn(async () => undefined),
     },
     memory: {
       list: (id: string) => memList(id),
@@ -92,6 +93,31 @@ describe('remember card', () => {
     });
     expect(state().aiActions[id]?.status).toBe('applied');
     expect(lastResult()).toMatchObject({ outcome: 'applied', memoryId: 'abcdef123456' });
+  });
+
+  it('a note proposed by an MCP client is stored with source mcp:<client>', async () => {
+    memAdd.mockResolvedValue({ ok: true, note: { id: 'abcdef123456' } });
+    state().aiApplyEvent({ kind: 'done', requestId: 'req1' });
+    state().aiApplyEvent({
+      kind: 'external',
+      requestId: 'mcp-1',
+      connectionId: 'c1',
+      client: 'Claude Code',
+    });
+    state().aiApplyEvent({
+      kind: 'action',
+      requestId: 'mcp-1',
+      callId: 'call-1',
+      name: 'remember',
+      args: { text: 'a rule' },
+    });
+    await vi.waitFor(() => expect(cards()).toHaveLength(1));
+    await state().aiApproveAction(cards()[0]!.id);
+    expect(memAdd).toHaveBeenCalledWith({
+      connectionId: 'c1',
+      text: 'a rule',
+      source: 'mcp:Claude Code',
+    });
   });
 
   it('Skip stores nothing and tells the model it was rejected', async () => {

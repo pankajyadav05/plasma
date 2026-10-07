@@ -2332,7 +2332,9 @@ export type AiChatEvent =
    * An external AI tool (MCP) is about to propose a change: the panel opens a
    * thread for it, bound to `connectionId`, before the `action` event arrives.
    */
-  | { kind: 'external'; requestId: string; connectionId: string; client: string };
+  | { kind: 'external'; requestId: string; connectionId: string; client: string }
+  /** Main withdraws a card nobody decided (a request that expired, access that was turned off). A card already approved ignores it. */
+  | { kind: 'withdraw'; requestId: string; callId: string; reason: string };
 
 /** The renderer's answer to an `action` event; main feeds it back to the model. */
 export const AiActionResult = z.object({
@@ -2375,7 +2377,11 @@ export type MemoryNote = z.infer<typeof MemoryNote>;
 export const MemoryAddRequest = z.object({
   connectionId: z.string().min(1),
   text: z.string().max(5000),
-  source: z.enum(['user', 'agent']).default('user'),
+  /** `user`, `agent`, or `mcp:<client name>` for a note an MCP client proposed and the user approved. */
+  source: z
+    .string()
+    .regex(/^(?:user|agent|mcp:.{1,80})$/)
+    .default('user'),
 });
 export type MemoryAddRequest = z.infer<typeof MemoryAddRequest>;
 
@@ -2583,6 +2589,8 @@ export const IpcChannel = {
   AiListModels: 'plasma:ai:list-models',
   /** The renderer's answer to an agent action card (applied / rejected / …). */
   AiActionResult: 'plasma:ai:action-result',
+  /** The user clicked Approve on a card: from here main must wait for the real outcome. */
+  AiActionApproved: 'plasma:ai:action-approved',
   /** Database memory: notes kept per saved connection. */
   MemoryList: 'plasma:memory:list',
   MemoryAdd: 'plasma:memory:add',
@@ -2878,6 +2886,8 @@ export interface PlasmaAPI {
     listModels(opts?: AiListModelsRequest): Promise<AiModelsResult>;
     /** Answer an agent `action` event (the user approved, rejected, … the card). */
     actionResult(res: AiActionResult): Promise<void>;
+    /** Tell main the user approved a card (it may be an MCP proposal that must not be withdrawn now). */
+    actionApproved(requestId: string, callId: string, approved?: boolean): Promise<void>;
     /** Run ONE read-only statement in a read-only session (never the primary's autocommit). */
     runReadOnly(sql: string): Promise<QueryResult>;
   };
