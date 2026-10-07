@@ -11,6 +11,7 @@ import { isSplit, paneTabIds } from '@/stores/pane-state';
 import { usePanes } from '@/stores/panes';
 import { activeTab, useSession } from '@/stores/session';
 import { editsOf } from '@/stores/session-pending-edits';
+import { useSupportBundle } from '@/stores/support-bundle';
 import { useWorkbench } from '@/stores/workbench';
 import { useWorkspace } from '@/stores/workspace';
 import { isDataFileSession } from '@shared/data-files';
@@ -31,6 +32,7 @@ export type CommandId =
   | 'newConnection'
   | 'openWorkspace'
   | 'openDataFile'
+  | 'supportBundle'
   | 'attachPostgres'
   | 'openConnectionString'
   | 'disconnect'
@@ -414,6 +416,9 @@ export function runCommand(id: CommandId): boolean {
       return true;
     case 'openDataFile':
       void pickAndOpenDataFiles();
+      return true;
+    case 'supportBundle':
+      void useSupportBundle.getState().openDialog();
       return true;
     case 'attachPostgres':
       useDataFiles.setState({ attachOpen: true });

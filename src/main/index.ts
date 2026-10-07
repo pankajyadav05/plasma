@@ -155,6 +155,7 @@ import {
   setHostKeyPrompt,
   tunnelForwardError,
 } from './ssh-tunnel';
+import { registerSupportIpc } from './support-ipc';
 import { evaluateRestartMarker, installHandoverPending, readRestartMarker } from './update-restart';
 import { type UpdaterHost, disposeUpdater, initUpdater } from './updater';
 import {
@@ -199,6 +200,8 @@ let queryRequestRevision = 0;
 // right tool call (sideband SQL vs Redis command vs OS search). Set
 // by ConnectionConnect / VaultConnectById, cleared on disconnect.
 let activeEngine: ConnectionEngine | null = null;
+/** The server version of the live session, for the support bundle. */
+let activeServerVersion: string | null = null;
 
 /**
  * The session main opened, retained so a transport loss (VPN drop,
@@ -511,6 +514,15 @@ app
     buildAppMenu();
     registerIpcHandlers();
     registerWorkspaceIpc(workspaceRuntime, () => mainWindow);
+    registerSupportIpc({
+      window: () => mainWindow,
+      active: () =>
+        retainedSession && activeEngine
+          ? { engine: activeEngine, serverVersion: activeServerVersion ?? 'unknown' }
+          : null,
+      connections: () => vaultList(),
+      settings: () => getAllSettings(),
+    });
     handleStartupArgv(workspaceRuntime);
     // C33: the updater follows whichever window is current (macOS reopen).
     initUpdater(() => mainWindow, updaterHost);
@@ -658,6 +670,7 @@ const connectionRecovery = new ConnectionRecovery({
     // Only reached when the epoch is unchanged (C11), i.e. still this session.
     if (recovered.connectionId) activeConnectionId = recovered.connectionId;
     activeEngine = recovered.engine;
+    activeServerVersion = recovered.serverVersion;
     const payload: ConnectionRecovered = recovered;
     mainWindow?.webContents.send(IpcChannel.ConnectionRecoveredEvent, payload);
   },
@@ -860,6 +873,7 @@ async function establishSession(config: ConnectionConfigType) {
     }
     activeConnectionId = config.id;
     activeEngine = res.engine;
+    activeServerVersion = res.serverVersion;
     // U27: keep what it takes to rebuild this session after a transport
     // loss. Host/port are the pre-tunnel ones so a retry re-forwards
     // through a fresh tunnel.

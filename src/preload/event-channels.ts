@@ -48,6 +48,7 @@ export const eventChannels = [
   'plasma:ssh:hostKeyPrompt',
   'plasma:admin:jobEvent',
   'plasma:menu:openWorkspace',
+  'plasma:menu:supportBundle',
   'plasma:workspace:changed',
   'plasma:launch:action',
 ] as const;

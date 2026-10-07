@@ -24,6 +24,7 @@ import { PaneTabContext } from '@/stores/pane-context';
 import { type PaneId, activeIn, isSplit } from '@/stores/pane-state';
 import { usePanes } from '@/stores/panes';
 import { useActiveTabSelect, useSession } from '@/stores/session';
+import { useSupportBundle } from '@/stores/support-bundle';
 import { type Overlay, useWorkbench } from '@/stores/workbench';
 import { type KeyId, matchGlobalBinding, selectTabIndex } from '@shared/keymap';
 import { Suspense, useEffect, useRef } from 'react';
@@ -84,6 +85,10 @@ const StructureDialogsHost = lazyNamed(
   () => import('@/features/structure/StructureDialogsHost'),
   'StructureDialogsHost',
 );
+const SupportBundleDialog = lazyNamed(
+  () => import('@/features/support/SupportBundleDialog'),
+  'SupportBundleDialog',
+);
 const ShortcutCheatSheet = lazyNamed(
   () => import('@/features/keymap/ShortcutCheatSheet'),
   'ShortcutCheatSheet',
@@ -106,6 +111,7 @@ export function AppShell() {
   const connectionState = useSession((s) => s.connectionState);
   const overlay = useWorkbench((s) => s.overlay);
   const setOverlay = useWorkbench((s) => s.setOverlay);
+  const supportBundleOpen = useSupportBundle((s) => s.open);
   const overlayProps = (name: NonNullable<Overlay>) => ({
     open: overlay === name,
     onOpenChange: (open: boolean) => setOverlay(open ? name : null),
@@ -219,6 +225,9 @@ export function AppShell() {
       </LazyOnOpen>
       <LazyOnOpen open={overlay === 'notebook'}>
         <NotebookDialog {...overlayProps('notebook')} />
+      </LazyOnOpen>
+      <LazyOnOpen open={supportBundleOpen}>
+        <SupportBundleDialog />
       </LazyOnOpen>
       <LazyOnOpen open={overlay === 'cheatSheet'}>
         <ShortcutCheatSheet {...overlayProps('cheatSheet')} />

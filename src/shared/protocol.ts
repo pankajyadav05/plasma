@@ -2929,4 +2929,6 @@ export interface PlasmaAPI {
   deepLink: import('./deep-link').DeepLinkApi;
   /** CLI companion: the `plasma` launcher. */
   cli: import('./deep-link').CliApi;
+  /** "Create support bundle…": review every file, then save a zip. Nothing is uploaded. */
+  support: import('./support-bundle').SupportApi;
 }

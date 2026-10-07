@@ -66,6 +66,7 @@ const MENU_COMMANDS: ReadonlyArray<readonly [EventChannel, CommandId]> = [
   ['plasma:menu:splitPane', 'splitPane'],
   ['plasma:menu:openWorkspace', 'openWorkspace'],
   ['plasma:menu:openDataFile', 'openDataFile'],
+  ['plasma:menu:supportBundle', 'supportBundle'],
 ];
 
 let recoveryWired = false;

@@ -7,6 +7,7 @@ import {
 } from '@shared/worker-policy';
 import { parseWorkerResponse } from '@shared/worker-response-parse';
 import { type UtilityProcess, utilityProcess } from 'electron';
+import { workerOutput } from './line-ring';
 import { logger } from './logger';
 
 /**
@@ -233,9 +234,11 @@ export class WorkerSupervisor {
 
     proc.stdout?.on('data', (chunk) => {
       process.stdout.write(`[worker] ${chunk}`);
+      workerOutput.push(chunk, '[worker] ');
     });
     proc.stderr?.on('data', (chunk) => {
       process.stderr.write(`[worker:err] ${chunk}`);
+      workerOutput.push(chunk, '[worker:err] ');
     });
 
     proc.on('message', (raw: unknown) => {

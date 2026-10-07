@@ -108,7 +108,19 @@ export function redactSecrets(text: string, secrets: readonly string[] = []): st
     (m, q1: string, name: string, q2: string, sep: string, value: string) => {
       // MySQL's "(using password: YES)" says whether one was sent, not what it was.
       if (/^(?:yes|no)$/i.test(value)) return m;
-      const quote = value.startsWith('"') ? '"' : value.startsWith("'") ? "'" : '';
+      // So do flags and the markers other redaction passes leave ("hasApiKey": true, "[set]").
+      const bare = value.replace(/^["']|["']$/g, '');
+      if (/^(?:true|false|null|\[set\]|\[empty\]|\[left out\]|\[omitted\]|\*\*\*)$/i.test(bare)) {
+        return m;
+      }
+      // A quoted key means JSON: the value stays a string, so the document still parses.
+      const quote = value.startsWith('"')
+        ? '"'
+        : value.startsWith("'")
+          ? "'"
+          : q1 === '"'
+            ? '"'
+            : '';
       return `${q1}${name}${q2}${sep}${quote}${REDACTED}${quote}`;
     },
   );

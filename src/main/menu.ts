@@ -178,6 +178,11 @@ export function appMenuTemplate(
           label: 'Report a Bug',
           click: () => void shell.openExternal(`${REPO_URL}/issues`),
         },
+        { type: 'separator' },
+        {
+          label: 'Create Support Bundle…',
+          click: () => sendToFocusedWindow('plasma:menu:supportBundle'),
+        },
       ],
     },
   ];

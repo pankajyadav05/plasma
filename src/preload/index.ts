@@ -1,4 +1,5 @@
 import { IpcChannel, type PlasmaAPI, type Platform } from '@shared/protocol';
+import { SupportChannel } from '@shared/support-bundle';
 import { WorkspaceChannel } from '@shared/workspace';
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import { type EventChannel, eventChannels } from './event-channels';
@@ -206,6 +207,10 @@ const api: PlasmaAPI = {
   cli: {
     status: () => ipcRenderer.invoke(WorkspaceChannel.CliStatus),
     install: () => ipcRenderer.invoke(WorkspaceChannel.CliInstall),
+  },
+  support: {
+    preview: (options) => ipcRenderer.invoke(SupportChannel.Preview, options),
+    save: (token) => ipcRenderer.invoke(SupportChannel.Save, token),
   },
 };
 

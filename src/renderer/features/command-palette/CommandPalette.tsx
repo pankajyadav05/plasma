@@ -142,6 +142,11 @@ const ACTIONS: ReadonlyArray<{ id: CommandId; label: string; keywords?: string[]
     label: 'Open workspace folder…',
     keywords: ['team', 'shared', 'git', '.plasma', 'project'],
   },
+  {
+    id: 'supportBundle',
+    label: 'Create support bundle…',
+    keywords: ['help', 'logs', 'debug', 'diagnostics', 'report', 'zip'],
+  },
   { id: 'disconnect', label: 'Disconnect' },
 ];
 

@@ -16,6 +16,7 @@ import { describeCheckedAt, describeUpdateStatus } from '@/lib/update-status';
 import { useUpdate } from '@/lib/use-update';
 import { SAFE_MODE_LABEL, SAFE_MODE_LEVELS } from '@/stores/safe-mode';
 import { useSession } from '@/stores/session';
+import { useSupportBundle } from '@/stores/support-bundle';
 import { ROW_LIMIT_CHOICES, useWorkbench } from '@/stores/workbench';
 import { cheatSheetSections, formatBinding, formatKeys } from '@shared/keymap';
 import { LINT_RULES, LINT_RULE_IDS } from '@shared/pg-migration-lint';
@@ -948,6 +949,21 @@ function AdvancedSection() {
       <SubHeading>About</SubHeading>
       <div className="px-4">
         <UpdateField />
+        <div className="mt-3 flex items-center gap-3">
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            data-testid="settings-support-bundle"
+            onClick={() => void useSupportBundle.getState().openDialog()}
+          >
+            Create support bundle…
+          </Button>
+          <span className="text-[12px] text-[var(--wb-text-3)]">
+            A zip of logs, versions and settings to send when something goes wrong. You review every
+            file first; nothing is uploaded.
+          </span>
+        </div>
         <p className="mt-2 text-[12px] text-[var(--wb-text-3)]">
           Preferences are stored locally on this computer.
         </p>

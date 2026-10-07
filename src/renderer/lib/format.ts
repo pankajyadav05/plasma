@@ -29,3 +29,10 @@ export function formatDuration(ms: number): string {
   if (remMs > 0) parts.push(`${remMs} ms`);
   return parts.join(' ');
 }
+
+/** "812 B", "14.2 KB", "3.1 MB": file sizes for a list. */
+export function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
