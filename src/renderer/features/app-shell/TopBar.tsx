@@ -394,7 +394,13 @@ function StatusCapsule() {
   );
   const tab = useActiveTabSelect((t) =>
     t
-      ? { kind: t.kind, tableName: t.tableName, title: t.title, queryRunState: t.queryRunState }
+      ? {
+          kind: t.kind,
+          tableName: t.tableName,
+          title: t.title,
+          queryRunState: t.queryRunState,
+          phase: t.queryLifecycle?.phase,
+        }
       : undefined,
   );
   const canvasMode = useSession((s) => s.canvasMode);
@@ -525,7 +531,18 @@ function StatusCapsule() {
               </span>
               <Seg>{object}</Seg>
               {tab?.queryRunState === 'running' && canvasMode === 'database' && (
-                <Loader2 className="ml-1.5 h-3 w-3 shrink-0 animate-spin opacity-80" />
+                <Loader2
+                  className="ml-1.5 h-3 w-3 shrink-0 animate-spin opacity-80"
+                  role="img"
+                  aria-label={
+                    tab.phase === 'cancelling'
+                      ? 'Cancelling query'
+                      : tab.phase === 'queued'
+                        ? 'Query queued'
+                        : 'Query running'
+                  }
+                  data-testid="status-running"
+                />
               )}
             </>
           )}
