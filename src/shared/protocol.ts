@@ -719,6 +719,11 @@ export const ColumnMeta = z.object({
   name: z.string(),
   dataTypeID: z.number().int(),
   dataTypeName: z.string(),
+  /**
+   * Postgres: the type (or its base / element type) has no usable `=` (composites,
+   * json arrays, domains over them…), so a grid commit cannot compare it. Only set when true.
+   */
+  noEquality: z.literal(true).optional(),
 });
 export type ColumnMeta = z.infer<typeof ColumnMeta>;
 
@@ -1152,6 +1157,21 @@ export type TxnState = z.infer<typeof TxnState>;
  * Postgres text form of each value, or `null` for SQL NULL — never JS
  * Dates or objects. Each statement must affect exactly one row.
  */
+export const EditStatementKind = z.enum(['update', 'delete', 'insert']);
+
+/**
+ * A statement of a grid edit batch that could not be applied because the data
+ * moved under the user (B1): an UPDATE / DELETE matched no row (changed or gone
+ * since the grid loaded it; the statements carry the original values in their
+ * WHERE), or an INSERT collided with an existing key. When any exist the whole
+ * batch was rolled back.
+ */
+export const EditConflict = z.object({
+  index: z.number().int().nonnegative(),
+  reason: z.enum(['no-match', 'duplicate']),
+});
+export type EditConflict = z.infer<typeof EditConflict>;
+
 export const CommitEditBatchRequest = z.object({
   connectionGen: z.number().int().nonnegative(),
   updates: z
@@ -1160,6 +1180,7 @@ export const CommitEditBatchRequest = z.object({
         sql: z.string().min(1),
         params: z.array(z.union([z.string(), z.number(), z.boolean(), z.null()])).optional(),
         label: z.string().max(500).optional(),
+        kind: EditStatementKind.optional(),
       }),
     )
     .min(1),
@@ -1330,6 +1351,7 @@ export const WorkerRequest = z.discriminatedUnion('kind', [
           sql: z.string().min(1),
           params: z.array(z.unknown()).optional(),
           label: z.string().optional(),
+          kind: EditStatementKind.optional(),
         }),
       )
       .min(1),
@@ -1611,6 +1633,8 @@ export const WorkerResponse = z.discriminatedUnion('kind', [
     id: z.string(),
     state: TxnState,
     applied: z.number().int().nonnegative(),
+    /** Present when rows changed under the edit: the batch was rolled back, `applied` is 0. */
+    conflicts: z.array(EditConflict).optional(),
   }),
   /**
    * `fatal: 'connection-lost'` means the driver's transport is gone (VPN
@@ -2421,6 +2445,17 @@ export const IpcChannel = {
   UpdatePrepared: 'plasma:update:prepared',
   /** Renderer → main, once per launch: how the previous update restart ended. */
   UpdateLaunchInfo: 'plasma:update:launchInfo',
+  // Crash recovery (B2)
+  /** Renderer → main (fire and forget): the live workspace snapshot, or null to clear it. */
+  RecoverySave: 'plasma:recovery:save',
+  /** Same, but answers once the snapshot is on disk. */
+  RecoveryFlush: 'plasma:recovery:flush',
+  /** Once per window load: did the last run end badly, and what is waiting to be restored. */
+  RecoveryLaunchInfo: 'plasma:recovery:launchInfo',
+  /** A connection's pending snapshot was restored or discarded (all when no id). */
+  RecoveryResolve: 'plasma:recovery:resolve',
+  /** Show the main log file in the file manager. */
+  RecoveryShowLog: 'plasma:recovery:showLog',
   // Dev sanity checks
   PingMain: 'plasma:ping:main',
   PingWorker: 'plasma:ping:worker',
@@ -2552,8 +2587,13 @@ export interface PlasmaAPI {
      */
     commitEditBatch(req: {
       connectionGen: number;
-      updates: Array<{ sql: string; params?: unknown[]; label?: string }>;
-    }): Promise<{ state: TxnState; applied: number }>;
+      updates: Array<{
+        sql: string;
+        params?: unknown[];
+        label?: string;
+        kind?: 'update' | 'delete' | 'insert';
+      }>;
+    }): Promise<{ state: TxnState; applied: number; conflicts?: EditConflict[] }>;
     /** EXPLAIN (FORMAT JSON) one statement; ANALYZE runs it inside a rolled-back transaction. */
     explain(req: { sql: string; analyze: boolean; params?: unknown[] }): Promise<QueryResult>;
     /**
@@ -2774,6 +2814,17 @@ export interface PlasmaAPI {
     prepared(info: { connectionId: string | null }): Promise<void>;
     /** Once per launch: whether an update restart just happened, and how it ended. */
     launchInfo(): Promise<UpdateLaunchInfo>;
+  };
+  /** B2: crash recovery. */
+  recovery: {
+    /** Debounced snapshots; `null` clears (deliberate disconnect). Not awaited. */
+    save(journal: import('./recovery').RecoveryJournal | null, durable?: boolean): void;
+    /** Resolves once the snapshot is durably on disk; false when main refused it. */
+    flush(journal: import('./recovery').RecoveryJournal | null): Promise<boolean>;
+    launchInfo(): Promise<import('./recovery').RecoveryLaunchInfo>;
+    /** `keepAsRestored`: the restored state could not be written down; set the snapshot aside instead of deleting it. */
+    resolve(connectionId?: string, keepAsRestored?: boolean): Promise<void>;
+    showLog(): Promise<void>;
   };
   /** D1: team workspaces (`.plasma/` folders). */
   workspace: import('./workspace').WorkspaceApi;

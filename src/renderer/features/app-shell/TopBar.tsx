@@ -156,6 +156,7 @@ function ChangesCluster() {
       ? (s.pendingEditsError?.message ?? null)
       : null,
   );
+  const canDetectConflicts = useSession((s) => engineCaps(s.activeConfig?.engine).editConflicts);
   const has = edits.length > 0;
   if (!has && !busy && !error) return null;
 
@@ -190,6 +191,12 @@ function ChangesCluster() {
           <div className="border-b border-[var(--wb-separator)] px-3 py-2 text-[12px] text-[var(--wb-text-2)]">
             {summarizeEdits(edits)} — commits as one transaction ({kbd('S')})
           </div>
+          {!canDetectConflicts && (
+            <div className="border-b border-[var(--wb-separator)] px-3 py-2 text-[12px] text-[var(--wb-text-2)]">
+              Conflicts cannot be detected on this engine. If someone else changed these rows after
+              you loaded them, your changes overwrite theirs.
+            </div>
+          )}
           {error && (
             <div
               className="border-b border-[var(--wb-separator)] px-3 py-2 text-[12px] text-destructive"

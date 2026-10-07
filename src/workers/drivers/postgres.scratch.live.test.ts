@@ -80,18 +80,18 @@ suite('postgres driver (live, scratch database)', () => {
       { sql: UPDATE, params: ['a2', '1'] },
       { sql: UPDATE, params: ['b2', '2'] },
     ]);
-    expect(res).toEqual({ state: 'none', applied: 2 });
+    expect(res).toEqual({ state: 'none', applied: 2, conflicts: [] });
     expect(await value(rw, 1)).toBe('a2');
     expect(await value(rw, 2)).toBe('b2');
   });
 
   it('rolls the whole batch back when an UPDATE matches no row', async () => {
-    await expect(
-      rw.commitEditBatch(1, [
-        { sql: UPDATE, params: ['x', '1'] },
-        { sql: UPDATE, params: ['x', '99'], label: 'id=99' },
-      ]),
-    ).rejects.toThrow(/matched no row/);
+    const res = await rw.commitEditBatch(1, [
+      { sql: UPDATE, params: ['x', '1'] },
+      { sql: UPDATE, params: ['x', '99'], label: 'id=99' },
+    ]);
+    expect(res.applied).toBe(0);
+    expect(res.conflicts).toEqual([{ index: 1, reason: 'no-match' }]);
     expect(await value(rw, 1)).toBe('a2');
     expect(rw.getTxnState()).toBe('none');
   });
@@ -106,12 +106,11 @@ suite('postgres driver (live, scratch database)', () => {
   it('uses a savepoint inside the user transaction: failure keeps earlier work, success stays open', async () => {
     await rw.query('BEGIN');
     await rw.query("UPDATE items SET v = 'mine' WHERE id = 1");
-    await expect(
-      rw.commitEditBatch(1, [
-        { sql: UPDATE, params: ['batch', '2'] },
-        { sql: UPDATE, params: ['nope', '99'] },
-      ]),
-    ).rejects.toThrow(/matched no row/);
+    const conflicted = await rw.commitEditBatch(1, [
+      { sql: UPDATE, params: ['batch', '2'] },
+      { sql: UPDATE, params: ['nope', '99'] },
+    ]);
+    expect(conflicted.conflicts).toHaveLength(1);
     // The user's transaction is still open and healthy, with its own change,
     // and the failed batch left no trace.
     expect(rw.getTxnState()).toBe('active');
@@ -119,7 +118,7 @@ suite('postgres driver (live, scratch database)', () => {
     expect(await value(rw, 2)).toBe('b2');
 
     const ok = await rw.commitEditBatch(1, [{ sql: UPDATE, params: ['batch', '2'] }]);
-    expect(ok).toEqual({ state: 'active', applied: 1 });
+    expect(ok).toEqual({ state: 'active', applied: 1, conflicts: [] });
     await rw.query('ROLLBACK');
     expect(rw.getTxnState()).toBe('none');
     expect(await value(rw, 1)).toBe('a2');

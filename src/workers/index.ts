@@ -230,8 +230,17 @@ process.parentPort.on('message', async (evt: Electron.MessageEvent) => {
         case 'commitEditBatch': {
           const drv = sqlDriver();
           if (!drv) return unsupported(req.id, 'commitEditBatch');
-          const { state, applied } = await drv.commitEditBatch(req.connectionGen, req.updates);
-          send({ kind: 'editBatchResult', id: req.id, state, applied });
+          const { state, applied, conflicts } = await drv.commitEditBatch(
+            req.connectionGen,
+            req.updates,
+          );
+          send({
+            kind: 'editBatchResult',
+            id: req.id,
+            state,
+            applied,
+            ...(conflicts.length > 0 ? { conflicts } : {}),
+          });
           break;
         }
         case 'applyDdl': {

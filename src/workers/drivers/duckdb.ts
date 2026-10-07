@@ -33,6 +33,7 @@ import {
   type DuckdbViewSource,
   buildDuckdbSchema,
 } from './duckdb-introspect';
+import type { EditBatchConflict } from './pg-txn';
 import type { ExportBatch, SqlEditUpdate, SqlEngineDriver, SqlQueryOpts } from './sql-engine';
 import { XlsxError, xlsxSheetNames } from './xlsx-sheets';
 
@@ -640,7 +641,7 @@ export class DuckdbDriver implements SqlEngineDriver {
   async commitEditBatch(
     _expectedGen: number,
     _updates: SqlEditUpdate[],
-  ): Promise<{ state: TxnState; applied: number }> {
+  ): Promise<{ state: TxnState; applied: number; conflicts: EditBatchConflict[] }> {
     throw new Error('Rows cannot be edited in a DuckDB data-file session.');
   }
 

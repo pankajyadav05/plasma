@@ -151,6 +151,24 @@ export interface PendingEdit {
   /** Updated column; '' for insert / delete. */
   column: string;
   oldValue: unknown;
+  /** Update only: the edited column's type name, for the concurrent-edit guard. */
+  oldType?: string;
+  /** The server cannot compare this column's type (see ColumnMeta.noEquality). */
+  oldNoEquality?: boolean;
+  /**
+   * Delete only: every column of the row as it was loaded (Postgres text), so
+   * the DELETE can refuse a row that changed since (see shared/edit-guard.ts).
+   */
+  originalRow?: Array<{
+    column: string;
+    value: string | null;
+    type?: string;
+    noEquality?: boolean;
+  }>;
+  /** Restored after a crash while its commit was in flight: it may already be saved. */
+  maybeCommitted?: boolean;
+  /** Set once the user kept their change over a difference the guard could not explain: no comparison. */
+  unguarded?: boolean;
   /** Postgres text for the new value; null = SQL NULL. */
   newValue: string | null;
   /** Insert only: column → Postgres text (null = NULL); omitted = DEFAULT. */

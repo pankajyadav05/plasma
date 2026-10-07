@@ -17,7 +17,7 @@ import { translatePlaceholders } from '@shared/sql-dialect';
 import { isTxnExemptSql, leadingKeyword, splitSqlStatements } from '@shared/sql-statements';
 import Database from 'better-sqlite3';
 import { type SqlitePlanRow, sqlitePlanToJson } from './explain-plan';
-import { runEditBatch } from './pg-txn';
+import { type EditBatchConflict, runEditBatch } from './pg-txn';
 import type { ExportBatch, SqlEditUpdate, SqlEngineDriver, SqlQueryOpts } from './sql-engine';
 import { introspectSqlite } from './sqlite-introspect';
 
@@ -409,7 +409,7 @@ export class SqliteDriver implements SqlEngineDriver {
   async commitEditBatch(
     expectedGen: number,
     updates: SqlEditUpdate[],
-  ): Promise<{ state: TxnState; applied: number }> {
+  ): Promise<{ state: TxnState; applied: number; conflicts: EditBatchConflict[] }> {
     const db = this.requireDb();
     if (expectedGen !== this.connectionGen) {
       throw new Error(
@@ -430,10 +430,10 @@ export class SqliteDriver implements SqlEngineDriver {
         return { rowCount: Number(info.changes) };
       },
     };
-    const applied = await this.locked(() =>
+    const outcome = await this.locked(() =>
       runEditBatch(client, db.inTransaction ? 'T' : 'I', updates),
     );
-    return { state: this.getTxnState(), applied };
+    return { state: this.getTxnState(), ...outcome };
   }
 
   /** Unbounded stream for file export: batches of rows, no display caps. */

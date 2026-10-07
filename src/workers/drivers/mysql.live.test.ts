@@ -1,4 +1,6 @@
 import type { ConnectionConfig } from '@shared/protocol';
+import { dialectFor } from '@shared/sql-dialect';
+import { buildUpdateSql } from '@shared/table-query';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { MysqlDriver } from './mysql';
 
@@ -126,17 +128,53 @@ live('mysql driver (live)', () => {
     ]);
     expect(ok.applied).toBe(3);
     expect((await drv.query('SELECT name FROM users WHERE id = 1')).rows).toEqual([['ADA']]);
-    await expect(
-      drv.commitEditBatch(1, [
-        { sql: 'UPDATE `users` SET `name` = $1 WHERE `id` = $2', params: ['X', '1'] },
-        { sql: 'UPDATE `users` SET `name` = $1 WHERE `id` = $2', params: ['Y', '999'] },
-      ]),
-    ).rejects.toThrow(/Edit 2 of 2.*matched no row.*Nothing was saved/);
+    const missed = await drv.commitEditBatch(1, [
+      { sql: 'UPDATE `users` SET `name` = $1 WHERE `id` = $2', params: ['X', '1'] },
+      { sql: 'UPDATE `users` SET `name` = $1 WHERE `id` = $2', params: ['Y', '999'] },
+    ]);
+    expect(missed.applied).toBe(0);
+    expect(missed.conflicts).toEqual([{ index: 1, reason: 'no-match' }]);
     expect((await drv.query("SELECT count(*) FROM users WHERE name = 'X'")).rows[0]![0]).toBe(0);
     expect(drv.getTxnState()).toBe('none');
     await expect(
       drv.commitEditBatch(9, [{ sql: 'DELETE FROM `users` WHERE `id` = $1', params: ['1'] }]),
     ).rejects.toThrow(/generation mismatch/);
+  });
+
+  it('detects a row changed since it was loaded (guarded WHERE, <=>) and an unchanged one commits', async () => {
+    const mysql = dialectFor('mysql');
+    const stmt = (value: string | null) => {
+      const { sql, params } = buildUpdateSql({
+        schema: '',
+        table: 'users',
+        set: { name: 'mine' },
+        pkValues: { id: '1' },
+        guards: [{ column: 'name', value, type: 'varchar' }],
+        dialect: mysql,
+      });
+      return { sql, params: params as unknown[], kind: 'update' as const };
+    };
+    const current = (await drv.query('SELECT name FROM users WHERE id = 1')).rows[0]![0] as string;
+    await drv.query("UPDATE users SET name = 'theirs' WHERE id = 1");
+    const stale = await drv.commitEditBatch(1, [stmt(current)]);
+    expect(stale.conflicts).toEqual([{ index: 0, reason: 'no-match' }]);
+    expect((await drv.query('SELECT name FROM users WHERE id = 1')).rows).toEqual([['theirs']]);
+    // Writing the same value is not "no row": affected rows count matches (FOUND_ROWS).
+    const same = await drv.commitEditBatch(1, [
+      { sql: 'UPDATE `users` SET `name` = $1 WHERE `id` = $2', params: ['theirs', '1'] },
+    ]);
+    expect(same.conflicts).toEqual([]);
+    const fresh = await drv.commitEditBatch(1, [stmt('theirs')]);
+    expect(fresh.applied).toBe(1);
+    const dup = await drv.commitEditBatch(1, [
+      {
+        sql: 'INSERT INTO `users` (`id`, `name`) VALUES ($1, $2)',
+        params: ['1', 'dup'],
+        kind: 'insert',
+      },
+    ]);
+    expect(dup.conflicts).toEqual([{ index: 0, reason: 'duplicate' }]);
+    await drv.query("UPDATE users SET name = 'ADA' WHERE id = 1");
   });
 
   it('tracks explicit transactions and uses a savepoint for edit batches inside them', async () => {

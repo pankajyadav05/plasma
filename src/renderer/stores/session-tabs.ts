@@ -1,10 +1,23 @@
+import {
+  fromRecoveredEdit,
+  notifyRecoveryRestored,
+  restoreEdits,
+  takeRecoveryFor,
+} from '@/lib/crash-recovery';
 import { ipc } from '@/lib/ipc';
 import type { Filter, TableSort } from '@/lib/table-query';
 import type { ConnectionEngine } from '@shared/protocol';
+import { targetOf } from '@shared/recovery';
 import { engineCaps } from '@shared/sql-dialect';
-import { editsOf, pendingEditCount, withoutTabEdits } from './session-pending-edits';
+import { editsOf, pendingEditCount, rowKeyOf, withoutTabEdits } from './session-pending-edits';
 import { DEFAULT_SETTINGS } from './session-settings';
-import { createEmptyTab, createTableTab, patchActiveTab, patchTabById } from './session-tab-model';
+import {
+  createEmptyTab,
+  createTableTab,
+  freshId,
+  patchActiveTab,
+  patchTabById,
+} from './session-tab-model';
 import { loadTableTab } from './session-table-query';
 import type { QueryTab, SessionState, SliceCreator, TableViewMode } from './session-types';
 import { useWorkbench } from './workbench';
@@ -109,12 +122,27 @@ export function storageKey(connectionId: string): string {
 
 /** Postgres SQL + table tabs, in order, with the active tab's index. */
 export function serializeTabs(tabs: readonly QueryTab[], activeTabId: string): PersistedTabs {
+  return serializeTabsIndexed(tabs, activeTabId).data;
+}
+
+/**
+ * `serializeTabs` plus where each tab landed in the saved list (tabs that are
+ * not persisted have no entry), so staged edits can be tied to their tab by
+ * position and re-attached after a restore (crash recovery).
+ */
+export function serializeTabsIndexed(
+  tabs: readonly QueryTab[],
+  activeTabId: string,
+  maxSqlChars = MAX_SQL_CHARS,
+): { data: PersistedTabs; indexById: Map<string, number> } {
   const out: PersistedTab[] = [];
+  const indexById = new Map<string, number>();
   let activeIndex = 0;
   for (const t of tabs) {
     if (t.kind === 'sql') {
-      if (t.sql.length > MAX_SQL_CHARS) continue;
+      if (t.sql.length > maxSqlChars) continue;
       if (t.id === activeTabId) activeIndex = out.length;
+      indexById.set(t.id, out.length);
       out.push({
         kind: 'sql',
         title: t.title,
@@ -124,6 +152,7 @@ export function serializeTabs(tabs: readonly QueryTab[], activeTabId: string): P
       });
     } else if (t.kind === 'table' && t.tableSchema && t.tableName) {
       if (t.id === activeTabId) activeIndex = out.length;
+      indexById.set(t.id, out.length);
       out.push({
         kind: 'table',
         title: t.title,
@@ -136,7 +165,18 @@ export function serializeTabs(tabs: readonly QueryTab[], activeTabId: string): P
       });
     }
   }
-  return { v: 1, activeIndex, tabs: out };
+  return { data: { v: 1, activeIndex, tabs: out }, indexById };
+}
+
+/** Whether one saved tab has what restoring it needs. */
+export function isValidPersistedTab(t: unknown): t is PersistedTab {
+  if (!t || typeof t !== 'object') return false;
+  const tab = t as Partial<PersistedTab>;
+  if (typeof tab.title !== 'string') return false;
+  if (tab.kind === 'sql') return typeof tab.sql === 'string';
+  if (tab.kind === 'table')
+    return typeof tab.tableSchema === 'string' && typeof tab.tableName === 'string';
+  return false;
 }
 
 /** Validate an untrusted persisted payload; null when unusable. */
@@ -144,19 +184,13 @@ export function parsePersistedTabs(raw: unknown): PersistedTabs | null {
   if (!raw || typeof raw !== 'object') return null;
   const r = raw as Partial<PersistedTabs>;
   if (r.v !== 1 || !Array.isArray(r.tabs)) return null;
-  const tabs = r.tabs.filter((t): t is PersistedTab => {
-    if (!t || typeof t !== 'object' || typeof t.title !== 'string') return false;
-    if (t.kind === 'sql') return typeof t.sql === 'string';
-    if (t.kind === 'table')
-      return typeof t.tableSchema === 'string' && typeof t.tableName === 'string';
-    return false;
-  });
+  const tabs = r.tabs.filter(isValidPersistedTab);
   if (tabs.length === 0) return null;
-  const activeIndex =
-    typeof r.activeIndex === 'number' && r.activeIndex >= 0 && r.activeIndex < tabs.length
-      ? r.activeIndex
-      : 0;
-  return { v: 1, activeIndex, tabs };
+  // The saved index counts every entry; the usable ones may be fewer.
+  const savedActive = typeof r.activeIndex === 'number' ? r.activeIndex : -1;
+  const activeTab = r.tabs[savedActive];
+  const found = isValidPersistedTab(activeTab) ? tabs.indexOf(activeTab) : -1;
+  return { v: 1, activeIndex: Math.max(found, 0), tabs };
 }
 
 /**
@@ -635,20 +669,77 @@ export function adoptConnectionTabs(
   const forced = connId != null && restoreOnceFor === connId;
   if (forced) restoreOnceFor = null;
   const restore = state.settings.restoreWorkspace !== false || forced;
-  const persisted = restore && connId && engineCaps(engine).sql ? loadPersistedTabs(connId) : null;
+  // B2: a snapshot set aside after a crash wins over the saved strip (it is newer)
+  // and is restored whatever "Restore tabs on launch" says: the close was not a choice.
+  const recovered =
+    connId && engineCaps(engine).sql
+      ? takeRecoveryFor(connId, state.activeConfig ? targetOf(state.activeConfig) : null)
+      : null;
+  const recoveredStrip = recovered ? parsePersistedTabs(recovered.strip) : null;
+  const persisted =
+    recoveredStrip ??
+    (restore && connId && engineCaps(engine).sql ? loadPersistedTabs(connId) : null);
   const pristine =
     state.tabs.length === 1 &&
     state.tabs[0]!.kind === 'sql' &&
     state.tabs[0]!.sql.trim() === '' &&
     !state.tabs[0]!.queryResult;
-  if (persisted) {
-    const { tabs, activeTabId } = restoreTabs(
-      persisted,
-      (title) => createEmptyTab(pageSize, title),
-      (schemaName, tableName) => createTableTab(pageSize, schemaName, tableName),
-    );
-    set({ tabs, activeTabId, tabsConnectionId: connId });
+  if (persisted || (recovered && recovered.edits.length > 0)) {
+    const restored = persisted
+      ? restoreTabs(
+          persisted,
+          (title) => createEmptyTab(pageSize, title),
+          (schemaName, tableName) => createTableTab(pageSize, schemaName, tableName),
+        )
+      : (() => {
+          const fresh = createEmptyTab(pageSize);
+          return { tabs: [fresh], activeTabId: fresh.id };
+        })();
+    let { tabs } = restored;
+    const { activeTabId } = restored;
+    let pendingEditsByTab = get().pendingEditsByTab;
+    let editCount = 0;
+    if (recovered && connId) {
+      // Saved positions -> live tabs. Tabs that failed validation were skipped by
+      // restoreTabs, so count only the valid ones.
+      const idByIndex = new Map<number, string>();
+      if (recoveredStrip) {
+        let k = 0;
+        recovered.strip.tabs.forEach((t, i) => {
+          if (!isValidPersistedTab(t)) return;
+          const tab = restored.tabs[k++];
+          if (tab) idByIndex.set(i, tab.id);
+        });
+      }
+      const res = restoreEdits(recovered.edits, idByIndex, state.connectionGen, freshId, rowKeyOf);
+      // An edit whose tab did not come back reopens its table instead of being lost.
+      const reopened = new Map<string, QueryTab>();
+      for (const orphan of res.orphans) {
+        const key = `${orphan.schema}\u0000${orphan.table}`;
+        let tab = reopened.get(key);
+        if (!tab) {
+          tab = createTableTab(pageSize, orphan.schema, orphan.table);
+          reopened.set(key, tab);
+        }
+        res.byTab[tab.id] = [
+          ...(res.byTab[tab.id] ?? []),
+          fromRecoveredEdit(orphan, tab.id, state.connectionGen, freshId(), rowKeyOf),
+        ];
+        res.restored++;
+      }
+      tabs = [...tabs, ...reopened.values()];
+      pendingEditsByTab = { ...pendingEditsByTab, ...res.byTab };
+      editCount = res.restored;
+    }
+    set({
+      tabs,
+      activeTabId,
+      tabsConnectionId: connId,
+      ...(recovered ? { pendingEditsByTab } : {}),
+    });
     get().setActiveTab(activeTabId);
+    if (recovered)
+      notifyRecoveryRestored({ journal: recovered, tabs: tabs.length, edits: editCount });
     return;
   }
   if (state.tabsConnectionId !== null && !pristine) {

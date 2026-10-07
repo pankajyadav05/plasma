@@ -6,14 +6,34 @@ import { DataFilesDialogs } from '@/features/data-files/DataFilesDialogs';
 import { type CommandId, runCommand } from '@/features/keymap/commands';
 import { WorkspaceDialogs } from '@/features/workspace/WorkspaceDialogs';
 import { routeAiTaskEvent } from '@/lib/ai-task';
+import {
+  onRecoveryRestored,
+  onRecoveryTargetChanged,
+  recoveryContext,
+  setBeforeCommitHook,
+  setPendingRecoveries,
+} from '@/lib/crash-recovery';
+import {
+  type AnnounceDeps,
+  announceNothingToRestore,
+  announceOffers,
+  announceRestored,
+  announceTargetChanged,
+  planRecoveryBoot,
+} from '@/lib/recovery-boot';
+import { flushRecoveryJournal, installRecoveryJournal } from '@/lib/recovery-journal';
 import { announceUpdateOutcome, planResume } from '@/lib/update-launch';
 import { handleDroppedDataFiles } from '@/stores/data-files';
 import { useReconnect } from '@/stores/reconnect';
 import { useSession } from '@/stores/session';
+import { discardAllPendingEdits } from '@/stores/session-pending-edits';
+import { createEmptyTab } from '@/stores/session-tab-model';
 import { flushPersistedTabs, restoreTabsOnceFor } from '@/stores/session-tabs';
+import { useUpdateToasts } from '@/stores/update-toasts';
 import { useWorkspace } from '@/stores/workspace';
 import type { LaunchAction } from '@shared/deep-link';
 import { ConnectionRecovered, type DataFilePickResult } from '@shared/protocol';
+import type { RecoveryLaunchInfo } from '@shared/recovery';
 import type { WorkspaceSnapshot } from '@shared/workspace';
 import { useEffect } from 'react';
 
@@ -48,6 +68,55 @@ const MENU_COMMANDS: ReadonlyArray<readonly [EventChannel, CommandId]> = [
   ['plasma:menu:openDataFile', 'openDataFile'],
 ];
 
+let recoveryWired = false;
+
+/** B2: keep main's crash snapshot current, and say what was restored once a snapshot is back. */
+function wireCrashRecovery(): AnnounceDeps {
+  const toasts = () => useUpdateToasts.getState();
+  const deps: AnnounceDeps = {
+    push: (toast, ms) => toasts().push(toast, ms),
+    dismiss: (id) => toasts().dismiss(id),
+    discardEdits: () => {
+      discardAllPendingEdits(useSession.setState);
+      toasts().dismiss('crash-recovery');
+    },
+    discardSnapshot: (connectionId) => void window.plasma.recovery.resolve(connectionId),
+    openAsSql: (journal) => {
+      // Plain unsaved SQL tabs: no connection is attached and no edit comes with them.
+      const s = useSession.getState();
+      const pageSize = s.settings.defaultPageSize;
+      const added = journal.strip.tabs
+        .filter((t) => t.kind === 'sql' && typeof t.sql === 'string' && t.sql.trim() !== '')
+        .map((t) => ({
+          ...createEmptyTab(pageSize, `recovered-${String(t.title ?? 'query')}`),
+          sql: String(t.sql),
+        }));
+      if (added.length > 0) useSession.setState({ tabs: [...s.tabs, ...added] });
+      void window.plasma.recovery.resolve(journal.connectionId);
+    },
+    showLog: () => void window.plasma.recovery.showLog(),
+    hasLog: recoveryContext().hasLog,
+  };
+  if (recoveryWired) return deps;
+  recoveryWired = true;
+  installRecoveryJournal(useSession, window.plasma.recovery);
+  setBeforeCommitHook(flushRecoveryJournal);
+  onRecoveryTargetChanged((journal) => announceTargetChanged(journal, deps));
+  onRecoveryRestored((restored) => {
+    announceRestored(restored, recoveryContext().cause, {
+      ...deps,
+      hasLog: recoveryContext().hasLog,
+    });
+    // The restored state must be in the live snapshot before the old one is let go, so a
+    // crash right now still has something to restore. If it could not be written, the old
+    // one is set aside (never restored a second time) instead of deleted.
+    void flushRecoveryJournal()
+      .then((ok) => window.plasma.recovery.resolve(restored.journal.connectionId, !ok))
+      .catch(() => undefined);
+  });
+  return deps;
+}
+
 export function App() {
   useEffect(() => {
     void (async () => {
@@ -72,6 +141,30 @@ export function App() {
         savedConnections,
         useWorkspace.getState().snapshot?.profiles.map((p) => p.id) ?? [],
       );
+      // B2: did Plasma crash or get killed last time? Snapshots main set aside wait here
+      // until their connection is up (adoptConnectionTabs restores them).
+      const crash = await window.plasma.recovery.launchInfo().catch(() => null);
+      if (crash) setPendingRecoveries(crash);
+      const recoveryDeps = wireCrashRecovery();
+      const recoveryPlan = planRecoveryBoot(
+        resume ? { ...(crash as RecoveryLaunchInfo), unclean: false } : crash,
+        savedConnections,
+        useWorkspace.getState().snapshot?.profiles.map((p) => p.id) ?? [],
+      );
+      if (recoveryPlan.noticeOnly !== null) {
+        announceNothingToRestore(recoveryPlan.noticeOnly, recoveryDeps);
+        void window.plasma.recovery.resolve();
+      }
+      announceOffers(recoveryPlan.offers, recoveryDeps);
+      if (recoveryPlan.resume && connectionState === 'idle') {
+        const target = recoveryPlan.resume.plan;
+        if (target.kind === 'saved') {
+          useReconnect.getState().start({ id: target.id, name: target.name }, 'launch');
+        } else {
+          await useWorkspace.getState().connectProfile(target.profileId);
+        }
+        return;
+      }
       if (resume && connectionState === 'idle') {
         restoreTabsOnceFor(resume.kind === 'saved' ? resume.id : resume.connectionId);
         if (resume.kind === 'saved') {

@@ -21,9 +21,25 @@
  *  - discarding is just dropping the queue — no re-query needed.
  */
 import { cellToText, isNoopEdit } from '@/features/result-grid/cell-edit';
+import { runBeforeCommitHook } from '@/lib/crash-recovery';
+import {
+  type EditConflict,
+  type TheirsLookup,
+  type WorkerConflict,
+  buildConflicts,
+  conflictSummary,
+  keepMine,
+  takeTheirs,
+} from '@/lib/edit-conflicts';
 import { cleanIpcError } from '@/lib/errors';
 import { ipc } from '@/lib/ipc';
-import { buildDeleteSql, buildInsertSql, buildUpdateSql } from '@/lib/table-query';
+import {
+  buildDeleteSql,
+  buildInsertSql,
+  buildRowLookupSql,
+  buildUpdateSql,
+} from '@/lib/table-query';
+import type { GuardValue } from '@shared/edit-guard';
 import type { ColumnMeta, SchemaInfo } from '@shared/protocol';
 import { POSTGRES_DIALECT, type SqlDialect, dialectFor, engineCaps } from '@shared/sql-dialect';
 import { effectiveSafeMode } from './safe-mode';
@@ -267,8 +283,17 @@ export function pendingInsertsFor(tabId: string, edits: readonly PendingEdit[]):
 }
 
 export interface EditBatch {
-  /** `label` ('update "public"."users"') names the statement in worker errors. */
-  updates: Array<{ sql: string; params: unknown[]; label: string }>;
+  /**
+   * `label` ('update "public"."users"') names the statement in worker errors;
+   * `kind` lets the worker tell a changed row (UPDATE / DELETE matched nothing)
+   * from an INSERT that hit an existing key.
+   */
+  updates: Array<{
+    sql: string;
+    params: unknown[];
+    label: string;
+    kind: 'update' | 'delete' | 'insert';
+  }>;
   /** Edit ids behind each statement (same order as `updates`). */
   editIds: string[][];
 }
@@ -283,8 +308,16 @@ export interface EditBatch {
 export function buildEditBatch(
   edits: readonly PendingEdit[],
   dialect: SqlDialect = POSTGRES_DIALECT,
+  opts: { serverVersion?: string | null } = {},
 ): EditBatch {
-  const updates: Array<{ sql: string; params: unknown[] }> = [];
+  // Before Postgres 12 floats print rounded, so their text never matches the stored value.
+  const oldPg =
+    dialect.engine === 'postgres' &&
+    Number(/(\d+)\./.exec(opts.serverVersion ?? '')?.[1] ?? 99) < 12;
+  const unsafeFloat = (type: string | undefined) =>
+    oldPg && /^_?(float4|float8|real|double precision)(\[\])?$/i.test(type ?? '');
+  const updates: Array<{ sql: string; params: unknown[]; kind: 'update' | 'delete' | 'insert' }> =
+    [];
   const editIds: string[][] = [];
   const tableKey = (e: PendingEdit) => `${e.schema}\u0000${e.table}`;
   const rowId = (e: PendingEdit) => `${tableKey(e)}\u0000${e.rowKey ?? rowKeyOf(e.pkValues)}`;
@@ -299,9 +332,19 @@ export function buildEditBatch(
       schema: e.schema,
       table: e.table,
       pkValues: e.pkValues,
+      guards: e.unguarded
+        ? []
+        : (e.originalRow ?? [])
+            .filter((c) => !(c.column in e.pkValues))
+            .map((c) => ({
+              column: c.column,
+              value: c.value,
+              type: c.type,
+              noEquality: c.noEquality || unsafeFloat(c.type),
+            })),
       dialect,
     });
-    updates.push({ sql, params });
+    updates.push({ sql, params, kind: 'delete' });
     editIds.push([e.id]);
   }
 
@@ -318,14 +361,24 @@ export function buildEditBatch(
     const first = list[0]!;
     const set: Record<string, unknown> = {};
     for (const e of list) set[e.column] = e.newValue;
+    // The values the user saw in the columns they changed must still be there.
+    const guards: GuardValue[] = list
+      .filter((e) => !e.unguarded && !(e.column in first.pkValues))
+      .map((e) => ({
+        column: e.column,
+        value: e.oldValue === null || e.oldValue === undefined ? null : String(e.oldValue),
+        type: e.oldType,
+        noEquality: e.oldNoEquality || unsafeFloat(e.oldType),
+      }));
     const { sql, params } = buildUpdateSql({
       schema: first.schema,
       table: first.table,
       set,
       pkValues: first.pkValues,
+      guards,
       dialect,
     });
-    updates.push({ sql, params });
+    updates.push({ sql, params, kind: 'update' });
     editIds.push(list.map((e) => e.id));
   }
 
@@ -334,7 +387,11 @@ export function buildEditBatch(
     const values = e.values ?? {};
     const cols = Object.keys(values);
     if (cols.length === 0) {
-      updates.push({ sql: dialect.insertDefaults(dialect.qualify(e.schema, e.table)), params: [] });
+      updates.push({
+        sql: dialect.insertDefaults(dialect.qualify(e.schema, e.table)),
+        params: [],
+        kind: 'insert',
+      });
     } else {
       const { sql } = buildInsertSql({
         schema: e.schema,
@@ -342,7 +399,7 @@ export function buildEditBatch(
         values: Object.fromEntries(cols.map((c) => [c, values[c] ?? null])),
         dialect,
       });
-      updates.push({ sql, params: cols.map((c) => values[c] ?? null) });
+      updates.push({ sql, params: cols.map((c) => values[c] ?? null), kind: 'insert' });
     }
     editIds.push([e.id]);
   }
@@ -481,12 +538,15 @@ function applyCellEdit(
     e.column === col.name &&
     (e.rowKey ?? rowKeyOf(e.pkValues)) === rowKey;
   const rest = edits.filter((e) => !sameCell(e));
-  const oldValue = row[columnIndex];
+  const existing = edits.find(sameCell);
+  // The original is what the user first edited against. A re-edit after the grid
+  // reloaded must NOT take the reloaded server value as the new guard: that would
+  // hide a change made by someone else in between.
+  const oldValue = existing ? existing.oldValue : row[columnIndex];
   // Typing the original value back (or clicking in and out) un-queues.
   if (isNoopEdit(oldValue, newValue, col.dataTypeName)) {
     return { edits: rest.length !== edits.length ? rest : edits, outcome: 'noop' };
   }
-  const existing = edits.find(sameCell);
   const edit: PendingEdit = {
     id: existing?.id ?? freshEditId(),
     tabId: target.tab.id,
@@ -496,7 +556,10 @@ function applyCellEdit(
     pkValues,
     rowKey,
     column: col.name,
-    oldValue: cellToText(oldValue, col.dataTypeName),
+    oldValue: existing ? existing.oldValue : cellToText(oldValue, col.dataTypeName),
+    oldType: existing?.oldType ?? col.dataTypeName,
+    ...((existing ? existing.oldNoEquality : col.noEquality) ? { oldNoEquality: true } : {}),
+    ...(existing?.unguarded ? { unguarded: true } : {}),
     newValue,
     rowIndex,
     columnIndex,
@@ -696,6 +759,12 @@ export function queueRowDeletes(set: Set, get: Get, rowIndices: readonly number[
         rowKey,
         column: '',
         oldValue: row,
+        originalRow: target.columns.map((c, i) => ({
+          column: c.name,
+          value: cellToText(row[i], c.dataTypeName),
+          type: c.dataTypeName,
+          ...(c.noEquality ? { noEquality: true } : {}),
+        })),
         newValue: null,
         rowIndex: target.rows.indexOf(row),
         columnIndex: -1,
@@ -821,7 +890,9 @@ export async function commitPendingEdits(
   if (mismatched.length > 0 || liveGen <= 0) {
     fail('pending edits belong to a previous connection — discard them before committing');
   }
-  const batch = buildEditBatch(edits, dialectFor(state.activeConfig?.engine));
+  const batch = buildEditBatch(edits, dialectFor(state.activeConfig?.engine), {
+    serverVersion: state.serverVersion,
+  });
   // Prod tag / safe mode: every grid write needs an explicit confirm (or is
   // refused outright on a read-only safe mode).
   const decision = evaluateGate(get, '', true);
@@ -845,12 +916,23 @@ export async function commitPendingEdits(
     }
     return;
   }
+  // B2: edits restored after a crash that hit mid-commit may already be saved. An INSERT
+  // would simply be written again, so check first; nothing is sent while one is in doubt.
+  const doubtful = await preflightMaybeCommitted(get, edits, batch);
+  if (doubtful.length > 0) {
+    await reviewConflicts(set, get, tabId, edits, batch, doubtful);
+    return;
+  }
   set({ pendingEditsBusy: true, pendingEditsError: null });
   try {
+    // B2: the crash snapshot must say "these were being committed" BEFORE the request
+    // leaves, so a crash in the middle restores them flagged instead of as plain edits.
+    set({ commitInFlightIds: edits.map((e) => e.id) });
+    await runBeforeCommitHook();
     // U05: one worker request owns BEGIN/statements/COMMIT (or SAVEPOINT
     // when a user transaction is already open). Never a sequence of
     // unrelated IPC calls that can commit foreign work.
-    let res: { state: unknown };
+    let res: { state: unknown; conflicts?: WorkerConflict[] };
     try {
       res = await ipc.query.commitEditBatch({ connectionGen: liveGen, updates: batch.updates });
     } catch (err) {
@@ -865,6 +947,13 @@ export async function commitPendingEdits(
       });
       throw new Error(message);
     }
+    // B1: a row changed under the user. The worker rolled the whole batch back;
+    // every staged edit stays, and the conflicting rows go to review.
+    if (res.conflicts && res.conflicts.length > 0) {
+      set({ txnState: res.state });
+      await reviewConflicts(set, get, tabId, edits, batch, res.conflicts);
+      return;
+    }
     // Only drop what was committed — edits queued while the batch ran stay.
     const committed = new Set(edits.map((e) => e.id));
     set({
@@ -874,6 +963,8 @@ export async function commitPendingEdits(
         editsOf(get().pendingEditsByTab, tabId).filter((e) => !committed.has(e.id)),
       ),
       txnState: res.state,
+      editConflicts: null,
+      editConflictsOpen: false,
     });
     // Refresh the committed tab (it may have been closed meanwhile).
     const tab = get().tabs.find((t: QueryTab) => t.id === tabId) as QueryTab | undefined;
@@ -884,8 +975,161 @@ export async function commitPendingEdits(
       }
     }
   } finally {
-    set({ pendingEditsBusy: false });
+    set({ pendingEditsBusy: false, commitInFlightIds: [] });
   }
+}
+
+/**
+ * Restored INSERTs that were in flight when Plasma stopped (`maybeCommitted`): the
+ * row may be in the table already. Where the key is known the row is looked up; an
+ * existing one, or a key the server generates (so nothing can be checked), is held
+ * back as a conflict for the user to decide. Updates and deletes need no check:
+ * their guarded WHERE already refuses to apply twice.
+ */
+async function preflightMaybeCommitted(
+  get: Get,
+  edits: readonly PendingEdit[],
+  batch: EditBatch,
+): Promise<WorkerConflict[]> {
+  const out: WorkerConflict[] = [];
+  const state = get();
+  const dialect = dialectFor(state.activeConfig?.engine);
+  for (let i = 0; i < batch.editIds.length; i++) {
+    const e = edits.find((x) => x.id === batch.editIds[i]?.[0]);
+    if (!e || !e.maybeCommitted || editKind(e) !== 'insert') continue;
+    const pkNames = tablePkNames(state.schema, e.schema, e.table);
+    const values = e.values ?? {};
+    const pk: Record<string, string | null> = {};
+    for (const name of pkNames) pk[name] = values[name] ?? null;
+    if (pkNames.length === 0 || Object.values(pk).some((v) => v === null)) {
+      out.push({ index: i, reason: 'maybe-saved' });
+      continue;
+    }
+    try {
+      const { sql, params } = buildRowLookupSql({
+        schema: e.schema,
+        table: e.table,
+        pkValues: pk,
+        currentRead: state.txnState === 'active',
+        dialect,
+      });
+      const res = await ipc.query.run(sql, params, { internal: true });
+      if (res.rows.length > 0) out.push({ index: i, reason: 'duplicate' });
+    } catch {
+      out.push({ index: i, reason: 'maybe-saved' });
+    }
+  }
+  return out;
+}
+
+// ─── Concurrent-edit conflicts (B1) ──────────────────────────────────
+
+/** Rows read back for review; a commit with more conflicts than this lists the rest as unreadable. */
+const MAX_CONFLICT_LOOKUPS = 50;
+
+/**
+ * The commit was rolled back because rows changed. Read each row's current
+ * state ("theirs") and hand the list to the review dialog. Staged edits are
+ * untouched; the grid tints them through `pendingEditsError.editIds`.
+ */
+async function reviewConflicts(
+  set: Set,
+  get: Get,
+  tabId: string,
+  edits: readonly PendingEdit[],
+  batch: EditBatch,
+  conflicts: readonly WorkerConflict[],
+): Promise<void> {
+  const dialect = dialectFor(get().activeConfig?.engine);
+  const byId = new Map(edits.map((e) => [e.id, e] as const));
+  const theirs = new Map<number, TheirsLookup>();
+  let looked = 0;
+  for (const c of conflicts) {
+    if (c.reason !== 'no-match') continue;
+    const first = byId.get(batch.editIds[c.index]?.[0] ?? '');
+    if (!first || looked++ >= MAX_CONFLICT_LOOKUPS) continue;
+    try {
+      const { sql, params } = buildRowLookupSql({
+        schema: first.schema,
+        table: first.table,
+        pkValues: first.pkValues,
+        currentRead: get().txnState === 'active',
+        dialect,
+      });
+      const res = await ipc.query.run(sql, params, { internal: true });
+      const row = res.rows[0] as unknown[] | undefined;
+      theirs.set(
+        c.index,
+        row
+          ? {
+              found: true,
+              row: res.columns.map((col, i) => ({
+                column: col.name,
+                value: cellToText(row[i], col.dataTypeName),
+                type: col.dataTypeName,
+                ...(col.noEquality ? { noEquality: true } : {}),
+              })),
+            }
+          : { found: false },
+      );
+    } catch (err) {
+      theirs.set(c.index, {
+        error: cleanIpcError(err instanceof Error ? err.message : String(err)),
+      });
+    }
+  }
+  const items = buildConflicts({ edits, batch, conflicts, theirs });
+  set({
+    editConflicts: { tabId, items },
+    editConflictsOpen: true,
+    pendingEditsError: {
+      message: conflictSummary(items),
+      editIds: items.flatMap((i) => i.editIds),
+      tabId,
+    } satisfies PendingEditsError,
+  });
+}
+
+/**
+ * Resolve one conflicting row. `mine` re-stages the change against the
+ * server's current values (the next commit compares against those); `theirs`
+ * drops the change. Either way the table reloads so the grid shows the server.
+ */
+export function resolveEditConflict(
+  set: Set,
+  get: Get,
+  deps: PendingEditsDeps,
+  conflictId: string,
+  choice: 'mine' | 'theirs',
+): void {
+  const state = get();
+  const review = state.editConflicts as { tabId: string; items: EditConflict[] } | null;
+  const item = review?.items.find((i) => i.id === conflictId);
+  if (!review || !item) return;
+  const current = editsOf(state.pendingEditsByTab, review.tabId);
+  const next = choice === 'mine' ? keepMine(current, item) : takeTheirs(current, item);
+  if (choice === 'mine' && next.every((e, i) => e === current[i])) return; // not re-stageable
+  const remaining = review.items.filter((i) => i.id !== conflictId);
+  set({
+    pendingEditsByTab: withTabEdits(state.pendingEditsByTab, review.tabId, next),
+    editConflicts: remaining.length > 0 ? { tabId: review.tabId, items: remaining } : null,
+    editConflictsOpen: remaining.length > 0,
+    pendingEditsError:
+      remaining.length > 0
+        ? {
+            message: conflictSummary(remaining),
+            editIds: remaining.flatMap((i) => i.editIds),
+            tabId: review.tabId,
+          }
+        : null,
+  });
+  const tab = get().tabs.find((t: QueryTab) => t.id === review.tabId) as QueryTab | undefined;
+  if (tab && tab.kind === 'table') void deps.runTableDataQuery(set, get, review.tabId);
+}
+
+/** Close the review without resolving anything: edits stay staged and tinted. */
+export function closeEditConflicts(set: Set): void {
+  set({ editConflictsOpen: false });
 }
 
 export async function revertPendingEdits(
@@ -900,10 +1144,18 @@ export async function revertPendingEdits(
   set({
     pendingEditsByTab: withoutTabEdits(get().pendingEditsByTab, [tabId]),
     pendingEditsError: null,
+    ...(get().editConflicts?.tabId === tabId
+      ? { editConflicts: null, editConflictsOpen: false }
+      : {}),
   });
 }
 
 /** Drop every tab's staged edits (connection switch / disconnect gate). */
 export function discardAllPendingEdits(set: Set): void {
-  set({ pendingEditsByTab: {}, pendingEditsError: null });
+  set({
+    pendingEditsByTab: {},
+    pendingEditsError: null,
+    editConflicts: null,
+    editConflictsOpen: false,
+  });
 }

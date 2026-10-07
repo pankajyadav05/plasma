@@ -1,3 +1,9 @@
+import {
+  onRecoveryRestored,
+  onRecoveryTargetChanged,
+  resetPendingRecoveries,
+  setPendingRecoveries,
+} from '@/lib/crash-recovery';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { QueryTab } from './session';
 import {
@@ -361,5 +367,263 @@ describe('restoring tabs after an update restart', () => {
     restoreTabsOnceFor('c1');
     adopt(false, 'c1');
     expect(adopt(false, 'c1').tabs.map((t) => t.id)).toEqual(['start']);
+  });
+});
+
+describe('restoring a crashed session (B2)', () => {
+  const store = new Map<string, string>();
+  const restored = vi.fn();
+  beforeEach(() => {
+    store.clear();
+    restored.mockClear();
+    vi.stubGlobal('localStorage', {
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => store.set(k, v),
+      removeItem: (k: string) => store.delete(k),
+    });
+    // The older saved strip must lose to the newer crash snapshot.
+    store.set(
+      'plasma.tabs.v1.c1',
+      JSON.stringify({ v: 1, activeIndex: 0, tabs: [{ kind: 'sql', title: 'old', sql: 'old' }] }),
+    );
+    onRecoveryRestored(restored);
+  });
+  afterEach(() => {
+    onRecoveryRestored(null);
+    resetPendingRecoveries();
+    vi.unstubAllGlobals();
+  });
+
+  const edit = (tabIndex: number, over: Record<string, unknown> = {}) => ({
+    tabIndex,
+    kind: 'update' as const,
+    schema: 'public',
+    table: 'users',
+    pkValues: { id: '1' },
+    column: 'name',
+    oldValue: 'ada',
+    oldType: 'text',
+    newValue: 'ADA',
+    ...over,
+  });
+
+  function crashJournal(over: Record<string, unknown> = {}) {
+    return {
+      v: 1 as const,
+      savedAt: 10,
+      connectionId: 'c1',
+      txnActive: true,
+      strip: {
+        v: 1 as const,
+        activeIndex: 2,
+        tabs: [
+          { kind: 'sql', title: 'query-1.sql', sql: 'select unsaved', cleanSql: '' },
+          { kind: 'sql', title: 'bad' }, // fails validation: skipped on restore
+          { kind: 'table', title: 'users', tableSchema: 'public', tableName: 'users' },
+        ],
+      },
+      edits: [edit(2)],
+      ...over,
+    };
+  }
+
+  function adopt(settingOn = false) {
+    let state = {
+      activeConfig: { id: 'c1' },
+      connectionGen: 7,
+      tabsConnectionId: null as string | null,
+      tabs: [tab({ id: 'start' })],
+      activeTabId: 'start',
+      pendingEditsByTab: {},
+      settings: { restoreWorkspace: settingOn, defaultPageSize: 50 },
+      setActiveTab: vi.fn(),
+    };
+    const set = (patch: Record<string, unknown>) => {
+      state = { ...state, ...patch } as typeof state;
+    };
+    adoptConnectionTabs(set as never, (() => state) as never, 'postgres');
+    return state;
+  }
+
+  const setPending = (journals: unknown[]) =>
+    setPendingRecoveries({
+      unclean: true,
+      cause: 'exit',
+      announce: [],
+      journals: journals as never,
+      hasLog: true,
+    });
+
+  it('brings back tabs with their unsaved SQL, even with "Restore tabs on launch" off', () => {
+    setPending([crashJournal()]);
+    const state = adopt(false);
+    expect(state.tabs.map((t) => t.kind)).toEqual(['sql', 'table']);
+    expect(state.tabs[0]?.sql).toBe('select unsaved');
+    expect(state.tabsConnectionId).toBe('c1');
+    expect(state.activeTabId).toBe(state.tabs[1]?.id);
+  });
+
+  it('re-stages edits on the right tab despite a skipped tab, stamped with the live generation', () => {
+    setPending([crashJournal()]);
+    const state = adopt();
+    const tableTab = state.tabs[1] as QueryTab;
+    const byTab = state.pendingEditsByTab as Record<string, Array<Record<string, unknown>>>;
+    const edits = byTab[tableTab.id];
+    expect(edits).toHaveLength(1);
+    expect(edits?.[0]).toMatchObject({
+      kind: 'update',
+      column: 'name',
+      oldValue: 'ada',
+      newValue: 'ADA',
+      connectionGen: 7,
+      tabId: tableTab.id,
+    });
+  });
+
+  it('tells the shell what came back, with the snapshot to resolve afterwards', () => {
+    setPending([crashJournal()]);
+    adopt();
+    expect(restored).toHaveBeenCalledOnce();
+    const arg = restored.mock.calls[0]?.[0];
+    expect(arg).toMatchObject({ tabs: 2, edits: 1 });
+    expect(arg.journal.connectionId).toBe('c1');
+    expect(arg.journal.txnActive).toBe(true);
+  });
+
+  it('restores a snapshot once, and only for its own connection', () => {
+    setPending([crashJournal()]);
+    expect(adopt().tabs).toHaveLength(2);
+    // a later adoption (e.g. another reconnect) starts from the normal path
+    expect(adopt().tabs.map((t) => t.id)).toEqual(['start']);
+    resetPendingRecoveries();
+    setPending([crashJournal({ connectionId: 'other' })]);
+    expect(adopt().tabs.map((t) => t.id)).toEqual(['start']);
+    expect(restored).toHaveBeenCalledTimes(1);
+  });
+
+  it('an edit whose tab was unusable reopens its table instead of being lost', () => {
+    setPending([
+      crashJournal({
+        strip: { v: 1, activeIndex: 0, tabs: [{ kind: 'sql', title: 'q', sql: 'select 1' }] },
+        edits: [edit(9), edit(9, { column: 'age', oldValue: '1', newValue: '2' })],
+      }),
+    ]);
+    const state = adopt();
+    expect(state.tabs.map((t) => t.kind)).toEqual(['sql', 'table']);
+    const reopened = state.tabs[1] as QueryTab;
+    expect(reopened.tableName).toBe('users');
+    const staged = (state.pendingEditsByTab as Record<string, unknown[]>)[reopened.id];
+    expect(staged).toHaveLength(2);
+    expect(restored.mock.calls[0]?.[0].edits).toBe(2);
+  });
+
+  it('edits with no usable tab strip still come back (fresh tab plus the table)', () => {
+    setPending([crashJournal({ strip: { v: 1, activeIndex: 0, tabs: [{ kind: 'bogus' }] } })]);
+    const state = adopt();
+    expect(Object.values(state.pendingEditsByTab as object).flat()).toHaveLength(1);
+  });
+
+  it('a snapshot without edits restores tabs and stages nothing', () => {
+    setPending([crashJournal({ edits: [], txnActive: false })]);
+    const state = adopt();
+    expect(Object.keys(state.pendingEditsByTab)).toEqual([]);
+    expect(restored.mock.calls[0]?.[0].edits).toBe(0);
+  });
+});
+
+describe('a snapshot against another target is not applied (P2-6)', () => {
+  afterEach(() => {
+    onRecoveryRestored(null);
+    onRecoveryTargetChanged(null);
+    resetPendingRecoveries();
+    vi.unstubAllGlobals();
+  });
+
+  const journal = {
+    v: 1 as const,
+    savedAt: 10,
+    connectionId: 'c1',
+    txnActive: false,
+    target: { engine: 'postgres', host: 'prod.db', port: 5432, database: 'prod', user: 'app' },
+    strip: {
+      v: 1 as const,
+      activeIndex: 0,
+      tabs: [{ kind: 'sql', title: 'q', sql: 'select unsaved' }],
+    },
+    edits: [
+      {
+        tabIndex: 0,
+        kind: 'insert' as const,
+        schema: 'public',
+        table: 'users',
+        pkValues: {},
+        column: '',
+        oldValue: null,
+        newValue: null,
+        values: { id: '1' },
+      },
+    ],
+  };
+
+  function adopt(database: string) {
+    vi.stubGlobal('localStorage', {
+      getItem: () => null,
+      setItem: () => undefined,
+      removeItem: () => undefined,
+    });
+    let state = {
+      activeConfig: {
+        id: 'c1',
+        engine: 'postgres',
+        host: 'prod.db',
+        port: 5432,
+        database,
+        user: 'app',
+      },
+      connectionGen: 7,
+      tabsConnectionId: null as string | null,
+      tabs: [tab({ id: 'start' })],
+      activeTabId: 'start',
+      pendingEditsByTab: {},
+      settings: { restoreWorkspace: false, defaultPageSize: 50 },
+      setActiveTab: vi.fn(),
+    };
+    const set = (patch: Record<string, unknown>) => {
+      state = { ...state, ...patch } as typeof state;
+    };
+    adoptConnectionTabs(set as never, (() => state) as never, 'postgres');
+    return state;
+  }
+
+  it('applies it when host, port, database and user are unchanged', () => {
+    setPendingRecoveries({
+      unclean: true,
+      cause: 'exit',
+      announce: [],
+      journals: [journal],
+      hasLog: false,
+    });
+    const state = adopt('prod');
+    expect(state.tabs[0]?.sql).toBe('select unsaved');
+    expect(Object.values(state.pendingEditsByTab as object).flat()).toHaveLength(1);
+  });
+
+  it('refuses it when the database changed: no tab, no edit, and the shell is told', () => {
+    const changed = vi.fn();
+    const restored = vi.fn();
+    onRecoveryTargetChanged(changed);
+    onRecoveryRestored(restored);
+    setPendingRecoveries({
+      unclean: true,
+      cause: 'exit',
+      announce: [],
+      journals: [journal],
+      hasLog: false,
+    });
+    const state = adopt('staging');
+    expect(state.tabs.map((t) => t.id)).toEqual(['start']);
+    expect(state.pendingEditsByTab).toEqual({});
+    expect(changed).toHaveBeenCalledOnce();
+    expect(restored).not.toHaveBeenCalled();
   });
 });
