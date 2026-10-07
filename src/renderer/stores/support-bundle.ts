@@ -48,7 +48,13 @@ async function load(
     });
   } catch (err) {
     if (mine !== seq) return;
-    set({ loading: false, error: err instanceof Error ? err.message : String(err) });
+    // The files on screen no longer match the checkbox, so none of them may be saved.
+    set({
+      loading: false,
+      preview: null,
+      selected: null,
+      error: err instanceof Error ? err.message : String(err),
+    });
   }
 }
 
@@ -86,7 +92,9 @@ export const useSupportBundle = create<SupportBundleState>((set, get) => ({
     if (!preview || get().loading) return;
     set({ saving: true, error: null });
     try {
-      const res = await ipc.support.save(preview.token);
+      const res = await ipc.support.save(preview.token, {
+        redactHostsAndUsers: get().redactHostsAndUsers,
+      });
       set({ saving: false, savedPath: res.saved ? res.filePath : null });
     } catch (err) {
       set({ saving: false, error: err instanceof Error ? err.message : String(err) });

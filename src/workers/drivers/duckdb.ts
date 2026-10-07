@@ -107,7 +107,6 @@ const READ_TYPES = new Set<number>([ST.SELECT, ST.EXPLAIN, ST.TRANSACTION]);
 // DuckDBTypeId values of the integer types the grid shows as numbers.
 const INTEGER_TYPE_IDS = new Set<number>([2, 3, 4, 5, 6, 7, 8, 9]);
 const TYPE_FLOAT = 10;
-const TYPE_BLOB = 18;
 
 /**
  * DuckDB's JSON form widens a FLOAT (32-bit) to a double: 1.1 arrives as
@@ -123,31 +122,37 @@ export function shortestFloat32(value: number): number {
   return value;
 }
 
-/**
- * DuckDB prints a BLOB as text with `\xHH` (upper-case) for every byte that is
- * not printable ASCII and the printable bytes as themselves. The grid's one
- * binary form is `\x` + lower-case hex, the same as Postgres bytea.
- */
-export function duckdbBlobToHex(text: string): string {
-  let hex = '';
-  for (let i = 0; i < text.length; i++) {
-    if (
-      text[i] === '\\' &&
-      text[i + 1] === 'x' &&
-      /^[0-9a-fA-F]{2}$/.test(text.slice(i + 2, i + 4))
-    ) {
-      hex += text.slice(i + 2, i + 4).toLowerCase();
-      i += 3;
-    } else {
-      hex += (text.charCodeAt(i) & 0xff).toString(16).padStart(2, '0');
-    }
-  }
-  return `\\x${hex}`;
+/** `\x` + lower-case hex of `bytes`: the grid's one binary form. */
+export function bytesToHexCell(bytes: Uint8Array): string {
+  return `\\x${Buffer.from(bytes).toString('hex')}`;
 }
 
 type Api = typeof import('@duckdb/node-api');
 let apiPromise: Promise<Api> | null = null;
 /** The native module is loaded on first use, so other engines never pay for it. */
+/**
+ * The JSON form of a DuckDB value, except that a BLOB is read from its bytes. DuckDB's own
+ * text form prints a backslash literally, so `\x41A` (the bytes 5c 78 34 31 41) cannot be told
+ * from the byte 0x41 followed by an A.
+ */
+type JsonConverter = (value: unknown, type: { typeId: number }, conv: unknown) => unknown;
+let converterPromise: Promise<JsonConverter> | null = null;
+function jsonWithBlobs(): Promise<JsonConverter> {
+  converterPromise ??= loadApi().then((api) => {
+    const base = api.JsonDuckDBValueConverter as unknown as JsonConverter;
+    const BLOB = api.DuckDBTypeId.BLOB as number;
+    const conv: JsonConverter = (value, type, recurse) => {
+      if (type.typeId === BLOB) {
+        const bytes = (value as { bytes?: Uint8Array } | null)?.bytes;
+        return bytes ? bytesToHexCell(bytes) : null;
+      }
+      return base(value, type, recurse ?? conv);
+    };
+    return conv;
+  });
+  return converterPromise;
+}
+
 function loadApi(): Promise<Api> {
   apiPromise ??= import('@duckdb/node-api').then((m) => {
     const mod = m as unknown as Api & { default?: Api };
@@ -166,7 +171,6 @@ export function normalizeDuckdbCell(value: unknown, typeId: number): unknown {
     return Number(value);
   }
   if (typeId === TYPE_FLOAT && typeof value === 'number') return shortestFloat32(value);
-  if (typeId === TYPE_BLOB && typeof value === 'string') return duckdbBlobToHex(value);
   return value;
 }
 
@@ -193,6 +197,15 @@ type ColumnMetaT = QueryResult['columns'][number];
 export class DuckdbDriver implements SqlEngineDriver {
   private instance: DuckDBInstance | null = null;
   private conn: DuckDBConnection | null = null;
+
+  /**
+   * Lookups and AI queries run here, not on `conn`: the user may have typed BEGIN, and a
+   * statement that fails inside their transaction aborts it. Another connection of the same
+   * instance has its own transaction and sees the same catalog and sandbox.
+   */
+  private readConn: DuckDBConnection | null = null;
+  /** The connection a statement is running on, for cancel. */
+  private current: DuckDBConnection | null = null;
   private cancelRequested = false;
   private timedOut = false;
   private running = false;
@@ -443,17 +456,22 @@ export class DuckdbDriver implements SqlEngineDriver {
 
   async disconnect(): Promise<void> {
     const conn = this.conn;
+    const readConn = this.readConn;
     const instance = this.instance;
+    this.readConn = null;
+    this.current = null;
     this.conn = null;
     this.instance = null;
     this.cancelRequested = false;
     this.running = false;
     this.sources = [];
     this.attached = [];
-    try {
-      conn?.closeSync();
-    } catch {
-      // already closed
+    for (const c of [readConn, conn]) {
+      try {
+        c?.closeSync();
+      } catch {
+        // already closed
+      }
     }
     try {
       instance?.closeSync();
@@ -478,6 +496,13 @@ export class DuckdbDriver implements SqlEngineDriver {
     } finally {
       release();
     }
+  }
+
+  /** The connection for read-only paths, opened on first use. */
+  private async requireReadConn(): Promise<DuckDBConnection> {
+    if (!this.instance) throw new Error('not connected to a DuckDB session');
+    this.readConn ??= await this.instance.connect();
+    return this.readConn;
   }
 
   private requireConn(): DuckDBConnection {
@@ -541,13 +566,15 @@ export class DuckdbDriver implements SqlEngineDriver {
     opts: SqlQueryOpts | undefined,
     readsOnly: boolean,
   ): Promise<Omit<QueryResult, 'durationMs'>> {
-    const conn = this.requireConn();
+    this.requireConn();
+    const conn = readsOnly ? await this.requireReadConn() : this.requireConn();
     const statements = splitSqlStatements(sql);
     if (statements.length === 0) return { columns: [], rows: [], rowCount: 0, command: '' };
     if (statements.length > 1 && params && params.length > 0) {
       throw new Error('bind parameters need a single statement');
     }
     this.running = true;
+    this.current = conn;
     this.cancelRequested = false;
     this.timedOut = false;
     const timer =
@@ -562,17 +589,8 @@ export class DuckdbDriver implements SqlEngineDriver {
       if (readsOnly) {
         // A SELECT can still write (`nextval()` moves a sequence), and the
         // statement type says nothing about that: the engine has to refuse it.
-        try {
-          await conn.run('BEGIN TRANSACTION READ ONLY');
-          readOnlyTxn = true;
-        } catch (err) {
-          if (/within a transaction/i.test(String(err))) {
-            throw new Error(
-              'rejected: a transaction is open on this session; commit or roll it back first',
-            );
-          }
-          throw err;
-        }
+        await conn.run('BEGIN TRANSACTION READ ONLY');
+        readOnlyTxn = true;
       }
       let last: Omit<QueryResult, 'durationMs'> = { columns: [], rows: [], rowCount: 0 };
       for (const text of statements) {
@@ -592,6 +610,7 @@ export class DuckdbDriver implements SqlEngineDriver {
       if (readOnlyTxn) await conn.run('ROLLBACK').catch(() => undefined);
       if (timer) clearTimeout(timer);
       this.running = false;
+      this.current = null;
       this.cancelRequested = false;
       this.timedOut = false;
     }
@@ -616,7 +635,9 @@ export class DuckdbDriver implements SqlEngineDriver {
     const state = emptyBoundState();
     const maxRows = Math.min(opts?.maxRows ?? MAX_RESULT_ROWS, opts?.rowCeiling ?? MAX_RESULT_ROWS);
     const maxBytes = Math.min(opts?.maxBytes ?? MAX_RESULT_BYTES, MAX_RESULT_BYTES_CEILING);
-    const chunks = result.yieldRowsJson();
+    const chunks = result.yieldConvertedRows(
+      (await jsonWithBlobs()) as Parameters<typeof result.yieldConvertedRows>[0],
+    );
     try {
       outer: for await (const chunk of chunks) {
         for (const raw of chunk) {
@@ -678,9 +699,9 @@ export class DuckdbDriver implements SqlEngineDriver {
   }
 
   async cancelQuery(): Promise<boolean> {
-    if (!this.running || !this.conn) return false;
+    if (!this.running || !this.current) return false;
     this.cancelRequested = true;
-    this.conn.interrupt();
+    this.current.interrupt();
     return true;
   }
 
@@ -728,7 +749,9 @@ export class DuckdbDriver implements SqlEngineDriver {
     }
     const columns = this.columnsOf(result);
     const typeIds = columns.map((_, i) => result.columnTypeId(i) as number);
-    const chunks = result.yieldRowsJson();
+    const chunks = result.yieldConvertedRows(
+      (await jsonWithBlobs()) as Parameters<typeof result.yieldConvertedRows>[0],
+    );
     let first = true;
     this.running = true;
     this.cancelRequested = false;

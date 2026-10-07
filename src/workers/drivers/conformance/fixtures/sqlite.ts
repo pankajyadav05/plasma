@@ -110,6 +110,7 @@ export function sqliteFixture(): SqlFixture {
         'WITH x AS (SELECT 1 AS n) INSERT INTO write_log SELECT n FROM x',
         'CREATE TABLE ai_probe (a INTEGER)',
         'PRAGMA user_version = 9',
+        'PRAGMA foreign_keys = OFF',
         `ATTACH DATABASE '${evilPath}' AS evil`,
         `ATTACH DATABASE '${otherPath}' AS other`,
         `VACUUM INTO '${evilPath}'`,
@@ -121,6 +122,8 @@ export function sqliteFixture(): SqlFixture {
       if (tables.rows.length > 0) leaked.push('ai_probe table was created');
       const v = await session.query('PRAGMA user_version');
       if (Number(v.rows[0]?.[0]) !== 0) leaked.push(`user_version is ${v.rows[0]?.[0]}`);
+      const fk = await session.query('PRAGMA foreign_keys');
+      if (Number(fk.rows[0]?.[0]) !== 1) leaked.push('foreign key enforcement was switched off');
       if (existsSync(evilPath)) leaked.push('a database file was created next to the database');
       // An ATTACH that was let through would make the other file readable by the next query.
       const peek = await session.aiQuery('SELECT s FROM other.secret').catch(() => null);

@@ -197,3 +197,14 @@ describe('ssh tunnel manager', () => {
     }
   });
 });
+
+describe('forward errors', () => {
+  it('keeps the last failure for the connection error, and forgets it once a forward works', async () => {
+    const { noteForwardResult, tunnelForwardError } = await import('./ssh-tunnel');
+    expect(tunnelForwardError('t-fwd')).toBeUndefined();
+    noteForwardResult('t-fwd', new Error('(SSH) Channel open failure: Connection refused'));
+    expect(tunnelForwardError('t-fwd')).toMatch(/Connection refused/);
+    noteForwardResult('t-fwd', null);
+    expect(tunnelForwardError('t-fwd')).toBeUndefined();
+  });
+});

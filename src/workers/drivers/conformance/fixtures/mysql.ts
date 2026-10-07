@@ -130,6 +130,21 @@ export function mysqlFixture(flavor: MysqlFlavor): SqlFixture {
       ['SET TRANSACTION READ WRITE', `INSERT INTO users (id, name) VALUES (56, 'bypass')`],
       ['SET @@session.tx_read_only = 0', `INSERT INTO users (id, name) VALUES (57, 'bypass')`],
       [`START TRANSACTION READ WRITE; INSERT INTO users (id, name) VALUES (58, 'bypass'); COMMIT`],
+      [
+        'START TRANSACTION /* /* */ READ WRITE /* */',
+        `INSERT INTO users (id, name) VALUES (59, 'bypass')`,
+        'COMMIT',
+      ],
+      [
+        'START TRANSACTION # c\n READ WRITE',
+        `INSERT INTO users (id, name) VALUES (60, 'bypass')`,
+        'COMMIT',
+      ],
+      [
+        '/*!START TRANSACTION READ WRITE*/',
+        `INSERT INTO users (id, name) VALUES (61, 'bypass')`,
+        'COMMIT',
+      ],
     ],
     aiReadSql: 'SELECT count(*) AS c FROM users',
     aiWriteProbes: [
@@ -143,6 +158,9 @@ export function mysqlFixture(flavor: MysqlFlavor): SqlFixture {
       'SET SESSION TRANSACTION READ WRITE',
       'START TRANSACTION READ WRITE',
       'COMMIT',
+      "SELECT 1 /* /* */ INTO OUTFILE '/tmp/plasma-conf-out' /* */",
+      "SELECT '\\'' INTO OUTFILE '/tmp/plasma-conf-out'",
+      '/*!50000 SELECT 1 */',
     ],
     async cleanupAfterLoss(env) {
       const running = await env.admin(

@@ -1,4 +1,5 @@
 import { isConnectionLostError } from '@shared/connection-loss';
+import { topLevelJsonValue } from '@shared/json-bigint';
 import type { ConnectionConfig } from '@shared/protocol';
 import { afterAll, beforeAll, describe, expect } from 'vitest';
 import { OpenSearchDriver } from '../opensearch';
@@ -23,6 +24,7 @@ export const opensearchCaps = allCapabilities({
   foreignKeys: { no: 'OpenSearch has no relations' },
   constraints: { no: 'OpenSearch enforces no constraints beyond mappings' },
   transactions: { no: 'OpenSearch has no transactions' },
+  userTransactions: { no: 'OpenSearch has no BEGIN / COMMIT statements' },
   multiStatement: { no: 'a request is one call; the Dev Tools console sends them one by one' },
   aiQuery: { no: 'the agent reads OpenSearch through the same classified read-only requests' },
   rowEdit: {
@@ -251,6 +253,12 @@ export function registerOpenSearchConformance(opts: { enabled: boolean }): void 
             size: 5,
           });
           expect(typed.hits.map((h) => h.id)).toContain('exact');
+          // What the document editor shows and saves: the raw text keeps the number a number.
+          const doc = await os.request({ method: 'GET', path: `/${IDX}/_doc/exact` });
+          expect(doc.rawBody).toBeDefined();
+          const source = topLevelJsonValue(doc.rawBody as string, '_source') as string;
+          expect(source).toContain('9007199254740993');
+          expect(source).not.toContain('"9007199254740993"');
           await os.request({ method: 'DELETE', path: `/${IDX}/_doc/exact?refresh=true` });
         },
       );

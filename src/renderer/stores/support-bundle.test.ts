@@ -78,7 +78,7 @@ describe('support bundle dialog state', () => {
     await useSupportBundle.getState().openDialog();
     save.mockResolvedValue({ saved: true, filePath: '/tmp/plasma-support.zip', bytes: 1234 });
     await useSupportBundle.getState().save();
-    expect(save).toHaveBeenCalledWith('t1');
+    expect(save).toHaveBeenCalledWith('t1', { redactHostsAndUsers: false });
     expect(useSupportBundle.getState().savedPath).toBe('/tmp/plasma-support.zip');
     expect(useSupportBundle.getState().saving).toBe(false);
   });
@@ -118,5 +118,18 @@ describe('support bundle dialog state', () => {
     await opening;
     expect(useSupportBundle.getState().preview).toBeNull();
     expect(useSupportBundle.getState().open).toBe(false);
+  });
+
+  it('a failed refresh leaves nothing to save, whatever the checkbox now says', async () => {
+    preview.mockResolvedValue(bundle('t1'));
+    await useSupportBundle.getState().openDialog();
+    preview.mockRejectedValue(new Error('boom'));
+    await useSupportBundle.getState().setRedact(true);
+    const s = useSupportBundle.getState();
+    expect(s.redactHostsAndUsers).toBe(true);
+    expect(s.preview).toBeNull();
+    expect(s.error).toBe('boom');
+    await s.save();
+    expect(save).not.toHaveBeenCalled();
   });
 });

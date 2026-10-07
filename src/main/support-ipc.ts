@@ -18,6 +18,7 @@ import { type BrowserWindow, app, dialog, ipcMain } from 'electron';
 import { z } from 'zod';
 import { workerOutput } from './line-ring';
 import { logger } from './logger';
+import { redactErrorText } from './redact';
 import { readTail, stampForFileName, zipOf } from './support-files';
 
 /**
@@ -69,7 +70,7 @@ export function gatherInput(deps: SupportIpcDeps): SupportBundleInput {
     settings: deps.settings(),
     mainLog: readTail(join(logs, 'main.log')),
     mainLogOld: readTail(join(logs, 'main.old.log')),
-    workerLog: workerOutput.text(),
+    workerLog: redactErrorText(workerOutput.text()),
     updateHelperLog: existsSync(helper) ? readTail(helper, 256 * 1024) : null,
     osUser,
   };
@@ -77,21 +78,33 @@ export function gatherInput(deps: SupportIpcDeps): SupportBundleInput {
 
 export function registerSupportIpc(deps: SupportIpcDeps): void {
   // One preview at a time: the one on screen is the one that gets saved.
-  let pending: { token: string; files: SupportBundleFile[]; at: number } | null = null;
+  let pending: {
+    token: string;
+    options: SupportBundleOptions;
+    files: SupportBundleFile[];
+    at: number;
+  } | null = null;
 
   ipcMain.handle(SupportChannel.Preview, (_e, rawOptions: unknown): SupportBundlePreview => {
     const options: SupportBundleOptions = OptionsSchema.parse(rawOptions);
     const files = buildSupportBundle(gatherInput(deps), options);
-    pending = { token: randomUUID(), files, at: Date.now() };
+    pending = { token: randomUUID(), options, files, at: Date.now() };
     return { token: pending.token, files, totalBytes: totalBytes(files) };
   });
 
   ipcMain.handle(
     SupportChannel.Save,
-    async (_e, rawToken: unknown): Promise<SupportBundleSaveResult> => {
+    async (_e, rawToken: unknown, rawOptions: unknown): Promise<SupportBundleSaveResult> => {
       const token = z.string().min(1).parse(rawToken);
+      const options = OptionsSchema.parse(rawOptions);
       if (!pending || pending.token !== token || Date.now() - pending.at > PREVIEW_TTL_MS) {
         throw new Error('This bundle is out of date. Close the window and create it again.');
+      }
+      // What the checkbox says must be what the files were made with.
+      if (pending.options.redactHostsAndUsers !== options.redactHostsAndUsers) {
+        throw new Error(
+          'The files shown are not the ones for this setting. Wait for them to refresh.',
+        );
       }
       const { files } = pending;
       const win = deps.window();

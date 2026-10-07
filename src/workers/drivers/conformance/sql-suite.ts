@@ -457,6 +457,34 @@ export function registerSqlConformance(fx: SqlFixture, opts: SqlSuiteOpts): void
       );
     });
 
+    // ── a transaction the user typed ─────────────────────────────────────
+
+    describe('user transactions', () => {
+      scenario(
+        'lookups and AI reads leave a BEGIN the user typed alone, and its COMMIT keeps everything',
+        'userTransactions',
+        async () => {
+          const d = await open();
+          await d.query(tableOf('tx_probe', 'INTEGER'));
+          try {
+            await d.query('BEGIN');
+            await d.query('INSERT INTO tx_probe (id, v) VALUES (1, 1)');
+            // What opening a table does, and an agent read, while the transaction is open.
+            const opts = { timeoutMs: 5000 };
+            await d.sidebandQuery('SELECT 1', undefined, opts);
+            await d.aiQuery('SELECT 2');
+            await d.introspect({ objects: true, columns: false });
+            await d.query('INSERT INTO tx_probe (id, v) VALUES (2, 2)');
+            await d.query('COMMIT');
+            expect(await truthCount(env, d, 'tx_probe')).toBe(2);
+          } finally {
+            await d.query('ROLLBACK').catch(() => undefined);
+            await d.query('DROP TABLE tx_probe').catch(() => undefined);
+          }
+        },
+      );
+    });
+
     // ── cancellation ─────────────────────────────────────────────────────
 
     describe('cancellation', () => {

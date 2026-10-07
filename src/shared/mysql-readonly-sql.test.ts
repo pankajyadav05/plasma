@@ -2,22 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   mysqlAuxReadViolation,
   mysqlReadOnlyEscapeReason,
-  unwrapExecutableComments,
+  mysqlSkeleton,
 } from './mysql-readonly-sql';
-
-describe('unwrapExecutableComments', () => {
-  it('exposes what MySQL and MariaDB run inside versioned comments', () => {
-    expect(unwrapExecutableComments('SELECT 1 /*!50000 , 2 */')).toMatch(/SELECT 1\s+, 2/);
-    expect(unwrapExecutableComments('/*M!100000 SET x = 1 */')).toMatch(/SET x = 1/);
-    expect(unwrapExecutableComments('/*!START TRANSACTION READ WRITE*/')).toMatch(
-      /START TRANSACTION READ WRITE/,
-    );
-  });
-
-  it('leaves ordinary comments alone', () => {
-    expect(unwrapExecutableComments('/* note */ SELECT 1')).toBe('/* note */ SELECT 1');
-  });
-});
 
 describe('mysqlReadOnlyEscapeReason', () => {
   const refused = [
@@ -32,6 +18,12 @@ describe('mysqlReadOnlyEscapeReason', () => {
     '/*!START TRANSACTION READ WRITE*/',
     '/*!50000 SET SESSION tx_read_only = 0 */',
     '/*M!100000 START TRANSACTION READ WRITE */',
+    // MySQL does not nest comments: the first star-slash ends it
+    'START TRANSACTION /* /* */ READ WRITE /* */',
+    'START TRANSACTION # note\n READ WRITE',
+    'START TRANSACTION -- note\n READ WRITE',
+    "SELECT '\\'' ; START TRANSACTION READ WRITE",
+    'SET /* x */ @@session.tx_read_only = 0',
     'PREPARE p FROM "START TRANSACTION READ WRITE"',
     'EXECUTE p',
     'prepare\np from @s',
@@ -52,6 +44,11 @@ describe('mysqlReadOnlyEscapeReason', () => {
     'BEGIN',
     'COMMIT',
     'SELECT @@session.transaction_isolation',
+    'SELECT @@transaction_read_only',
+    'SELECT @@tx_read_only',
+    "SELECT 'a' /* START TRANSACTION READ WRITE */",
+    '-- START TRANSACTION READ WRITE\nSELECT 1',
+    'SELECT `read write` FROM t',
     'SET SESSION TRANSACTION READ ONLY',
     'INSERT INTO t (prepared) VALUES (1)',
   ];
@@ -107,6 +104,12 @@ describe('mysqlAuxReadViolation', () => {
     "SELECT 1 INTO OUTFILE '/tmp/x'",
     "SELECT * FROM t INTO   DUMPFILE '/tmp/x'",
     '/*!DELETE FROM t*/',
+    '/*!50000 SELECT 1 */',
+    "SELECT 1 /* /* */ INTO OUTFILE '/tmp/x' /* */",
+    "SELECT '\\'' INTO OUTFILE '/tmp/x'",
+    "SELECT 1 # c\n INTO DUMPFILE '/tmp/x'",
+    "SELECT 1 -- c\n INTO OUTFILE '/tmp/x'",
+    'SELECT "\\"" INTO OUTFILE \'/tmp/x\'',
     '',
   ];
   for (const sql of refused) {
@@ -114,4 +117,18 @@ describe('mysqlAuxReadViolation', () => {
       expect(mysqlAuxReadViolation(sql)).not.toBeNull();
     });
   }
+});
+
+describe('mysqlSkeleton', () => {
+  it('lexes comments, strings and identifiers the MySQL way', () => {
+    expect(mysqlSkeleton('SELECT /* a /* b */ 1').text).toBe('select 1');
+    expect(mysqlSkeleton('SELECT 1 # x\n, 2').text).toBe('select 1 , 2');
+    expect(mysqlSkeleton('SELECT 1 -- x\n, 2').text).toBe('select 1 , 2');
+    // "--" without a following blank is not a comment in MySQL: 1 - (-2)
+    expect(mysqlSkeleton('SELECT 1--2').text).toBe('select 1--2');
+    expect(mysqlSkeleton('SELECT \'a\\\'b\', "c""d", `e``f`').text).toBe("select '', '', `_`");
+    expect(mysqlSkeleton('SELECT /*! 1 */').executableComment).toBe(true);
+    expect(mysqlSkeleton('SELECT /*M!100 1 */').executableComment).toBe(true);
+    expect(mysqlSkeleton('SELECT /* 1 */').executableComment).toBe(false);
+  });
 });

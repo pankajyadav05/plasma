@@ -425,3 +425,117 @@ describe('pieces', () => {
     ]);
   });
 });
+
+describe('what a driver error prints in the worker log', () => {
+  const worker = [
+    '[worker:err] [plasma-worker] uncaught: error: duplicate key value violates unique constraint "u"',
+    "    detail: 'Key (customer_email)=(carol@corp.com) already exists.',",
+    '    where: \'SQL statement "INSERT INTO customers (email) VALUES ($1)"\',',
+    "    internalQuery: 'SELECT ssn FROM people WHERE id = 7',",
+    '    routine: _bt_check_unique',
+    '[worker:err] bad value: invalid input syntax for type integer: "123-45-6789"',
+    '[worker:err] statement failed:',
+    'SELECT name',
+    'FROM payroll',
+    "WHERE ssn = '123-45-6789'",
+    '    at Client._handleErrorMessage (node_modules/pg/lib/client.js:1)',
+    '[worker] still running',
+    'MERGE INTO t USING s ON t.id = s.id',
+    '  WHEN MATCHED THEN UPDATE SET v = 1',
+    '[worker] ok',
+  ].join('\n');
+  const text = () =>
+    buildSupportBundle(input({ workerLog: worker }), { redactHostsAndUsers: false }).find(
+      (f) => f.name === 'logs/worker.log',
+    )?.text as string;
+
+  it('removes row values, quoted statements and the lines that continue a statement', () => {
+    const t = text();
+    for (const bad of [
+      'carol@corp.com',
+      '123-45-6789',
+      'payroll',
+      'INSERT INTO customers',
+      'SELECT ssn',
+      'MATCHED',
+      'UPDATE SET',
+    ]) {
+      expect(t, bad).not.toContain(bad);
+    }
+    expect(t).toContain('Key (customer_email)=(***)');
+    expect(t).toContain('invalid input syntax for type integer: "***"');
+    expect(t).toContain('internalQuery: [left out]');
+  });
+
+  it('keeps the rest of the log, stack frames included', () => {
+    const t = text();
+    expect(t).toContain('routine: _bt_check_unique');
+    expect(t).toContain('at Client._handleErrorMessage');
+    expect(t).toContain('[worker] still running');
+    expect(t).toContain('[worker] ok');
+  });
+});
+
+describe('hiding hosts and users nobody saved', () => {
+  const hidden = (over: Partial<SupportBundleInput>) =>
+    allText(buildSupportBundle(input(over), { redactHostsAndUsers: true }));
+
+  it('hides host names that only appear in a log or a setting', () => {
+    const t = hidden({
+      mainLog:
+        '[error] getaddrinfo ENOTFOUND db9.internal.corp\n[info] ollama at ollama.lab.example.net',
+      settings: {
+        aiLocalUrl: 'http://gpu-box.lan:11434/v1',
+        theme: 'dark',
+        pgBinDir: '/opt/pg/bin',
+      },
+    });
+    for (const bad of ['db9.internal.corp', 'ollama.lab.example.net', 'gpu-box.lan']) {
+      expect(t, bad).not.toContain(bad);
+    }
+    // File names, versions and code are not host names.
+    expect(t).toContain('main.log');
+    expect(t).toContain('3.3.0');
+  });
+
+  it('hides every host of a Sentinel or Cluster list', () => {
+    const t = hidden({
+      connections: [
+        {
+          id: 'r',
+          name: 'cache',
+          engine: 'redis',
+          host: 'sentinel://s1.corp:26379,s2.corp:26379/master',
+          port: 6379,
+        },
+      ],
+    });
+    expect(t).not.toContain('s1.corp');
+    expect(t).not.toContain('s2.corp');
+  });
+
+  it('hides IPv6 addresses but not clock times or ::1', () => {
+    const t = hidden({
+      mainLog: [
+        '[2026-10-07 09:00:00.000] [error] connect ECONNREFUSED [fd00:1234::5]:5432',
+        '[2026-10-07 09:00:01.000] [info] peer 2001:db8:0:0:0:0:2:1 and fe80::1ff:fe23:4567:890a',
+        '[2026-10-07 09:00:02.000] [info] local ::1 ok',
+      ].join('\n'),
+    });
+    expect(t).not.toContain('fd00:1234');
+    expect(t).not.toContain('2001:db8');
+    expect(t).not.toContain('fe80::');
+    expect(t).toContain('09:00:00.000');
+    expect(t).toContain('::1 ok');
+  });
+
+  it('hides a short Windows account name in plain and JSON-escaped paths', () => {
+    const t = hidden({
+      osUser: 'pj',
+      settings: { pgBinDir: 'C:\\Users\\pj\\pg\\bin', theme: 'dark' },
+      mainLog: 'opened C:\\Users\\pj\\AppData\\Roaming\\Plasma',
+    });
+    expect(t).not.toMatch(/Users\\+pj/);
+    expect(t).toContain('<user>');
+  });
+});

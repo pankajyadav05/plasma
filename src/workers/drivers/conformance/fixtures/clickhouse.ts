@@ -46,6 +46,7 @@ export function clickhouseFixture(): SqlFixture {
       constraints: {
         no: 'ClickHouse enforces no unique, not-null or key constraints: the primary key is a sorting key',
       },
+      userTransactions: { no: 'ClickHouse has no BEGIN / COMMIT statements' },
       transactions: { no: 'ClickHouse has no transactions; begin / commit / rollback are no-ops' },
       rowEdit: {
         no: 'writes are asynchronous mutations (ALTER ... UPDATE); the grid refuses edits and the editor warns',

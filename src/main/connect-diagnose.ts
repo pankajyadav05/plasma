@@ -10,6 +10,7 @@ import {
   stageOfCause,
 } from '@shared/connect-diagnosis';
 import { type StageResult, type StageStep, plannedStages, runStages } from '@shared/connect-stages';
+import { redisEndpointKind } from '@shared/connection-endpoint';
 import { type ErrorInfo, errorInfoOf } from '@shared/error-info';
 import type { ConnectionConfig, ConnectionTestResult } from '@shared/protocol';
 import { redactSecrets } from '@shared/redact-secrets';
@@ -57,6 +58,20 @@ export interface DiagnoseOptions {
 /** TLS is switched on (including the unverified `insecure` mode). */
 function tlsOn(config: ConnectionConfig): boolean {
   return effectiveTlsMode(config) !== 'disable';
+}
+
+/**
+ * The host field names one host to look up and dial. Not so for a unix socket (a path, `unix:`,
+ * Postgres' socket directory) or for Redis' `sentinel://` and `cluster://` lists: those go
+ * straight to the driver.
+ */
+export function isDialableHost(engine: string, host: string): boolean {
+  const h = host.trim();
+  if (h.startsWith('/') || h.startsWith('\\') || /^unix:/i.test(h) || /^host=/i.test(h))
+    return false;
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(h) || h.includes(',')) return false;
+  if (engine === 'redis' && redisEndpointKind(h) !== 'tcp') return false;
+  return true;
 }
 
 /** The target of a connect as the diagnosis words it: files have no host. */
@@ -185,7 +200,13 @@ export async function runStagedTest(
   const engine = config.engine ?? 'postgres';
   const file = isFileEngine(engine);
   const tls = tlsOn(config);
-  const plan = plannedStages({ engine, ssl: tls && !file, ssh: Boolean(ssh) && !file });
+  const dialable = file || isDialableHost(engine, config.host);
+  const plan = plannedStages({
+    engine,
+    ssl: tls && !file,
+    ssh: Boolean(ssh) && !file,
+    dialable,
+  });
   const steps: StageStep[] = [];
   let target = { host: config.host, port: config.port };
 
@@ -199,7 +220,7 @@ export async function runStagedTest(
           return undefined;
         },
       });
-    } else {
+    } else if (dialable) {
       steps.push({
         stages: ['dns'],
         run: () => (deps.dns ?? probeDns)(config.host),

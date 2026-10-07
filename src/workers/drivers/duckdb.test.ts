@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { dataFileSessionConfig } from '@shared/data-files';
 import type { ConnectionConfig } from '@shared/protocol';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
-import { DuckdbDriver, duckdbBlobToHex, shortestFloat32 } from './duckdb';
+import { DuckdbDriver, bytesToHexCell, shortestFloat32 } from './duckdb';
 import { writeTestXlsx } from './test-xlsx';
 
 let dir: string;
@@ -70,12 +70,16 @@ describe('DuckDB values', () => {
     expect(shortestFloat32(Number.POSITIVE_INFINITY)).toBe(Number.POSITIVE_INFINITY);
   });
 
-  it('shows a BLOB as `\\x` + lower-case hex like every other engine', () => {
-    expect(duckdbBlobToHex('\\xDE\\xAD\\xBE\\xEF')).toBe('\\xdeadbeef');
-    expect(duckdbBlobToHex('ab\\x00c')).toBe('\\x61620063');
-    expect(duckdbBlobToHex('')).toBe('\\x');
-    // A backslash is printed as \x5C, so a literal "\x" pair in text cannot be misread.
-    expect(duckdbBlobToHex('\\x5Cx41')).toBe('\\x5c783431');
+  it('shows a BLOB as `\\x` + lower-case hex, from its bytes', async () => {
+    expect(bytesToHexCell(Uint8Array.from([0xde, 0xad, 0xbe, 0xef]))).toBe('\\xdeadbeef');
+    expect(bytesToHexCell(new Uint8Array())).toBe('\\x');
+    driver = new DuckdbDriver();
+    await driver.connect({ ...dataFileSessionConfig([]), database: ':memory:' });
+    // The bytes 5c 78 34 31 41 spell \x41A in DuckDB's text form: not the byte 0x41 and an A.
+    const r = await driver.query(
+      "SELECT from_hex('5c78343141') AS a, from_hex('deadbeef') AS b, ['x'::BLOB, from_hex('00ff')] AS l",
+    );
+    expect(r.rows[0]).toEqual(['\\x5c78343141', '\\xdeadbeef', ['\\x78', '\\x00ff']]);
   });
 
   it('refuses a read that writes: nextval() moves a sequence', async () => {
@@ -89,13 +93,32 @@ describe('DuckDB values', () => {
     expect((await driver.query("SELECT nextval('seq_a')")).rows).toEqual([[1]]);
   });
 
-  it('refuses AI reads while the user has a transaction open', async () => {
+  it('leaves a transaction the user typed alone: lookups never abort it', async () => {
     driver = new DuckdbDriver();
     await driver.connect({ ...dataFileSessionConfig([]), database: ':memory:' });
+    await driver.query('CREATE TABLE t (a INT)');
     await driver.query('BEGIN');
-    await expect(driver.aiQuery('SELECT 1')).rejects.toThrow(/transaction is open/);
-    await driver.query('ROLLBACK');
-    expect((await driver.aiQuery('SELECT 1')).rows).toEqual([[1]]);
+    await driver.query('INSERT INTO t VALUES (1)');
+    // What opening a table does: lookups on the side, and an AI read.
+    expect((await driver.sidebandQuery('SELECT 1')).rows).toEqual([[1]]);
+    expect((await driver.aiQuery('SELECT 2')).rows).toEqual([[2]]);
+    await expect(driver.aiQuery("SELECT nextval('nope')")).rejects.toThrow();
+    // The user's transaction is intact: more work in it, then a commit that keeps all of it.
+    await driver.query('INSERT INTO t VALUES (2)');
+    await driver.query('COMMIT');
+    expect((await driver.query('SELECT count(*) FROM t')).rows).toEqual([[2]]);
+  });
+
+  it('cancels a lookup on the connection it runs on', async () => {
+    driver = new DuckdbDriver();
+    await driver.connect({ ...dataFileSessionConfig([]), database: ':memory:' });
+    const slow = driver.sidebandQuery(
+      'SELECT count(*) FROM range(100000000000) t(a) WHERE a % 7 = 3',
+    );
+    await new Promise((r) => setTimeout(r, 300));
+    expect(await driver.cancelQuery()).toBe(true);
+    await expect(slow).rejects.toThrow(/cancel/);
+    expect((await driver.query('SELECT 1')).rows).toEqual([[1]]);
   });
 });
 

@@ -284,9 +284,9 @@ async function createTunnel(target: TunnelTarget): Promise<{ host: string; port:
     local.on('error', (e: Error) => logger.warn('[plasma-ssh] local socket error:', e.message));
     local.on('close', () => sockets.delete(local));
     ssh.forwardOut('127.0.0.1', 0, target.pgHost, target.pgPort, (err, stream) => {
+      noteForwardResult(target.id, err);
       if (err) {
         logger.error('[plasma-ssh] forwardOut failed:', err);
-        forwardErrors.set(target.id, err.message);
         local.destroy();
         return;
       }
@@ -394,6 +394,16 @@ export function openTunnel(target: TunnelTarget): Promise<{ host: string; port: 
     });
   opening.set(target.id, { promise: attempt, signature: signatureOf(target) });
   return attempt;
+}
+
+/**
+ * Remember how the last forward went: a failure is kept for the connection error to read, a
+ * success clears it, so an old refusal on a tunnel that works again is never blamed for a later,
+ * unrelated failure (a wrong password).
+ */
+export function noteForwardResult(id: string, err?: Error | null): void {
+  if (err) forwardErrors.set(id, err.message);
+  else forwardErrors.delete(id);
 }
 
 /** Why the jump host could not open the database port for this tunnel, if it could not. */

@@ -729,6 +729,11 @@ export type OsSqlResult = z.infer<typeof OsSqlResult>;
 export const OsRawResponse = z.object({
   status: z.number().int(),
   body: z.unknown(),
+  /**
+   * The response text, only when it holds an integer beyond 2^53 (`body` then shows it as text).
+   * The document editor builds its text from this so the number is written back as a number.
+   */
+  rawBody: z.string().optional(),
   durationMs: z.number(),
 });
 export type OsRawResponse = z.infer<typeof OsRawResponse>;

@@ -27,6 +27,11 @@ export interface StagePlanOptions {
   ssl: boolean;
   /** The connection goes through an SSH tunnel. */
   ssh: boolean;
+  /**
+   * False when the host field is not one host name and one port (a unix socket, a Redis
+   * sentinel / cluster list): there is nothing to look up or dial before the driver.
+   */
+  dialable?: boolean;
 }
 
 const FILE_ENGINES = new Set(['sqlite', 'duckdb']);
@@ -62,7 +67,7 @@ export function plannedStages(opts: StagePlanOptions): Array<{ id: StageId; labe
   if (FILE_ENGINES.has(opts.engine)) return [stage('database')];
   // Through a tunnel the jump host resolves and reaches the database; what can be
   // checked from here is the tunnel itself.
-  const reach: StageId[] = opts.ssh ? ['ssh'] : ['dns', 'tcp'];
+  const reach: StageId[] = opts.ssh ? ['ssh'] : opts.dialable === false ? [] : ['dns', 'tcp'];
   return [...reach, ...(opts.ssl ? (['tls'] as const) : []), 'login', 'database'].map((id) =>
     stage(id as StageId),
   );

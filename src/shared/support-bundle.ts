@@ -49,8 +49,11 @@ export type SupportBundleSaveResult =
 export interface SupportApi {
   /** Gather the bundle and return every file's exact text, for review. */
   preview(options: SupportBundleOptions): Promise<SupportBundlePreview>;
-  /** Ask where to save, then write the previewed files as a zip. Nothing is uploaded. */
-  save(token: string): Promise<SupportBundleSaveResult>;
+  /**
+   * Ask where to save, then write the previewed files as a zip. Nothing is uploaded. `options`
+   * are the ones the screen shows; main refuses when they are not the ones the preview was made with.
+   */
+  save(token: string, options: SupportBundleOptions): Promise<SupportBundleSaveResult>;
 }
 
 // ── inputs ───────────────────────────────────────────────────────────────
@@ -110,15 +113,54 @@ const SQL_LINE =
 
 export const SQL_LINE_PLACEHOLDER = '[line left out: it looks like SQL]';
 
-/** Remove what a log line must not carry, one line at a time. */
-function scrubLogLines(text: string): string {
+/** A line that only SQL starts with: a clause on its own line, the rest of a statement. */
+const SQL_CLAUSE_LINE =
+  /^\s*(?:from|where|join|left\s+join|inner\s+join|group\s+by|order\s+by|having|limit|offset|set|values|using|on|returning|union|merge\s+into|with\s+\w+\s+as)\b/i;
+/** `util.inspect` of a driver error prints the statement under these names. */
+const QUOTED_QUERY_FIELD = /^(\s*)(where|internalQuery|query|text|values|parameters|params)\s*:/i;
+/** The start of a new log record or a stack frame: where a dropped statement ends. */
+const RECORD_START = /^\s*(?:\[|\d{4}-\d{2}-\d{2}|at\s|\}|$)/;
+/** Lines that follow a dropped SQL line are part of the same statement, up to this many. */
+const SQL_TAIL_LINES = 60;
+
+/**
+ * Row values that driver errors quote (`Key (email)=(a@b.com)`, `Failing row contains (…)`,
+ * `invalid input syntax for type integer: "abc"`): the main log has them removed when it is
+ * written; the worker's output is not, so the bundle does it for every log.
+ */
+export function scrubRowValues(text: string): string {
   return text
-    .split('\n')
-    .map((raw) => {
-      const line = raw.length > MAX_LINE ? `${raw.slice(0, MAX_LINE)}… [cut]` : raw;
-      return SQL_LINE.test(line) ? SQL_LINE_PLACEHOLDER : line;
-    })
-    .join('\n');
+    .replace(/(invalid input (?:syntax|value) for [^:\n]+: )"(?:[^"]|"")*"/gi, '$1"***"')
+    .replace(/(Key \([^)\n]*\)=)\([^\n]*?\)(?= (?:already|is not|is still)|\.|$)/g, '$1(***)')
+    .replace(/(Failing row contains )\([^\n]*\)/g, '$1(***)');
+}
+
+/** Remove what a log must not carry: SQL (also when it runs over several lines), row values. */
+function scrubLogLines(text: string): string {
+  const out: string[] = [];
+  let tail = 0;
+  for (const raw of scrubRowValues(text).split('\n')) {
+    const line = raw.length > MAX_LINE ? `${raw.slice(0, MAX_LINE)}… [cut]` : raw;
+    const quoted = QUOTED_QUERY_FIELD.exec(line);
+    if (quoted) {
+      out.push(`${quoted[1]}${quoted[2]}: [left out]`);
+      tail = 0;
+      continue;
+    }
+    if (SQL_LINE.test(line) || SQL_CLAUSE_LINE.test(line)) {
+      out.push(SQL_LINE_PLACEHOLDER);
+      tail = SQL_TAIL_LINES;
+      continue;
+    }
+    if (tail > 0 && !RECORD_START.test(line)) {
+      tail--;
+      out.push(SQL_LINE_PLACEHOLDER);
+      continue;
+    }
+    tail = 0;
+    out.push(line);
+  }
+  return out.join('\n');
 }
 
 const ERROR_LINE =
@@ -327,16 +369,32 @@ export function collectIdentities(
 ): { hosts: string[]; users: string[] } {
   const hosts = new Set<string>();
   const users = new Set<string>();
+  const addOne = (entry: string) => {
+    const bare = entry
+      .trim()
+      .replace(/^[a-z][a-z0-9+.-]*:\/\//i, '')
+      .replace(/^[^@/]*@/, '');
+    const h = bare.startsWith('[')
+      ? bare.slice(1, bare.indexOf(']'))
+      : (bare.split(/[/:?#]/)[0] ?? '');
+    if (h && !KEEP_HOSTS.has(h.toLowerCase())) hosts.add(h);
+  };
+  // A host field may be a list: sentinel://a:1,b:2/master, cluster://a:1,b:2.
   const addHost = (v: unknown) => {
     if (typeof v !== 'string') return;
-    const h =
-      v
-        .trim()
-        .replace(/^[a-z][a-z0-9+.-]*:\/\//i, '')
-        .replace(/^[^@/]*@/, '')
-        .split(/[/:?#]/)[0] ?? '';
-    if (!KEEP_HOSTS.has(h.toLowerCase())) hosts.add(h);
+    const scheme = /^[a-z][a-z0-9+.-]*:\/\//i.exec(v.trim())?.[0] ?? '';
+    const rest = v.trim().slice(scheme.length).split('/')[0] ?? '';
+    for (const part of rest.split(',')) addOne(`${scheme}${part}`);
   };
+  // Hosts in settings that no connection names: an AI server URL, any URL a preference holds.
+  const scan = (v: unknown, depth = 0) => {
+    if (typeof v === 'string') {
+      for (const m of v.matchAll(/[a-z][a-z0-9+.-]*:\/\/[^\s"'<>]+/gi)) addHost(m[0]);
+    } else if (depth < 4 && v && typeof v === 'object') {
+      for (const x of Object.values(v)) scan(x, depth + 1);
+    }
+  };
+  scan(settings);
   const addUser = (v: unknown) => {
     if (typeof v === 'string' && v.trim()) users.add(v.trim());
   };
@@ -361,6 +419,119 @@ export function collectIdentities(
     hosts: [...hosts].sort((a, b) => b.length - a.length),
     users: [...users].sort((a, b) => b.length - a.length),
   };
+}
+
+/** Endings that are files or code, not the end of a host name. */
+const NOT_A_TLD = new Set([
+  'log',
+  'json',
+  'js',
+  'mjs',
+  'cjs',
+  'ts',
+  'tsx',
+  'txt',
+  'zip',
+  'db',
+  'sqlite',
+  'md',
+  'html',
+  'css',
+  'png',
+  'svg',
+  'exe',
+  'dll',
+  'so',
+  'node',
+  'sh',
+  'yml',
+  'yaml',
+  'xml',
+  'old',
+  'pdf',
+  'csv',
+  'sql',
+  'lock',
+  'pid',
+  'conf',
+  'cfg',
+  'ini',
+  'tmp',
+  'bak',
+  'map',
+  'wasm',
+  'asar',
+  'plist',
+  'dmg',
+  'pkg',
+  'duckdb',
+  'parquet',
+  'ndjson',
+  'tsv',
+  'key',
+  'pem',
+  'crt',
+  'sock',
+  'dump',
+  'sample',
+]);
+const COMMON_TLD = new Set([
+  'com',
+  'net',
+  'org',
+  'io',
+  'dev',
+  'co',
+  'cloud',
+  'corp',
+  'internal',
+  'local',
+  'lan',
+  'intranet',
+  'home',
+  'ai',
+  'app',
+  'info',
+  'biz',
+  'edu',
+  'gov',
+  'us',
+  'uk',
+  'de',
+  'fr',
+  'eu',
+  'in',
+  'jp',
+  'cn',
+  'ru',
+  'br',
+  'au',
+  'ca',
+  'nl',
+  'se',
+  'ch',
+  'es',
+  'it',
+  'xyz',
+  'tech',
+  'online',
+  'site',
+  'aws',
+]);
+
+/**
+ * A dotted name that is probably a host: it ends like one, or it has three or more labels. A file
+ * name (`main.log`), a version (`16.2.1`) or a method (`pg.Client`) is not.
+ */
+export function looksLikeHostName(name: string): boolean {
+  const labels = name.toLowerCase().split('.');
+  const last = labels.at(-1) ?? '';
+  if (/^\d+$/.test(last) || NOT_A_TLD.has(last)) return false;
+  if (labels.every((l) => /^\d+$/.test(l))) return false;
+  if (COMMON_TLD.has(last)) return true;
+  return (
+    labels.length >= 3 && labels.every((l) => /^[a-z0-9-]+$/.test(l)) && name === name.toLowerCase()
+  );
 }
 
 function escapeRe(text: string): string {
@@ -390,7 +561,13 @@ export function createPrivacyFilter(identities: { hosts: string[]; users: string
 
   const text = (input: string): string => {
     let out = input;
-    // E-mail addresses first: they hold a user and a host.
+    // Home folders first: the account name may be too short for anything else to catch, and in
+    // a JSON file the backslashes are doubled.
+    out = out.replace(
+      /(\/home\/|\/Users\/|[A-Za-z]:(?:\\{1,2})Users(?:\\{1,2}))([^/\\\s'"]+)/g,
+      '$1<user>',
+    );
+    // E-mail addresses next: they hold a user and a host.
     out = out.replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+/g, (m) =>
       name(mailName, m, 'email'),
     );
@@ -398,9 +575,31 @@ export function createPrivacyFilter(identities: { hosts: string[]; users: string
     out = out.replace(/\b(?:\d{1,3}\.){3}\d{1,3}\b/g, (ip) =>
       ip === '127.0.0.1' || ip === '0.0.0.0' ? ip : name(ipName, ip, 'ip'),
     );
+    // IPv6: bracketed, or written with `::` or in the full eight groups (a clock time is neither).
+    out = out.replace(
+      /\[[0-9a-f:.]*:[0-9a-f:.]*\]|(?<![0-9a-f:.])[0-9a-f:]{3,39}(?![0-9a-f:])/gi,
+      (m) => {
+        const bare = m.replace(/^\[|\]$/g, '');
+        const v6 =
+          /^[0-9a-f:]+$/i.test(bare) &&
+          bare.split(':').every((g) => g.length <= 4) &&
+          (bare.includes('::') || bare.split(':').length === 8);
+        const loopback = /^(::1?|0:0:0:0:0:0:0:1)$/.test(bare);
+        return m.startsWith('[')
+          ? loopback
+            ? m
+            : name(ipName, m, 'ip')
+          : v6 && !loopback
+            ? name(ipName, m, 'ip')
+            : m;
+      },
+    );
+    // Host names nobody saved anywhere (a log line, a setting): a dotted name that is not a file.
+    out = out.replace(
+      /(?<![\w./@-])[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+(?![\w-])/gi,
+      (m) => (looksLikeHostName(m) ? name(hostName, m, 'host') : m),
+    );
     for (const { u, re } of userRes) out = out.replace(re, name(userName, u, 'user'));
-    // Home folders carry the account name even when it was never saved anywhere.
-    out = out.replace(/(\/home\/|\/Users\/|[A-Za-z]:\\Users\\)([^/\\\s'"]+)/g, '$1<user>');
     return out;
   };
   return {

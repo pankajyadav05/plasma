@@ -6,6 +6,7 @@ import {
   type StagedTestDeps,
   diagnoseFailure,
   diagnosedError,
+  isDialableHost,
   probeDns,
   probeTcp,
   runStagedTest,
@@ -252,6 +253,61 @@ describe('runStagedTest', () => {
       }),
     );
     expect(JSON.stringify(r)).not.toContain('hunter2-secret');
+  });
+});
+
+describe('hosts that are not one name and one port', () => {
+  const cases: Array<[string, string]> = [
+    ['redis', 'sentinel://h1:26379,h2:26379/master'],
+    ['redis', 'cluster://h1:7000,h2:7001'],
+    ['redis', '/var/run/redis/redis.sock'],
+    ['redis', 'unix:/tmp/redis.sock'],
+    ['postgres', '/var/run/postgresql'],
+    ['postgres', 'host=/var/run/postgresql'],
+    ['mysql', '/tmp/mysql.sock'],
+  ];
+  it.each(cases)(
+    '%s host %s goes straight to the driver, with no lookup or dial',
+    async (engine, host) => {
+      const probes: string[] = [];
+      const r = await runStagedTest(
+        config({ engine: engine as ConnectionConfig['engine'], host }),
+        deps({
+          dns: async () => {
+            probes.push('dns');
+            throw coded('getaddrinfo ENOTFOUND', { code: 'ENOTFOUND' });
+          },
+          tcp: async () => {
+            probes.push('tcp');
+            throw coded('connect ECONNREFUSED', { code: 'ECONNREFUSED' });
+          },
+        }),
+      );
+      expect(probes).toEqual([]);
+      expect(r.ok).toBe(true);
+      expect(statuses(r)).toEqual(['login:ok', 'database:ok']);
+    },
+  );
+
+  it('still reports a driver failure of such a host on the right step', async () => {
+    const r = await runStagedTest(
+      config({ engine: 'redis', host: 'sentinel://h1:26379/master' }),
+      deps({
+        connect: async () => {
+          throw coded('WRONGPASS invalid username-password pair', { name: 'ReplyError' });
+        },
+      }),
+    );
+    expect(statuses(r)).toEqual(['login:failed', 'database:skipped']);
+  });
+
+  it('tells plain host names from the other forms', () => {
+    expect(isDialableHost('postgres', 'db.example.com')).toBe(true);
+    expect(isDialableHost('redis', 'cache.internal')).toBe(true);
+    expect(isDialableHost('postgres', '[::1]')).toBe(true);
+    expect(isDialableHost('postgres', '/var/run/postgresql')).toBe(false);
+    expect(isDialableHost('redis', 'cluster://a:1')).toBe(false);
+    expect(isDialableHost('opensearch', 'https://x')).toBe(false);
   });
 });
 

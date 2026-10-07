@@ -133,6 +133,7 @@ describe('support bundle IPC', () => {
     const res = await invoke<{ saved: boolean; filePath?: string; bytes?: number }>(
       SupportChannel.Save,
       preview.token,
+      { redactHostsAndUsers: false },
     );
     expect(dialogCalls).toBe(1);
     expect(res).toMatchObject({ saved: true, filePath: savePath });
@@ -156,7 +157,9 @@ describe('support bundle IPC', () => {
       redactHostsAndUsers: false,
     });
     savePath = null;
-    expect(await invoke(SupportChannel.Save, preview.token)).toEqual({ saved: false });
+    expect(
+      await invoke(SupportChannel.Save, preview.token, { redactHostsAndUsers: false }),
+    ).toEqual({ saved: false });
   });
 
   it('refuses a token that is not the preview on screen', async () => {
@@ -165,8 +168,21 @@ describe('support bundle IPC', () => {
     });
     await invoke<SupportBundlePreview>(SupportChannel.Preview, { redactHostsAndUsers: true });
     savePath = join(root, 'x.zip');
-    await expect(invoke(SupportChannel.Save, first.token)).rejects.toThrow(/out of date/);
+    await expect(
+      invoke(SupportChannel.Save, first.token, { redactHostsAndUsers: false }),
+    ).rejects.toThrow(/out of date/);
     expect(dialogCalls).toBe(0);
-    await expect(invoke(SupportChannel.Save, 42)).rejects.toThrow();
+    await expect(invoke(SupportChannel.Save, 42, { redactHostsAndUsers: false })).rejects.toThrow();
+  });
+
+  it('refuses to save when the setting on screen is not the one the files were made with', async () => {
+    const shown = await invoke<SupportBundlePreview>(SupportChannel.Preview, {
+      redactHostsAndUsers: false,
+    });
+    savePath = join(root, 'y.zip');
+    await expect(
+      invoke(SupportChannel.Save, shown.token, { redactHostsAndUsers: true }),
+    ).rejects.toThrow(/not the ones/);
+    expect(dialogCalls).toBe(0);
   });
 });

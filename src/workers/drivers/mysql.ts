@@ -470,8 +470,10 @@ export class MysqlDriver implements SqlEngineDriver {
     if (statements.length > 1 && params && params.length > 0) {
       throw new Error('bind parameters need a single statement');
     }
-    await this.reassertReadOnly(conn);
     if (opts?.autoBegin && this.txn === 'none' && !isTxnExemptSql(statements[0]!)) {
+      // The transaction about to start must be a read-only one on a read-only connection;
+      // each statement below re-asserts it again through guardReadOnly.
+      await this.reassertReadOnly(conn);
       await this.exec(conn, 'START TRANSACTION', [], true);
     }
     let last: RawResult = { columns: [], rows: [], rowCount: 0 };

@@ -20,6 +20,8 @@ export const CAPABILITY_DOCS = {
   transactions: 'begin / commit / rollback are real, and `txnState` follows the server.',
   multiStatement: 'A script of several statements runs; the last statement answers.',
   constraints: 'Key, unique and NOT NULL violations are errors that write nothing.',
+  userTransactions:
+    'A BEGIN / COMMIT typed by the user is a real transaction, and lookups never disturb it.',
   errorKeepsSession: 'A failed statement leaves the connection usable.',
   cancel: 'A running statement is stopped by `cancelQuery()` within 2 s.',
   statementTimeout: 'The connect-time statement timeout stops a slow statement.',

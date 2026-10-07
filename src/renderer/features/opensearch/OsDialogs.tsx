@@ -10,6 +10,7 @@ import {
 import { Input } from '@/components/ui/input';
 import { Pill } from '@/components/ui/workbench';
 import { ipc } from '@/lib/ipc';
+import { prettyJsonText, topLevelJsonValue } from '@shared/json-bigint';
 import { AlertTriangle, Save, Trash2 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { OsCodeEditor } from './OsCodeEditor';
@@ -166,7 +167,10 @@ function OsDocDialog() {
           setError(res.status === 404 ? 'Document not found' : JSON.stringify(body.error ?? body));
           return;
         }
-        const pretty = `${JSON.stringify(body._source ?? {}, null, 2)}\n`;
+        // A source with an integer beyond 2^53 is read from the raw response text: re-stringifying
+        // the parsed body would turn that number into a string.
+        const rawSource = res.rawBody ? topLevelJsonValue(res.rawBody, '_source') : null;
+        const pretty = `${rawSource ? prettyJsonText(rawSource) : JSON.stringify(body._source ?? {}, null, 2)}\n`;
         setDoc({
           text: pretty,
           seqNo: typeof body._seq_no === 'number' ? body._seq_no : null,

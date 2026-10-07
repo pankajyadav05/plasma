@@ -210,7 +210,7 @@ const api: PlasmaAPI = {
   },
   support: {
     preview: (options) => ipcRenderer.invoke(SupportChannel.Preview, options),
-    save: (token) => ipcRenderer.invoke(SupportChannel.Save, token),
+    save: (token, options) => ipcRenderer.invoke(SupportChannel.Save, token, options),
   },
 };
 

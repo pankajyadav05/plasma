@@ -33,7 +33,7 @@ export function duckdbFixture(): SqlFixture {
       badCredentials: { no: 'a local session has no credentials' },
       connectionLoss: { no: 'an in-process engine has no server connection to lose' },
       transactions: {
-        no: 'data-file sessions autocommit; begin / commit / rollback are no-ops that always answer "none"',
+        no: 'the driver does not track transactions: begin / commit / rollback() and txnState always answer "none" (a BEGIN typed by the user is still a real DuckDB transaction, see userTransactions)',
       },
       rowEdit: {
         no: 'data-file sessions are read-mostly; grid edits are refused in favour of SQL',

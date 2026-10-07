@@ -107,7 +107,45 @@ function commandOf(sql: string): string {
  * make any database on disk readable to a lookup or an AI query, so the
  * read-only paths refuse them; the editor itself may still attach.
  */
-const CONNECTION_STATEMENTS = new Set(['ATTACH', 'DETACH']);
+const CONNECTION_STATEMENTS = new Set(['ATTACH', 'DETACH', 'REINDEX', 'VACUUM']);
+
+/** Pragmas that take an argument and only look: everything else with an argument sets something. */
+const READ_PRAGMAS = new Set([
+  'table_info',
+  'table_xinfo',
+  'table_list',
+  'index_list',
+  'index_info',
+  'index_xinfo',
+  'foreign_key_list',
+  'foreign_key_check',
+  'integrity_check',
+  'quick_check',
+  'database_list',
+  'collation_list',
+  'function_list',
+  'module_list',
+  'pragma_list',
+  'compile_options',
+]);
+
+/**
+ * `stmt.readonly` is true for `PRAGMA foreign_keys = OFF` too: it changes the connection, not
+ * the file, and the user's own session keeps the change. A pragma on a read-only path may name
+ * itself or call one of the look-only pragmas; assigning or any other argument is refused.
+ */
+export function pragmaViolation(sql: string): string | null {
+  const m = /^\s*pragma\s+(?:[\w"`\[\]]+\s*\.\s*)?(\w+)\s*(=|\()?/i.exec(
+    sql.replace(/\/\*[\s\S]*?\*\/|--[^\n]*/g, ' '),
+  );
+  if (!m) return null;
+  const [, name, op] = m;
+  if (op === '=') return `PRAGMA ${name} = … changes the connection`;
+  if (op === '(' && !READ_PRAGMAS.has((name as string).toLowerCase())) {
+    return `PRAGMA ${name}(…) changes the connection`;
+  }
+  return null;
+}
 
 type Statement = Database.Statement<unknown[], unknown[]>;
 
@@ -259,8 +297,10 @@ export class SqliteDriver implements SqlEngineDriver {
       let last: Omit<QueryResult, 'durationMs'> = { columns: [], rows: [], rowCount: 0 };
       for (const text of statements) {
         if (readsOnly && CONNECTION_STATEMENTS.has(commandOf(text))) {
-          throw new Error('rejected: ATTACH and DETACH are not allowed here');
+          throw new Error(`rejected: ${commandOf(text)} is not allowed here`);
         }
+        const pragma = readsOnly && commandOf(text) === 'PRAGMA' ? pragmaViolation(text) : null;
+        if (pragma) throw new Error(`rejected: ${pragma}`);
         const { stmt, bind } = this.prepare(db, text, statements.length === 1 ? params : undefined);
         if (readsOnly && !stmt.readonly) {
           throw new Error('rejected: only read-only statements are allowed here');

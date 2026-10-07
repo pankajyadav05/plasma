@@ -22,6 +22,7 @@ export const redisCaps = allCapabilities({
   primaryKeys: { no: 'Redis has keys, not tables: there is no schema to introspect' },
   foreignKeys: { no: 'Redis has no relations' },
   constraints: { no: 'Redis has no constraints' },
+  userTransactions: { no: 'Redis has no BEGIN / COMMIT statements' },
   transactions: {
     no: 'MULTI / EXEC are refused on the shared connection; atomic work goes through EVAL',
   },

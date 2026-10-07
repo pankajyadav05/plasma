@@ -1,6 +1,6 @@
 import { Client, errors as osErrors } from '@opensearch-project/opensearch';
 import { AwsSigv4Signer } from '@opensearch-project/opensearch/aws';
-import { parseJsonKeepingBigInts } from '@shared/json-bigint';
+import { parseJsonReportingBigInts } from '@shared/json-bigint';
 import { OS_READ_ONLY_MESSAGE, isOsReadRequest, isReadOnlyOsSql } from '@shared/os-write-policy';
 import type {
   ConnectionConfig,
@@ -200,7 +200,7 @@ export class OpenSearchDriver {
   private async transport(
     params: TransportParams,
     opts: { timeoutMs?: number; requestId?: string } = {},
-  ): Promise<{ statusCode: number; body: unknown }> {
+  ): Promise<{ statusCode: number; body: unknown; rawText?: string }> {
     const client = this.requireClient();
     const requestTimeout = opts.timeoutMs && opts.timeoutMs > 0 ? opts.timeoutMs : undefined;
     const promise = client.transport.request(
@@ -233,11 +233,15 @@ export class OpenSearchDriver {
       const text = await readCappedText(res.body, this.maxResponseBytes);
       const contentType = String(res.headers?.['content-type'] ?? '');
       let body: unknown = text;
+      let rawText: string | undefined;
       if (params.method === 'HEAD') {
         body = statusCode < 400;
       } else if (/json/.test(contentType) && text !== '') {
         // A number beyond 2^53 would lose digits in a JS number; those come back as exact text.
-        body = parseJsonKeepingBigInts(text);
+        const parsed = parseJsonReportingBigInts(text);
+        body = parsed.value;
+        // The parsed body shows such an integer as text; the raw text lets an editor write it back as a number.
+        if (parsed.kept) rawText = text;
       }
       if (statusCode >= 400 && !(params.method === 'HEAD' && statusCode === 404)) {
         throw new osErrors.ResponseError({
@@ -247,7 +251,7 @@ export class OpenSearchDriver {
           meta: {},
         } as unknown as ConstructorParameters<typeof osErrors.ResponseError>[0]);
       }
-      return { statusCode, body };
+      return { statusCode, body, ...(rawText ? { rawText } : {}) };
     } catch (err) {
       if (aborted) throw new Error('request cancelled');
       const name = err && typeof err === 'object' ? (err as { name?: string }).name : undefined;
@@ -572,7 +576,12 @@ export class OpenSearchDriver {
         timeoutMs: opts.timeoutMs,
         requestId: opts.requestId,
       });
-      return { status: res.statusCode, body: res.body ?? null, durationMs: Date.now() - start };
+      return {
+        status: res.statusCode,
+        body: res.body ?? null,
+        durationMs: Date.now() - start,
+        ...(res.rawText ? { rawBody: res.rawText } : {}),
+      };
     } catch (err) {
       const http = responseFromError(err);
       if (http) return { ...http, durationMs: Date.now() - start };

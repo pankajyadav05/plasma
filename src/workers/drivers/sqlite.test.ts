@@ -8,7 +8,13 @@ import { dialectFor } from '@shared/sql-dialect';
 import { buildDeleteSql, buildUpdateSql } from '@shared/table-query';
 import Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { SqliteDriver, normalizeSqliteCell, sqliteTypeName, toSqliteBinding } from './sqlite';
+import {
+  SqliteDriver,
+  normalizeSqliteCell,
+  pragmaViolation,
+  sqliteTypeName,
+  toSqliteBinding,
+} from './sqlite';
 
 /**
  * Workbench flows against a real SQLite file (no server needed): browse,
@@ -186,6 +192,35 @@ describe('queries', () => {
     // The editor may still attach on purpose.
     await drv.query(`ATTACH DATABASE '${other}' AS o`);
     expect((await drv.query('SELECT s FROM o.secret')).rows).toEqual([['hidden']]);
+  });
+
+  it('read paths cannot change the connection with a PRAGMA, VACUUM or REINDEX', async () => {
+    for (const sql of [
+      'PRAGMA foreign_keys = OFF',
+      'PRAGMA foreign_keys(0)',
+      'PRAGMA writable_schema = 1',
+      'PRAGMA case_sensitive_like = 1',
+      'PRAGMA main.user_version = 3',
+      'PRAGMA /* x */ foreign_keys = OFF',
+      'REINDEX',
+      'VACUUM',
+    ]) {
+      await expect(drv.aiQuery(sql), sql).rejects.toThrow(/rejected/);
+      await expect(drv.sidebandQuery(sql), sql).rejects.toThrow(/rejected/);
+    }
+    // The user's own connection still enforces foreign keys, and reading pragmas still works.
+    expect((await drv.query('PRAGMA foreign_keys')).rows).toEqual([[1]]);
+    expect((await drv.aiQuery('PRAGMA foreign_keys')).rows).toEqual([[1]]);
+    expect((await drv.aiQuery('PRAGMA table_info(users)')).rows.length).toBeGreaterThan(0);
+    expect((await drv.aiQuery('PRAGMA main.index_list(posts)')).rows.length).toBeGreaterThan(0);
+  });
+
+  it('pragmaViolation tells looking from setting', () => {
+    expect(pragmaViolation('PRAGMA user_version')).toBeNull();
+    expect(pragmaViolation('pragma table_info("users")')).toBeNull();
+    expect(pragmaViolation('PRAGMA user_version = 4')).toMatch(/changes/);
+    expect(pragmaViolation('PRAGMA wal_checkpoint(TRUNCATE)')).toMatch(/changes/);
+    expect(pragmaViolation('SELECT 1')).toBeNull();
   });
 
   it('stops a long SELECT when cancelled', async () => {

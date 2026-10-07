@@ -38,6 +38,12 @@ describe('plannedStages', () => {
     ]);
   });
 
+  it('has no host steps when the host is a socket or a list', () => {
+    expect(
+      ids(plannedStages({ engine: 'redis', ssl: false, ssh: false, dialable: false })),
+    ).toEqual(['login', 'database']);
+  });
+
   it('has a single step for a file', () => {
     expect(plannedStages({ engine: 'sqlite', ssl: false, ssh: false })).toEqual([
       { id: 'database', label: 'Open the file' },
