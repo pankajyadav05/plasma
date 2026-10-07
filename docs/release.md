@@ -36,6 +36,14 @@ platform (it must create `plasma.db`), and publishes from a protected
 runners, launches each build to prove it boots, then signs the manifests and
 uploads to R2 (and creates a GitHub Release when run from a `v*` tag).
 
+The GitHub Release page gets its notes from `scripts/release-notes.mjs`: every
+`feat`, `fix` and `perf` commit since the previous `v*` tag, grouped under New,
+Faster and Fixed (tests, CI, docs, version bumps and "review findings"
+follow-ups are left out). Commit subjects are the release notes, so write them
+for users. Preview them before releasing with
+`node scripts/release-notes.mjs <next version>`; the in-app "What's new" link
+opens this page.
+
 One-time setup (repo → Settings):
 
 - **Secrets and variables → Actions**: `R2_ACCESS_KEY_ID`,

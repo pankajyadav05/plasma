@@ -429,10 +429,11 @@ jobs:
     # Protect this environment (required reviewers) in the repo settings.
     environment: production
     steps:
-      - name: Checkout
+      - name: Checkout (with tags, for the release notes)
         uses: actions/checkout@v4
         with:
           ref: ${{ needs.version.outputs.ref }}
+          fetch-depth: 0
 
       - name: Download build artifacts
         uses: actions/download-artifact@v4
@@ -489,11 +490,19 @@ jobs:
           curl -fsS -X POST "$VERCEL_DEPLOY_HOOK" > /dev/null
           echo "site redeploy triggered"
 
+      # What changed since the previous version tag, from the commit subjects
+      # (feat/fix/perf only). We push to main without PRs, so GitHub's own
+      # generated notes would be just the "Full Changelog" link.
+      - name: Write release notes
+        run: node scripts/release-notes.mjs "${{ needs.version.outputs.version }}" --out=release-notes.md
+
       # Every release gets its page, on the tag the version job made or used.
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ needs.version.outputs.version }}
+          body_path: release-notes.md
+          # Appends the "Full Changelog" compare link after our notes.
           generate_release_notes: true
           files: |
             release/Plasma-Setup-*.exe
