@@ -30,6 +30,20 @@ export interface EditUpdate {
   sql: string;
   params?: unknown[];
   label?: string;
+  /** What the statement does; lets a unique-key failure of an INSERT count as a conflict. */
+  kind?: 'update' | 'delete' | 'insert';
+}
+
+/** A statement that could not apply because the data moved (see protocol `EditConflict`). */
+export interface EditBatchConflict {
+  index: number;
+  reason: 'no-match' | 'duplicate';
+}
+
+export interface EditBatchOutcome {
+  /** Statements applied (0 when the batch was rolled back for conflicts). */
+  applied: number;
+  conflicts: EditBatchConflict[];
 }
 
 const ABORTED_MESSAGE =
@@ -50,6 +64,21 @@ function describeEdit(updates: readonly EditUpdate[], i: number): string {
 }
 
 /**
+ * A unique / primary-key violation, whichever engine raised it: Postgres
+ * SQLSTATE 23505, MySQL ER_DUP_ENTRY (1062), SQLite SQLITE_CONSTRAINT_UNIQUE /
+ * _PRIMARYKEY.
+ */
+export function isDuplicateKeyError(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  const e = err as { code?: unknown; errno?: unknown; message?: unknown };
+  const code = typeof e.code === 'string' ? e.code : '';
+  if (code === '23505' || code === 'ER_DUP_ENTRY' || e.errno === 1062) return true;
+  if (code === 'SQLITE_CONSTRAINT_UNIQUE' || code === 'SQLITE_CONSTRAINT_PRIMARYKEY') return true;
+  const msg = typeof e.message === 'string' ? e.message : '';
+  return /UNIQUE constraint failed|PRIMARY KEY must be unique/i.test(msg);
+}
+
+/**
  * Apply a grid edit batch atomically.
  *
  * - Idle session → `BEGIN … COMMIT`.
@@ -57,19 +86,25 @@ function describeEdit(updates: readonly EditUpdate[], i: number): string {
  *   user's transaction stays open and is never committed by the tray.
  * - Aborted transaction → refused; nothing is sent.
  *
- * Every UPDATE must report `rowCount === 1`. Zero means the row changed or
- * was deleted since it was loaded (or the key no longer matches); more than
- * one means the key is not unique. Either way, and on any Postgres error,
- * the whole batch is rolled back and the error names the failing edit.
+ * Every UPDATE / DELETE must report `rowCount === 1`. Its WHERE carries the
+ * primary key AND the values the grid loaded (B1), so zero means the row was
+ * changed or deleted since: that is a conflict, not an error. All statements
+ * still run so every conflicting row is reported at once, then the whole
+ * batch is rolled back and the conflicts are returned. More than one row
+ * means the key is not unique; a Postgres error is an error; both throw (and
+ * roll back) naming the failing edit. An INSERT that hits an existing key is
+ * a conflict too, but ends the batch there (the transaction is aborted).
+ * Nothing is ever committed unless every statement succeeded.
  */
 export async function runEditBatch(
   client: SimpleClient,
   status: TxnStatus,
   updates: readonly EditUpdate[],
-): Promise<number> {
+): Promise<EditBatchOutcome> {
   if (status === 'E') throw new Error(ABORTED_MESSAGE);
   const nested = status === 'T';
   await client.query(nested ? 'SAVEPOINT plasma_edit_batch' : 'BEGIN');
+  const conflicts: EditBatchConflict[] = [];
   try {
     for (let i = 0; i < updates.length; i++) {
       const update = updates[i]!;
@@ -77,9 +112,17 @@ export async function runEditBatch(
       try {
         ({ rowCount } = await client.query({ text: update.sql, values: update.params }));
       } catch (err) {
+        if (update.kind === 'insert' && isDuplicateKeyError(err)) {
+          conflicts.push({ index: i, reason: 'duplicate' });
+          break;
+        }
         throw new Error(
           `${describeEdit(updates, i)} failed: ${pgErrorText(err)}. Nothing was saved.`,
         );
+      }
+      if (rowCount === 0 && update.kind !== 'insert') {
+        conflicts.push({ index: i, reason: 'no-match' });
+        continue;
       }
       if (rowCount !== 1) {
         const n = rowCount ?? 0;
@@ -90,20 +133,28 @@ export async function runEditBatch(
         throw new Error(`${describeEdit(updates, i)} ${why}. Nothing was saved.`);
       }
     }
+    if (conflicts.length > 0) {
+      await rollbackBatch(client, nested);
+      return { applied: 0, conflicts };
+    }
     await client.query(nested ? 'RELEASE SAVEPOINT plasma_edit_batch' : 'COMMIT');
-    return updates.length;
+    return { applied: updates.length, conflicts: [] };
   } catch (err) {
     try {
-      if (nested) {
-        await client.query('ROLLBACK TO SAVEPOINT plasma_edit_batch');
-        await client.query('RELEASE SAVEPOINT plasma_edit_batch');
-      } else {
-        await client.query('ROLLBACK');
-      }
+      await rollbackBatch(client, nested);
     } catch {
       // The connection is gone or already rolled back; the original error matters.
     }
     throw err;
+  }
+}
+
+async function rollbackBatch(client: SimpleClient, nested: boolean): Promise<void> {
+  if (nested) {
+    await client.query('ROLLBACK TO SAVEPOINT plasma_edit_batch');
+    await client.query('RELEASE SAVEPOINT plasma_edit_batch');
+  } else {
+    await client.query('ROLLBACK');
   }
 }
 

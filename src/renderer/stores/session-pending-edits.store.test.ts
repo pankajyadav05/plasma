@@ -202,7 +202,7 @@ describe('grid pending edits (A1 / A5 / B3)', () => {
       'UPDATE',
       'INSERT',
     ]);
-    expect(arg.updates[0].params).toEqual(['x@y.z', '1']);
+    expect(arg.updates[0].params).toEqual(['x@y.z', '1', 'a@b.co']);
     expect(tabAEdits()).toHaveLength(0);
   });
 
@@ -280,7 +280,7 @@ describe('per-tab pending edits (R-01 / R-02 / R-03 / R-04)', () => {
     commitEditBatch.mockResolvedValue({ state: 'none', applied: 1 });
     await useSession.getState().commitPendingEdits({ tabId: 'tab-a' });
     expect(commitEditBatch).toHaveBeenCalledOnce();
-    expect(commitEditBatch.mock.calls[0]?.[0].updates[0].params).toEqual(['x@y.z', '1']);
+    expect(commitEditBatch.mock.calls[0]?.[0].updates[0].params).toEqual(['x@y.z', '1', 'a@b.co']);
     expect(tabAEdits()).toHaveLength(0);
     expect(editsOf(useSession.getState().pendingEditsByTab, 'tab-b')).toHaveLength(1);
   });
@@ -464,5 +464,116 @@ describe('bulk edits (set value / fill / paste / find & replace)', () => {
     threeRows();
     useSession.setState((s) => ({ activeConfig: { ...s.activeConfig!, readOnly: true } }));
     expect(() => useSession.getState().insertRows([{ id: '10' }])).toThrow(/read-only/);
+  });
+});
+
+describe('concurrent-edit conflicts (B1)', () => {
+  beforeEach(() => {
+    commitEditBatch.mockReset();
+    queryRun.mockReset();
+  });
+
+  const stageAndCommit = async (lookup: unknown) => {
+    await useSession.getState().updateCell(0, 1, 'mine');
+    commitEditBatch.mockResolvedValue({
+      state: 'none',
+      applied: 0,
+      conflicts: [{ index: 0, reason: 'no-match' }],
+    });
+    queryRun.mockResolvedValue(lookup);
+    await useSession.getState().commitPendingEdits();
+  };
+  const theirsResult = {
+    columns: [
+      { name: 'id', dataTypeID: 23, dataTypeName: 'int4' },
+      { name: 'email', dataTypeID: 25, dataTypeName: 'text' },
+    ],
+    rows: [[1, 'theirs@x.y']],
+    rowCount: 1,
+    durationMs: 1,
+    command: 'SELECT',
+  };
+  const firstItem = () => useSession.getState().editConflicts?.items[0];
+
+  it('keeps every staged edit, flags the row and opens the review', async () => {
+    await stageAndCommit(theirsResult);
+    const s = useSession.getState();
+    expect(tabAEdits()).toHaveLength(1);
+    expect(s.editConflicts?.items).toHaveLength(1);
+    expect(firstItem()).toMatchObject({
+      kind: 'changed',
+      columns: [{ column: 'email', original: 'a@b.co', mine: 'mine', theirs: 'theirs@x.y' }],
+    });
+    expect(s.editConflictsOpen).toBe(true);
+    expect(s.pendingEditsError?.editIds).toEqual(tabAEdits().map((e) => e.id));
+    expect(s.pendingEditsError?.message).toMatch(/changed by someone else/);
+    // the lookup is an internal, keyed read
+    expect(queryRun.mock.calls[0]?.[0]).toMatch(
+      /^SELECT \* FROM "public"."users" WHERE "id" = \$1/,
+    );
+    expect(queryRun.mock.calls[0]?.[2]).toEqual({ internal: true });
+  });
+
+  it('keep mine re-stages on the server values; the next commit compares against them', async () => {
+    await stageAndCommit(theirsResult);
+    useSession.getState().resolveEditConflict(firstItem()?.id ?? '', 'mine');
+    const s = useSession.getState();
+    expect(s.editConflicts).toBeNull();
+    expect(s.editConflictsOpen).toBe(false);
+    expect(s.pendingEditsError).toBeNull();
+    expect(tabAEdits()[0]).toMatchObject({ oldValue: 'theirs@x.y', newValue: 'mine' });
+    commitEditBatch.mockResolvedValue({ state: 'none', applied: 1 });
+    await useSession.getState().commitPendingEdits();
+    expect(commitEditBatch.mock.calls.at(-1)?.[0].updates[0].params).toEqual([
+      'mine',
+      '1',
+      'theirs@x.y',
+    ]);
+    expect(tabAEdits()).toHaveLength(0);
+  });
+
+  it('take theirs drops my edit', async () => {
+    await stageAndCommit(theirsResult);
+    useSession.getState().resolveEditConflict(firstItem()?.id ?? '', 'theirs');
+    expect(tabAEdits()).toHaveLength(0);
+    expect(useSession.getState().editConflicts).toBeNull();
+  });
+
+  it('a row that was deleted offers only take theirs; keep mine changes nothing', async () => {
+    await stageAndCommit({ ...theirsResult, rows: [], rowCount: 0 });
+    const item = firstItem();
+    expect(item?.kind).toBe('gone');
+    useSession.getState().resolveEditConflict(item?.id ?? '', 'mine');
+    expect(tabAEdits()).toHaveLength(1);
+    expect(useSession.getState().editConflicts?.items).toHaveLength(1);
+  });
+
+  it('cancel closes the review but the edits and the flag stay', async () => {
+    await stageAndCommit(theirsResult);
+    useSession.getState().closeEditConflicts();
+    expect(useSession.getState().editConflictsOpen).toBe(false);
+    expect(tabAEdits()).toHaveLength(1);
+    expect(useSession.getState().pendingEditsError).not.toBeNull();
+    useSession.getState().openEditConflicts();
+    expect(useSession.getState().editConflictsOpen).toBe(true);
+  });
+
+  it('discarding the tab’s edits clears the review', async () => {
+    await stageAndCommit(theirsResult);
+    await useSession.getState().revertPendingEdits();
+    expect(useSession.getState().editConflicts).toBeNull();
+  });
+
+  it('a row that cannot be read back is still reported, as unknown', async () => {
+    await useSession.getState().updateCell(0, 1, 'mine');
+    commitEditBatch.mockResolvedValue({
+      state: 'none',
+      applied: 0,
+      conflicts: [{ index: 0, reason: 'no-match' }],
+    });
+    queryRun.mockRejectedValue(new Error('permission denied'));
+    await useSession.getState().commitPendingEdits();
+    expect(firstItem()?.kind).toBe('unknown');
+    expect(tabAEdits()).toHaveLength(1);
   });
 });

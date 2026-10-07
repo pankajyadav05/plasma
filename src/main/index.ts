@@ -29,6 +29,7 @@ import {
   ConnectionSshConfig,
   type ConnectionTestResult,
   type DataFilePickResult,
+  type EditConflict,
   ExplainRequest,
   ExportSaveRequest,
   type ExportSaveResult,
@@ -1362,7 +1363,10 @@ function registerIpcHandlers() {
   // statement and rolls everything back naming the failing edit.
   ipcMain.handle(
     IpcChannel.QueryCommitEditBatch,
-    async (_e, raw: unknown): Promise<{ state: TxnState; applied: number }> => {
+    async (
+      _e,
+      raw: unknown,
+    ): Promise<{ state: TxnState; applied: number; conflicts?: EditConflict[] }> => {
       const req = CommitEditBatchRequest.parse(raw);
       if (retainedSession?.config.readOnly === true) {
         throw new Error('This connection is read-only — edits cannot be committed.');
@@ -1388,17 +1392,24 @@ function registerIpcHandlers() {
         );
         throw err;
       }
+      const conflicted = res.conflicts && res.conflicts.length > 0;
       recordAuditStatements(
         auditDeps,
         req.updates.map((u) => ({
           sql: u.sql,
           source: 'grid-commit' as const,
-          affectedRows: 1,
+          ...(conflicted
+            ? { error: 'Rolled back: a row changed on the server since it was loaded.' }
+            : { affectedRows: 1 }),
           ts: startedAt,
           durationMs: Date.now() - startedAt,
         })),
       );
-      return { state: res.state, applied: res.applied };
+      return {
+        state: res.state,
+        applied: res.applied,
+        ...(conflicted ? { conflicts: res.conflicts } : {}),
+      };
     },
   );
 

@@ -20,7 +20,7 @@ import { createConnection } from 'mysql2';
 import type { Connection as CbConnection } from 'mysql2';
 import { mysqlPlanToJson } from './explain-plan';
 import { type MysqlRawSchema, buildMysqlSchema, mysqlIntrospectQueries } from './mysql-introspect';
-import { runEditBatch } from './pg-txn';
+import { type EditBatchConflict, runEditBatch } from './pg-txn';
 import type { ExportBatch, SqlEditUpdate, SqlEngineDriver, SqlQueryOpts } from './sql-engine';
 
 /**
@@ -525,7 +525,7 @@ export class MysqlDriver implements SqlEngineDriver {
   async commitEditBatch(
     expectedGen: number,
     updates: SqlEditUpdate[],
-  ): Promise<{ state: TxnState; applied: number }> {
+  ): Promise<{ state: TxnState; applied: number; conflicts: EditBatchConflict[] }> {
     const conn = this.requirePrimary();
     if (expectedGen !== this.connectionGen) {
       throw new Error(
@@ -547,11 +547,11 @@ export class MysqlDriver implements SqlEngineDriver {
         return { rowCount: res.rowCount };
       },
     };
-    const applied = await this.chain('primaryTail', async () => {
+    const outcome = await this.chain('primaryTail', async () => {
       await this.reassertReadOnly(conn);
       return runEditBatch(client, this.txn === 'active' ? 'T' : 'I', updates);
     });
-    return { state: this.txn, applied };
+    return { state: this.txn, ...outcome };
   }
 
   /** Unbounded stream for file export: the server is read in batches, never buffered. */

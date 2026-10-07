@@ -27,6 +27,7 @@ import {
   innerType,
 } from './clickhouse-introspect';
 import { clickhousePlanToJson } from './explain-plan';
+import type { EditBatchConflict } from './pg-txn';
 import type { ExportBatch, SqlEditUpdate, SqlEngineDriver, SqlQueryOpts } from './sql-engine';
 
 /**
@@ -482,7 +483,7 @@ export class ClickhouseDriver implements SqlEngineDriver {
   async commitEditBatch(
     _expectedGen: number,
     _updates: SqlEditUpdate[],
-  ): Promise<{ state: TxnState; applied: number }> {
+  ): Promise<{ state: TxnState; applied: number; conflicts: EditBatchConflict[] }> {
     throw new Error(
       'ClickHouse rows cannot be edited in the grid: mutations are asynchronous. Write an ALTER TABLE … UPDATE in the editor instead.',
     );

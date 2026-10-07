@@ -5,6 +5,7 @@ import type {
   SchemaInfo,
   TxnState,
 } from '@shared/protocol';
+import type { EditBatchConflict } from './pg-txn';
 
 /** Options every SQL engine driver understands on `query`. */
 export interface SqlQueryOpts {
@@ -23,6 +24,7 @@ export interface SqlEditUpdate {
   sql: string;
   params?: unknown[];
   label?: string;
+  kind?: 'update' | 'delete' | 'insert';
 }
 
 export interface ExportBatch {
@@ -51,7 +53,7 @@ export interface SqlEngineDriver {
   commitEditBatch(
     expectedGen: number,
     updates: SqlEditUpdate[],
-  ): Promise<{ state: TxnState; applied: number }>;
+  ): Promise<{ state: TxnState; applied: number; conflicts: EditBatchConflict[] }>;
   streamQueryForExport(sql: string, params?: unknown[]): AsyncGenerator<ExportBatch, void, void>;
   introspect(opts?: IntrospectOpts): Promise<SchemaInfo>;
   setConnectionGen(gen: number): void;

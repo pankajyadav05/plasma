@@ -42,6 +42,8 @@ import { PgListener } from './pg-listener';
 import { enforceReadOnlySession } from './pg-readonly';
 import { type CappedRead, finishSafeRun, rollbackSafeRun, startSafeRun } from './pg-safe-run';
 import {
+  type EditBatchConflict,
+  type EditBatchOutcome,
   type EditUpdate,
   type TxnStatus,
   runEditBatch,
@@ -1232,7 +1234,7 @@ export class PostgresDriver {
   async commitEditBatch(
     expectedGen: number,
     updates: EditUpdate[],
-  ): Promise<{ state: TxnState; applied: number }> {
+  ): Promise<{ state: TxnState; applied: number; conflicts: EditBatchConflict[] }> {
     this.assertNoSafeRun();
     const client = await this.requireClient('primary');
     if (expectedGen !== this.connectionGen)
@@ -1240,14 +1242,14 @@ export class PostgresDriver {
         `connection generation mismatch: edit batch is for generation ${expectedGen}, current is ${this.connectionGen}`,
       );
     this.takeNotices();
-    let applied: number;
+    let outcome: EditBatchOutcome;
     try {
-      applied = await runEditBatch(client, this.txnStatus(), updates);
+      outcome = await runEditBatch(client, this.txnStatus(), updates);
     } finally {
       this.takeNotices();
     }
     this.lastActivityAt = Date.now();
-    return { state: this.txnState, applied };
+    return { state: this.txnState, ...outcome };
   }
 
   /** Structure editor Apply (see pg-import.ts). */

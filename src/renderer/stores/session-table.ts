@@ -4,8 +4,10 @@
  * row-editing tray. The server queries live in `session-table-query.ts`,
  * the tray logic in `session-pending-edits.ts`.
  */
+import type { EditConflict } from '@/lib/edit-conflicts';
 import type { Filter, TableSort } from '@/lib/table-query';
 import {
+  closeEditConflicts as closeEditConflictsAction,
   commitPendingEdits as commitPendingEditsAction,
   discardPendingEdit as discardPendingEditAction,
   duplicateValues,
@@ -14,6 +16,7 @@ import {
   queueInsert,
   queueInserts,
   queueRowDeletes,
+  resolveEditConflict as resolveEditConflictAction,
   revertPendingEdits as revertPendingEditsAction,
   tabsWithEdits,
   updatePendingInsert as updatePendingInsertAction,
@@ -51,6 +54,10 @@ export interface TableSlice {
   pendingEditsBusy: boolean;
   /** Last commit failure: Postgres message + the edits whose statement failed. */
   pendingEditsError: PendingEditsError | null;
+  /** Rows that changed on the server since they were loaded, found by the last commit (B1). */
+  editConflicts: { tabId: string; items: EditConflict[] } | null;
+  /** The conflict review dialog is showing. */
+  editConflictsOpen: boolean;
   /**
    * Open a table tab. Single clicks open a reusable *preview* tab (italic)
    * that the next preview open replaces; `preview: false` pins it.
@@ -109,12 +116,20 @@ export interface TableSlice {
   commitPendingEdits(opts?: { confirmed?: boolean; tabId?: string }): Promise<void>;
   /** Discards the edits of `tabId` (default: the active tab). */
   revertPendingEdits(opts?: { tabId?: string }): Promise<void>;
+  /** Keep my change (re-staged on the server's values) or take theirs (drop mine) for one row. */
+  resolveEditConflict(conflictId: string, choice: 'mine' | 'theirs'): void;
+  /** Close the conflict review (edits stay staged). */
+  closeEditConflicts(): void;
+  /** Re-open it from the commit banner. */
+  openEditConflicts(): void;
 }
 
 export const createTableSlice: SliceCreator<TableSlice> = (set, get) => ({
   pendingEditsByTab: {},
   pendingEditsBusy: false,
   pendingEditsError: null,
+  editConflicts: null,
+  editConflictsOpen: false,
 
   openTable(schemaName, tableName, opts) {
     const state = get();
@@ -444,5 +459,23 @@ export const createTableSlice: SliceCreator<TableSlice> = (set, get) => ({
 
   async revertPendingEdits(opts) {
     await revertPendingEditsAction(set, get, { runTableDataQuery }, opts);
+  },
+
+  resolveEditConflict(conflictId, choice) {
+    resolveEditConflictAction(
+      set,
+      get,
+      { runTableDataQuery, runTableCountQuery },
+      conflictId,
+      choice,
+    );
+  },
+
+  closeEditConflicts() {
+    closeEditConflictsAction(set);
+  },
+
+  openEditConflicts() {
+    if (get().editConflicts) set({ editConflictsOpen: true });
   },
 });

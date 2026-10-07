@@ -10,6 +10,7 @@ import { TabStrip } from '@/features/editor/TabStrip';
 import { VariablesBar } from '@/features/editor/VariablesBar';
 import { runCommand, selectTabAt } from '@/features/keymap/commands';
 import { MigrationCheckDialog } from '@/features/migration/MigrationCheckDialog';
+import { EditConflictDialog } from '@/features/result-grid/EditConflictDialog';
 import { FilterRow } from '@/features/result-grid/FilterRow';
 import { ResultFooter } from '@/features/result-grid/ResultFooter';
 import { ResultGrid } from '@/features/result-grid/ResultGrid';
@@ -198,6 +199,7 @@ export function AppShell() {
       <DeleteConfirmDialog />
       <ProdGateDialog />
       <PendingEditsGateDialog />
+      <EditConflictDialog />
       <CloseTabsDialog />
       <SnippetEditorDialog />
       <MigrationCheckDialog />

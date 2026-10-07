@@ -81,6 +81,11 @@ export interface EngineCapabilities {
   columnProfile: boolean;
   /** Writes run as asynchronous mutations (ClickHouse `ALTER … UPDATE`); the editor warns. */
   asyncMutations: boolean;
+  /**
+   * Grid commits can tell that a row changed on the server since it was loaded
+   * (guarded WHERE + reliable affected-row counts inside one transaction).
+   */
+  editConflicts: boolean;
 }
 
 const PG_CAPS: EngineCapabilities = {
@@ -105,6 +110,7 @@ const PG_CAPS: EngineCapabilities = {
   rowEdits: true,
   columnProfile: false,
   asyncMutations: false,
+  editConflicts: true,
 };
 
 const SQLITE_CAPS: EngineCapabilities = {
@@ -165,6 +171,7 @@ const NO_CAPS: EngineCapabilities = {
   rowEdits: true,
   columnProfile: false,
   asyncMutations: false,
+  editConflicts: false,
 };
 
 const CLICKHOUSE_CAPS: EngineCapabilities = {
@@ -187,6 +194,7 @@ const CLICKHOUSE_CAPS: EngineCapabilities = {
   rowEdits: false,
   columnProfile: false,
   asyncMutations: true,
+  editConflicts: false,
 };
 
 const DUCKDB_CAPS: EngineCapabilities = {
@@ -209,6 +217,7 @@ const DUCKDB_CAPS: EngineCapabilities = {
   rowEdits: false,
   columnProfile: true,
   asyncMutations: false,
+  editConflicts: false,
 };
 
 /** Capabilities of `engine`; `null`/unknown means Postgres (the legacy default). */

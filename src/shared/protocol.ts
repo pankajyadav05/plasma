@@ -1152,6 +1152,21 @@ export type TxnState = z.infer<typeof TxnState>;
  * Postgres text form of each value, or `null` for SQL NULL — never JS
  * Dates or objects. Each statement must affect exactly one row.
  */
+export const EditStatementKind = z.enum(['update', 'delete', 'insert']);
+
+/**
+ * A statement of a grid edit batch that could not be applied because the data
+ * moved under the user (B1): an UPDATE / DELETE matched no row (changed or gone
+ * since the grid loaded it; the statements carry the original values in their
+ * WHERE), or an INSERT collided with an existing key. When any exist the whole
+ * batch was rolled back.
+ */
+export const EditConflict = z.object({
+  index: z.number().int().nonnegative(),
+  reason: z.enum(['no-match', 'duplicate']),
+});
+export type EditConflict = z.infer<typeof EditConflict>;
+
 export const CommitEditBatchRequest = z.object({
   connectionGen: z.number().int().nonnegative(),
   updates: z
@@ -1160,6 +1175,7 @@ export const CommitEditBatchRequest = z.object({
         sql: z.string().min(1),
         params: z.array(z.union([z.string(), z.number(), z.boolean(), z.null()])).optional(),
         label: z.string().max(500).optional(),
+        kind: EditStatementKind.optional(),
       }),
     )
     .min(1),
@@ -1330,6 +1346,7 @@ export const WorkerRequest = z.discriminatedUnion('kind', [
           sql: z.string().min(1),
           params: z.array(z.unknown()).optional(),
           label: z.string().optional(),
+          kind: EditStatementKind.optional(),
         }),
       )
       .min(1),
@@ -1611,6 +1628,8 @@ export const WorkerResponse = z.discriminatedUnion('kind', [
     id: z.string(),
     state: TxnState,
     applied: z.number().int().nonnegative(),
+    /** Present when rows changed under the edit: the batch was rolled back, `applied` is 0. */
+    conflicts: z.array(EditConflict).optional(),
   }),
   /**
    * `fatal: 'connection-lost'` means the driver's transport is gone (VPN
@@ -2552,8 +2571,13 @@ export interface PlasmaAPI {
      */
     commitEditBatch(req: {
       connectionGen: number;
-      updates: Array<{ sql: string; params?: unknown[]; label?: string }>;
-    }): Promise<{ state: TxnState; applied: number }>;
+      updates: Array<{
+        sql: string;
+        params?: unknown[];
+        label?: string;
+        kind?: 'update' | 'delete' | 'insert';
+      }>;
+    }): Promise<{ state: TxnState; applied: number; conflicts?: EditConflict[] }>;
     /** EXPLAIN (FORMAT JSON) one statement; ANALYZE runs it inside a rolled-back transaction. */
     explain(req: { sql: string; analyze: boolean; params?: unknown[] }): Promise<QueryResult>;
     /**

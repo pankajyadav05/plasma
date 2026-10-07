@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   type SimpleClient,
   buildExplainSql,
+  isDuplicateKeyError,
   runEditBatch,
   runExplain,
   txnStateFromStatus,
@@ -40,7 +41,10 @@ describe('runEditBatch', () => {
 
   it('wraps an idle session in BEGIN/COMMIT', async () => {
     const client = fakeClient();
-    await expect(runEditBatch(client, 'I', updates)).resolves.toBe(2);
+    await expect(runEditBatch(client, 'I', updates)).resolves.toEqual({
+      applied: 2,
+      conflicts: [],
+    });
     expect(client.log).toEqual(['BEGIN', updates[0]!.sql, updates[1]!.sql, 'COMMIT']);
   });
 
@@ -63,13 +67,54 @@ describe('runEditBatch', () => {
     expect(client.log).toEqual([]);
   });
 
-  it('rolls back and names the edit when an UPDATE matches no row', async () => {
+  it('rolls back and reports a conflict when an UPDATE matches no row', async () => {
     const client = fakeClient({ [updates[1]!.sql]: 0 });
-    await expect(runEditBatch(client, 'I', updates)).rejects.toThrow(
-      /Edit 2 of 2 \(public\.a id=11 → y\) matched no row.*Nothing was saved/,
-    );
+    await expect(runEditBatch(client, 'I', updates)).resolves.toEqual({
+      applied: 0,
+      conflicts: [{ index: 1, reason: 'no-match' }],
+    });
     expect(client.log.at(-1)).toBe('ROLLBACK');
     expect(client.log).not.toContain('COMMIT');
+  });
+
+  it('runs every statement so all conflicting rows are reported, then rolls back once', async () => {
+    const client = fakeClient({ [updates[0]!.sql]: 0, [updates[1]!.sql]: 0 });
+    const out = await runEditBatch(client, 'T', updates);
+    expect(out.conflicts.map((c) => c.index)).toEqual([0, 1]);
+    expect(client.log.slice(-2)).toEqual([
+      'ROLLBACK TO SAVEPOINT plasma_edit_batch',
+      'RELEASE SAVEPOINT plasma_edit_batch',
+    ]);
+    expect(client.log.filter((l) => l.startsWith('RELEASE'))).toHaveLength(1);
+  });
+
+  it('never commits a batch that has a conflict, wherever it is', async () => {
+    const three = [...updates, { sql: 'DELETE FROM a WHERE id = $1', params: ['5'] }];
+    const client = fakeClient({ [updates[0]!.sql]: 0 });
+    const out = await runEditBatch(client, 'I', three);
+    expect(out.applied).toBe(0);
+    expect(client.log).not.toContain('COMMIT');
+  });
+
+  it('reports an INSERT that hits an existing key as a duplicate and stops there', async () => {
+    const dup = Object.assign(new Error('duplicate key value violates unique constraint'), {
+      code: '23505',
+    });
+    const batch = [
+      updates[0]!,
+      { sql: 'INSERT INTO a (id) VALUES ($1)', params: ['1'], kind: 'insert' as const },
+      updates[1]!,
+    ];
+    const client = fakeClient({ [batch[1]!.sql]: dup });
+    const out = await runEditBatch(client, 'I', batch);
+    expect(out).toEqual({ applied: 0, conflicts: [{ index: 1, reason: 'duplicate' }] });
+    expect(client.log).toEqual(['BEGIN', batch[0]!.sql, batch[1]!.sql, 'ROLLBACK']);
+  });
+
+  it('a unique violation of an UPDATE is an error, not a conflict', async () => {
+    const dup = Object.assign(new Error('duplicate key value'), { code: '23505' });
+    const client = fakeClient({ [updates[0]!.sql]: dup });
+    await expect(runEditBatch(client, 'I', updates)).rejects.toThrow(/Edit 1 of 2.*failed/);
   });
 
   it('rolls back when an UPDATE matches more than one row', async () => {
@@ -90,6 +135,18 @@ describe('runEditBatch', () => {
       'ROLLBACK TO SAVEPOINT plasma_edit_batch',
       'RELEASE SAVEPOINT plasma_edit_batch',
     ]);
+  });
+});
+
+describe('isDuplicateKeyError', () => {
+  it('recognises each engine’s unique violation', () => {
+    expect(isDuplicateKeyError({ code: '23505' })).toBe(true);
+    expect(isDuplicateKeyError({ code: 'ER_DUP_ENTRY' })).toBe(true);
+    expect(isDuplicateKeyError({ errno: 1062 })).toBe(true);
+    expect(isDuplicateKeyError({ code: 'SQLITE_CONSTRAINT_PRIMARYKEY' })).toBe(true);
+    expect(isDuplicateKeyError(new Error('UNIQUE constraint failed: users.id'))).toBe(true);
+    expect(isDuplicateKeyError({ code: '23503' })).toBe(false);
+    expect(isDuplicateKeyError(null)).toBe(false);
   });
 });
 

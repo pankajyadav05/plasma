@@ -1,7 +1,10 @@
 import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { GuardValue } from '@shared/edit-guard';
 import type { ConnectionConfig } from '@shared/protocol';
+import { dialectFor } from '@shared/sql-dialect';
+import { buildDeleteSql, buildUpdateSql } from '@shared/table-query';
 import Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { SqliteDriver, normalizeSqliteCell, sqliteTypeName, toSqliteBinding } from './sqlite';
@@ -205,12 +208,12 @@ describe('edit batches', () => {
   });
 
   it('rolls everything back when one statement matches no row', async () => {
-    await expect(
-      drv.commitEditBatch(1, [
-        { sql: 'UPDATE users SET name = $1 WHERE id = $2', params: ['X', '1'] },
-        { sql: 'UPDATE users SET name = $1 WHERE id = $2', params: ['Y', '999'] },
-      ]),
-    ).rejects.toThrow(/Edit 2 of 2.*matched no row.*Nothing was saved/);
+    const r = await drv.commitEditBatch(1, [
+      { sql: 'UPDATE users SET name = $1 WHERE id = $2', params: ['X', '1'] },
+      { sql: 'UPDATE users SET name = $1 WHERE id = $2', params: ['Y', '999'] },
+    ]);
+    expect(r.applied).toBe(0);
+    expect(r.conflicts).toEqual([{ index: 1, reason: 'no-match' }]);
     expect((await drv.query("SELECT count(*) FROM users WHERE name = 'X'")).rows[0]![0]).toBe(0);
     expect(drv.getTxnState()).toBe('none');
   });
@@ -246,6 +249,151 @@ describe('edit batches', () => {
     ).rejects.toThrow(/FOREIGN KEY/);
     await drv.query('DELETE FROM users WHERE id = 1');
     expect((await drv.query('SELECT count(*) FROM posts')).rows[0]![0]).toBe(0);
+  });
+});
+
+describe('concurrent edits (B1)', () => {
+  const sqlite = dialectFor('sqlite');
+  /** A second client changing the file between "grid loaded" and "commit". */
+  function other(sql: string, ...args: unknown[]): void {
+    const db = new Database(file);
+    try {
+      db.prepare(sql).run(...args);
+    } finally {
+      db.close();
+    }
+  }
+  const guarded = (set: Record<string, unknown>, id: string, guards: GuardValue[]) => {
+    const { sql, params } = buildUpdateSql({
+      schema: 'main',
+      table: 'users',
+      set,
+      pkValues: { id },
+      guards,
+      dialect: sqlite,
+    });
+    return { sql, params: params as unknown[], kind: 'update' as const };
+  };
+
+  it('commits when nothing changed since the load (integer column compared as text)', async () => {
+    const r = await drv.commitEditBatch(1, [
+      guarded({ age: '37' }, '1', [{ column: 'age', value: '36', type: 'integer' }]),
+    ]);
+    expect(r).toMatchObject({ applied: 1, conflicts: [] });
+    expect((await drv.query('SELECT age FROM users WHERE id = 1')).rows).toEqual([[37]]);
+  });
+
+  it('refuses to overwrite a value somebody else changed, and keeps theirs', async () => {
+    other("UPDATE users SET name = 'ADA (theirs)' WHERE id = 1");
+    const r = await drv.commitEditBatch(1, [
+      guarded({ name: 'mine' }, '1', [{ column: 'name', value: 'ada', type: 'text' }]),
+    ]);
+    expect(r.applied).toBe(0);
+    expect(r.conflicts).toEqual([{ index: 0, reason: 'no-match' }]);
+    expect((await drv.query('SELECT name FROM users WHERE id = 1')).rows).toEqual([
+      ['ADA (theirs)'],
+    ]);
+    expect(drv.getTxnState()).toBe('none');
+  });
+
+  it('does not conflict when somebody changed a column this edit leaves alone', async () => {
+    other('UPDATE users SET age = 99 WHERE id = 1');
+    const r = await drv.commitEditBatch(1, [
+      guarded({ name: 'mine' }, '1', [{ column: 'name', value: 'ada', type: 'text' }]),
+    ]);
+    expect(r.conflicts).toEqual([]);
+    expect((await drv.query('SELECT name, age FROM users WHERE id = 1')).rows).toEqual([
+      ['mine', 99],
+    ]);
+  });
+
+  it('compares NULL to NULL (IS, not =)', async () => {
+    const ok = await drv.commitEditBatch(1, [
+      guarded({ bio: 'x' }, '2', [{ column: 'bio', value: null, type: 'text' }]),
+    ]);
+    expect(ok.conflicts).toEqual([]);
+    other("UPDATE users SET bio = 'taken' WHERE id = 3");
+    const bad = await drv.commitEditBatch(1, [
+      guarded({ bio: 'y' }, '3', [{ column: 'bio', value: null, type: 'text' }]),
+    ]);
+    expect(bad.conflicts).toHaveLength(1);
+  });
+
+  it('rolls the whole batch back when only one row conflicts, and reports every conflict', async () => {
+    other("UPDATE users SET name = 'theirs' WHERE id = 2");
+    other("UPDATE users SET name = 'theirs too' WHERE id = 3");
+    const r = await drv.commitEditBatch(1, [
+      guarded({ name: 'one' }, '1', [{ column: 'name', value: 'ada', type: 'text' }]),
+      guarded({ name: 'two' }, '2', [{ column: 'name', value: 'bob', type: 'text' }]),
+      guarded({ name: 'three' }, '3', [{ column: 'name', value: 'cy', type: 'text' }]),
+    ]);
+    expect(r.applied).toBe(0);
+    expect(r.conflicts.map((c) => c.index)).toEqual([1, 2]);
+    expect((await drv.query('SELECT name FROM users ORDER BY id')).rows).toEqual([
+      ['ada'],
+      ['theirs'],
+      ['theirs too'],
+    ]);
+  });
+
+  it('a DELETE of a row that changed, or is already gone, is a conflict', async () => {
+    const del = (id: string, cols: GuardValue[]) => {
+      const { sql, params } = buildDeleteSql({
+        schema: 'main',
+        table: 'users',
+        pkValues: { id },
+        guards: cols,
+        dialect: sqlite,
+      });
+      return { sql, params: params as unknown[], kind: 'delete' as const };
+    };
+    const row = (name: string, age: string): GuardValue[] => [
+      { column: 'id', value: '2', type: 'integer' },
+      { column: 'name', value: name, type: 'text' },
+      { column: 'age', value: age, type: 'integer' },
+      { column: 'bio', value: null, type: 'text' },
+    ];
+    other('UPDATE users SET age = 13 WHERE id = 2');
+    const changed = await drv.commitEditBatch(1, [del('2', row('bob', '12'))]);
+    expect(changed.conflicts).toEqual([{ index: 0, reason: 'no-match' }]);
+    other('DELETE FROM posts WHERE user_id = 3');
+    other('DELETE FROM users WHERE id = 3');
+    const gone = await drv.commitEditBatch(1, [del('3', row('cy', '41'))]);
+    expect(gone.conflicts).toEqual([{ index: 0, reason: 'no-match' }]);
+    expect((await drv.query('SELECT count(*) FROM users WHERE id = 2')).rows[0]![0]).toBe(1);
+    // (the users_touch trigger set bio when the other client changed the row)
+    const nowRow = row('bob', '13').map((c) =>
+      c.column === 'bio' ? { ...c, value: 'touched' } : c,
+    );
+    const fine = await drv.commitEditBatch(1, [del('2', nowRow)]);
+    expect(fine).toMatchObject({ applied: 1, conflicts: [] });
+  });
+
+  it('an INSERT with a key that now exists is reported as a duplicate; nothing else is saved', async () => {
+    const r = await drv.commitEditBatch(1, [
+      guarded({ name: 'fine' }, '1', [{ column: 'name', value: 'ada', type: 'text' }]),
+      {
+        sql: 'INSERT INTO "main"."users" ("id", "name") VALUES ($1, $2)',
+        params: ['2', 'dup'],
+        kind: 'insert',
+      },
+    ]);
+    expect(r.applied).toBe(0);
+    expect(r.conflicts).toEqual([{ index: 1, reason: 'duplicate' }]);
+    expect((await drv.query('SELECT name FROM users WHERE id = 1')).rows).toEqual([['ada']]);
+  });
+
+  it('inside the user transaction a conflict rolls back to the savepoint and leaves it open', async () => {
+    await drv.beginTransaction();
+    await drv.query('UPDATE users SET age = 50 WHERE id = 3');
+    await drv.query("UPDATE users SET name = 'changed in my transaction' WHERE id = 1");
+    const r = await drv.commitEditBatch(1, [
+      guarded({ name: 'mine' }, '1', [{ column: 'name', value: 'ada', type: 'text' }]),
+    ]);
+    expect(r.conflicts).toHaveLength(1);
+    expect(drv.getTxnState()).toBe('active');
+    expect((await drv.query('SELECT age FROM users WHERE id = 3')).rows).toEqual([[50]]);
+    await drv.rollbackTransaction();
   });
 });
 

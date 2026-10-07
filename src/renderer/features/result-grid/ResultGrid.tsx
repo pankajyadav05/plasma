@@ -1416,6 +1416,8 @@ export function ResultGrid() {
 
   // Commit failure pointers (VF13): the edits whose statement failed.
   const failedIds = useMemo(() => new Set(pendingEditsError?.editIds ?? []), [pendingEditsError]);
+  const hasConflicts = useSession((s) => s.editConflicts?.tabId === gridTabId);
+  const openEditConflicts = useSession((s) => s.openEditConflicts);
   const failedRowKeys = useMemo(() => {
     const s = new Set<string>();
     for (const e of pendingEdits) if (failedIds.has(e.id) && e.rowKey) s.add(e.rowKey);
@@ -1837,7 +1839,12 @@ export function ResultGrid() {
               </>
             )}
           </span>
-          {!editError && failedIds.size > 0 && (
+          {!editError && hasConflicts && (
+            <button type="button" onClick={openEditConflicts} className="shrink-0 underline">
+              Review
+            </button>
+          )}
+          {!editError && !hasConflicts && failedIds.size > 0 && (
             <button type="button" onClick={jumpToFailure} className="shrink-0 underline">
               Show cell
             </button>
