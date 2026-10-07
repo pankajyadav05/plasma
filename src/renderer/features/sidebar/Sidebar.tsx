@@ -4,16 +4,18 @@ import { usePresenting } from '@/features/presentation/presentation';
 import { cn } from '@/lib/cn';
 import { ENGINE_ICON, ENGINE_LABEL } from '@/lib/engine-meta';
 import { lazyNamed } from '@/lib/lazy';
+import { useMemory } from '@/stores/ai-memory';
 import { useSession } from '@/stores/session';
 import { type SidebarMode, useWorkbench } from '@/stores/workbench';
 import { engineCaps } from '@shared/sql-dialect';
-import { Copy, Pencil, Plus } from 'lucide-react';
-import { Suspense } from 'react';
+import { BookMarked, Copy, Pencil, Plus } from 'lucide-react';
+import { Suspense, useState } from 'react';
 import { groupConnections } from '../connection-manager/connection-groups';
 import { WorkspaceSection } from '../workspace/WorkspaceSection';
 import { EntityList } from './EntityList';
 import { HistoryList } from './HistoryList';
 import { SavedQueriesList } from './SavedQueriesList';
+import { type ContextMenuState, SidebarContextMenu } from './SidebarContextMenu';
 
 const OsSidebar = lazyNamed(() => import('@/features/opensearch/OsSidebar'), 'OsSidebar');
 const RedisSidebar = lazyNamed(() => import('@/features/redis/RedisSidebar'), 'RedisSidebar');
@@ -96,6 +98,8 @@ function SavedConnectionsList() {
   const editConnection = useSession((s) => s.editConnection);
   const duplicateSaved = useSession((s) => s.duplicateSaved);
   const openDialog = useSession((s) => s.openDialog);
+  const openMemory = useMemory((s) => s.open);
+  const [menu, setMenu] = useState<ContextMenuState | null>(null);
 
   const connecting = connectionState === 'connecting';
 
@@ -124,6 +128,33 @@ function SavedConnectionsList() {
                   <div
                     key={c.id}
                     className="group/row relative mx-2 flex h-6 items-stretch rounded-[5px] transition-colors hover:bg-[color-mix(in_srgb,var(--wb-text)_6%,transparent)]"
+                    onContextMenu={(e) => {
+                      e.preventDefault();
+                      setMenu({
+                        x: e.clientX,
+                        y: e.clientY,
+                        entries: [
+                          {
+                            type: 'item',
+                            label: 'Database memory…',
+                            icon: <BookMarked />,
+                            onSelect: () => openMemory({ id: c.id, name: c.name }),
+                          },
+                          {
+                            type: 'item',
+                            label: 'Edit',
+                            icon: <Pencil />,
+                            onSelect: () => void editConnection(c.id),
+                          },
+                          {
+                            type: 'item',
+                            label: 'Duplicate',
+                            icon: <Copy />,
+                            onSelect: () => void duplicateSaved(c.id),
+                          },
+                        ],
+                      });
+                    }}
                   >
                     <button
                       type="button"
@@ -185,6 +216,7 @@ function SavedConnectionsList() {
         )}
       </div>
 
+      <SidebarContextMenu state={menu} onClose={() => setMenu(null)} />
       <div className="border-t border-[var(--wb-separator)] p-2.5">
         <Button variant="outline" size="sm" onClick={() => openDialog()} className="w-full">
           <Plus />

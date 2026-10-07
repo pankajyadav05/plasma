@@ -79,6 +79,8 @@ export interface AiSlice {
   aiRejectAction(id: string, note?: string): void;
   /** Undo an applied view change. */
   aiUndoAction(id: string): Promise<void>;
+  /** remember: the user edited the note text on a pending card. */
+  aiEditMemoryAction(id: string, text: string): void;
 }
 
 export const createAiSlice: SliceCreator<AiSlice> = (set, get, api) => {
@@ -268,6 +270,7 @@ export const createAiSlice: SliceCreator<AiSlice> = (set, get, api) => {
     aiApproveAction: (id) => actions.approve(id),
     aiRejectAction: (id, note) => actions.reject(id, note),
     aiUndoAction: (id) => actions.undo(id),
+    aiEditMemoryAction: (id, text) => actions.editMemory(id, text),
   };
 };
 

@@ -93,6 +93,8 @@ export function describeAiSends(input: {
   rowData: boolean;
   /** Images in the draft: they go to the model with the next message. */
   images?: number;
+  /** Notes of the connection's memory that go with the next message (0 = none / switched off). */
+  memory?: number;
 }): string {
   const parts = [providerLine(input.settings)];
   if (input.sql) {
@@ -106,5 +108,6 @@ export function describeAiSends(input: {
   }
   parts.push(`Row data: ${input.rowData ? 'capped samples' : 'off'}`);
   if (input.images) parts.push(`Images: ${input.images}`);
+  if (input.memory) parts.push(`Memory: ${input.memory} ${input.memory === 1 ? 'note' : 'notes'}`);
   return parts.join(' · ');
 }
