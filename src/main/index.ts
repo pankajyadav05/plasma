@@ -1,9 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { readFile, stat } from 'node:fs/promises';
+import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { isMemoryEnabled } from '@shared/ai-memory';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { isAgentReadSql } from '@shared/ai-readonly-sql';
 import { sshUnsupportedReason } from '@shared/connection-endpoint';
 import { CONNECTION_LOST, ConnectionLostError } from '@shared/connection-loss';
@@ -93,6 +94,7 @@ import {
 } from './ai-memory';
 import { listLocalModels, listOpenRouterModels, resolveModelsUrl } from './ai-models';
 import { type AuditDeps, recordAuditStatements, registerAuditIpc } from './audit-ipc';
+import { installTargets } from './cli-install';
 import { diagnosedError, runStagedTest } from './connect-diagnose';
 import {
   ConnectionRecovery,
@@ -118,6 +120,8 @@ import {
 } from './history';
 import { registerImportIpc } from './import-ipc';
 import { initLogger, logger } from './logger';
+import { startMcpHost } from './mcp/host';
+import type { McpService } from './mcp/service';
 import { buildAppMenu } from './menu';
 import {
   assertOsWritable,
@@ -261,8 +265,15 @@ if (process.env.PLASMA_USER_DATA) {
 
 // C34: one instance per profile — a second one would share plasma.db and
 // the worker. The lock is per userData dir, so isolated E2E runs coexist.
-let hasInstanceLock = app.requestSingleInstanceLock();
-if (!hasInstanceLock && installHandoverPending(app.getPath('userData'), Date.now())) {
+// `plasma mcp` starts this same binary as the stdio MCP bridge: no window, no
+// instance lock (it must not disturb a running Plasma), no crash marker.
+const MCP_BRIDGE_MODE = process.argv.includes('--plasma-mcp-bridge');
+let hasInstanceLock = MCP_BRIDGE_MODE ? false : app.requestSingleInstanceLock();
+if (
+  !MCP_BRIDGE_MODE &&
+  !hasInstanceLock &&
+  installHandoverPending(app.getPath('userData'), Date.now())
+) {
   // An update restart: the installer (or the AppImage swap) starts the new
   // version while the old one is still shutting down and holds the lock. Wait
   // for it instead of quitting, which would leave the user with no window.
@@ -272,7 +283,9 @@ if (!hasInstanceLock && installHandoverPending(app.getPath('userData'), Date.now
     hasInstanceLock = app.requestSingleInstanceLock();
   }
 }
-if (!hasInstanceLock) {
+if (MCP_BRIDGE_MODE) {
+  app.dock?.hide();
+} else if (!hasInstanceLock) {
   // The running instance gets 'second-instance' and comes forward. Say so,
   // or `pnpm dev` just stops: on macOS (case-insensitive disk) the dev
   // profile `plasma` is the installed app's `Plasma`, so an open Plasma.app
@@ -324,6 +337,10 @@ registerLaunchHandlers(workspaceRuntime, hasInstanceLock);
 app
   .whenReady()
   .then(async () => {
+    if (MCP_BRIDGE_MODE) {
+      await runMcpBridge();
+      return;
+    }
     if (!hasInstanceLock) return;
     initLogger();
     // C19/C34: navigation + window.open + permission guards, and IPC only
@@ -528,6 +545,31 @@ app
     buildAppMenu();
     registerIpcHandlers();
     registerWorkspaceIpc(workspaceRuntime, () => mainWindow);
+    {
+      const host = startMcpHost({
+        userDataDir: app.getPath('userData'),
+        version: app.getVersion(),
+        connections: () => vaultList(),
+        fullConfig: (id) => workspaceRuntime.connectConfigFor(id) ?? vaultGetFull(id),
+        settings: () => SettingsShape.parse(getAllSettings()),
+        openConnectionId: () => (isSqlEngine(activeEngine) ? activeConnectionId : null),
+        mainWindow: () => mainWindow,
+        runIsolatedRead: (id, sql, maxRows, o) => runIsolatedRead(id, sql, maxRows, o),
+        cancelIsolatedRun: async (runId) => {
+          await callWorker({ kind: 'compareCancel', runId }, 'cancelled');
+        },
+        introspectIsolated,
+        installedLauncher: () => {
+          for (const t of installTargets(homedir())) {
+            const dest = join(t.dir, 'plasma');
+            if (existsSync(dest)) return dest;
+          }
+          return null;
+        },
+      });
+      mcpService = host.service;
+      mcpReapply = host.reapply;
+    }
     registerSupportIpc({
       window: () => mainWindow,
       active: () =>
@@ -576,9 +618,35 @@ app.on('will-quit', () => {
   if (hasInstanceLock) recovery.end();
   cancelAllJobs();
   closeAllTunnels();
+  void mcpService?.stop();
   workerSupervisor.stop();
   closeDb();
 });
+
+/** `plasma mcp`: pipe MCP JSON-RPC between stdio and the running Plasma, then exit. */
+async function runMcpBridge(): Promise<void> {
+  try {
+    // A separate built entry (plain Node code, no Electron APIs); loaded by path so it stays its own file.
+    const mod = (await import(pathToFileURL(join(__dirname, 'mcp-bridge.js')).href)) as {
+      runBridge(o: {
+        userDataDir: string;
+        stdin: NodeJS.ReadableStream;
+        stdout: NodeJS.WritableStream;
+      }): Promise<void>;
+    };
+    await mod.runBridge({
+      userDataDir: app.getPath('userData'),
+      stdin: process.stdin,
+      stdout: process.stdout,
+    });
+  } catch (err) {
+    console.error('[plasma] mcp bridge failed:', err instanceof Error ? err.message : err);
+  }
+  app.exit(0);
+}
+
+let mcpService: McpService | null = null;
+let mcpReapply: (() => Promise<void>) | null = null;
 
 // ─── Worker helper ────────────────────────────────────────────────────
 
@@ -647,6 +715,133 @@ async function callWorker<K extends WorkerResponse['kind']>(
  * network too), reconnect the worker, and tell the renderer which
  * generation it is now talking to (U27).
  */
+/**
+ * Open a throwaway session on a saved connection (TLS files, DuckDB
+ * attachments, SSH tunnel), run `fn` with its config, and always tear the
+ * tunnel down. Never touches the live session. Used by Result Compare and
+ * the MCP server.
+ */
+async function withIsolatedSession<T>(
+  connectionId: string,
+  fn: (effective: ConnectionConfigType, config: ConnectionConfigType) => Promise<T>,
+): Promise<T> {
+  const config = workspaceRuntime.connectConfigFor(connectionId) ?? vaultGetFull(connectionId);
+  if (!config) throw new Error('That connection is not saved any more.');
+  if (!isSqlEngine(config.engine ?? 'postgres')) {
+    throw new Error(
+      'Compare needs a SQL connection (Postgres, MySQL, SQLite, ClickHouse, DuckDB).',
+    );
+  }
+  const settings = SettingsShape.parse(getAllSettings());
+  assertTlsAllowedForTag(resolveTls(config), settings.connectionTags?.[config.id]);
+  const tunnelKey = `compare:${randomUUID()}`;
+  let tunnelled = false;
+  try {
+    let effective: ConnectionConfigType = await withTlsFiles(config);
+    if (config.engine === 'duckdb' && config.duckdb?.attachConnectionIds?.length) {
+      // Saved Postgres connections attached read-only, resolved here with their stored passwords.
+      effective = {
+        ...effective,
+        duckdb: {
+          files: config.duckdb.files,
+          installPostgresExtension: config.duckdb.installPostgresExtension,
+          installExcelExtension: config.duckdb.installExcelExtension,
+          attach: buildDuckdbAttachments(config.duckdb.attachConnectionIds, {
+            load: (id) => vaultGetFull(id),
+            sshFor: (id) => getFullSshConfig(id, settings.connectionSsh) !== null,
+          }),
+        },
+      };
+    }
+    const ssh = getFullSshConfig(config.id, settings.connectionSsh);
+    if (ssh) {
+      const refusal = sshUnsupportedReason(config);
+      if (refusal) throw new Error(refusal);
+      const local = await openTunnel({
+        id: tunnelKey,
+        ssh,
+        pgHost: config.host,
+        pgPort: config.port,
+      });
+      tunnelled = true;
+      effective = {
+        ...withTunnelServername(effective, config.host),
+        host: local.host,
+        port: local.port,
+      };
+    }
+    return await fn(effective, config);
+  } finally {
+    if (tunnelled) closeTunnel(tunnelKey);
+  }
+}
+
+/**
+ * One read-only statement on a saved connection that is not the live one: a
+ * throwaway read-only session (tunnel included) that is closed right after,
+ * recorded in history. Result Compare and the MCP `run_query` both use it.
+ */
+export function runIsolatedRead(
+  connectionId: string,
+  sql: string,
+  maxRows: number,
+  opts: { runId?: string; timeoutMs?: number } = {},
+): Promise<QueryResult> {
+  return withIsolatedSession(connectionId, async (effective) => {
+    const executedAt = Date.now();
+    try {
+      const res = await callWorker(
+        {
+          kind: 'compareQuery',
+          config: { ...effective, readOnly: true },
+          sql,
+          maxRows,
+          runId: opts.runId ?? randomUUID(),
+          ...(opts.timeoutMs ? { timeoutMs: opts.timeoutMs } : {}),
+        },
+        'queryResult',
+      );
+      try {
+        recordHistory({
+          connectionId,
+          sql,
+          rowCount: res.result.rowCount,
+          durationMs: res.result.durationMs,
+          error: null,
+          executedAt,
+        });
+      } catch (err) {
+        logger.error('[plasma] history write failed (non-fatal):', err);
+      }
+      return res.result;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      try {
+        recordHistory({
+          connectionId,
+          sql,
+          rowCount: null,
+          durationMs: null,
+          error: message,
+          executedAt,
+        });
+      } catch {}
+      throw err;
+    }
+  });
+}
+
+/** Structure of a saved connection that is not open (MCP `get_schema`), on a throwaway session. */
+function introspectIsolated(connectionId: string): Promise<SchemaInfo> {
+  return withIsolatedSession(connectionId, async (effective) => {
+    const res = await callWorker(
+      { kind: 'compareSchema', config: { ...effective, readOnly: true } },
+      'schemaInfo',
+    );
+    return res.info;
+  });
+}
+
 const connectionRecovery = new ConnectionRecovery({
   session: () => retainedSession,
   epoch: () => sessionEpoch,
@@ -2077,94 +2272,7 @@ function registerIpcHandlers() {
       const res = await callWorker({ kind: 'aiQuery', sql: req.sql, maxRows }, 'queryResult');
       return res.result;
     }
-    const targetId = req.connectionId;
-    const config = workspaceRuntime.connectConfigFor(targetId) ?? vaultGetFull(targetId);
-    if (!config) throw new Error('That connection is not saved any more.');
-    if (!isSqlEngine(config.engine ?? 'postgres')) {
-      throw new Error(
-        'Compare needs a SQL connection (Postgres, MySQL, SQLite, ClickHouse, DuckDB).',
-      );
-    }
-    const settings = SettingsShape.parse(getAllSettings());
-    assertTlsAllowedForTag(resolveTls(config), settings.connectionTags?.[config.id]);
-    const tunnelKey = `compare:${randomUUID()}`;
-    let tunnelled = false;
-    try {
-      let effective: ConnectionConfigType = await withTlsFiles(config);
-      if (config.engine === 'duckdb' && config.duckdb?.attachConnectionIds?.length) {
-        // Saved Postgres connections attached read-only, resolved here with their stored passwords.
-        effective = {
-          ...effective,
-          duckdb: {
-            files: config.duckdb.files,
-            installPostgresExtension: config.duckdb.installPostgresExtension,
-            installExcelExtension: config.duckdb.installExcelExtension,
-            attach: buildDuckdbAttachments(config.duckdb.attachConnectionIds, {
-              load: (id) => vaultGetFull(id),
-              sshFor: (id) => getFullSshConfig(id, settings.connectionSsh) !== null,
-            }),
-          },
-        };
-      }
-      const ssh = getFullSshConfig(config.id, settings.connectionSsh);
-      if (ssh) {
-        const refusal = sshUnsupportedReason(config);
-        if (refusal) throw new Error(refusal);
-        const local = await openTunnel({
-          id: tunnelKey,
-          ssh,
-          pgHost: config.host,
-          pgPort: config.port,
-        });
-        tunnelled = true;
-        effective = {
-          ...withTunnelServername(effective, config.host),
-          host: local.host,
-          port: local.port,
-        };
-      }
-      const executedAt = Date.now();
-      try {
-        const res = await callWorker(
-          {
-            kind: 'compareQuery',
-            config: { ...effective, readOnly: true },
-            sql: req.sql,
-            maxRows,
-            runId: req.runId ?? randomUUID(),
-          },
-          'queryResult',
-        );
-        try {
-          recordHistory({
-            connectionId: targetId,
-            sql: req.sql,
-            rowCount: res.result.rowCount,
-            durationMs: res.result.durationMs,
-            error: null,
-            executedAt,
-          });
-        } catch (err) {
-          logger.error('[plasma] history write failed (non-fatal):', err);
-        }
-        return res.result;
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        try {
-          recordHistory({
-            connectionId: targetId,
-            sql: req.sql,
-            rowCount: null,
-            durationMs: null,
-            error: message,
-            executedAt,
-          });
-        } catch {}
-        throw err;
-      }
-    } finally {
-      if (tunnelled) closeTunnel(tunnelKey);
-    }
+    return runIsolatedRead(req.connectionId, req.sql, maxRows, { runId: req.runId });
   });
 
   // The agent's run_query: one read-only statement on the aux client inside a
@@ -2290,6 +2398,9 @@ function registerIpcHandlers() {
     // Push queryTimeoutMs → PG statement_timeout while connected (U20).
     if (merged.queryTimeoutMs !== prev.queryTimeoutMs && isSqlEngine(activeEngine)) {
       void applyStatementTimeout(merged.queryTimeoutMs);
+    }
+    if (merged.mcpEnabled !== prev.mcpEnabled || merged.mcpPort !== prev.mcpPort) {
+      void mcpReapply?.();
     }
     return merged;
   });

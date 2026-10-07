@@ -102,3 +102,41 @@ describe('aiAsk with images', () => {
     expect(await useSession.getState().aiAsk('x', { images: [image(1)] })).toBe(false);
   });
 });
+
+describe('an MCP client proposes a change (external thread)', () => {
+  it('opens a labelled thread bound to its connection and keeps it out of what the model sees', async () => {
+    useSession.setState({ activeConfig: { id: 'c1', name: 'c', engine: 'postgres' } as never });
+    useSession.getState().aiApplyEvent({
+      kind: 'external',
+      requestId: 'mcp-1',
+      connectionId: 'c1',
+      client: 'Claude Code',
+    });
+    const s = useSession.getState();
+    expect(s.aiRequestId).toBe('mcp-1');
+    expect(s.aiChatConnectionId).toBe('c1');
+    expect(s.aiPending).toBe(true);
+    expect(s.aiChat.map((t) => [t.role, t.content, Boolean(t.external)])).toEqual([
+      ['user', 'Claude Code wants to change data', true],
+      ['assistant', '', true],
+    ]);
+    // the event that follows is not a stale stream
+    useSession.getState().aiApplyEvent({ kind: 'done', requestId: 'mcp-1' });
+    expect(useSession.getState().aiPending).toBe(false);
+    // the next question of the user does not carry the MCP thread to the model
+    await useSession.getState().aiAsk('hello');
+    const msgs = sent().messages;
+    expect(msgs.map((m) => m.role)).toEqual(['user']);
+  });
+
+  it('starts fresh when the thread is for another connection', () => {
+    useSession.setState({
+      aiChat: [{ id: 'x', role: 'user', content: 'old', streaming: false }],
+      aiChatConnectionId: 'other',
+    } as never);
+    useSession
+      .getState()
+      .aiApplyEvent({ kind: 'external', requestId: 'mcp-2', connectionId: 'c1', client: 'Cursor' });
+    expect(useSession.getState().aiChat).toHaveLength(2);
+  });
+});

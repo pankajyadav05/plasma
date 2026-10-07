@@ -270,6 +270,18 @@ function ChatTurn({
     ),
   );
   const parts = turn.parts ?? [{ kind: 'text' as const, text: turn.content }];
+  if (turn.external && isUser) {
+    return (
+      <div
+        data-testid="ai-external-label"
+        className="mb-2 flex items-center gap-2 text-[11px] text-[var(--wb-text-2)]"
+      >
+        <span className="h-px flex-1 bg-[var(--wb-separator)]" />
+        <span>{turn.content}</span>
+        <span className="h-px flex-1 bg-[var(--wb-separator)]" />
+      </div>
+    );
+  }
   return (
     <div className={cn('mb-4 flex flex-col gap-1', isUser ? 'items-end' : 'items-start')}>
       <div

@@ -117,6 +117,7 @@ export const createAiSlice: SliceCreator<AiSlice> = (set, get, api) => {
       const connectionId = state.activeConfig?.id ?? null;
       const sameChat = state.aiChatConnectionId === connectionId;
       const history = sameChat ? state.aiChat : [];
+      const modelHistory = history.filter((t) => !t.external);
 
       const userTurn: AiTurn = {
         id: freshId(),
@@ -145,7 +146,7 @@ export const createAiSlice: SliceCreator<AiSlice> = (set, get, api) => {
       // content per OpenAI/OpenRouter chat shape. An assistant turn carries
       // one line per action card so the model knows how each one ended.
       const messages: AiMessage[] = capHistoryImages(
-        [...history, userTurn].map((t) => ({
+        [...modelHistory, userTurn].map((t) => ({
           role: t.role,
           content: turnWireContent(t, state.aiActions),
         })),
@@ -224,6 +225,33 @@ export const createAiSlice: SliceCreator<AiSlice> = (set, get, api) => {
 
     aiApplyEvent(evt) {
       const state = get();
+      if (evt.kind === 'external') {
+        // An MCP client proposes a change: open a labelled thread bound to its connection.
+        const same = state.aiChatConnectionId === evt.connectionId;
+        const label: AiTurn = {
+          id: freshId(),
+          role: 'user',
+          content: `${evt.client} wants to change data`,
+          external: { client: evt.client },
+        };
+        const placeholder: AiTurn = {
+          id: freshId(),
+          role: 'assistant',
+          content: '',
+          streaming: true,
+          parts: [],
+          external: { client: evt.client },
+        };
+        set({
+          aiChat: [...(same ? state.aiChat : []), label, placeholder],
+          aiActions: same ? state.aiActions : {},
+          aiChatConnectionId: evt.connectionId,
+          aiPending: true,
+          aiRequestId: evt.requestId,
+          rightPanelMode: 'ai',
+        });
+        return;
+      }
       if (state.aiRequestId !== evt.requestId) return; // stale stream
       if (evt.kind === 'action') {
         void actions.handleActionEvent(evt);
