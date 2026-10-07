@@ -37,7 +37,7 @@ suite('result compare read path (live)', () => {
     admin = new pg.Client({ connectionString: url });
     await admin.connect();
     await admin.query(`CREATE DATABASE ${scratch}`);
-    const c = new pg.Client({ ...configFor(scratch), password: undefined });
+    const c = new pg.Client({ ...configFor(scratch) });
     await c.connect();
     await c.query('CREATE TABLE t (id int primary key, v text)');
     await c.query("INSERT INTO t SELECT g, 'v' || g FROM generate_series(1, 30000) g");
