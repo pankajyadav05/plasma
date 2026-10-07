@@ -22,6 +22,12 @@ export interface DuckdbRawSchema {
   primaryKeys: unknown[][];
   /** [catalog, schema, table, index name, sql, unique] */
   indexes: unknown[][];
+  /**
+   * [catalog, schema, table, constraint name, columns (JSON array),
+   *  referenced table, referenced columns (JSON array)]. Optional: older
+   * snapshots and test fixtures predate it.
+   */
+  foreignKeys?: unknown[][];
 }
 
 /** A data file that backs a view, for the structure view's details. */
@@ -139,6 +145,29 @@ export function buildDuckdbSchema(
         })
     : [];
 
+  // duckdb_constraints() names the referenced table but not its schema; DuckDB
+  // resolves it in the referencing table's own schema, so that is what we report.
+  const foreignKeys: SchemaInfo['foreignKeys'] = [];
+  if (wantColumns) {
+    for (const r of visible(raw.foreignKeys ?? [])) {
+      const schema = duckdbSchemaName(raw, s(r[0]), s(r[1]));
+      if (scope && !scope.has(schema)) continue;
+      const from = parseNames(r[4]);
+      const to = parseNames(r[6]);
+      from.forEach((column, i) => {
+        foreignKeys.push({
+          schema,
+          table: s(r[2]),
+          column,
+          refSchema: schema,
+          refTable: s(r[5]),
+          refColumn: to[i] ?? '',
+          constraint: s(r[3]),
+        });
+      });
+    }
+  }
+
   const indexes: NonNullable<SchemaInfo['indexes']> = wantColumns
     ? visible(raw.indexes).map((r) => ({
         schema: duckdbSchemaName(raw, s(r[0]), s(r[1])),
@@ -158,7 +187,7 @@ export function buildDuckdbSchema(
     schemas: wantObjects ? [...schemaNames].sort().map((name) => ({ name })) : [],
     tables,
     columns,
-    foreignKeys: [],
+    foreignKeys,
     indexes,
     triggers: [],
     routines: [],
@@ -185,4 +214,7 @@ export const DUCKDB_INTROSPECT_SQL = {
                 FROM duckdb_constraints() WHERE constraint_type = 'PRIMARY KEY'`,
   indexes: `SELECT database_name, schema_name, table_name, index_name, sql, is_unique
             FROM duckdb_indexes()`,
+  foreignKeys: `SELECT database_name, schema_name, table_name, constraint_name,
+                       to_json(constraint_column_names), referenced_table, to_json(referenced_column_names)
+                FROM duckdb_constraints() WHERE constraint_type = 'FOREIGN KEY'`,
 } as const;

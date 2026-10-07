@@ -106,6 +106,44 @@ const READ_TYPES = new Set<number>([ST.SELECT, ST.EXPLAIN, ST.TRANSACTION]);
 
 // DuckDBTypeId values of the integer types the grid shows as numbers.
 const INTEGER_TYPE_IDS = new Set<number>([2, 3, 4, 5, 6, 7, 8, 9]);
+const TYPE_FLOAT = 10;
+const TYPE_BLOB = 18;
+
+/**
+ * DuckDB's JSON form widens a FLOAT (32-bit) to a double: 1.1 arrives as
+ * 1.100000023841858. The shortest decimal that is still the same float32 is
+ * what the server prints and what the user typed.
+ */
+export function shortestFloat32(value: number): number {
+  if (!Number.isFinite(value)) return value;
+  for (let digits = 1; digits <= 9; digits++) {
+    const candidate = Number(value.toPrecision(digits));
+    if (Math.fround(candidate) === value) return candidate;
+  }
+  return value;
+}
+
+/**
+ * DuckDB prints a BLOB as text with `\xHH` (upper-case) for every byte that is
+ * not printable ASCII and the printable bytes as themselves. The grid's one
+ * binary form is `\x` + lower-case hex, the same as Postgres bytea.
+ */
+export function duckdbBlobToHex(text: string): string {
+  let hex = '';
+  for (let i = 0; i < text.length; i++) {
+    if (
+      text[i] === '\\' &&
+      text[i + 1] === 'x' &&
+      /^[0-9a-fA-F]{2}$/.test(text.slice(i + 2, i + 4))
+    ) {
+      hex += text.slice(i + 2, i + 4).toLowerCase();
+      i += 3;
+    } else {
+      hex += (text.charCodeAt(i) & 0xff).toString(16).padStart(2, '0');
+    }
+  }
+  return `\\x${hex}`;
+}
 
 type Api = typeof import('@duckdb/node-api');
 let apiPromise: Promise<Api> | null = null;
@@ -127,6 +165,8 @@ export function normalizeDuckdbCell(value: unknown, typeId: number): unknown {
   if (INTEGER_TYPE_IDS.has(typeId) && typeof value === 'string' && /^-?\d{1,15}$/.test(value)) {
     return Number(value);
   }
+  if (typeId === TYPE_FLOAT && typeof value === 'number') return shortestFloat32(value);
+  if (typeId === TYPE_BLOB && typeof value === 'string') return duckdbBlobToHex(value);
   return value;
 }
 
@@ -190,6 +230,8 @@ export class DuckdbDriver implements SqlEngineDriver {
   }
 
   async connect(config: ConnectionConfig, statementTimeoutMs?: number): Promise<string> {
+    // A second connect replaces the session: release the old instance first.
+    await this.disconnect();
     const files = config.duckdb?.files ?? [];
     const database = config.database || ':memory:';
     const inMemory = database === ':memory:';
@@ -515,7 +557,23 @@ export class DuckdbDriver implements SqlEngineDriver {
             conn.interrupt();
           }, this.statementTimeoutMs)
         : null;
+    let readOnlyTxn = false;
     try {
+      if (readsOnly) {
+        // A SELECT can still write (`nextval()` moves a sequence), and the
+        // statement type says nothing about that: the engine has to refuse it.
+        try {
+          await conn.run('BEGIN TRANSACTION READ ONLY');
+          readOnlyTxn = true;
+        } catch (err) {
+          if (/within a transaction/i.test(String(err))) {
+            throw new Error(
+              'rejected: a transaction is open on this session; commit or roll it back first',
+            );
+          }
+          throw err;
+        }
+      }
       let last: Omit<QueryResult, 'durationMs'> = { columns: [], rows: [], rowCount: 0 };
       for (const text of statements) {
         const stmt = await this.prepare(
@@ -531,6 +589,7 @@ export class DuckdbDriver implements SqlEngineDriver {
       if (this.timedOut) throw new Error('canceling statement due to statement timeout');
       throw friendlyError(err);
     } finally {
+      if (readOnlyTxn) await conn.run('ROLLBACK').catch(() => undefined);
       if (timer) clearTimeout(timer);
       this.running = false;
       this.cancelRequested = false;
@@ -706,6 +765,7 @@ export class DuckdbDriver implements SqlEngineDriver {
         columns: opts?.columns === false ? [] : await all(DUCKDB_INTROSPECT_SQL.columns),
         primaryKeys: opts?.columns === false ? [] : await all(DUCKDB_INTROSPECT_SQL.primaryKeys),
         indexes: opts?.columns === false ? [] : await all(DUCKDB_INTROSPECT_SQL.indexes),
+        foreignKeys: opts?.columns === false ? [] : await all(DUCKDB_INTROSPECT_SQL.foreignKeys),
       };
       return buildDuckdbSchema(raw, this.sources, opts);
     });

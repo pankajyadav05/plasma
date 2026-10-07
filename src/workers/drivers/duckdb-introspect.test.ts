@@ -61,6 +61,50 @@ describe('buildDuckdbSchema', () => {
     });
   });
 
+  it('reads foreign keys, one row per column pair', () => {
+    const withFks = buildDuckdbSchema({
+      ...raw,
+      foreignKeys: [
+        ['memory', 'main', 'posts', 'posts_user_fk', '["user_id"]', 'users', '["id"]'],
+        ['memory', 'main', 'links', 'links_ab_fk', '["a","b"]', 'pairs', '["x","y"]'],
+        ['memory', 'information_schema', 'hidden', 'h_fk', '["c"]', 't', '["c"]'],
+      ],
+    });
+    expect(withFks.foreignKeys).toEqual([
+      {
+        schema: 'main',
+        table: 'posts',
+        column: 'user_id',
+        refSchema: 'main',
+        refTable: 'users',
+        refColumn: 'id',
+        constraint: 'posts_user_fk',
+      },
+      {
+        schema: 'main',
+        table: 'links',
+        column: 'a',
+        refSchema: 'main',
+        refTable: 'pairs',
+        refColumn: 'x',
+        constraint: 'links_ab_fk',
+      },
+      {
+        schema: 'main',
+        table: 'links',
+        column: 'b',
+        refSchema: 'main',
+        refTable: 'pairs',
+        refColumn: 'y',
+        constraint: 'links_ab_fk',
+      },
+    ]);
+    expect(buildDuckdbSchema(raw).foreignKeys).toEqual([]);
+    expect(
+      buildDuckdbSchema({ ...raw, foreignKeys: [] }, [], { columns: false }).foreignKeys,
+    ).toEqual([]);
+  });
+
   it('scopes columns to the requested schemas', () => {
     const s = buildDuckdbSchema(raw, sources, { columnSchemas: ['main'] });
     expect(s.columns.every((c) => c.schema === 'main')).toBe(true);

@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { dataFileSessionConfig } from '@shared/data-files';
 import type { ConnectionConfig } from '@shared/protocol';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
-import { DuckdbDriver } from './duckdb';
+import { DuckdbDriver, duckdbBlobToHex, shortestFloat32 } from './duckdb';
 import { writeTestXlsx } from './test-xlsx';
 
 let dir: string;
@@ -59,6 +59,45 @@ async function open(paths: string[], extra: Partial<ConnectionConfig> = {}) {
   const version = await driver.connect(config);
   return { d: driver, version };
 }
+
+describe('DuckDB values', () => {
+  it('shows a FLOAT as its shortest float32 value, not the widened double', () => {
+    expect(shortestFloat32(1.100000023841858)).toBe(1.1);
+    expect(shortestFloat32(Math.fround(0.1))).toBe(0.1);
+    expect(shortestFloat32(Math.fround(16777217))).toBe(16777216);
+    expect(shortestFloat32(0)).toBe(0);
+    expect(shortestFloat32(Number.NaN)).toBeNaN();
+    expect(shortestFloat32(Number.POSITIVE_INFINITY)).toBe(Number.POSITIVE_INFINITY);
+  });
+
+  it('shows a BLOB as `\\x` + lower-case hex like every other engine', () => {
+    expect(duckdbBlobToHex('\\xDE\\xAD\\xBE\\xEF')).toBe('\\xdeadbeef');
+    expect(duckdbBlobToHex('ab\\x00c')).toBe('\\x61620063');
+    expect(duckdbBlobToHex('')).toBe('\\x');
+    // A backslash is printed as \x5C, so a literal "\x" pair in text cannot be misread.
+    expect(duckdbBlobToHex('\\x5Cx41')).toBe('\\x5c783431');
+  });
+
+  it('refuses a read that writes: nextval() moves a sequence', async () => {
+    driver = new DuckdbDriver();
+    await driver.connect({ ...dataFileSessionConfig([]), database: ':memory:' });
+    await driver.query('CREATE SEQUENCE seq_a');
+    await expect(driver.aiQuery("SELECT nextval('seq_a')")).rejects.toThrow(/read-only/i);
+    await expect(driver.sidebandQuery("SELECT nextval('seq_a')")).rejects.toThrow(/read-only/i);
+    // Nothing moved, the session still reads, and the editor itself may call it.
+    expect((await driver.aiQuery('SELECT 1')).rows).toEqual([[1]]);
+    expect((await driver.query("SELECT nextval('seq_a')")).rows).toEqual([[1]]);
+  });
+
+  it('refuses AI reads while the user has a transaction open', async () => {
+    driver = new DuckdbDriver();
+    await driver.connect({ ...dataFileSessionConfig([]), database: ':memory:' });
+    await driver.query('BEGIN');
+    await expect(driver.aiQuery('SELECT 1')).rejects.toThrow(/transaction is open/);
+    await driver.query('ROLLBACK');
+    expect((await driver.aiQuery('SELECT 1')).rows).toEqual([[1]]);
+  });
+});
 
 describe('DuckDB data-file session', () => {
   it('turns each file into a view named after it and queries them', async () => {
