@@ -405,6 +405,12 @@ export function AiComposer({
 
 /** The tray's right side: the schema and tab parts of the sends line. */
 function trayRight(sends: string): string {
+  const memory = sends.split(' · ').find((p) => p.startsWith('Memory: '));
+  const main = trayMain(sends);
+  return memory ? (main ? `${main} · ${memory}` : memory) : main;
+}
+
+function trayMain(sends: string): string {
   const parts = sends.split(' · ');
   const schema = parts.find((p) => p.startsWith('Schema:') || p.startsWith('Overview:'));
   const imgs = Number(parts.find((p) => p.startsWith('Images: '))?.slice(8) ?? 0);

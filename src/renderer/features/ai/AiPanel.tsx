@@ -5,10 +5,12 @@ import { buildAgentContext } from '@/lib/ai-context';
 import type { AiImage } from '@/lib/ai-images';
 import { aiSchemaAllowed } from '@/lib/ai-task';
 import { cn } from '@/lib/cn';
+import { useMemory } from '@/stores/ai-memory';
 import { type AiTurn, useActiveTab, useSession } from '@/stores/session';
+import { formatMemoryForPrompt, isMemoryEnabled } from '@shared/ai-memory';
 import { isSqlEngine } from '@shared/sql-dialect';
-import { Loader2, Sparkles, Trash2 } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import { BookMarked, Loader2, Sparkles, Trash2 } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { AgentActionCard } from './AgentActionCard';
 import { AiComposer } from './AiComposer';
 import { ImageGrid } from './AiImages';
@@ -51,6 +53,21 @@ export function AiPanel() {
     if (!id) return false;
     return s.settings.connectionAiRowData?.[id] === true;
   });
+  const connectionId = useSession((s) => s.activeConfig?.id ?? null);
+  const saved = useSession((s) =>
+    s.activeConfig ? s.savedConnections.some((c) => c.id === s.activeConfig?.id) : false,
+  );
+  const memoryOn = useSession((s) => isMemoryEnabled(s.activeConfig?.id, s.settings));
+  const memoryNotes = useMemory((s) => (connectionId ? s.notes[connectionId] : undefined));
+  const loadMemory = useMemory((s) => s.load);
+  const openMemory = useMemory((s) => s.open);
+  useEffect(() => {
+    if (connectionId && saved) void loadMemory(connectionId);
+  }, [connectionId, saved, loadMemory]);
+  const memorySent = useMemo(
+    () => (memoryOn && memoryNotes ? formatMemoryForPrompt(memoryNotes).included : 0),
+    [memoryOn, memoryNotes],
+  );
   const [draft, setDraft] = useState('');
   const [images, setImages] = useState<AiImage[]>([]);
   const sends = describeAiSends({
@@ -61,6 +78,7 @@ export function AiPanel() {
     hasContext,
     rowData: allowAiRowData,
     images: images.length,
+    memory: memorySent,
   });
   const tab = useActiveTab();
   const connectionName = useSession((s) => s.activeConfig?.name ?? 'Not connected');
@@ -123,6 +141,24 @@ export function AiPanel() {
         <Sparkles className="h-3.5 w-3.5 text-[var(--wb-text-2)]" />
         <span className="truncate text-[12px] text-[var(--wb-text-2)]">Assistant</span>
         <div className="flex-1" />
+        {connectionId && saved && (
+          <button
+            type="button"
+            data-testid="ai-memory-button"
+            aria-label={`Memory: ${memoryNotes?.length ?? 0} ${memoryNotes?.length === 1 ? 'note' : 'notes'}${memoryOn ? '' : ', off'}. Open`}
+            title="What the assistant remembers about this database"
+            onClick={() => openMemory({ id: connectionId, name: connectionName })}
+            className={cn(
+              'inline-flex h-6 cursor-pointer items-center gap-1 rounded-[6px] px-1.5 text-[12px] text-[var(--wb-text-2)] transition-colors',
+              'hover:bg-[var(--wb-control-hover)] hover:text-[var(--wb-text)]',
+              'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+              !memoryOn && 'opacity-60',
+            )}
+          >
+            <BookMarked className="h-3.5 w-3.5" aria-hidden />
+            <span className="tabular-nums">{memoryNotes?.length ?? 0}</span>
+          </button>
+        )}
         {aiChat.length > 0 && (
           <IconButton variant="plain" label="Clear conversation" onClick={aiClear}>
             <Trash2 />

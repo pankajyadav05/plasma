@@ -17,12 +17,14 @@ import {
   type AgentActionStatus,
   normalizeAction,
 } from '@shared/agent-actions';
+import { isMemoryEnabled } from '@shared/ai-memory';
 import { agentReadSandboxed, isAgentReadSql } from '@shared/ai-readonly-sql';
 import { isAiSchemaAllowed } from '@shared/ai-schema-policy';
 import type { AiActionResult, AiChatEvent, QueryResult } from '@shared/protocol';
 import { isSqlEngine } from '@shared/sql-dialect';
 import { closeColumnNames, mergeHiddenFilterValues, validateTableView } from '@shared/table-view';
 import type { StoreApi } from 'zustand';
+import { useMemory } from './ai-memory';
 import { errorText } from './session-connection';
 import { SAFE_RUN_BLOCKED_NOTE, safeRunPending } from './session-safe-run';
 import { activeTab, freshId, patchTabById, resultPatch } from './session-tab-model';
@@ -73,6 +75,10 @@ function fallbackAction(name: string, args: Record<string, unknown>): AgentActio
       return { name, sql: str(args.sql) };
     case 'propose_change':
       return { name, sql: str(args.sql), summary: str(args.summary) };
+    case 'remember':
+      return { name, text: str(args.text) };
+    case 'forget':
+      return { name, id: str(args.id), text: str(args.text) || undefined };
     default:
       return { name: 'open_in_editor', sql: str(args.sql) };
   }
@@ -90,6 +96,8 @@ export interface AgentActionApi {
   approve(id: string): Promise<void>;
   reject(id: string, note?: string): void;
   undo(id: string): Promise<void>;
+  /** remember: keep the text the user typed on the pending card. */
+  editMemory(id: string, text: string): void;
   /** Every open card becomes cancelled. `send: false` when main already knows (Stop / error). */
   cancelAll(reason: string, opts?: { send?: boolean }): void;
 }
@@ -117,6 +125,7 @@ export function createAgentActions(api: StoreApi<SessionState>): AgentActionApi 
         outcome,
         ...(note ? { note: note.slice(0, 2000) } : {}),
         ...(a.dbError ? { dbError: a.dbError.slice(0, 4000) } : {}),
+        ...(a.memoryId ? { memoryId: a.memoryId } : {}),
         ...(data ? { data } : {}),
       })
       .catch(() => undefined);
@@ -425,11 +434,55 @@ export function createAgentActions(api: StoreApi<SessionState>): AgentActionApi 
     }
   };
 
+  /** remember / forget: the note is stored (or removed) in main; the card closes with the outcome. */
+  const runMemory = async (a: AgentAction): Promise<void> => {
+    const connectionId = get().aiChatConnectionId;
+    const act = a.action;
+    if (!connectionId) {
+      settle(a.id, 'failed', 'No connection. Nothing was saved.');
+      return;
+    }
+    const memory = useMemory.getState();
+    // The write happened, so the card must say so even if Stop got here first.
+    const doneAnyway = (extra: Partial<AgentAction>, note: string) =>
+      patch(a.id, { ...extra, status: 'applied', note });
+    if (act.name === 'remember') {
+      if (!isMemoryEnabled(connectionId, get().settings)) {
+        settle(a.id, 'failed', 'Memory is off for this connection. Nothing was saved.');
+        return;
+      }
+      const res = await memory.add(connectionId, a.memoryText ?? act.text, 'agent');
+      if (!isOpen(get().aiActions[a.id])) {
+        if (res.ok) doneAnyway({ memoryId: res.note.id }, 'Remembered.');
+        return;
+      }
+      if (!res.ok) {
+        // The user can fix the text and try again: the card stays open with the reason.
+        patch(a.id, { status: 'pending', note: res.error });
+        return;
+      }
+      settle(a.id, 'applied', 'Remembered.', undefined, { memoryId: res.note.id });
+      return;
+    }
+    if (act.name === 'forget') {
+      await memory.remove(connectionId, act.id);
+      if (!isOpen(get().aiActions[a.id])) {
+        doneAnyway({}, 'Forgotten.');
+        return;
+      }
+      settle(a.id, 'applied', 'Forgotten.');
+    }
+  };
+
   const runOne = async (id: string): Promise<void> => {
     const a = get().aiActions[id];
     if (!isOpen(a)) return;
     const act = a.action;
     switch (act.name) {
+      case 'remember':
+      case 'forget':
+        await runMemory(a);
+        return;
       case 'show_table': {
         const st = get();
         st.openTable(act.schema, act.table, { preview: false });
@@ -610,6 +663,16 @@ export function createAgentActions(api: StoreApi<SessionState>): AgentActionApi 
       return;
     }
 
+    if (action.name === 'remember') {
+      addCard({ ...base, status: 'pending', memoryText: action.text });
+      return;
+    }
+    if (action.name === 'forget') {
+      // Main answered the model already if the note did not exist: here it is always a card.
+      addCard({ ...base, status: 'pending' });
+      return;
+    }
+
     if (action.name === 'run_query' || action.name === 'propose_change') {
       if (safeRunPending(state.safeRun)) {
         failedCard(evt, action, SAFE_RUN_BLOCKED_NOTE);
@@ -647,6 +710,12 @@ export function createAgentActions(api: StoreApi<SessionState>): AgentActionApi 
           `The app could not show this action: ${errorText(err).slice(0, 200)}`,
         );
       }
+    },
+
+    editMemory(id, text) {
+      const a = get().aiActions[id];
+      if (a?.status !== 'pending' || a.name !== 'remember') return;
+      patch(id, { memoryText: text, note: undefined });
     },
 
     reject(id, note) {

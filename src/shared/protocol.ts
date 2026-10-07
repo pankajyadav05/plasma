@@ -2000,6 +2000,8 @@ export const SettingsShape = z.object({
    * to safeStorage on next schema bump.
    */
   connectionAiRowData: z.record(z.string(), z.boolean()).optional(),
+  /** Database memory: send a connection's notes with its AI requests (default on; false = off). */
+  connectionAiMemory: z.record(z.string(), z.boolean()).optional(),
   /** SC-20: send schema names / sample keys to the AI provider (default on; prod needs the per-connection opt-in). */
   aiSendSchema: z.boolean().optional(),
   connectionSsh: z
@@ -2291,6 +2293,8 @@ export const AgentActionName = z.enum([
   'run_query',
   'propose_change',
   'open_in_editor',
+  'remember',
+  'forget',
 ]);
 export type AgentActionName = z.infer<typeof AgentActionName>;
 
@@ -2312,6 +2316,8 @@ export const AiActionResult = z.object({
   callId: z.string(),
   outcome: z.enum(['applied', 'rejected', 'failed', 'cancelled']),
   note: z.string().max(2000).optional(),
+  /** remember: the id of the note the user approved (stored by the app before it answers). */
+  memoryId: z.string().max(100).optional(),
   /**
    * The database's own error text, when the failure came from the database.
    * It can quote row values, so main never forwards it without the row-data
@@ -2327,6 +2333,42 @@ export const AiActionResult = z.object({
     .optional(),
 });
 export type AiActionResult = z.infer<typeof AiActionResult>;
+
+// ─── Database memory ─────────────────────────────────────────────────
+
+export const MemoryNote = z.object({
+  id: z.string(),
+  connectionId: z.string(),
+  text: z.string(),
+  /** `user`, `agent` or `mcp:<client name>`. */
+  source: z.string(),
+  createdAt: z.number(),
+  updatedAt: z.number(),
+});
+export type MemoryNote = z.infer<typeof MemoryNote>;
+
+/** The renderer may add as the user or on the user's approval of an agent card; never as an MCP client. */
+export const MemoryAddRequest = z.object({
+  connectionId: z.string().min(1),
+  text: z.string().max(5000),
+  source: z.enum(['user', 'agent']).default('user'),
+});
+export type MemoryAddRequest = z.infer<typeof MemoryAddRequest>;
+
+export const MemoryUpdateRequest = z.object({
+  connectionId: z.string().min(1),
+  id: z.string().min(1),
+  text: z.string().max(5000),
+});
+export type MemoryUpdateRequest = z.infer<typeof MemoryUpdateRequest>;
+
+export const MemoryDeleteRequest = z.object({
+  connectionId: z.string().min(1),
+  id: z.string().min(1),
+});
+export type MemoryDeleteRequest = z.infer<typeof MemoryDeleteRequest>;
+
+export type MemoryWriteResult = { ok: true; note: MemoryNote } | { ok: false; error: string };
 
 // ─── EXPLAIN result ──────────────────────────────────────────────────
 
@@ -2517,6 +2559,11 @@ export const IpcChannel = {
   AiListModels: 'plasma:ai:list-models',
   /** The renderer's answer to an agent action card (applied / rejected / …). */
   AiActionResult: 'plasma:ai:action-result',
+  /** Database memory: notes kept per saved connection. */
+  MemoryList: 'plasma:memory:list',
+  MemoryAdd: 'plasma:memory:add',
+  MemoryUpdate: 'plasma:memory:update',
+  MemoryDelete: 'plasma:memory:delete',
   /** The agent's read-only query: runs in a read-only session (`aiQuery`), result shown in a tab. */
   AiRunReadOnly: 'plasma:ai:run-readonly',
   CompareRun: 'plasma:compare:run',
@@ -2809,6 +2856,12 @@ export interface PlasmaAPI {
     actionResult(res: AiActionResult): Promise<void>;
     /** Run ONE read-only statement in a read-only session (never the primary's autocommit). */
     runReadOnly(sql: string): Promise<QueryResult>;
+  };
+  memory: {
+    list(connectionId: string): Promise<MemoryNote[]>;
+    add(req: MemoryAddRequest): Promise<MemoryWriteResult>;
+    update(req: MemoryUpdateRequest): Promise<MemoryWriteResult>;
+    delete(req: MemoryDeleteRequest): Promise<void>;
   };
   sql: {
     /** Pretty-print a SQL string. Falls back to the input on parse errors. */

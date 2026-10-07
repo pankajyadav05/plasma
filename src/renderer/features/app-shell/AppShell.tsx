@@ -1,3 +1,4 @@
+import { MemoryDialog } from '@/features/ai/MemoryDialog';
 import { CommandPalette } from '@/features/command-palette/CommandPalette';
 import { DeleteConfirmDialog } from '@/features/connection-manager/DeleteConfirmDialog';
 import { PendingEditsGateDialog } from '@/features/connection-manager/PendingEditsGateDialog';
@@ -205,6 +206,7 @@ export function AppShell() {
       <CommandPalette />
       <DeleteConfirmDialog />
       <ProdGateDialog />
+      <MemoryDialog />
       <PendingEditsGateDialog />
       <EditConflictDialog />
       <CloseTabsDialog />

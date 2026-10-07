@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs';
 import { readFile, stat } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isMemoryEnabled } from '@shared/ai-memory';
 import { isAgentReadSql } from '@shared/ai-readonly-sql';
 import { sshUnsupportedReason } from '@shared/connection-endpoint';
 import { CONNECTION_LOST, ConnectionLostError } from '@shared/connection-loss';
@@ -40,6 +41,9 @@ import {
   HistoryListOpts,
   IntrospectOpts,
   IpcChannel,
+  MemoryAddRequest,
+  MemoryDeleteRequest,
+  MemoryUpdateRequest,
   type PingRequest,
   type PingResponse,
   type QueryResult,
@@ -77,6 +81,16 @@ import {
   startAiChat,
   submitAiActionResult,
 } from './ai';
+import {
+  addMemory,
+  deleteMemory,
+  deleteMemoryForConnection,
+  getMemory,
+  listMemory,
+  memoryOptionsFor,
+  secretValuesOf,
+  updateMemory,
+} from './ai-memory';
 import { listLocalModels, listOpenRouterModels, resolveModelsUrl } from './ai-models';
 import { type AuditDeps, recordAuditStatements, registerAuditIpc } from './audit-ipc';
 import { diagnosedError, runStagedTest } from './connect-diagnose';
@@ -1352,6 +1366,68 @@ function registerIpcHandlers() {
   ipcMain.handle(IpcChannel.VaultDelete, (_e, id: unknown): void => {
     if (typeof id !== 'string') throw new Error('id must be a string');
     vaultDelete(id);
+    deleteMemoryForConnection(getDb(), id);
+  });
+
+  // ── Database memory ──
+
+  const memoryConnectionSaved = (id: string): boolean =>
+    Boolean(getDb().prepare('SELECT 1 FROM connections WHERE id = ?').get(id));
+
+  // The renderer can only touch notes of a connection that is saved in the vault.
+  const memoryConnection = (id: unknown): string => {
+    if (typeof id !== 'string' || id === '') throw new Error('connectionId must be a string');
+    if (!memoryConnectionSaved(id))
+      throw new Error('Notes can only be kept for a saved connection.');
+    return id;
+  };
+  /** Values main knows are secret for this connection (and the AI key): a note may not contain them. */
+  const knownSecretsFor = (connectionId: string | null | undefined): string[] => {
+    const out: string[] = [];
+    try {
+      if (connectionId) {
+        out.push(...secretValuesOf(vaultGetFull(connectionId)));
+        const ssh = getFullSshConfig(
+          connectionId,
+          SettingsShape.parse(getAllSettings()).connectionSsh,
+        );
+        out.push(...secretValuesOf(ssh));
+      }
+      out.push(getApiKey());
+    } catch {
+      // A secret that cannot be read cannot be matched; the pattern checks still run.
+    }
+    return out.filter((s) => s.length >= 4);
+  };
+  ipcMain.handle(IpcChannel.MemoryList, (_e, id: unknown) =>
+    listMemory(getDb(), memoryConnection(id)),
+  );
+  ipcMain.handle(IpcChannel.MemoryAdd, (_e, raw: unknown) => {
+    const req = MemoryAddRequest.parse(raw);
+    const connectionId = memoryConnection(req.connectionId);
+    // An approved agent card cannot save a note once the user switched memory off.
+    if (
+      req.source === 'agent' &&
+      !isMemoryEnabled(connectionId, SettingsShape.parse(getAllSettings()))
+    ) {
+      return { ok: false, error: 'Memory is off for this connection.' };
+    }
+    return addMemory(getDb(), connectionId, req.text, req.source, {
+      secrets: knownSecretsFor(connectionId),
+    });
+  });
+  ipcMain.handle(IpcChannel.MemoryUpdate, (_e, raw: unknown) => {
+    const req = MemoryUpdateRequest.parse(raw);
+    const connectionId = memoryConnection(req.connectionId);
+    if (getMemory(getDb(), req.id)?.connectionId !== connectionId) {
+      return { ok: false, error: 'That note is gone.' };
+    }
+    return updateMemory(getDb(), req.id, req.text, { secrets: knownSecretsFor(connectionId) });
+  });
+  ipcMain.handle(IpcChannel.MemoryDelete, (_e, raw: unknown): void => {
+    const req = MemoryDeleteRequest.parse(raw);
+    const connectionId = memoryConnection(req.connectionId);
+    if (getMemory(getDb(), req.id)?.connectionId === connectionId) deleteMemory(getDb(), req.id);
   });
 
   ipcMain.handle(
@@ -1917,8 +1993,16 @@ function registerIpcHandlers() {
     const chatConnectionId = activeConnectionId;
     const sameConnection = () =>
       Boolean(chatConnectionId) && activeConnectionId === chatConnectionId;
+    // Database memory: this connection's notes only, and only while its switch is on.
+    const { memory, memoryTools } = memoryOptionsFor(getDb(), chatConnectionId, {
+      settings: () => SettingsShape.parse(getAllSettings()),
+      saved: Boolean(chatConnectionId && memoryConnectionSaved(chatConnectionId)),
+      secrets: () => knownSecretsFor(chatConnectionId),
+    });
     const result = await startAiChat(mainWindow, parsed, apiKey, settings.openrouterModel, {
       provider,
+      memory,
+      memoryTools,
       localUrl: settings.aiLocalUrl,
       localModel: settings.aiLocalModel,
       allowRowData: isAiRowDataAllowed(chatConnectionId, settings.connectionAiRowData),

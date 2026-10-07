@@ -47,6 +47,21 @@ describe('labels', () => {
 });
 
 describe('describeAiSends', () => {
+  it('lists the memory notes only when some are sent', () => {
+    const base = {
+      settings: { aiProvider: 'openrouter' as const, openrouterModel: 'a/b' },
+      sql: true,
+      schemaAllowed: true,
+      tableCount: 2,
+      hasContext: false,
+      rowData: false,
+    };
+    expect(describeAiSends({ ...base, memory: 3 })).toMatch(/ · Memory: 3 notes$/);
+    expect(describeAiSends({ ...base, memory: 1 })).toMatch(/ · Memory: 1 note$/);
+    expect(describeAiSends({ ...base, memory: 0 })).not.toMatch(/Memory/);
+    expect(describeAiSends(base)).not.toMatch(/Memory/);
+  });
+
   const base = {
     settings: { openrouterModel: 'anthropic/claude-sonnet-4.5' },
     sql: true,

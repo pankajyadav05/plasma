@@ -5,6 +5,7 @@
  * shows the card). Pure: nothing here touches a connection or the UI.
  */
 import { z } from 'zod';
+import { checkMemoryText } from './ai-memory';
 import { isAgentReadSql } from './ai-readonly-sql';
 import { AgentActionName } from './protocol';
 import { splitSqlStatements } from './sql-statements';
@@ -53,6 +54,12 @@ const ProposeChangeArgs = z.object({
     .transform((t) => t?.trim() ?? ''),
 });
 const OpenInEditorArgs = z.object({ sql: sqlText });
+const RememberArgs = z.object({ text: z.string().max(5000) });
+const ForgetArgs = z.object({
+  id: ident,
+  /** Not from the model: main fills in the note's text so the card can show it. */
+  text: z.string().max(1000).optional(),
+});
 
 /** A tool call that passed `normalizeAction`. */
 export type AgentActionInput =
@@ -65,7 +72,9 @@ export type AgentActionInput =
     }
   | { name: 'run_query'; sql: string; title?: string }
   | { name: 'propose_change'; sql: string; summary: string }
-  | { name: 'open_in_editor'; sql: string };
+  | { name: 'open_in_editor'; sql: string }
+  | { name: 'remember'; text: string }
+  | { name: 'forget'; id: string; text?: string };
 
 export type NormalizedAction =
   | { ok: true; action: AgentActionInput }
@@ -140,6 +149,19 @@ export function normalizeAction(name: string, args: unknown): NormalizedAction {
       if (!r.success) return { ok: false, error: firstIssue(r.error) };
       return { ok: true, action: { name: 'open_in_editor', sql: r.data.sql } };
     }
+    case 'remember': {
+      const r = RememberArgs.safeParse(a);
+      if (!r.success) return { ok: false, error: firstIssue(r.error) };
+      // Duplicates and the note cap need the stored notes: main checks those next.
+      const checked = checkMemoryText(r.data.text, []);
+      if (!checked.ok) return { ok: false, error: checked.error };
+      return { ok: true, action: { name: 'remember', text: checked.text } };
+    }
+    case 'forget': {
+      const r = ForgetArgs.safeParse(a);
+      if (!r.success) return { ok: false, error: firstIssue(r.error) };
+      return { ok: true, action: { name: 'forget', id: r.data.id, text: r.data.text } };
+    }
   }
 }
 
@@ -154,14 +176,23 @@ export function actionTitle(name: AgentActionName): string {
       return 'Change data';
     case 'open_in_editor':
       return 'Open in editor';
+    case 'remember':
+      return 'Remember';
+    case 'forget':
+      return 'Forget';
   }
 }
 
 /** One-line subject of an action: the table, or the SQL's first line. */
 export function actionSubject(action: AgentActionInput): string {
   if (action.name === 'show_table') return `${action.schema}.${action.table}`;
+  if (action.name === 'remember') return clip(action.text);
+  if (action.name === 'forget') return clip(action.text ?? action.id);
   const first = action.sql.split('\n').find((l) => l.trim().length > 0) ?? '';
-  const line = first.trim();
+  return clip(first.trim());
+}
+
+function clip(line: string): string {
   return line.length > 80 ? `${line.slice(0, 79)}…` : line;
 }
 

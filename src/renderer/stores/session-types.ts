@@ -128,6 +128,10 @@ export interface AgentAction {
   /** Editor tab generation / Safe Run token before the card started its run (to tell its run apart). */
   startGen?: number;
   safeRunPrev?: number;
+  /** remember: the text as the user has edited it (the note stored is this, not the model's). */
+  memoryText?: string;
+  /** remember: the id of the stored note, sent back to the model. */
+  memoryId?: string;
 }
 
 /**
