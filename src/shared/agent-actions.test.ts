@@ -193,3 +193,56 @@ describe('agent system prompt', () => {
     expect(withCtx).toContain('query_database');
   });
 });
+
+describe('normalizeAction: memory tools', () => {
+  it('accepts a short note and cleans it', () => {
+    expect(normalizeAction('remember', { text: '  orders.amount \n is in cents ' })).toEqual({
+      ok: true,
+      action: { name: 'remember', text: 'orders.amount is in cents' },
+    });
+  });
+
+  it('refuses an empty, long or secret-bearing note before any card', () => {
+    expect(normalizeAction('remember', { text: ' ' }).ok).toBe(false);
+    expect(normalizeAction('remember', {}).ok).toBe(false);
+    expect(normalizeAction('remember', { text: 'x'.repeat(501) }).ok).toBe(false);
+    const secret = normalizeAction('remember', { text: 'password: hunter2hunter2' });
+    expect(secret).toEqual({ ok: false, error: "Memory can't hold passwords or keys." });
+  });
+
+  it('accepts forget with an id and requires one', () => {
+    expect(normalizeAction('forget', { id: ' m:abc123 ' })).toEqual({
+      ok: true,
+      action: { name: 'forget', id: 'm:abc123', text: undefined },
+    });
+    expect(normalizeAction('forget', {}).ok).toBe(false);
+  });
+
+  it('titles and describes them', () => {
+    expect(actionTitle('remember')).toBe('Remember');
+    expect(actionTitle('forget')).toBe('Forget');
+    expect(actionSubject({ name: 'remember', text: 'a rule' })).toBe('a rule');
+    expect(actionSubject({ name: 'forget', id: 'm:abc123', text: 'old rule' })).toBe('old rule');
+    expect(actionHistoryLine({ name: 'remember', text: 'a rule' }, 'rejected')).toBe(
+      '[remember: rejected]',
+    );
+  });
+});
+
+describe('agent prompt: memory', () => {
+  const base = { flavour: 'Postgres', ddl: null, context: null, rowData: false };
+  it('adds the notes and the remember rules only when memory is on', () => {
+    const on = buildAgentSystemPrompt({
+      ...base,
+      memory: '--- Notes ---\n- [m:abc123] a rule',
+      memoryTools: true,
+    });
+    expect(on).toContain('- [m:abc123] a rule');
+    expect(on).toContain('- remember:');
+    expect(on).toMatch(/at most one remember per reply/);
+    expect(on).toMatch(/Never put row values, personal data/);
+    const off = buildAgentSystemPrompt(base);
+    expect(off).not.toContain('remember');
+    expect(off).not.toContain('Notes');
+  });
+});

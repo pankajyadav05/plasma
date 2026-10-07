@@ -123,6 +123,12 @@ const api: PlasmaAPI = {
     run: (req) => ipcRenderer.invoke(IpcChannel.CompareRun, req),
     cancel: (runId) => ipcRenderer.invoke(IpcChannel.CompareCancel, runId),
   },
+  memory: {
+    list: (connectionId) => ipcRenderer.invoke(IpcChannel.MemoryList, connectionId),
+    add: (req) => ipcRenderer.invoke(IpcChannel.MemoryAdd, req),
+    update: (req) => ipcRenderer.invoke(IpcChannel.MemoryUpdate, req),
+    delete: (req) => ipcRenderer.invoke(IpcChannel.MemoryDelete, req),
+  },
   sql: {
     format: (sql) => ipcRenderer.invoke(IpcChannel.FormatSql, sql),
   },

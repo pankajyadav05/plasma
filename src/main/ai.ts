@@ -1,6 +1,7 @@
 import { normalizeAction } from '@shared/agent-actions';
 import { buildAgentSystemPrompt } from '@shared/agent-prompt';
 import { type AiContent, capHistoryImages, contentText, countImages } from '@shared/ai-images';
+import { memoryActionResult } from '@shared/ai-memory';
 import { AI_SCHEMA_MAX_TABLES } from '@shared/ai-schema-policy';
 import { taskMaxTokens, taskSystemPrompt } from '@shared/ai-tasks';
 import {
@@ -211,8 +212,26 @@ export type AiChatOptions = {
    * opt-in was revoked since the chat started; null when the call may run.
    */
   toolGuard?: () => string | null;
+  /**
+   * Database memory for the bound connection: the section for the system
+   * prompt (null/absent = nothing to send: no notes, or the switch is off).
+   */
+  memory?: { text: string; count: number } | null;
+  /**
+   * Offers `remember` / `forget` to the agent and validates them against the
+   * stored notes. Absent when memory is off for the connection.
+   */
+  memoryTools?: MemoryToolHooks;
   /** Injectable fetch for regression tests that capture the request body. */
   fetchImpl?: typeof fetch;
+};
+
+/** What main knows about the notes, so a bad `remember` / `forget` never reaches a card. */
+export type MemoryToolHooks = {
+  /** A refusal ("Already remembered.") or null when the note may be proposed. */
+  checkRemember(text: string): string | null;
+  /** The note a model's `m:<shortid>` means, or the reason there is none. */
+  resolveForget(ref: string): { ok: true; id: string; text: string } | { ok: false; error: string };
 };
 
 /** Names of the tools offered for `engine` (a model may only call these). */
@@ -227,7 +246,14 @@ function namesOf(tools: readonly unknown[]): Set<string> {
 }
 
 /** Tool names handled by the renderer (the user decides), not by `toolExecutor`. */
-const ACTION_TOOL_NAMES = new Set(['show_table', 'run_query', 'propose_change', 'open_in_editor']);
+const ACTION_TOOL_NAMES = new Set([
+  'show_table',
+  'run_query',
+  'propose_change',
+  'open_in_editor',
+  'remember',
+  'forget',
+]);
 
 export type AiToolExecutor = (name: string, args: Record<string, unknown>) => Promise<string>;
 
@@ -359,6 +385,39 @@ const TOOLS_AGENT = [
         type: 'object',
         properties: { sql: { type: 'string' } },
         required: ['sql'],
+      },
+    },
+  },
+] as const;
+
+/** Offered on top of TOOLS_AGENT while the connection's memory is on. */
+const TOOLS_MEMORY = [
+  {
+    type: 'function',
+    function: {
+      name: 'remember',
+      description:
+        'Propose ONE short note to keep about this database: a business rule the user stated or corrected, or what a table or column means. The user can edit it before approving. Never store row values, personal data, passwords or keys. At most one per reply.',
+      parameters: {
+        type: 'object',
+        properties: {
+          text: { type: 'string', description: 'One short sentence, at most 500 characters.' },
+        },
+        required: ['text'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'forget',
+      description: 'Propose removing a note that is wrong or out of date. The user approves first.',
+      parameters: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: 'The note id from the notes list, e.g. "m:a1b2c3".' },
+        },
+        required: ['id'],
       },
     },
   },
@@ -523,7 +582,7 @@ async function pump(
   // what they send back is gated separately (`shapeActionResult`).
   const agentMode = req.agent === true && !task && isSqlEngine(engine);
   const messages: InternalMsg[] = task
-    ? buildTaskMessages(task, req.messages, allowSchema ? req.schema : null)
+    ? buildTaskMessages(task, req.messages, allowSchema ? req.schema : null, options.memory?.text)
     : agentMode
       ? buildAgentMessages(
           req.messages,
@@ -531,12 +590,15 @@ async function pump(
           allowSchema ? req.schema : null,
           allowSchema ? req.context : undefined,
           allowRowData,
+          options.memory?.text,
+          options.memoryTools !== undefined,
         )
       : buildMessages(
           req.messages,
           engine,
           allowSchema ? req.schema : null,
           allowSchema ? req.engineContext : undefined,
+          options.memory?.text,
         );
   const sentImages = !task && req.messages.some((m) => countImages(m.content) > 0);
   const model = local
@@ -546,6 +608,7 @@ async function pump(
       : defaultModel;
   const tools: readonly unknown[] = [
     ...(agentMode ? TOOLS_AGENT : []),
+    ...(agentMode && options.memoryTools ? TOOLS_MEMORY : []),
     ...(allowRowData ? toolsForEngine(engine) : []),
   ];
   const fetchImpl = options.fetchImpl ?? fetch;
@@ -793,6 +856,24 @@ async function runAgentAction(input: {
   const refusal = options.actionGuard?.() ?? null;
   if (refusal) return JSON.stringify({ error: `rejected: ${refusal}` });
 
+  // Memory changes: checked against the stored notes before any card is shown.
+  const act = normalized.action;
+  let eventArgs = args;
+  if (act.name === 'remember' || act.name === 'forget') {
+    const hooks = options.memoryTools;
+    if (!hooks)
+      return JSON.stringify({ error: 'rejected: memory is turned off for this connection' });
+    if (act.name === 'remember') {
+      const bad = hooks.checkRemember(act.text);
+      if (bad) return JSON.stringify({ error: `rejected: ${bad}` });
+      eventArgs = { text: act.text };
+    } else {
+      const found = hooks.resolveForget(act.id);
+      if (!found.ok) return JSON.stringify({ error: `rejected: ${found.error}` });
+      eventArgs = { id: found.id, text: found.text };
+    }
+  }
+
   // Stop can land before the card is even shown: nothing to ask then.
   if (signal.aborted || input.windowGone())
     return JSON.stringify({ outcome: 'cancelled', note: 'The chat was stopped.' });
@@ -805,9 +886,11 @@ async function runAgentAction(input: {
     requestId: req.requestId,
     callId: call.id,
     name: normalized.action.name,
-    args,
+    args: eventArgs,
   });
   const res = await answered;
+  // Memory answers carry no rows or database errors: the shared wording is the whole reply.
+  if (act.name === 'remember' || act.name === 'forget') return memoryActionResult(act.name, res);
   return (options.shapeActionResult ?? defaultActionResult)(res);
 }
 
@@ -832,6 +915,7 @@ function buildMessages(
   engine: ConnectionEngine,
   schema?: SchemaInfo | null,
   engineContext?: string,
+  memory?: string,
 ): ChatMsg[] {
   const out: ChatMsg[] = [];
 
@@ -859,6 +943,15 @@ function buildMessages(
     }`;
   }
 
+  // The user's notes go even when the schema does not (they wrote them to be used).
+  if (memory) {
+    systemContent =
+      systemContent ??
+      (sqlFlavour[engine]
+        ? `You are Plasma's SQL assistant. The user is exploring a ${sqlFlavour[engine]} database. The schema is not available to you. When the user asks for a query, return JUST the SQL inside a \`\`\`sql code block.`
+        : "You are Plasma's database assistant.");
+    systemContent += `\n\n${memory}`;
+  }
   if (systemContent) {
     out.push({ role: 'system', content: systemContent });
   }
@@ -882,6 +975,8 @@ function buildAgentMessages(
   schema: SchemaInfo | null | undefined,
   context: string | undefined,
   rowData: boolean,
+  memory?: string,
+  memoryTools = false,
 ): ChatMsg[] {
   const ddl = schema ? compactSchema(schema) : '';
   const system = buildAgentSystemPrompt({
@@ -889,6 +984,8 @@ function buildAgentMessages(
     ddl: ddl || null,
     context: context?.trim() ? context : null,
     rowData,
+    memory: memory ?? null,
+    memoryTools,
   });
   return [
     { role: 'system', content: system },
@@ -907,9 +1004,12 @@ export function buildTaskMessages(
   task: NonNullable<AiChatRequest['task']>,
   messages: AiMessage[],
   schema?: SchemaInfo | null,
+  memory?: string,
 ): ChatMsg[] {
   const ddl = schema ? compactSchema(schema, { withIndexes: task === 'explain-plan' }) : '';
-  const system = `${taskSystemPrompt(task)}${ddl ? `\n\n--- SCHEMA ---\n${ddl}` : ''}`;
+  const system = `${taskSystemPrompt(task)}${ddl ? `\n\n--- SCHEMA ---\n${ddl}` : ''}${
+    memory ? `\n\n${memory}` : ''
+  }`;
   return [
     { role: 'system', content: system },
     // Tasks are text-only: any image is left out.
