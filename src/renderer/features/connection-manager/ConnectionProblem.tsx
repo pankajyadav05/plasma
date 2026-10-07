@@ -42,7 +42,7 @@ export function StageList({ stages }: { stages: readonly StageResult[] }) {
           </span>
           {s.status === 'ok' && s.note && (
             <span className="text-[var(--wb-text-3)]" title={s.note}>
-              {s.note.length > 24 ? `${s.note.slice(0, 22)}…` : s.note}
+              ({s.note.length > 24 ? `${s.note.slice(0, 22)}…` : s.note})
             </span>
           )}
         </li>

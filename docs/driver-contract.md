@@ -46,6 +46,13 @@ that process's event loop for long: a `cancel` request has to be heard.
   reject (the driver is not connected); `connect` works again on the same
   instance.
 * A wrong password is an error that does **not** contain the password.
+* A failed `connect` says why. The error carries the codes the engine sent
+  (SQLSTATE, MySQL errno, ClickHouse code, Redis reply prefix, HTTP status, Node
+  errno), which the worker forwards as `info` next to the message and
+  `shared/connect-diagnosis.ts` turns into a cause with a fix. A driver may not
+  swallow the reason: Redis rejects with the first error it saw (`WRONGPASS`,
+  `ECONNREFUSED`), never a bare "Connection is closed", and OpenSearch refuses an
+  HTTP server whose `GET /` carries no version ("not OpenSearch").
 * `setConnectionGen(n)` stamps the session; `commitEditBatch` refuses a batch
   made for another generation.
 * Health: Postgres probes a connection that has been idle for a while with a
@@ -125,7 +132,7 @@ A failing call rejects with an `Error` whose `message` names what the server
 said. That is the whole shape the worker forwards:
 
 ```
-{ kind: 'error', id, message, fatal?: 'connection-lost', txnLost?, notices? }
+{ kind: 'error', id, message, info?: ErrorInfo, fatal?: 'connection-lost', txnLost?, notices? }
 ```
 
 * Postgres errors also carry the `pg` fields (`code` = SQLSTATE, `position`,
