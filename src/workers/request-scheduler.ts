@@ -50,6 +50,7 @@ const LANE_BY_KIND: Partial<Record<Kind, Lane>> = {
   ping: 'free',
   testConnect: 'free',
   compareQuery: 'free',
+  compareSchema: 'free',
   compareCancel: 'free',
 };
 
@@ -105,6 +106,7 @@ export class RequestScheduler {
         kind === 'ping' ||
         kind === 'testConnect' ||
         kind === 'compareQuery' ||
+        kind === 'compareSchema' ||
         kind === 'compareCancel')
     ) {
       return fn();

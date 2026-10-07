@@ -1,8 +1,8 @@
+import { randomUUID } from 'node:crypto';
 import { normalizeAction } from '@shared/agent-actions';
 import { buildAgentSystemPrompt } from '@shared/agent-prompt';
 import { type AiContent, capHistoryImages, contentText, countImages } from '@shared/ai-images';
 import { memoryActionResult } from '@shared/ai-memory';
-import { AI_SCHEMA_MAX_TABLES } from '@shared/ai-schema-policy';
 import { taskMaxTokens, taskSystemPrompt } from '@shared/ai-tasks';
 import {
   AiActionResult,
@@ -12,6 +12,7 @@ import {
   type ConnectionEngine,
   type SchemaInfo,
 } from '@shared/protocol';
+import { compactSchema } from '@shared/schema-compact';
 import { isSqlEngine } from '@shared/sql-dialect';
 import type { BrowserWindow } from 'electron';
 import type { MemoryToolHooks } from './ai-memory';
@@ -910,6 +911,77 @@ async function runAgentAction(input: {
   return (options.shapeActionResult ?? defaultActionResult)(res);
 }
 
+/** The one MCP proposal waiting for the user (one at a time keeps the panel unambiguous). */
+let externalOpen: string | null = null;
+
+export type ExternalChangeResult =
+  | { kind: 'answered'; res: AiActionResult }
+  | { kind: 'timeout' }
+  | { kind: 'cancelled' }
+  | { kind: 'refused'; note: string };
+
+/**
+ * An external AI tool (MCP) proposes a change. It rides the SAME round-trip as
+ * the in-app agent's `propose_change`: the panel gets an `external` event (a
+ * thread labelled with the client), then the `action` event; the card runs the
+ * statement through the renderer's one write path (prod gate, read-only guard,
+ * Safe Run) and answers through `submitAiActionResult`.
+ */
+export async function requestExternalChange(input: {
+  win: BrowserWindow | null;
+  client: string;
+  connectionId: string;
+  sql: string;
+  summary: string;
+  signal: AbortSignal;
+  timeoutMs: number;
+}): Promise<ExternalChangeResult> {
+  const { win, signal } = input;
+  if (!win || win.isDestroyed()) {
+    return { kind: 'refused', note: 'Plasma has no open window. Open Plasma and try again.' };
+  }
+  const args = { sql: input.sql, summary: input.summary };
+  const normalized = normalizeAction('propose_change', args);
+  if (!normalized.ok) return { kind: 'refused', note: `rejected: ${normalized.error}` };
+  if (inflight.size > 0 || externalOpen) {
+    return {
+      kind: 'refused',
+      note: 'The AI panel in Plasma is busy with another request. Try again in a moment.',
+    };
+  }
+  const requestId = `mcp-${randomUUID()}`;
+  const callId = 'call-1';
+  const key = actionKey(requestId, callId);
+  externalOpen = requestId;
+  const send = (evt: AiChatEvent) => {
+    if (!win.isDestroyed()) win.webContents.send('plasma:ai:event', evt);
+  };
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let onAbort: (() => void) | undefined;
+  try {
+    const answered = new Promise<ExternalChangeResult>((resolve) => {
+      pendingActions.set(key, {
+        requestId,
+        resolve: (res) => resolve({ kind: 'answered', res }),
+      });
+      timer = setTimeout(() => resolve({ kind: 'timeout' }), input.timeoutMs);
+      onAbort = () => resolve({ kind: 'cancelled' });
+      if (signal.aborted) onAbort();
+      else signal.addEventListener('abort', onAbort, { once: true });
+    });
+    send({ kind: 'external', requestId, connectionId: input.connectionId, client: input.client });
+    send({ kind: 'action', requestId, callId, name: 'propose_change', args });
+    return await answered;
+  } finally {
+    if (timer) clearTimeout(timer);
+    if (onAbort) signal.removeEventListener('abort', onAbort);
+    pendingActions.delete(key);
+    externalOpen = null;
+    // Closes the thread; a card nobody answered becomes cancelled.
+    send({ kind: 'done', requestId });
+  }
+}
+
 /**
  * Build the OpenRouter messages array. Prepends an engine-specific
  * system prompt + any optional context the renderer prepared (compact
@@ -1033,52 +1105,4 @@ export function buildTaskMessages(
       .filter((m) => m.role !== 'system')
       .map((m) => ({ role: m.role, content: contentText(m.content) })),
   ];
-}
-
-const MAX_TABLES = AI_SCHEMA_MAX_TABLES;
-const MAX_COLS_PER_TABLE = 24;
-
-function compactSchema(schema: SchemaInfo, opts: { withIndexes?: boolean } = {}): string {
-  const tables = schema.tables.slice(0, MAX_TABLES);
-  const colByTable = new Map<string, SchemaInfo['columns']>();
-  for (const c of schema.columns) {
-    const key = `${c.schema}.${c.table}`;
-    const arr = colByTable.get(key) ?? [];
-    arr.push(c);
-    colByTable.set(key, arr);
-  }
-  const fkByTable = new Map<string, string[]>();
-  for (const fk of schema.foreignKeys) {
-    const key = `${fk.schema}.${fk.table}`;
-    const arr = fkByTable.get(key) ?? [];
-    arr.push(`${fk.column} -> ${fk.refSchema}.${fk.refTable}.${fk.refColumn}`);
-    fkByTable.set(key, arr);
-  }
-  const lines: string[] = [];
-  for (const t of tables) {
-    const key = `${t.schema}.${t.name}`;
-    const cols = (colByTable.get(key) ?? [])
-      .sort((a, b) => a.ordinal - b.ordinal)
-      .slice(0, MAX_COLS_PER_TABLE);
-    const colSig = cols
-      .map(
-        (c) =>
-          `${c.name} ${c.dataType}${c.isPrimaryKey ? ' PK' : ''}${c.isNullable ? '' : ' NOT NULL'}`,
-      )
-      .join(', ');
-    lines.push(`${key} (${colSig})`);
-    const fks = fkByTable.get(key);
-    if (fks && fks.length > 0) {
-      lines.push(`  FK: ${fks.join('; ')}`);
-    }
-    if (opts.withIndexes) {
-      for (const ix of schema.indexes ?? []) {
-        if (`${ix.schema}.${ix.table}` === key) lines.push(`  INDEX: ${ix.definition}`);
-      }
-    }
-  }
-  if (schema.tables.length > MAX_TABLES) {
-    lines.push(`-- … ${schema.tables.length - MAX_TABLES} more tables omitted for brevity`);
-  }
-  return lines.join('\n');
 }

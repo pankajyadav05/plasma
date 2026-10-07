@@ -24,6 +24,7 @@ import { ExportCancelledError, writeExportFromQueryStream, writeExportRows } fro
 import { RequestScheduler } from './request-scheduler';
 import {
   cancelIsolatedRun,
+  runIsolatedIntrospect,
   runIsolatedReadOnlyQuery,
   runIsolatedTestConnect,
 } from './test-connect';
@@ -346,8 +347,15 @@ process.parentPort.on('message', async (evt: Electron.MessageEvent) => {
             req.sql,
             req.maxRows,
             req.runId,
+            undefined,
+            req.timeoutMs,
           );
           send({ kind: 'queryResult', id: req.id, result });
+          break;
+        }
+        case 'compareSchema': {
+          const info = await runIsolatedIntrospect(req.config, req.opts);
+          send({ kind: 'schemaInfo', id: req.id, info });
           break;
         }
         case 'compareCancel': {

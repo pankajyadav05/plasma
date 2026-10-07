@@ -1,4 +1,10 @@
-import type { ConnectionConfig, ConnectionEngine, QueryResult } from '@shared/protocol';
+import type {
+  ConnectionConfig,
+  ConnectionEngine,
+  IntrospectOpts,
+  QueryResult,
+  SchemaInfo,
+} from '@shared/protocol';
 import { ClickhouseDriver } from './drivers/clickhouse';
 import { DuckdbDriver } from './drivers/duckdb';
 import { MysqlDriver } from './drivers/mysql';
@@ -100,6 +106,7 @@ export async function runIsolatedReadOnlyQuery(
   maxRows: number,
   runId?: string,
   overrides: Partial<Record<ConnectionEngine, () => ReadOnlyDriver>> = {},
+  timeoutMs: number = COMPARE_TIMEOUT_MS,
 ): Promise<QueryResult> {
   const engine: ConnectionEngine = config.engine ?? 'postgres';
   if (!SQL_ENGINES.has(engine)) throw new Error(`Compare needs a SQL connection, not ${engine}.`);
@@ -108,10 +115,38 @@ export async function runIsolatedReadOnlyQuery(
   )();
   if (runId) isolatedRuns.set(runId, driver);
   try {
-    await driver.connect({ ...config, readOnly: true }, COMPARE_TIMEOUT_MS);
+    await driver.connect({ ...config, readOnly: true }, timeoutMs);
     return await driver.aiQuery(sql, undefined, { maxRows });
   } finally {
     if (runId) isolatedRuns.delete(runId);
+    await driver.disconnect().catch(() => undefined);
+  }
+}
+
+/** The slice of a SQL driver a one-off structure read needs. */
+export type IntrospectDriver = Omit<TestableDriver, 'connect'> & {
+  connect(config: ConnectionConfig, statementTimeoutMs?: number): Promise<string>;
+  introspect(opts?: IntrospectOpts): Promise<SchemaInfo>;
+};
+
+/**
+ * Structure of a saved connection that is not open (MCP `get_schema`): a
+ * throwaway read-only driver connects, introspects and always disconnects.
+ */
+export async function runIsolatedIntrospect(
+  config: ConnectionConfig,
+  opts?: IntrospectOpts,
+  overrides: Partial<Record<ConnectionEngine, () => IntrospectDriver>> = {},
+): Promise<SchemaInfo> {
+  const engine: ConnectionEngine = config.engine ?? 'postgres';
+  if (!SQL_ENGINES.has(engine)) throw new Error(`Structure needs a SQL connection, not ${engine}.`);
+  const driver = (
+    overrides[engine] ?? (defaultFactories[engine] as unknown as () => IntrospectDriver)
+  )();
+  try {
+    await driver.connect({ ...config, readOnly: true }, COMPARE_TIMEOUT_MS);
+    return await driver.introspect(opts);
+  } finally {
     await driver.disconnect().catch(() => undefined);
   }
 }

@@ -91,6 +91,7 @@ const POLICY_BY_KIND: Partial<Record<WorkerRequest['kind'], RecoveryPolicy>> = {
   testConnect: 'none',
   // Isolated throwaway session: never worth rebuilding the live one for.
   compareQuery: 'none',
+  compareSchema: 'none',
   compareCancel: 'none',
   disconnect: 'none',
   ping: 'none',
