@@ -1,4 +1,5 @@
 import { ConnectionLostError } from '@shared/connection-loss';
+import { mysqlAuxReadViolation, mysqlReadOnlyEscapeReason } from '@shared/mysql-readonly-sql';
 import type {
   ConnectionConfig,
   IntrospectOpts,
@@ -121,6 +122,14 @@ const INTERRUPTED_CODES = new Set([
   'ER_QUERY_TIMEOUT',
   'ER_STATEMENT_TIMEOUT',
 ]);
+/** 3024: MySQL max_execution_time; 1969: MariaDB max_statement_time. */
+const TIMEOUT_ERRNOS = new Set([3024, 1969]);
+
+function errNo(err: unknown): number {
+  return err && typeof err === 'object' && 'errno' in err
+    ? Number((err as { errno: unknown }).errno)
+    : 0;
+}
 
 function errCode(err: unknown): string {
   return err && typeof err === 'object' && 'code' in err
@@ -189,6 +198,9 @@ export class MysqlDriver implements SqlEngineDriver {
 
   private watch(conn: CbConnection): void {
     conn.on('error', (err) => {
+      // A connection from a session that was already replaced (a reconnect) reports its
+      // death late; it must not mark the new session as lost.
+      if (conn !== this.primary && conn !== this.aux) return;
       if (LOST_CODES.has(errCode(err)) || (err as { fatal?: boolean }).fatal) {
         this.lostReason ??= err.message;
         this.lostInTxn ||= this.txn === 'active';
@@ -197,6 +209,9 @@ export class MysqlDriver implements SqlEngineDriver {
   }
 
   async connect(config: ConnectionConfig, statementTimeoutMs?: number): Promise<string> {
+    // A second connect replaces the session: close the old one first, so its late
+    // socket events cannot be read as the new session dying.
+    await this.disconnect();
     this.readOnly = config.readOnly === true;
     this.statementTimeoutMs = statementTimeoutMs ?? 0;
     this.lostReason = null;
@@ -312,7 +327,37 @@ export class MysqlDriver implements SqlEngineDriver {
       ? (opts?.maxRows ?? 500_000)
       : Math.min(opts?.maxRows ?? MAX_RESULT_ROWS, MAX_RESULT_ROWS);
     const maxBytes = Math.min(opts?.maxBytes ?? MAX_RESULT_BYTES, MAX_RESULT_BYTES_CEILING);
-    return new Promise((resolve, reject) => {
+    return new Promise((resolveRaw, rejectRaw) => {
+      // mysql2 reports a dead socket on the connection but does not always fail the
+      // statement that was waiting on it, which left a query hanging forever.
+      let settled = false;
+      const onDrop = (err?: unknown) => {
+        if (
+          err !== undefined &&
+          !LOST_CODES.has(errCode(err)) &&
+          !(err as { fatal?: boolean }).fatal
+        )
+          return;
+        reject(this.lossOr(err ?? new Error('connection lost: the server closed the connection')));
+      };
+      const unwatch = () => {
+        conn.removeListener('error', onDrop);
+        conn.removeListener('end', onDrop);
+      };
+      const resolve = (value: RawResult) => {
+        if (settled) return;
+        settled = true;
+        unwatch();
+        resolveRaw(value);
+      };
+      const reject = (reason: unknown) => {
+        if (settled) return;
+        settled = true;
+        unwatch();
+        rejectRaw(reason);
+      };
+      conn.on('error', onDrop);
+      conn.on('end', onDrop);
       const state = emptyBoundState();
       let fields: Array<{ name: string; columnType?: number; characterSet?: number }> = [];
       let header: { affectedRows?: number; serverStatus?: number } | null = null;
@@ -334,6 +379,11 @@ export class MysqlDriver implements SqlEngineDriver {
         }
       });
       q.on('error', (err: unknown) => {
+        // The one message every engine uses for a statement stopped by its timeout.
+        if (!capped && !this.killing && TIMEOUT_ERRNOS.has(errNo(err))) {
+          reject(new Error('canceling statement due to statement timeout'));
+          return;
+        }
         if (INTERRUPTED_CODES.has(errCode(err))) {
           if (capped) {
             finish();
@@ -393,6 +443,22 @@ export class MysqlDriver implements SqlEngineDriver {
     if (this.readOnly) await this.exec(conn, READ_ONLY_SQL, [], true);
   }
 
+  /**
+   * Before every user statement of a read-only connection: refuse text that
+   * tries to leave read-only mode, and put the session default back (a
+   * statement earlier in the same script may have changed it).
+   */
+  private async guardReadOnly(conn: CbConnection, sql: string): Promise<void> {
+    if (!this.readOnly) return;
+    const why = mysqlReadOnlyEscapeReason(sql);
+    if (why) {
+      throw new Error(
+        `Read-only connection: ${why} is not allowed. Edit the connection to turn off read-only.`,
+      );
+    }
+    await this.reassertReadOnly(conn);
+  }
+
   private async runStatements(
     conn: CbConnection,
     sql: string,
@@ -410,6 +476,7 @@ export class MysqlDriver implements SqlEngineDriver {
     }
     let last: RawResult = { columns: [], rows: [], rowCount: 0 };
     for (const text of statements) {
+      await this.guardReadOnly(conn, text);
       const t =
         statements.length === 1
           ? translatePlaceholders(text, params ?? [], { backslashEscapes: true })
@@ -442,6 +509,11 @@ export class MysqlDriver implements SqlEngineDriver {
   ): Promise<QueryResult> {
     const conn = this.requireAux();
     const start = Date.now();
+    // MariaDB runs DDL through a READ ONLY transaction (it commits first), so the
+    // transaction alone is not the boundary: only reads get as far as the server.
+    const violation = mysqlAuxReadViolation(sql);
+    if (violation)
+      throw new Error(`rejected: only read-only statements are allowed here (${violation})`);
     return this.chain('auxTail', async () => {
       const t = translatePlaceholders(sql, params ?? [], { backslashEscapes: true });
       await this.exec(conn, 'START TRANSACTION READ ONLY', [], true);
