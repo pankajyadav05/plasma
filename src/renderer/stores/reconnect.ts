@@ -1,4 +1,5 @@
 import { ipc } from '@/lib/ipc';
+import type { ConnectDiagnosis } from '@shared/connect-diagnosis';
 import { create } from 'zustand';
 import { useSession } from './session';
 import { pendingEditCount } from './session-pending-edits';
@@ -40,6 +41,8 @@ interface ReconnectState {
   /** Epoch ms of the next scheduled attempt while `waiting`. */
   nextAt: number | null;
   lastError: string | null;
+  /** The last failure in plain words (what is wrong, what to try, which field), when it could be explained. */
+  lastDiagnosis: ConnectDiagnosis | null;
   /**
    * Begin (re)connecting to `target`. `launch` and `manual` try right
    * away; `lost` waits the first backoff step so a flapping network
@@ -92,10 +95,19 @@ export const useReconnect = create<ReconnectState>((set, get) => {
     attempt: 0,
     nextAt: null,
     lastError: null,
+    lastDiagnosis: null,
 
     start(target, reason) {
       clearTimer();
-      set({ target, reason, attempt: 0, lastError: null, nextAt: null, phase: 'waiting' });
+      set({
+        target,
+        reason,
+        attempt: 0,
+        lastError: null,
+        lastDiagnosis: null,
+        nextAt: null,
+        phase: 'waiting',
+      });
       if (reason === 'lost') schedule();
       else void get().reconnectNow();
     },
@@ -112,7 +124,14 @@ export const useReconnect = create<ReconnectState>((set, get) => {
       if (get().target?.id !== target.id) return;
       const s = useSession.getState();
       if (s.connectionState === 'connected' && s.activeConfig?.id === target.id) {
-        set({ phase: 'idle', target: null, reason: null, attempt: 0, lastError: null });
+        set({
+          phase: 'idle',
+          target: null,
+          reason: null,
+          attempt: 0,
+          lastError: null,
+          lastDiagnosis: null,
+        });
         return;
       }
       if (s.connectionActionGate) {
@@ -120,13 +139,25 @@ export const useReconnect = create<ReconnectState>((set, get) => {
         set({ phase: 'failed', lastError: 'Unsaved edits are pending — reconnect manually' });
         return;
       }
-      set({ attempt: get().attempt + 1, lastError: s.connectionError ?? 'Connection failed' });
+      set({
+        attempt: get().attempt + 1,
+        lastError: s.connectionError ?? 'Connection failed',
+        lastDiagnosis: s.connectionDiagnosis ?? null,
+      });
       schedule();
     },
 
     cancel() {
       clearTimer();
-      set({ target: null, reason: null, phase: 'idle', attempt: 0, nextAt: null, lastError: null });
+      set({
+        target: null,
+        reason: null,
+        phase: 'idle',
+        attempt: 0,
+        nextAt: null,
+        lastError: null,
+        lastDiagnosis: null,
+      });
     },
   };
 });

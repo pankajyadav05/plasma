@@ -6,6 +6,7 @@ import { create } from 'zustand';
 type FakeSession = {
   connectionState: 'idle' | 'connecting' | 'connected' | 'error';
   connectionError: string | null;
+  connectionDiagnosis?: { cause: string; title: string } | null;
   connectionActionGate: unknown;
   activeConfig: { id: string } | null;
   pendingEditsByTab: Record<string, unknown[]>;
@@ -90,6 +91,23 @@ describe('reconnect machine', () => {
     outcomes = ['ok'];
     await useReconnect.getState().reconnectNow();
     expect(useReconnect.getState().phase).toBe('idle');
+  });
+
+  it('keeps the plain-language diagnosis of the last failure for the banner', async () => {
+    fakeSession.setState({ connectionDiagnosis: null });
+    connectSaved.mockImplementationOnce(async () => {
+      fakeSession.setState({
+        connectionState: 'error',
+        connectionError: 'Nothing is listening there. db:5432 refused the connection.',
+        connectionDiagnosis: { cause: 'refused', title: 'Nothing is listening there' },
+      });
+    });
+    useReconnect.getState().start(target, 'launch');
+    await vi.waitFor(() => expect(useReconnect.getState().attempt).toBe(1));
+    expect(useReconnect.getState().lastDiagnosis).toMatchObject({ cause: 'refused' });
+    // A new run starts clean, and a good connection clears it.
+    useReconnect.getState().cancel();
+    expect(useReconnect.getState().lastDiagnosis).toBeNull();
   });
 
   it('with auto-reconnect off, a lost session only offers the click', async () => {

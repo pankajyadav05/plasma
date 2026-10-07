@@ -10,13 +10,19 @@ import {
 } from '@/components/ui/select';
 import { Pill } from '@/components/ui/workbench';
 import { cn } from '@/lib/cn';
+import { fieldElementId, isFlagged } from '@/lib/connect-problem';
 import { databaseLabel } from '@/lib/engine-meta';
-import { describeConnectError } from '@/lib/errors';
 import { ipc } from '@/lib/ipc';
 import { MOD } from '@/lib/platform';
 import { SAFE_MODE_LABEL, SAFE_MODE_LEVELS, type SafeModeLevel } from '@/stores/safe-mode';
 import { useSession } from '@/stores/session';
 import { useConnectionDraft } from '@/stores/workspace';
+import {
+  type ConnectDiagnosis,
+  type ConnectField,
+  diagnoseConnectError,
+} from '@shared/connect-diagnosis';
+import type { StageResult } from '@shared/connect-stages';
 import { suggestReadOnlyForTag } from '@shared/connection-readonly';
 import {
   type ParsedConnectionUrl,
@@ -43,6 +49,7 @@ import {
   useState,
 } from 'react';
 import { CapsulePreview } from './CapsulePreview';
+import { ConnectionProblem, StageList } from './ConnectionProblem';
 import { SectionIndex } from './SectionIndex';
 import { ENGINE_DEFAULTS, isPlaceholderName } from './connection-defaults';
 import {
@@ -84,8 +91,8 @@ import { ENV_TAGS, type EnvTag, TAG_COLOR, TAG_LABEL } from './env-tags';
 type TestState =
   | { kind: 'idle' }
   | { kind: 'testing' }
-  | { kind: 'ok'; message: string }
-  | { kind: 'fail'; message: string };
+  | { kind: 'ok'; message: string; stages?: StageResult[]; warning?: ConnectDiagnosis }
+  | { kind: 'fail'; message: string; diagnosis?: ConnectDiagnosis; stages?: StageResult[] };
 
 const TLS_MODES: Exclude<TlsMode, 'insecure'>[] = [
   'disable',
@@ -132,6 +139,7 @@ export const ConnectionEditor = forwardRef<ConnectionEditorHandle, ConnectionEdi
   ) {
     const connectionState = useSession((s) => s.connectionState);
     const connectionError = useSession((s) => s.connectionError);
+    const connectionDiagnosis = useSession((s) => s.connectionDiagnosis);
     const connect = useSession((s) => s.connect);
     const testConnection = useSession((s) => s.testConnection);
     const closeDialog = useSession((s) => s.closeDialog);
@@ -155,6 +163,8 @@ export const ConnectionEditor = forwardRef<ConnectionEditorHandle, ConnectionEdi
     const [portText, setPortText] = useState(() => String(initial.port));
     const [test, setTest] = useState<TestState>({ kind: 'idle' });
     const [errors, setErrors] = useState<FormErrors>({});
+    /** The form as it was when the last test / connect ran: the flagged field is only flagged until it changes. */
+    const [flagAt, setFlagAt] = useState<string | null>(null);
     /** The store's connect error belongs to the last submit; hide it once the user edits. */
     const [showConnectError, setShowConnectError] = useState(false);
     const [urlOpen, setUrlOpen] = useState(false);
@@ -210,6 +220,40 @@ export const ConnectionEditor = forwardRef<ConnectionEditorHandle, ConnectionEdi
     });
     const baseline = useRef(snapshot);
     const dirty = snapshot !== baseline.current;
+
+    // ── what went wrong, in plain words (connect-diagnosis.ts) ──
+    const explain = (message: string): ConnectDiagnosis =>
+      diagnoseConnectError(
+        { message },
+        {
+          engine,
+          host: isFile ? form.database : form.host,
+          port: Number(portText) || form.port,
+          user: form.user || undefined,
+          database: form.database || undefined,
+          ssl: form.ssl,
+          ssh: useSsh,
+          secrets: [form.password, ssh.password, ssh.passphrase, ssh.privateKey],
+        },
+      );
+    const problem: { diagnosis: ConnectDiagnosis; stages?: StageResult[] } | null =
+      test.kind === 'fail'
+        ? { diagnosis: test.diagnosis ?? explain(test.message), stages: test.stages }
+        : test.kind === 'idle' && connectErrorVisible
+          ? { diagnosis: connectionDiagnosis ?? explain(connectionError ?? '') }
+          : null;
+    const flaggedField: ConnectField | undefined =
+      problem && flagAt === snapshot ? problem.diagnosis.field : undefined;
+    /** `aria-invalid` for a control the diagnosis points at. */
+    const flag = (id: string): true | undefined =>
+      isFlagged(id, flaggedField, engine) ? true : undefined;
+    const focusField = (field: ConnectField) => {
+      const el = document.getElementById(fieldElementId(field, engine));
+      if (!el) return;
+      // A closed section (the SSH card) opens with its switch; the control may not be there yet.
+      el.scrollIntoView({ block: 'center', behavior: 'auto' });
+      el.focus();
+    };
     useEffect(() => {
       onStatus({ name: form.name, dirty });
     }, [form.name, dirty, onStatus]);
@@ -366,13 +410,19 @@ export const ConnectionEditor = forwardRef<ConnectionEditorHandle, ConnectionEdi
         return;
       }
       setTest({ kind: 'testing' });
+      setFlagAt(snapshot);
       const started = performance.now();
       const res = await testConnection(currentConfig(), sshPayload());
       const ms = Math.round(performance.now() - started);
       setTest(
         res.ok
-          ? { kind: 'ok', message: `${res.message} · ${ms} ms` }
-          : { kind: 'fail', message: res.message },
+          ? {
+              kind: 'ok',
+              message: `${res.message} · ${ms} ms`,
+              stages: res.stages,
+              warning: res.warning,
+            }
+          : { kind: 'fail', message: res.message, diagnosis: res.diagnosis, stages: res.stages },
       );
     };
 
@@ -404,6 +454,7 @@ export const ConnectionEditor = forwardRef<ConnectionEditorHandle, ConnectionEdi
       if (!validate()) return;
       await persistSideSettings();
       setShowConnectError(true);
+      setFlagAt(snapshot);
       // On success the store leaves the Connections screen for the database.
       await connect(currentConfig());
     };
@@ -738,7 +789,7 @@ export const ConnectionEditor = forwardRef<ConnectionEditorHandle, ConnectionEdi
                         id="conn-file"
                         value={form.database}
                         readOnly
-                        aria-invalid={errors.database ? true : undefined}
+                        aria-invalid={errors.database || flag('conn-file') ? true : undefined}
                         placeholder="No file chosen"
                         className="font-mono"
                       />
@@ -760,7 +811,7 @@ export const ConnectionEditor = forwardRef<ConnectionEditorHandle, ConnectionEdi
                         <Input
                           id="conn-host"
                           value={form.host}
-                          aria-invalid={errors.host ? true : undefined}
+                          aria-invalid={errors.host || flag('conn-host') ? true : undefined}
                           onChange={(e) => update('host', e.target.value, 'host')}
                           placeholder={engine === 'opensearch' ? 'search.example.com' : 'localhost'}
                         />
@@ -769,7 +820,7 @@ export const ConnectionEditor = forwardRef<ConnectionEditorHandle, ConnectionEdi
                         <Input
                           id="conn-port"
                           value={portText}
-                          aria-invalid={errors.port ? true : undefined}
+                          aria-invalid={errors.port || flag('conn-port') ? true : undefined}
                           onChange={(e) => {
                             setPortText(e.target.value);
                             touched(['port']);
@@ -802,6 +853,7 @@ export const ConnectionEditor = forwardRef<ConnectionEditorHandle, ConnectionEdi
                         <Input
                           id="conn-db"
                           value={form.database}
+                          aria-invalid={flag('conn-db')}
                           onChange={(e) => update('database', e.target.value, 'database')}
                           placeholder={
                             engine === 'mysql'
@@ -818,7 +870,7 @@ export const ConnectionEditor = forwardRef<ConnectionEditorHandle, ConnectionEdi
                         <Input
                           id="conn-db"
                           value={form.database}
-                          aria-invalid={errors.database ? true : undefined}
+                          aria-invalid={errors.database || flag('conn-db') ? true : undefined}
                           onChange={(e) => update('database', e.target.value, 'database')}
                           placeholder="0"
                           inputMode="numeric"
@@ -856,6 +908,7 @@ export const ConnectionEditor = forwardRef<ConnectionEditorHandle, ConnectionEdi
                         <Input
                           id="conn-user"
                           value={form.user}
+                          aria-invalid={flag('conn-user')}
                           onChange={(e) => update('user', e.target.value)}
                           placeholder={engine === 'redis' ? '(leave empty for default)' : 'admin'}
                         />
@@ -865,6 +918,7 @@ export const ConnectionEditor = forwardRef<ConnectionEditorHandle, ConnectionEdi
                           id="conn-password"
                           type="password"
                           value={form.password}
+                          aria-invalid={flag('conn-password')}
                           onChange={(e) => update('password', e.target.value)}
                           placeholder={isEditing ? 'Saved — leave blank to keep' : '•••••••'}
                         />
@@ -891,6 +945,7 @@ export const ConnectionEditor = forwardRef<ConnectionEditorHandle, ConnectionEdi
                     >
                       <SelectTrigger
                         id="conn-ssl"
+                        aria-invalid={flag('conn-ssl')}
                         aria-label={tlsLabel}
                         className="h-[26px] text-[13px]"
                       >
@@ -971,7 +1026,7 @@ export const ConnectionEditor = forwardRef<ConnectionEditorHandle, ConnectionEdi
                       <Input
                         id="ssh-host"
                         value={ssh.host}
-                        aria-invalid={errors.sshHost ? true : undefined}
+                        aria-invalid={errors.sshHost || flag('ssh-host') ? true : undefined}
                         onChange={(e) => updateSsh('host', e.target.value, 'sshHost')}
                         placeholder="bastion.example.com"
                       />
@@ -980,7 +1035,7 @@ export const ConnectionEditor = forwardRef<ConnectionEditorHandle, ConnectionEdi
                       <Input
                         id="ssh-port"
                         value={ssh.port}
-                        aria-invalid={errors.sshPort ? true : undefined}
+                        aria-invalid={errors.sshPort || flag('ssh-port') ? true : undefined}
                         onChange={(e) => updateSsh('port', e.target.value, 'sshPort')}
                         placeholder="22"
                         inputMode="numeric"
@@ -990,7 +1045,7 @@ export const ConnectionEditor = forwardRef<ConnectionEditorHandle, ConnectionEdi
                       <Input
                         id="ssh-user"
                         value={ssh.user}
-                        aria-invalid={errors.sshUser ? true : undefined}
+                        aria-invalid={errors.sshUser || flag('ssh-user') ? true : undefined}
                         onChange={(e) => updateSsh('user', e.target.value, 'sshUser')}
                         placeholder="ubuntu"
                       />
@@ -1164,6 +1219,29 @@ export const ConnectionEditor = forwardRef<ConnectionEditorHandle, ConnectionEdi
           </div>
         </div>
 
+        {/* What went wrong in plain words, or the steps a good test went through */}
+        {problem && (
+          <ConnectionProblem
+            diagnosis={problem.diagnosis}
+            stages={problem.stages}
+            engine={engine}
+            onFocusField={focusField}
+          />
+        )}
+        {test.kind === 'ok' && test.warning && (
+          <ConnectionProblem
+            diagnosis={test.warning}
+            stages={test.stages}
+            tone="warning"
+            engine={engine}
+          />
+        )}
+        {test.kind === 'ok' && !test.warning && test.stages && test.stages.length > 0 && (
+          <div className="shrink-0 border-t border-[var(--wb-separator)] px-4 py-2">
+            <StageList stages={test.stages} />
+          </div>
+        )}
+
         {/* Sticky action bar */}
         <div className="flex shrink-0 items-center gap-3 border-t border-[var(--wb-separator)] bg-[var(--wb-window)] px-4 py-2.5">
           <div
@@ -1187,22 +1265,13 @@ export const ConnectionEditor = forwardRef<ConnectionEditorHandle, ConnectionEdi
                 </span>
               </>
             )}
-            {test.kind === 'fail' && (
+            {problem && (
               <span
                 className="line-clamp-2 text-[var(--destructive)]"
-                data-testid="conn-test-result"
-                title={describeConnectError(test.message, engine)}
+                data-testid={test.kind === 'fail' ? 'conn-test-result' : 'conn-connect-error'}
+                title={`${problem.diagnosis.title}. ${problem.diagnosis.detail}`}
               >
-                {describeConnectError(test.message, engine)}
-              </span>
-            )}
-            {test.kind === 'idle' && connectErrorVisible && (
-              <span
-                className="line-clamp-2 text-[var(--destructive)]"
-                data-testid="conn-connect-error"
-                title={describeConnectError(connectionError, engine)}
-              >
-                {describeConnectError(connectionError, engine)}
+                {problem.diagnosis.title}
               </span>
             )}
           </div>

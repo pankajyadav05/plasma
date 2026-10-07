@@ -1,5 +1,6 @@
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { ToolbarButton, ToolbarDivider, ToolbarGroup } from '@/components/ui/workbench';
+import { ConnectionProblem } from '@/features/connection-manager/ConnectionProblem';
 import {
   hostLabel,
   usePresentationWindowTitle,
@@ -7,6 +8,7 @@ import {
 } from '@/features/presentation/presentation';
 import { PendingEditsTable } from '@/features/result-grid/PendingEditsTable';
 import { cn } from '@/lib/cn';
+import { fieldElementId } from '@/lib/connect-problem';
 import { ENGINE_ICON, databaseLabel, shortServerVersion } from '@/lib/engine-meta';
 import { kbd } from '@/lib/platform';
 import { useReconnect } from '@/stores/reconnect';
@@ -595,6 +597,7 @@ function OfflineCapsule() {
   const attempt = useReconnect((s) => s.attempt);
   const nextAt = useReconnect((s) => s.nextAt);
   const lastError = useReconnect((s) => s.lastError);
+  const lastDiagnosis = useReconnect((s) => s.lastDiagnosis);
   const reconnectNow = useReconnect((s) => s.reconnectNow);
   const start = useReconnect((s) => s.start);
   const now = useNow(phase === 'waiting' ? 1000 : null);
@@ -603,6 +606,7 @@ function OfflineCapsule() {
   const last = !target ? savedConnections.find((c) => c.id === lastId) : undefined;
   const busy = phase === 'connecting' || connectionState === 'connecting';
   const name = target?.name ?? last?.name ?? activeConfig?.name;
+  const targetEngine = savedConnections.find((c) => c.id === target?.id)?.engine;
 
   let label: string;
   let dot: string;
@@ -619,8 +623,10 @@ function OfflineCapsule() {
     dot = 'bg-[var(--status-staging)]';
     onClick = () => void reconnectNow();
   } else if (target && phase === 'failed') {
-    label =
-      reason === 'launch'
+    // The cause in a few words when it is known; the "Why?" popover has the rest.
+    label = lastDiagnosis
+      ? `${target.name}: ${lastDiagnosis.title} — click to retry`
+      : reason === 'launch'
         ? `Couldn't connect to ${target.name} — click to retry`
         : `Couldn't reach ${target.name} — click to reconnect`;
     dot = 'bg-destructive';
@@ -651,7 +657,13 @@ function OfflineCapsule() {
         <button
           type="button"
           onClick={onClick}
-          title={lastError ? `${label}\n\nLast error: ${lastError}` : label}
+          title={
+            lastDiagnosis
+              ? `${label}\n\n${lastDiagnosis.detail}\n${lastDiagnosis.fixes[0] ?? ''}`.trim()
+              : lastError
+                ? `${label}\n\nLast error: ${lastError}`
+                : label
+          }
           className="-ml-1 flex min-w-0 flex-1 items-center rounded-full px-1 py-1 text-left hover:bg-black/10 dark:hover:bg-white/10"
           data-testid="reconnect-button"
         >
@@ -666,6 +678,38 @@ function OfflineCapsule() {
         <span className="flex min-w-0 flex-1 items-center" title={label}>
           {body}
         </span>
+      )}
+      {target && phase === 'failed' && lastDiagnosis && (
+        <Popover>
+          <PopoverTrigger asChild>
+            <button
+              type="button"
+              data-testid="reconnect-why"
+              className="ml-1 shrink-0 rounded-full px-2 py-0.5 font-sans text-[12px] font-medium opacity-80 hover:bg-black/10 hover:opacity-100 dark:hover:bg-white/10"
+            >
+              Why?
+            </button>
+          </PopoverTrigger>
+          <PopoverContent align="start" className="w-[26rem] p-0">
+            <ConnectionProblem
+              diagnosis={lastDiagnosis}
+              engine={targetEngine}
+              className="max-h-[60vh] border-t-0 bg-transparent"
+              onFocusField={(field) => {
+                // Open the connection's editor and put the cursor on the field to check.
+                void useSession
+                  .getState()
+                  .editConnection(target.id)
+                  .then(() =>
+                    window.setTimeout(
+                      () => document.getElementById(fieldElementId(field, targetEngine))?.focus(),
+                      250,
+                    ),
+                  );
+              }}
+            />
+          </PopoverContent>
+        </Popover>
       )}
       <ConnectionSwitcher
         trigger={

@@ -1,9 +1,12 @@
-import { ipc } from '@/lib/ipc';
 /**
  * Connection-lifecycle helpers for the session store (B2 / C15 / C21 / G2).
  * Kept out of session.ts so they can be unit-tested without the store.
  */
+import { readConnectError } from '@/lib/connect-problem';
+import { ipc } from '@/lib/ipc';
 import { suspendRecoveryJournal } from '@/lib/recovery-journal';
+import type { ConnectDiagnosis } from '@shared/connect-diagnosis';
+import type { StageResult } from '@shared/connect-stages';
 import type {
   ConnectionConfig,
   ConnectionEngine,
@@ -67,11 +70,22 @@ type SessionSet = (
   partial: Partial<SessionState> | ((s: SessionState) => Partial<SessionState>),
 ) => void;
 
+/** What "Test connection" shows: a line, the diagnosis of a failure or a note, and the steps it took. */
+export interface ConnectionTestOutcome {
+  ok: boolean;
+  message: string;
+  diagnosis?: ConnectDiagnosis;
+  warning?: ConnectDiagnosis;
+  stages?: StageResult[];
+}
+
 export interface ConnectionSlice {
   // ── connection ──
   activeConfig: ConnectionConfig | null;
   connectionState: ConnectionState;
   connectionError: string | null;
+  /** The failed connect in plain words, when main could explain it (see connect-diagnosis.ts). */
+  connectionDiagnosis: ConnectDiagnosis | null;
   serverVersion: string | null;
   /** Bumped on every (re)connect; stale results and approvals are checked against it. */
   connectionGen: number;
@@ -90,7 +104,7 @@ export interface ConnectionSlice {
   testConnection(
     config: ConnectionConfig,
     ssh?: ConnectionSshConfig | null,
-  ): Promise<{ ok: boolean; message: string }>;
+  ): Promise<ConnectionTestOutcome>;
   connect(config: ConnectionConfig): Promise<void>;
   disconnect(): Promise<void>;
   /** Clear local connection state after an unexpected worker restart (U20). */
@@ -113,6 +127,7 @@ export const createConnectionSlice: SliceCreator<ConnectionSlice> = (set, get) =
   activeConfig: null,
   connectionState: 'idle',
   connectionError: null,
+  connectionDiagnosis: null,
   serverVersion: null,
   connectionGen: 0,
   connectionActionGate: null,
@@ -124,11 +139,26 @@ export const createConnectionSlice: SliceCreator<ConnectionSlice> = (set, get) =
     try {
       const res = await ipc.conn.test(config, ssh);
       if (res.ok) {
-        return { ok: true, message: `Connected · ${shortVersion(res.serverVersion)}` };
+        return {
+          ok: true,
+          message: `Connected · ${shortVersion(res.serverVersion)}`,
+          stages: res.stages as StageResult[] | undefined,
+          warning: res.warning as ConnectDiagnosis | undefined,
+        };
       }
-      return { ok: false, message: res.message };
+      return {
+        ok: false,
+        message: res.message,
+        diagnosis: res.diagnosis as ConnectDiagnosis | undefined,
+        stages: res.stages as StageResult[] | undefined,
+      };
     } catch (err) {
-      return { ok: false, message: err instanceof Error ? err.message : String(err) };
+      const read = readConnectError(err);
+      return {
+        ok: false,
+        message: read.text,
+        ...(read.diagnosis ? { diagnosis: read.diagnosis } : {}),
+      };
     }
   },
 
@@ -140,7 +170,7 @@ export const createConnectionSlice: SliceCreator<ConnectionSlice> = (set, get) =
     // C12: one connect at a time — a second click or the reconnect timer
     // must not race the attempt already in flight.
     if (get().connectionState === 'connecting') return;
-    set({ connectionState: 'connecting', connectionError: null });
+    set({ connectionState: 'connecting', connectionError: null, connectionDiagnosis: null });
     try {
       const { serverVersion, engine, connectionGen } = await ipc.conn.connect(config);
       const eff = (engine ?? config.engine ?? 'postgres') as ConnectionEngine;
@@ -163,7 +193,7 @@ export const createConnectionSlice: SliceCreator<ConnectionSlice> = (set, get) =
       return;
     }
     if (get().connectionState === 'connecting') return; // C12
-    set({ connectionState: 'connecting', connectionError: null });
+    set({ connectionState: 'connecting', connectionError: null, connectionDiagnosis: null });
     try {
       const { info, config } = await ipc.vault.connectById(id);
       const eff = (info.engine ?? config.engine ?? 'postgres') as ConnectionEngine;
@@ -208,6 +238,7 @@ export const createConnectionSlice: SliceCreator<ConnectionSlice> = (set, get) =
       serverVersion: null,
       connectionState: 'idle',
       connectionError: null,
+      connectionDiagnosis: null,
     });
     // Clear all tabs' results since they reference a now-dead connection
     clearTabResults(set, { queryRunState: 'idle', queryRunningRange: null, queryErrorRange: null });
@@ -226,6 +257,7 @@ export const createConnectionSlice: SliceCreator<ConnectionSlice> = (set, get) =
     set({
       connectionState: 'connected',
       connectionError: null,
+      connectionDiagnosis: null,
       serverVersion: recovered.serverVersion,
       connectionGen: recovered.connectionGen,
       txnState: 'none',
@@ -418,6 +450,15 @@ function beginSession(
  * C21: main dropped the old session before dialling (the worker tore it
  * down), so the UI must stop showing it as live.
  */
+/** The error text and diagnosis a failed connect leaves in the store. */
+export function connectionFailure(err: unknown): {
+  connectionError: string;
+  connectionDiagnosis: ConnectDiagnosis | null;
+} {
+  const read = readConnectError(err);
+  return { connectionError: read.text, connectionDiagnosis: read.diagnosis };
+}
+
 function failConnect(set: SessionSet, err: unknown): void {
   set({
     ...freshSessionPatch(),
@@ -425,7 +466,7 @@ function failConnect(set: SessionSet, err: unknown): void {
     serverVersion: null,
     connectionGen: 0,
     connectionState: 'error',
-    connectionError: err instanceof Error ? err.message : String(err),
+    ...connectionFailure(err),
   });
   useWorkbench.getState().setInspectedRow(null);
   // R-07: requests in flight on the old session are dropped as stale and
