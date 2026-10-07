@@ -1,6 +1,6 @@
 import { resolve } from 'node:path';
-import { defineConfig, externalizeDepsPlugin } from 'electron-vite';
 import react from '@vitejs/plugin-react';
+import { defineConfig, externalizeDepsPlugin } from 'electron-vite';
 import type { Plugin } from 'vite';
 
 /**
@@ -30,12 +30,15 @@ export default defineConfig({
     },
     build: {
       rollupOptions: {
-        // Two entry points built into out/main/ :
+        // Three entry points built into out/main/ :
         //   - index.js         (Electron main process)
         //   - workers/index.js (DB utilityProcess worker)
+        //   - mcp-bridge.js    (stdio MCP bridge: plain Node, no Electron APIs;
+        //                       `plasma mcp` runs it through the app binary)
         // Main spawns the worker via join(__dirname, 'workers/index.js').
         input: {
           index: resolve(__dirname, 'src/main/index.ts'),
+          'mcp-bridge': resolve(__dirname, 'src/main/mcp/bridge.ts'),
           'workers/index': resolve(__dirname, 'src/workers/index.ts'),
         },
       },
