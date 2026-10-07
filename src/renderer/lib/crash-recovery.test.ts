@@ -3,6 +3,7 @@ import { type RecoveryJournal, parseJournal } from '@shared/recovery';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   fromRecoveredEdit,
+  onRecoveryTargetChanged,
   pickJournalToResume,
   recoveryNotice,
   resetPendingRecoveries,
@@ -86,7 +87,7 @@ describe('toRecoveredEdit / fromRecoveredEdit', () => {
     expect(back.rowKey).toBeUndefined();
   });
 
-  it('keeps the "unguarded" choice', () => {
+  it('never persists "unguarded": a restored edit is always compared again', () => {
     const back = fromRecoveredEdit(
       toRecoveredEdit(edit({ unguarded: true }), 0),
       't',
@@ -94,7 +95,8 @@ describe('toRecoveredEdit / fromRecoveredEdit', () => {
       'i',
       rowKeyOf,
     );
-    expect(back.unguarded).toBe(true);
+    expect(back.unguarded).toBeUndefined();
+    expect(toRecoveredEdit(edit({ unguarded: true }), 0)).not.toHaveProperty('unguarded');
   });
 
   it('what it writes is accepted by the journal parser', () => {
@@ -194,6 +196,7 @@ describe('pending snapshots', () => {
     setPendingRecoveries({
       unclean: true,
       cause: 'exit',
+      announce: [],
       journals: [j('a', 1), j('b', 2)],
       hasLog: false,
     });
@@ -208,5 +211,81 @@ describe('pending snapshots', () => {
     const all = [j('old', 1), j('gone', 9), j('new', 5)];
     expect(pickJournalToResume(all, (id) => id !== 'gone')?.connectionId).toBe('new');
     expect(pickJournalToResume(all, () => false)).toBeNull();
+  });
+});
+
+describe('more notices (P2-3, P2-1, P2-7)', () => {
+  it('says edits from an interrupted commit may already be saved', () => {
+    const n = recoveryNotice({
+      cause: 'exit',
+      tabs: 1,
+      edits: 3,
+      txnActive: false,
+      maybeCommitted: 2,
+    });
+    expect(n.detail).toContain(
+      '2 edits were being committed when Plasma stopped and may already be saved',
+    );
+    expect(n.detail).toContain('Check the data before committing');
+    expect(n.detail).not.toContain('not committed until you commit');
+  });
+
+  it('names what could not be saved: edits and over-size SQL tabs', () => {
+    const n = recoveryNotice({
+      cause: 'exit',
+      tabs: 2,
+      edits: 1,
+      txnActive: false,
+      omitted: { tabs: ['huge.sql'], edits: 2 },
+    });
+    expect(n.detail).toContain('2 edits could not be saved');
+    expect(n.detail).toContain('1 SQL tab (huge.sql) was too large to save');
+  });
+
+  it('a leftover snapshot restored on a clean launch is not called a crash', () => {
+    expect(recoveryNotice({ cause: null, tabs: 1, edits: 0, txnActive: false }).title).toBe(
+      'Restored unsaved work from an earlier session',
+    );
+  });
+
+  it('maybeCommitted survives the round trip', () => {
+    const r = toRecoveredEdit(edit({ maybeCommitted: true }), 0);
+    expect(r.maybeCommitted).toBe(true);
+    expect(fromRecoveredEdit(r, 't', 1, 'i', rowKeyOf).maybeCommitted).toBe(true);
+  });
+});
+
+describe('a snapshot taken against another target (P2-6)', () => {
+  afterEach(resetPendingRecoveries);
+  const target = { engine: 'postgres', host: 'h', port: 5432, database: 'prod', user: 'u' };
+  const j = (): RecoveryJournal => ({
+    v: 1,
+    savedAt: 1,
+    connectionId: 'c',
+    txnActive: false,
+    target,
+    strip: { v: 1, activeIndex: 0, tabs: [] },
+    edits: [],
+  });
+  const info = () => ({
+    unclean: true,
+    cause: 'exit' as const,
+    journals: [j()],
+    announce: [],
+    hasLog: false,
+  });
+
+  it('is applied when the connection still points at the same place', () => {
+    setPendingRecoveries(info());
+    expect(takeRecoveryFor('c', { ...target })).not.toBeNull();
+  });
+
+  it('is never applied when host or database changed; the shell is told instead', () => {
+    const seen: RecoveryJournal[] = [];
+    onRecoveryTargetChanged((x) => seen.push(x));
+    setPendingRecoveries(info());
+    expect(takeRecoveryFor('c', { ...target, database: 'staging' })).toBeNull();
+    expect(seen).toHaveLength(1);
+    onRecoveryTargetChanged(null);
   });
 });

@@ -80,23 +80,23 @@ suite('postgres driver (live): txn state, edits, explain, types', () => {
     const res = await driver.commitEditBatch(1, [
       { sql: 'UPDATE plasma_live_t SET v = $1 WHERE id = $2', params: ['z', '1'] },
     ]);
-    expect(res).toEqual({ state: 'active', applied: 1 });
+    expect(res).toEqual({ state: 'active', applied: 1, conflicts: [] });
     await driver.query('ROLLBACK');
     const after = await driver.query('SELECT v FROM plasma_live_t WHERE id = 1');
     expect(after.rows[0]?.[0]).toBe('a');
   });
 
   it('edit batch with a 0-row UPDATE rolls back everything', async () => {
-    await expect(
-      driver.commitEditBatch(1, [
-        { sql: 'UPDATE plasma_live_t SET v = $1 WHERE id = $2', params: ['x', '2'] },
-        {
-          sql: 'UPDATE plasma_live_t SET v = $1 WHERE id = $2',
-          params: ['x', '99'],
-          label: 'id=99',
-        },
-      ]),
-    ).rejects.toThrow(/Edit 2 of 2 \(id=99\) matched no row/);
+    const res = await driver.commitEditBatch(1, [
+      { sql: 'UPDATE plasma_live_t SET v = $1 WHERE id = $2', params: ['x', '2'] },
+      {
+        sql: 'UPDATE plasma_live_t SET v = $1 WHERE id = $2',
+        params: ['x', '99'],
+        label: 'id=99',
+      },
+    ]);
+    expect(res.applied).toBe(0);
+    expect(res.conflicts).toEqual([{ index: 1, reason: 'no-match' }]);
     const after = await driver.query('SELECT v FROM plasma_live_t WHERE id = 2');
     expect(after.rows[0]?.[0]).toBe('b');
     expect(driver.getTxnState()).toBe('none');

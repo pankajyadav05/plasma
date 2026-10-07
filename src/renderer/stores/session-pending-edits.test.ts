@@ -160,6 +160,23 @@ describe('buildEditBatch: concurrent-edit guards (B1)', () => {
     expect(updates[0]?.sql).toBe('UPDATE "public"."users" SET "email" = $1 WHERE "id" = $2');
   });
 
+  it('does not compare floats on Postgres before 12 (they print rounded)', () => {
+    const f = upd({ column: 'f', oldValue: '0.1', oldType: 'float8', newValue: '0.2' });
+    expect(
+      buildEditBatch([f], dialectFor('postgres'), { serverVersion: 'PostgreSQL 11.9' }).updates[0]
+        ?.sql,
+    ).not.toContain('DISTINCT');
+    expect(
+      buildEditBatch([f], dialectFor('postgres'), { serverVersion: 'PostgreSQL 16.2' }).updates[0]
+        ?.sql,
+    ).toContain('DISTINCT');
+  });
+
+  it('a column the server flags as not comparable is skipped', () => {
+    const e = upd({ column: 'c', oldValue: '(1,2)', oldType: 'pt', oldNoEquality: true });
+    expect(buildEditBatch([e]).updates[0]?.sql).not.toContain('DISTINCT');
+  });
+
   it('spells the guard per dialect', () => {
     const mysql = buildEditBatch([upd()], dialectFor('mysql')).updates[0]!;
     expect(mysql.sql).toBe(

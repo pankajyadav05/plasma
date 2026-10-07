@@ -50,6 +50,29 @@ describe('planGuard', () => {
   });
 });
 
+describe('planGuard: types that cannot be compared (P1-2, P1-3, P2-5)', () => {
+  it('postgres: json arrays, jsonpath, snapshots and anything the server flags are skipped', () => {
+    for (const t of ['_json', 'json[]', 'jsonpath', '_jsonpath', 'pg_snapshot', 'txid_snapshot']) {
+      expect(planGuard('postgres', t, 'x'), t).toBe('skip');
+    }
+    expect(planGuard('postgres', 'mycomposite', '(1,2)', true)).toBe('skip');
+    expect(planGuard('postgres', 'mycomposite[]', '{}', true)).toBe('skip');
+    expect(planGuard('postgres', 'mydomain', 'x', undefined)).toBe('eq');
+  });
+  it('postgres: json numbers JavaScript cannot hold exactly are not compared', () => {
+    expect(planGuard('postgres', 'jsonb', '{"a":12345678901234567890}')).toBe('skip');
+    expect(planGuard('postgres', 'jsonb', '{"a":"12345678901234567890"}')).toBe('skip');
+    expect(planGuard('postgres', 'jsonb', '{"a":123}')).toBe('eq');
+  });
+  it('sqlite and mysql: binary is skipped whatever the column is called', () => {
+    expect(planGuard('sqlite', 'bytea', '\\xdeadbeef')).toBe('skip');
+    expect(planGuard('sqlite', 'text', '\\x00')).toBe('skip');
+    expect(planGuard('sqlite', '', '\\x00')).toBe('skip');
+    expect(planGuard('mysql', 'text', '\\x00ff')).toBe('skip');
+    expect(planGuard('sqlite', 'text', 'plain')).toBe('eq');
+  });
+});
+
 describe('guardPredicate', () => {
   it('postgres', () => {
     const d = dialectFor('postgres');

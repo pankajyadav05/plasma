@@ -37,10 +37,18 @@ export interface GuardValue {
   column: string;
   value: string | null;
   type?: string;
+  /** The server says this type has no usable `=` (composite, json[], …): never compared. */
+  noEquality?: boolean;
 }
 
-// Postgres types without an `=` operator.
+// Postgres types without an `=` operator (arrays of them included), or whose
+// equality is not "same value" (box compares area). Custom types are decided by
+// the server (`ColumnMeta.noEquality`).
 const PG_SKIP = new Set([
+  'jsonpath',
+  'pg_snapshot',
+  'txid_snapshot',
+  'refcursor',
   'xml',
   'point',
   'lseg',
@@ -55,16 +63,27 @@ const PG_SKIP = new Set([
 const MYSQL_SKIP =
   /^(json|float|double|real|bit|geometry|point|linestring|polygon|multi\w+|geometrycollection|\w*blob|binary|varbinary)$/;
 // SQLite: REAL round-trips as text with a different spelling, blobs arrive as hex text.
-const SQLITE_SKIP = /^(real|float|double|double precision|blob)$/;
+const SQLITE_SKIP = /^(real|float|double|double precision|blob|bytea)$/;
+// Binary values reach the grid as `\\x…` text whatever the column is declared as.
+const HEX_BLOB = /^\\x[0-9a-fA-F]*$/;
+// A JSON number that JavaScript cannot hold exactly arrives as a string, so the
+// text the grid has is not the text the server holds.
+const BIG_JSON_NUMBER = /\d{16,}/;
 
-function baseType(type: string | undefined): string {
+function parseType(type: string | undefined): { base: string; array: boolean } {
   let t = (type ?? '')
     .toLowerCase()
     .replace(/\(.*\)/, '')
     .trim();
-  if (t.endsWith('[]')) t = t.slice(0, -2);
-  else if (t.startsWith('_')) t = t.slice(1);
-  return t;
+  let array = false;
+  if (t.endsWith('[]')) {
+    t = t.slice(0, -2);
+    array = true;
+  } else if (t.startsWith('_')) {
+    t = t.slice(1);
+    array = true;
+  }
+  return { base: t, array };
 }
 
 /** How (or whether) to compare one original value on `engine`. */
@@ -72,16 +91,24 @@ export function planGuard(
   engine: SqlDialect['engine'],
   type: string | undefined,
   value: string | null,
+  noEquality?: boolean,
 ): GuardPlan {
+  if (noEquality) return 'skip';
   if (value !== null && value.length > MAX_GUARD_CHARS) return 'skip';
-  const t = baseType(type);
+  const { base: t, array } = parseType(type);
   switch (engine) {
     case 'postgres':
-      if (t === 'json') return 'json-cast';
-      return PG_SKIP.has(t) ? 'skip' : 'eq';
+      if (PG_SKIP.has(t)) return 'skip';
+      if (t === 'json') return array ? 'skip' : 'json-cast';
+      if ((t === 'jsonb' || t === 'json') && value !== null && BIG_JSON_NUMBER.test(value)) {
+        return 'skip';
+      }
+      return 'eq';
     case 'mysql':
+      if (value !== null && HEX_BLOB.test(value)) return 'skip';
       return MYSQL_SKIP.test(t) ? 'skip' : 'eq';
     case 'sqlite':
+      if (value !== null && HEX_BLOB.test(value)) return 'skip';
       return SQLITE_SKIP.test(t) ? 'skip' : 'eq';
     default:
       return 'skip';
@@ -121,7 +148,7 @@ export function buildGuardClauses(
 ): string[] {
   const out: string[] = [];
   for (const g of guards ?? []) {
-    const plan = planGuard(dialect.engine, g.type, g.value);
+    const plan = planGuard(dialect.engine, g.type, g.value, g.noEquality);
     if (plan === 'skip') continue;
     out.push(guardPredicate(dialect, g.column, plan, addParam(g.value)));
   }

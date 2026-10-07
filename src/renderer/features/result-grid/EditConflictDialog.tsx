@@ -65,6 +65,8 @@ function headline(item: EditConflict): string {
       return `${what} was changed by someone else`;
     case 'gone':
       return `${what} no longer exists`;
+    case 'maybe-saved':
+      return `A new row in ${item.schema}.${item.table} may already be saved: Plasma stopped while it was being committed. Check the table before adding it again`;
     case 'duplicate':
       return `A new row in ${item.schema}.${item.table} uses a key that already exists`;
     default:

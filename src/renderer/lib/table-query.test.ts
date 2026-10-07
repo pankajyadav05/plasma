@@ -1,3 +1,4 @@
+import { dialectFor } from '@shared/sql-dialect';
 import { describe, expect, it } from 'vitest';
 import {
   type BuildInput,
@@ -7,6 +8,7 @@ import {
   buildDataSql,
   buildDeleteSql,
   buildEstimatedCountSql,
+  buildRowLookupSql,
   buildUpdateSql,
   quoteIdent,
   splitFilterList,
@@ -427,5 +429,17 @@ describe('ClickHouse and DuckDB table tabs', async () => {
       }).sql,
     ).toBe('SELECT COUNT(*) FROM "pg_prod"."public"."users"');
     expect(() => buildEstimatedCountSql('main', 't', DUCKDB_DIALECT)).toThrow();
+  });
+});
+
+describe('buildRowLookupSql', () => {
+  it('reads the current committed row inside a MySQL transaction', () => {
+    const base = { schema: 'app', table: 't', pkValues: { id: '1' } };
+    const my = dialectFor('mysql');
+    expect(buildRowLookupSql({ ...base, currentRead: true, dialect: my }).sql).toBe(
+      'SELECT * FROM `app`.`t` WHERE `id` = $1 LIMIT 2 LOCK IN SHARE MODE',
+    );
+    expect(buildRowLookupSql({ ...base, dialect: my }).sql).not.toContain('SHARE');
+    expect(buildRowLookupSql({ ...base, currentRead: true }).sql).not.toContain('SHARE');
   });
 });

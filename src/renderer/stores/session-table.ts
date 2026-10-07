@@ -54,6 +54,8 @@ export interface TableSlice {
   pendingEditsBusy: boolean;
   /** Last commit failure: Postgres message + the edits whose statement failed. */
   pendingEditsError: PendingEditsError | null;
+  /** Ids of the edits whose commit is in flight right now (written to the crash snapshot). */
+  commitInFlightIds: string[];
   /** Rows that changed on the server since they were loaded, found by the last commit (B1). */
   editConflicts: { tabId: string; items: EditConflict[] } | null;
   /** The conflict review dialog is showing. */
@@ -128,6 +130,7 @@ export const createTableSlice: SliceCreator<TableSlice> = (set, get) => ({
   pendingEditsByTab: {},
   pendingEditsBusy: false,
   pendingEditsError: null,
+  commitInFlightIds: [],
   editConflicts: null,
   editConflictsOpen: false,
 

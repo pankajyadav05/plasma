@@ -86,6 +86,16 @@ suite('postgres concurrent-edit detection (live)', () => {
         '2026-01-01', '2026-01-01 00:00:00.123456', '2026-01-01 00:00:00+00',
         '00000000-0000-0000-0000-000000000000', '{"a":1}', '{"a":  1}', '\\x0001',
         '{1,2}', '{x,"y z"}', '1 day', 'happy', NULL, '(1,2)');
+      CREATE TYPE pt AS (a int, p point);
+      CREATE DOMAIN pt_dom AS pt;
+      CREATE DOMAIN jarr_dom AS json[];
+      CREATE TABLE exotic (
+        id int PRIMARY KEY, jsa json[], comp pt, jp jsonpath, snap pg_snapshot, txs txid_snapshot,
+        cdom pt_dom, jdom jarr_dom, comps pt[], jbig jsonb, v text
+      );
+      INSERT INTO exotic VALUES (1, ARRAY['{"a":1}'::json], ROW(1,'(1,2)')::pt, '$.a', '10:20:'::pg_snapshot,
+        '10:20:'::txid_snapshot, ROW(2,'(3,4)')::pt, ARRAY['{"b":2}'::json], ARRAY[ROW(1,'(1,2)')::pt],
+        '{"n": 12345678901234567890}', 'x');
       CREATE TABLE kv (a int, b int, v text, PRIMARY KEY (a, b));
       INSERT INTO kv VALUES (1, 1, 'one'), (1, 2, 'two'), (2, 1, 'three');
       CREATE TABLE people (id int PRIMARY KEY, name text UNIQUE);
@@ -121,6 +131,7 @@ suite('postgres concurrent-edit detection (live)', () => {
       column,
       value: cellToText(row[idx], columns[idx]?.dataTypeName),
       type: columns[idx]?.dataTypeName,
+      noEquality: columns[idx]?.noEquality,
     };
     const { sql, params } = buildUpdateSql({
       schema: 'public',
@@ -216,6 +227,7 @@ suite('postgres concurrent-edit detection (live)', () => {
         column: c.name,
         value: cellToText(row[i], c.dataTypeName),
         type: c.dataTypeName,
+        noEquality: c.noEquality,
       }));
       const { sql, params } = buildDeleteSql({
         schema: 'public',
@@ -285,5 +297,53 @@ suite('postgres concurrent-edit detection (live)', () => {
     expect(sql).not.toContain('IS NOT DISTINCT');
     const r = await drv.commitEditBatch(1, [{ sql, params: params as unknown[], kind: 'update' }]);
     expect(r.applied).toBe(1);
+  });
+
+  const exoticGuards = async (): Promise<GuardValue[]> => {
+    const { columns, row } = await load('exotic', 'id = 1');
+    return columns.map((c, i) => ({
+      column: c.name,
+      value: cellToText(row[i], c.dataTypeName),
+      type: c.dataTypeName,
+      noEquality: c.noEquality,
+    }));
+  };
+
+  it('the server flags composites, domains over them, arrays of them and json[] (P1-2)', async () => {
+    const { columns } = await load('exotic', 'id = 1');
+    const flagged = columns.filter((c) => c.noEquality).map((c) => c.name);
+    expect(flagged).toEqual(expect.arrayContaining(['comp', 'cdom', 'comps']));
+  });
+
+  it('a DELETE guarded on every column of a table with such types commits instead of erroring (P1-2)', async () => {
+    const { sql, params } = buildDeleteSql({
+      schema: 'public',
+      table: 'exotic',
+      pkValues: { id: '1' },
+      guards: await exoticGuards(),
+      dialect: POSTGRES_DIALECT,
+    });
+    const r = await drv.commitEditBatch(1, [{ sql, params: params as unknown[], kind: 'delete' }]);
+    expect(r).toMatchObject({ applied: 1, conflicts: [] });
+    await other.query("INSERT INTO exotic (id, jbig, v) VALUES (1, $1, 'x')", [
+      '{"n": 12345678901234567890}',
+    ]);
+  });
+
+  it('jsonb holding integers beyond 2^53 never raises a false conflict (P2-5)', async () => {
+    const { columns, row } = await load('exotic', 'id = 1');
+    const i = columns.findIndex((c) => c.name === 'jbig');
+    const { sql, params } = buildUpdateSql({
+      schema: 'public',
+      table: 'exotic',
+      set: { jbig: '{"n": 1}' },
+      pkValues: { id: '1' },
+      guards: [
+        { column: 'jbig', value: cellToText(row[i], columns[i]?.dataTypeName), type: 'jsonb' },
+      ],
+      dialect: POSTGRES_DIALECT,
+    });
+    const r = await drv.commitEditBatch(1, [{ sql, params: params as unknown[], kind: 'update' }]);
+    expect(r.conflicts).toEqual([]);
   });
 });

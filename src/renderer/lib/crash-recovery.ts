@@ -1,5 +1,11 @@
 import type { PendingEdit } from '@/stores/session-types';
-import type { RecoveredEdit, RecoveryJournal, RecoveryLaunchInfo } from '@shared/recovery';
+import {
+  type RecoveredEdit,
+  type RecoveryJournal,
+  type RecoveryLaunchInfo,
+  type SnapshotTarget,
+  sameTarget,
+} from '@shared/recovery';
 
 /**
  * Crash recovery, renderer side, pure parts (B2). What gets written down
@@ -37,18 +43,20 @@ export function toRecoveredEdit(e: PendingEdit, tabIndex: number): RecoveredEdit
     // text form lives in `originalRow`.
     oldValue: kind === 'delete' ? null : textOrNull(e.oldValue),
     ...(e.oldType ? { oldType: e.oldType } : {}),
+    ...(e.oldNoEquality ? { oldNoEquality: true } : {}),
     ...(e.originalRow
       ? {
           originalRow: e.originalRow.map((c) => ({
             column: c.column,
             value: c.value,
             ...(c.type ? { type: c.type } : {}),
+            ...(c.noEquality ? { noEquality: true } : {}),
           })),
         }
       : {}),
     newValue: e.newValue,
     ...(e.values ? { values: textMap(e.values) } : {}),
-    ...(e.unguarded ? { unguarded: true } : {}),
+    ...(e.maybeCommitted ? { maybeCommitted: true } : {}),
   };
 }
 
@@ -71,10 +79,11 @@ export function fromRecoveredEdit(
     column: r.column,
     oldValue: r.oldValue,
     ...(r.oldType ? { oldType: r.oldType } : {}),
+    ...(r.oldNoEquality ? { oldNoEquality: true } : {}),
     ...(r.originalRow ? { originalRow: r.originalRow } : {}),
     newValue: r.newValue,
     ...(r.values ? { values: r.values } : {}),
-    ...(r.unguarded ? { unguarded: true } : {}),
+    ...(r.maybeCommitted ? { maybeCommitted: true } : {}),
     rowIndex: -1,
     columnIndex: -1,
     connectionGen,
@@ -133,6 +142,10 @@ export function recoveryNotice(input: {
   tabs: number;
   edits: number;
   txnActive: boolean;
+  /** Edits restored from a commit that was in flight when Plasma stopped. */
+  maybeCommitted?: number;
+  /** What the snapshot could not hold. */
+  omitted?: { tabs: string[]; edits: number };
 }): RecoveryNotice {
   const parts: string[] = [];
   const restored: string[] = [];
@@ -146,12 +159,30 @@ export function recoveryNotice(input: {
       'Your open transaction was rolled back, so its changes are gone. Run it again if you still need them.',
     );
   }
-  if (input.edits > 0) parts.push('Staged edits are not committed until you commit them.');
+  if (input.maybeCommitted) {
+    parts.push(
+      `${plural(input.maybeCommitted, 'edit')} ${input.maybeCommitted === 1 ? 'was' : 'were'} being committed when Plasma stopped and may already be saved. Check the data before committing.`,
+    );
+  } else if (input.edits > 0) {
+    parts.push('Staged edits are not committed until you commit them.');
+  }
+  if (input.omitted && input.omitted.edits > 0) {
+    parts.push(
+      `${plural(input.omitted.edits, 'edit')} could not be saved and ${input.omitted.edits === 1 ? 'is' : 'are'} lost.`,
+    );
+  }
+  if (input.omitted && input.omitted.tabs.length > 0) {
+    parts.push(
+      `${plural(input.omitted.tabs.length, 'SQL tab')} (${input.omitted.tabs.slice(0, 3).join(', ')}) ${input.omitted.tabs.length === 1 ? 'was' : 'were'} too large to save.`,
+    );
+  }
   return {
     title:
       input.cause === 'renderer'
         ? 'The Plasma window crashed and was reloaded'
-        : 'Plasma closed unexpectedly',
+        : input.cause === null
+          ? 'Restored unsaved work from an earlier session'
+          : 'Plasma closed unexpectedly',
     detail: parts.join(' '),
   };
 }
@@ -187,12 +218,28 @@ export function setPendingRecoveries(info: RecoveryLaunchInfo): void {
 }
 
 /** The snapshot for this connection, once. */
-export function takeRecoveryFor(connectionId: string | null): RecoveryJournal | null {
+export function takeRecoveryFor(
+  connectionId: string | null,
+  target?: SnapshotTarget | null,
+): RecoveryJournal | null {
   if (!connectionId || taken.has(connectionId)) return null;
   const found = pending.find((j) => j.connectionId === connectionId);
   if (!found) return null;
   taken.add(connectionId);
+  // The saved connection now points somewhere else (another host or database): the
+  // staged edits were made against different data, so they are never applied here.
+  if (found.target && target && !sameTarget(found.target, target)) {
+    targetChangedHandler?.(found);
+    return null;
+  }
   return found;
+}
+
+let targetChangedHandler: ((journal: RecoveryJournal) => void) | null = null;
+
+/** The app shell registers what to do with a snapshot taken against another target. */
+export function onRecoveryTargetChanged(handler: ((j: RecoveryJournal) => void) | null): void {
+  targetChangedHandler = handler;
 }
 
 export function recoveryContext(): { cause: RecoveryLaunchInfo['cause']; hasLog: boolean } {
@@ -216,6 +263,24 @@ export function pickJournalToResume(
     [...journals].sort((a, b) => b.savedAt - a.savedAt).find((j) => canResume(j.connectionId)) ??
     null
   );
+}
+
+// ─── Flush before a commit leaves ────────────────────────────────────
+
+let beforeCommit: (() => Promise<unknown>) | null = null;
+
+/** The app shell registers what must be on disk before a commit request is sent. */
+export function setBeforeCommitHook(fn: (() => Promise<unknown>) | null): void {
+  beforeCommit = fn;
+}
+
+/** Never blocks or fails a commit: the snapshot is a safety net, not a gate. */
+export async function runBeforeCommitHook(): Promise<void> {
+  try {
+    await beforeCommit?.();
+  } catch {
+    // the commit goes ahead
+  }
 }
 
 // ─── Restored notification ───────────────────────────────────────────

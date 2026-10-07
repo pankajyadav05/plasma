@@ -719,6 +719,11 @@ export const ColumnMeta = z.object({
   name: z.string(),
   dataTypeID: z.number().int(),
   dataTypeName: z.string(),
+  /**
+   * Postgres: the type (or its base / element type) has no usable `=` (composites,
+   * json arrays, domains over them…), so a grid commit cannot compare it. Only set when true.
+   */
+  noEquality: z.literal(true).optional(),
 });
 export type ColumnMeta = z.infer<typeof ColumnMeta>;
 
@@ -2813,11 +2818,12 @@ export interface PlasmaAPI {
   /** B2: crash recovery. */
   recovery: {
     /** Debounced snapshots; `null` clears (deliberate disconnect). Not awaited. */
-    save(journal: import('./recovery').RecoveryJournal | null): void;
+    save(journal: import('./recovery').RecoveryJournal | null, durable?: boolean): void;
     /** Resolves once the snapshot is durably on disk; false when main refused it. */
     flush(journal: import('./recovery').RecoveryJournal | null): Promise<boolean>;
     launchInfo(): Promise<import('./recovery').RecoveryLaunchInfo>;
-    resolve(connectionId?: string): Promise<void>;
+    /** `keepAsRestored`: the restored state could not be written down; set the snapshot aside instead of deleting it. */
+    resolve(connectionId?: string, keepAsRestored?: boolean): Promise<void>;
     showLog(): Promise<void>;
   };
   /** D1: team workspaces (`.plasma/` folders). */

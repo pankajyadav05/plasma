@@ -12,13 +12,15 @@ import type { PendingEdit } from '@/stores/session-types';
 /** What the worker reports: statement `index` (of the batch) matched no row, or an INSERT hit a unique key. */
 export interface WorkerConflict {
   index: number;
-  reason: 'no-match' | 'duplicate';
+  /** `maybe-saved`: a restored INSERT that was in flight when Plasma stopped and cannot be checked. */
+  reason: 'no-match' | 'duplicate' | 'maybe-saved';
 }
 
 export interface TheirsCell {
   column: string;
   value: string | null;
   type?: string;
+  noEquality?: boolean;
 }
 
 /** The server's current row for a key. */
@@ -45,6 +47,8 @@ export type ConflictKind =
   | 'gone'
   /** An INSERT collides with an existing key. */
   | 'duplicate'
+  /** A restored INSERT may already have been saved before Plasma stopped. */
+  | 'maybe-saved'
   /** The current row could not be read; nothing can be compared. */
   | 'unknown';
 
@@ -108,11 +112,11 @@ export function buildConflicts(input: {
       rowLabel: rowLabelOf(first),
       editIds: ids,
     };
-    if (op === 'insert' || c.reason === 'duplicate') {
+    if (op === 'insert' || c.reason !== 'no-match') {
       out.push({
         ...base,
         id: `insert:${first.id}`,
-        kind: 'duplicate',
+        kind: c.reason === 'maybe-saved' ? 'maybe-saved' : 'duplicate',
         columns: Object.entries(first.values ?? {}).map(([column, value]) => ({
           column,
           original: undefined,
@@ -198,28 +202,42 @@ export function keepMine(edits: readonly PendingEdit[], c: EditConflict): Pendin
   const theirs = c.theirsRow ?? [];
   const theirsOf = (column: string) => theirs.find((t) => t.column === column);
   const mine = new Set(c.editIds);
+  const group = edits.filter((e) => mine.has(e.id));
+  // Row level: only when NOTHING visibly differs anywhere in the row is the
+  // comparison itself the problem, and only then is it switched off (for this
+  // session; it is never written to the crash snapshot).
+  const invisible = group.every((e) => {
+    if (kindOf(e) === 'update') {
+      const t = theirsOf(e.column);
+      return !t || asText(e.oldValue) === t.value;
+    }
+    if (kindOf(e) === 'delete') {
+      const before = e.originalRow ?? [];
+      return (
+        before.length === theirs.length &&
+        before.every((b) => theirsOf(b.column)?.value === b.value)
+      );
+    }
+    return true;
+  });
   return edits.map((e) => {
     if (!mine.has(e.id)) return e;
     if (kindOf(e) === 'update') {
       const t = theirsOf(e.column);
-      if (!t) return { ...e, unguarded: true };
-      const same = asText(e.oldValue) === t.value;
+      if (!t) return invisible ? { ...e, unguarded: true } : e;
       return {
         ...e,
         oldValue: t.value,
         ...(t.type ? { oldType: t.type } : {}),
-        ...(same ? { unguarded: true } : {}),
+        ...(t.noEquality ? { oldNoEquality: true } : {}),
+        ...(invisible ? { unguarded: true } : {}),
       };
     }
     if (kindOf(e) === 'delete') {
-      const before = e.originalRow ?? [];
-      const same =
-        before.length === theirs.length &&
-        before.every((b) => theirsOf(b.column)?.value === b.value);
       return {
         ...e,
         originalRow: theirs.map((t) => ({ ...t })),
-        ...(same ? { unguarded: true } : {}),
+        ...(invisible ? { unguarded: true } : {}),
       };
     }
     return e;
@@ -237,11 +255,17 @@ export function conflictSummary(conflicts: readonly EditConflict[]): string {
   const n = conflicts.length;
   const gone = conflicts.filter((c) => c.kind === 'gone').length;
   const dup = conflicts.filter((c) => c.kind === 'duplicate').length;
-  const changed = n - gone - dup;
+  const maybe = conflicts.filter((c) => c.kind === 'maybe-saved').length;
+  const changed = n - gone - dup - maybe;
   const parts: string[] = [];
   if (changed > 0)
     parts.push(`${changed} row${changed === 1 ? ' was' : 's were'} changed by someone else`);
   if (gone > 0) parts.push(`${gone} row${gone === 1 ? ' was' : 's were'} deleted`);
+  if (maybe > 0) {
+    parts.push(
+      `${maybe} new row${maybe === 1 ? ' may' : 's may'} already be saved from before Plasma stopped`,
+    );
+  }
   if (dup > 0)
     parts.push(`${dup} new row${dup === 1 ? ' uses' : 's use'} a key that already exists`);
   const text = parts.join('; ');

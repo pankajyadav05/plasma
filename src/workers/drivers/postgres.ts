@@ -188,6 +188,21 @@ function readCursorBatch(
  * Lives in the utilityProcess so a crashing query or a rogue network read
  * never blocks the main process or the renderer.
  */
+/**
+ * Names for custom type OIDs, and whether a grid commit can compare them:
+ * a composite, or a type (after resolving a domain to its base and an array to
+ * its element) with no `=` operator, cannot be put in a guarded WHERE.
+ */
+const CUSTOM_TYPE_SQL = `
+  SELECT t.oid::int AS oid, format_type(t.oid, NULL) AS name,
+    (e.typtype = 'c' OR (e.typtype NOT IN ('e', 'r', 'm') AND NOT EXISTS (
+       SELECT 1 FROM pg_operator o WHERE o.oprname = '=' AND o.oprleft = e.oid AND o.oprright = e.oid
+    ))) AS noeq
+  FROM pg_type t
+  JOIN pg_type b ON b.oid = CASE WHEN t.typtype = 'd' THEN t.typbasetype ELSE t.oid END
+  JOIN pg_type e ON e.oid = CASE WHEN b.typelem <> 0 AND b.typlen = -1 THEN b.typelem ELSE b.oid END
+  WHERE t.oid = ANY($1::oid[])`;
+
 export class PostgresDriver {
   private primary: ClientT | null = null;
   private control: ClientT | null = null;
@@ -320,6 +335,8 @@ export class PostgresDriver {
    * another database, so the map is dropped on teardown.
    */
   private customTypeNames = new Map<number, string>();
+  /** OIDs of custom types that cannot be compared with `=` (see ColumnMeta.noEquality). */
+  private customNoEquality = new Set<number>();
 
   /**
    * Replace `oid:NNNN` column type names with the server's own name
@@ -344,12 +361,12 @@ export class PostgresDriver {
     if (unknown.length > 0) {
       try {
         const lookup = (client: ClientT) =>
-          client.query<{ oid: number; name: string }>(
-            'SELECT oid::int AS oid, format_type(oid, NULL) AS name FROM pg_type WHERE oid = ANY($1::oid[])',
-            [unknown],
-          );
+          client.query<{ oid: number; name: string; noeq: boolean }>(CUSTOM_TYPE_SQL, [unknown]);
         const res = auxClient ? await lookup(auxClient) : await this.withAux(lookup);
-        for (const r of res.rows) this.customTypeNames.set(Number(r.oid), r.name);
+        for (const r of res.rows) {
+          this.customTypeNames.set(Number(r.oid), r.name);
+          if (r.noeq) this.customNoEquality.add(Number(r.oid));
+        }
       } catch {
         return;
       }
@@ -357,6 +374,7 @@ export class PostgresDriver {
     for (const c of columns) {
       const name = this.customTypeNames.get(c.dataTypeID);
       if (name && c.dataTypeName?.startsWith('oid:')) c.dataTypeName = name;
+      if (this.customNoEquality.has(c.dataTypeID)) c.noEquality = true;
     }
   }
 
@@ -427,6 +445,7 @@ export class PostgresDriver {
     this.control = null;
     this.aux = null;
     this.customTypeNames.clear();
+    this.customNoEquality.clear();
     this.appliedTimeout = { primary: null, aux: null };
     for (const wake of [...this.lostWaiters]) wake();
 

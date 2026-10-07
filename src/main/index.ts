@@ -271,7 +271,9 @@ if (!hasInstanceLock) {
 // B2: crash recovery. The session marker says whether the last run ended
 // cleanly; a crashed run's snapshot is set aside before this run can write its
 // own. Only the instance that holds the lock owns these files.
-const recovery = new RecoveryRuntime(app.getPath('userData'));
+const recovery = new RecoveryRuntime(app.getPath('userData'), (message) =>
+  logger.warn(`[plasma] ${message}`),
+);
 let previousExit: ReturnType<RecoveryRuntime['start']> = { kind: 'clean' };
 if (hasInstanceLock) {
   try {
@@ -1005,7 +1007,7 @@ function attachWindowGuards(win: BrowserWindow): void {
     unsavedState = { openTransaction: false, pendingEdits: 0 };
     closeConfirmed = false;
     // The user closed the window on purpose (after the discard prompt, if any).
-    recovery.save(null);
+    void recovery.save(null);
     if (!retainedSession && !activeConnectionId) return;
     void serializeSessionChange(async () => {
       sessionEpoch++;
@@ -1239,28 +1241,26 @@ function registerIpcHandlers() {
 
   // B2: crash recovery. The renderer keeps a snapshot of the live workspace
   // here; after a crash the next launch asks what is waiting.
-  ipcMain.on(IpcChannel.RecoverySave, (e, raw: unknown) => {
+  ipcMain.on(IpcChannel.RecoverySave, (e, raw: unknown, durable: unknown) => {
     if (!mainWindow || e.sender !== mainWindow.webContents) return;
-    try {
-      recovery.save(raw);
-    } catch (err) {
-      logger.warn('[plasma] could not write the recovery snapshot', err);
-    }
+    void recovery.save(raw, durable === true);
   });
-  ipcMain.handle(IpcChannel.RecoveryFlush, (_e, raw: unknown): boolean => {
-    try {
-      return recovery.save(raw);
-    } catch (err) {
-      logger.warn('[plasma] could not write the recovery snapshot', err);
-      return false;
-    }
-  });
+  ipcMain.handle(
+    IpcChannel.RecoveryFlush,
+    (_e, raw: unknown): Promise<boolean> => recovery.save(raw, true),
+  );
   ipcMain.handle(IpcChannel.RecoveryLaunchInfo, () =>
     recovery.launchInfo(existsSync(join(app.getPath('userData'), 'logs', 'main.log'))),
   );
-  ipcMain.handle(IpcChannel.RecoveryResolve, (_e, connectionId: unknown): void => {
-    recovery.resolve(typeof connectionId === 'string' ? connectionId : undefined);
-  });
+  ipcMain.handle(
+    IpcChannel.RecoveryResolve,
+    (_e, connectionId: unknown, keepAsRestored: unknown): void => {
+      recovery.resolve(
+        typeof connectionId === 'string' ? connectionId : undefined,
+        keepAsRestored === true,
+      );
+    },
+  );
   ipcMain.handle(IpcChannel.RecoveryShowLog, (): void => {
     shell.showItemInFolder(join(app.getPath('userData'), 'logs', 'main.log'));
   });

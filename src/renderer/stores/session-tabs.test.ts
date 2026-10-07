@@ -1,5 +1,6 @@
 import {
   onRecoveryRestored,
+  onRecoveryTargetChanged,
   resetPendingRecoveries,
   setPendingRecoveries,
 } from '@/lib/crash-recovery';
@@ -448,6 +449,7 @@ describe('restoring a crashed session (B2)', () => {
     setPendingRecoveries({
       unclean: true,
       cause: 'exit',
+      announce: [],
       journals: journals as never,
       hasLog: true,
     });
@@ -526,5 +528,102 @@ describe('restoring a crashed session (B2)', () => {
     const state = adopt();
     expect(Object.keys(state.pendingEditsByTab)).toEqual([]);
     expect(restored.mock.calls[0]?.[0].edits).toBe(0);
+  });
+});
+
+describe('a snapshot against another target is not applied (P2-6)', () => {
+  afterEach(() => {
+    onRecoveryRestored(null);
+    onRecoveryTargetChanged(null);
+    resetPendingRecoveries();
+    vi.unstubAllGlobals();
+  });
+
+  const journal = {
+    v: 1 as const,
+    savedAt: 10,
+    connectionId: 'c1',
+    txnActive: false,
+    target: { engine: 'postgres', host: 'prod.db', port: 5432, database: 'prod', user: 'app' },
+    strip: {
+      v: 1 as const,
+      activeIndex: 0,
+      tabs: [{ kind: 'sql', title: 'q', sql: 'select unsaved' }],
+    },
+    edits: [
+      {
+        tabIndex: 0,
+        kind: 'insert' as const,
+        schema: 'public',
+        table: 'users',
+        pkValues: {},
+        column: '',
+        oldValue: null,
+        newValue: null,
+        values: { id: '1' },
+      },
+    ],
+  };
+
+  function adopt(database: string) {
+    vi.stubGlobal('localStorage', {
+      getItem: () => null,
+      setItem: () => undefined,
+      removeItem: () => undefined,
+    });
+    let state = {
+      activeConfig: {
+        id: 'c1',
+        engine: 'postgres',
+        host: 'prod.db',
+        port: 5432,
+        database,
+        user: 'app',
+      },
+      connectionGen: 7,
+      tabsConnectionId: null as string | null,
+      tabs: [tab({ id: 'start' })],
+      activeTabId: 'start',
+      pendingEditsByTab: {},
+      settings: { restoreWorkspace: false, defaultPageSize: 50 },
+      setActiveTab: vi.fn(),
+    };
+    const set = (patch: Record<string, unknown>) => {
+      state = { ...state, ...patch } as typeof state;
+    };
+    adoptConnectionTabs(set as never, (() => state) as never, 'postgres');
+    return state;
+  }
+
+  it('applies it when host, port, database and user are unchanged', () => {
+    setPendingRecoveries({
+      unclean: true,
+      cause: 'exit',
+      announce: [],
+      journals: [journal],
+      hasLog: false,
+    });
+    const state = adopt('prod');
+    expect(state.tabs[0]?.sql).toBe('select unsaved');
+    expect(Object.values(state.pendingEditsByTab as object).flat()).toHaveLength(1);
+  });
+
+  it('refuses it when the database changed: no tab, no edit, and the shell is told', () => {
+    const changed = vi.fn();
+    const restored = vi.fn();
+    onRecoveryTargetChanged(changed);
+    onRecoveryRestored(restored);
+    setPendingRecoveries({
+      unclean: true,
+      cause: 'exit',
+      announce: [],
+      journals: [journal],
+      hasLog: false,
+    });
+    const state = adopt('staging');
+    expect(state.tabs.map((t) => t.id)).toEqual(['start']);
+    expect(state.pendingEditsByTab).toEqual({});
+    expect(changed).toHaveBeenCalledOnce();
+    expect(restored).not.toHaveBeenCalled();
   });
 });

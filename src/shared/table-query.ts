@@ -356,6 +356,12 @@ export function buildRowLookupSql(input: {
   schema: string;
   table: string;
   pkValues: Record<string, unknown>;
+  /**
+   * Read the committed current row even inside the caller's transaction. MySQL's
+   * default REPEATABLE READ would otherwise show the transaction's snapshot, the
+   * very values the guarded write just found out of date.
+   */
+  currentRead?: boolean;
   dialect?: SqlDialect;
 }): BuiltSql {
   const d = input.dialect ?? POSTGRES_DIALECT;
@@ -369,7 +375,9 @@ export function buildRowLookupSql(input: {
     })
     .join(' AND ');
   return {
-    sql: `SELECT * FROM ${d.qualify(input.schema, input.table)} WHERE ${where} LIMIT 2`,
+    sql: `SELECT * FROM ${d.qualify(input.schema, input.table)} WHERE ${where} LIMIT 2${
+      input.currentRead && d.engine === 'mysql' ? ' LOCK IN SHARE MODE' : ''
+    }`,
     params,
   };
 }

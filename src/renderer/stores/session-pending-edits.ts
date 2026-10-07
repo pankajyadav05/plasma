@@ -21,6 +21,7 @@
  *  - discarding is just dropping the queue — no re-query needed.
  */
 import { cellToText, isNoopEdit } from '@/features/result-grid/cell-edit';
+import { runBeforeCommitHook } from '@/lib/crash-recovery';
 import {
   type EditConflict,
   type TheirsLookup,
@@ -307,7 +308,14 @@ export interface EditBatch {
 export function buildEditBatch(
   edits: readonly PendingEdit[],
   dialect: SqlDialect = POSTGRES_DIALECT,
+  opts: { serverVersion?: string | null } = {},
 ): EditBatch {
+  // Before Postgres 12 floats print rounded, so their text never matches the stored value.
+  const oldPg =
+    dialect.engine === 'postgres' &&
+    Number(/(\d+)\./.exec(opts.serverVersion ?? '')?.[1] ?? 99) < 12;
+  const unsafeFloat = (type: string | undefined) =>
+    oldPg && /^_?(float4|float8|real|double precision)(\[\])?$/i.test(type ?? '');
   const updates: Array<{ sql: string; params: unknown[]; kind: 'update' | 'delete' | 'insert' }> =
     [];
   const editIds: string[][] = [];
@@ -328,7 +336,12 @@ export function buildEditBatch(
         ? []
         : (e.originalRow ?? [])
             .filter((c) => !(c.column in e.pkValues))
-            .map((c) => ({ column: c.column, value: c.value, type: c.type })),
+            .map((c) => ({
+              column: c.column,
+              value: c.value,
+              type: c.type,
+              noEquality: c.noEquality || unsafeFloat(c.type),
+            })),
       dialect,
     });
     updates.push({ sql, params, kind: 'delete' });
@@ -355,6 +368,7 @@ export function buildEditBatch(
         column: e.column,
         value: e.oldValue === null || e.oldValue === undefined ? null : String(e.oldValue),
         type: e.oldType,
+        noEquality: e.oldNoEquality || unsafeFloat(e.oldType),
       }));
     const { sql, params } = buildUpdateSql({
       schema: first.schema,
@@ -524,12 +538,15 @@ function applyCellEdit(
     e.column === col.name &&
     (e.rowKey ?? rowKeyOf(e.pkValues)) === rowKey;
   const rest = edits.filter((e) => !sameCell(e));
-  const oldValue = row[columnIndex];
+  const existing = edits.find(sameCell);
+  // The original is what the user first edited against. A re-edit after the grid
+  // reloaded must NOT take the reloaded server value as the new guard: that would
+  // hide a change made by someone else in between.
+  const oldValue = existing ? existing.oldValue : row[columnIndex];
   // Typing the original value back (or clicking in and out) un-queues.
   if (isNoopEdit(oldValue, newValue, col.dataTypeName)) {
     return { edits: rest.length !== edits.length ? rest : edits, outcome: 'noop' };
   }
-  const existing = edits.find(sameCell);
   const edit: PendingEdit = {
     id: existing?.id ?? freshEditId(),
     tabId: target.tab.id,
@@ -539,8 +556,10 @@ function applyCellEdit(
     pkValues,
     rowKey,
     column: col.name,
-    oldValue: cellToText(oldValue, col.dataTypeName),
-    oldType: col.dataTypeName,
+    oldValue: existing ? existing.oldValue : cellToText(oldValue, col.dataTypeName),
+    oldType: existing?.oldType ?? col.dataTypeName,
+    ...((existing ? existing.oldNoEquality : col.noEquality) ? { oldNoEquality: true } : {}),
+    ...(existing?.unguarded ? { unguarded: true } : {}),
     newValue,
     rowIndex,
     columnIndex,
@@ -744,6 +763,7 @@ export function queueRowDeletes(set: Set, get: Get, rowIndices: readonly number[
           column: c.name,
           value: cellToText(row[i], c.dataTypeName),
           type: c.dataTypeName,
+          ...(c.noEquality ? { noEquality: true } : {}),
         })),
         newValue: null,
         rowIndex: target.rows.indexOf(row),
@@ -870,7 +890,9 @@ export async function commitPendingEdits(
   if (mismatched.length > 0 || liveGen <= 0) {
     fail('pending edits belong to a previous connection — discard them before committing');
   }
-  const batch = buildEditBatch(edits, dialectFor(state.activeConfig?.engine));
+  const batch = buildEditBatch(edits, dialectFor(state.activeConfig?.engine), {
+    serverVersion: state.serverVersion,
+  });
   // Prod tag / safe mode: every grid write needs an explicit confirm (or is
   // refused outright on a read-only safe mode).
   const decision = evaluateGate(get, '', true);
@@ -894,8 +916,19 @@ export async function commitPendingEdits(
     }
     return;
   }
+  // B2: edits restored after a crash that hit mid-commit may already be saved. An INSERT
+  // would simply be written again, so check first; nothing is sent while one is in doubt.
+  const doubtful = await preflightMaybeCommitted(get, edits, batch);
+  if (doubtful.length > 0) {
+    await reviewConflicts(set, get, tabId, edits, batch, doubtful);
+    return;
+  }
   set({ pendingEditsBusy: true, pendingEditsError: null });
   try {
+    // B2: the crash snapshot must say "these were being committed" BEFORE the request
+    // leaves, so a crash in the middle restores them flagged instead of as plain edits.
+    set({ commitInFlightIds: edits.map((e) => e.id) });
+    await runBeforeCommitHook();
     // U05: one worker request owns BEGIN/statements/COMMIT (or SAVEPOINT
     // when a user transaction is already open). Never a sequence of
     // unrelated IPC calls that can commit foreign work.
@@ -942,8 +975,51 @@ export async function commitPendingEdits(
       }
     }
   } finally {
-    set({ pendingEditsBusy: false });
+    set({ pendingEditsBusy: false, commitInFlightIds: [] });
   }
+}
+
+/**
+ * Restored INSERTs that were in flight when Plasma stopped (`maybeCommitted`): the
+ * row may be in the table already. Where the key is known the row is looked up; an
+ * existing one, or a key the server generates (so nothing can be checked), is held
+ * back as a conflict for the user to decide. Updates and deletes need no check:
+ * their guarded WHERE already refuses to apply twice.
+ */
+async function preflightMaybeCommitted(
+  get: Get,
+  edits: readonly PendingEdit[],
+  batch: EditBatch,
+): Promise<WorkerConflict[]> {
+  const out: WorkerConflict[] = [];
+  const state = get();
+  const dialect = dialectFor(state.activeConfig?.engine);
+  for (let i = 0; i < batch.editIds.length; i++) {
+    const e = edits.find((x) => x.id === batch.editIds[i]?.[0]);
+    if (!e || !e.maybeCommitted || editKind(e) !== 'insert') continue;
+    const pkNames = tablePkNames(state.schema, e.schema, e.table);
+    const values = e.values ?? {};
+    const pk: Record<string, string | null> = {};
+    for (const name of pkNames) pk[name] = values[name] ?? null;
+    if (pkNames.length === 0 || Object.values(pk).some((v) => v === null)) {
+      out.push({ index: i, reason: 'maybe-saved' });
+      continue;
+    }
+    try {
+      const { sql, params } = buildRowLookupSql({
+        schema: e.schema,
+        table: e.table,
+        pkValues: pk,
+        currentRead: state.txnState === 'active',
+        dialect,
+      });
+      const res = await ipc.query.run(sql, params, { internal: true });
+      if (res.rows.length > 0) out.push({ index: i, reason: 'duplicate' });
+    } catch {
+      out.push({ index: i, reason: 'maybe-saved' });
+    }
+  }
+  return out;
 }
 
 // ─── Concurrent-edit conflicts (B1) ──────────────────────────────────
@@ -977,6 +1053,7 @@ async function reviewConflicts(
         schema: first.schema,
         table: first.table,
         pkValues: first.pkValues,
+        currentRead: get().txnState === 'active',
         dialect,
       });
       const res = await ipc.query.run(sql, params, { internal: true });
@@ -990,6 +1067,7 @@ async function reviewConflicts(
                 column: col.name,
                 value: cellToText(row[i], col.dataTypeName),
                 type: col.dataTypeName,
+                ...(col.noEquality ? { noEquality: true } : {}),
               })),
             }
           : { found: false },

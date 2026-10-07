@@ -34,6 +34,7 @@ vi.mock('@/lib/ipc', () => ({
   },
 }));
 
+import { setBeforeCommitHook } from '@/lib/crash-recovery';
 import { useSession } from './session';
 import { editsOf, pendingEditCount } from './session-pending-edits';
 
@@ -575,5 +576,137 @@ describe('concurrent-edit conflicts (B1)', () => {
     await useSession.getState().commitPendingEdits();
     expect(firstItem()?.kind).toBe('unknown');
     expect(tabAEdits()).toHaveLength(1);
+  });
+
+  it('re-editing a staged cell after a reload keeps the ORIGINAL value as the guard (P0)', async () => {
+    await useSession.getState().updateCell(0, 1, 'mine1');
+    // The grid reloads: someone else changed the row meanwhile.
+    useSession.setState((st) => ({
+      tabs: st.tabs.map((t) =>
+        t.id === 'tab-a' && t.queryResult
+          ? { ...t, queryResult: { ...t.queryResult, rows: [[1, 'theirs']] } }
+          : t,
+      ),
+    }));
+    await useSession.getState().updateCell(0, 1, 'mine2');
+    expect(tabAEdits()[0]).toMatchObject({ oldValue: 'a@b.co', newValue: 'mine2' });
+    commitEditBatch.mockResolvedValue({ state: 'none', applied: 1 });
+    await useSession.getState().commitPendingEdits();
+    expect(commitEditBatch.mock.calls.at(-1)?.[0].updates[0].params).toEqual([
+      'mine2',
+      '1',
+      'a@b.co',
+    ]);
+  });
+
+  it('typing the original back after a reload still un-stages the edit', async () => {
+    await useSession.getState().updateCell(0, 1, 'mine1');
+    useSession.setState((st) => ({
+      tabs: st.tabs.map((t) =>
+        t.id === 'tab-a' && t.queryResult
+          ? { ...t, queryResult: { ...t.queryResult, rows: [[1, 'theirs']] } }
+          : t,
+      ),
+    }));
+    await useSession.getState().updateCell(0, 1, 'a@b.co');
+    expect(tabAEdits()).toHaveLength(0);
+  });
+});
+
+describe('a commit that a crash interrupts (B2 / P2-3)', () => {
+  beforeEach(() => {
+    commitEditBatch.mockReset();
+    queryRun.mockReset();
+    setBeforeCommitHook(null);
+  });
+  afterEach(() => setBeforeCommitHook(null));
+
+  const markMaybeCommitted = () =>
+    useSession.setState((s) => ({
+      pendingEditsByTab: {
+        ...s.pendingEditsByTab,
+        'tab-a': (s.pendingEditsByTab['tab-a'] ?? []).map((e) => ({ ...e, maybeCommitted: true })),
+      },
+    }));
+
+  it('the snapshot is told which edits are in flight BEFORE the request leaves, and cleared after', async () => {
+    await useSession.getState().updateCell(0, 1, 'mine');
+    const ids = tabAEdits().map((e) => e.id);
+    const order: string[] = [];
+    setBeforeCommitHook(async () => {
+      order.push(`hook:${useSession.getState().commitInFlightIds.join(',')}`);
+    });
+    commitEditBatch.mockImplementation(async () => {
+      order.push('sent');
+      return { state: 'none', applied: 1 };
+    });
+    await useSession.getState().commitPendingEdits();
+    expect(order).toEqual([`hook:${ids.join(',')}`, 'sent']);
+    expect(useSession.getState().commitInFlightIds).toEqual([]);
+  });
+
+  it('a failing hook never blocks the commit', async () => {
+    await useSession.getState().updateCell(0, 1, 'mine');
+    setBeforeCommitHook(async () => {
+      throw new Error('disk full');
+    });
+    commitEditBatch.mockResolvedValue({ state: 'none', applied: 1 });
+    await useSession.getState().commitPendingEdits();
+    expect(commitEditBatch).toHaveBeenCalledOnce();
+  });
+
+  it('a restored INSERT whose key already exists is not sent again', async () => {
+    await useSession.getState().insertRow({ id: '2', email: 'n@e.w' });
+    markMaybeCommitted();
+    queryRun.mockResolvedValue({
+      columns: [{ name: 'id', dataTypeID: 23, dataTypeName: 'int4' }],
+      rows: [[2]],
+      rowCount: 1,
+      durationMs: 1,
+      command: 'SELECT',
+    });
+    await useSession.getState().commitPendingEdits();
+    expect(commitEditBatch).not.toHaveBeenCalled();
+    expect(useSession.getState().editConflicts?.items[0]).toMatchObject({
+      op: 'insert',
+      kind: 'duplicate',
+    });
+    expect(tabAEdits()).toHaveLength(1);
+  });
+
+  it('a restored INSERT whose key is not in the table yet is committed', async () => {
+    await useSession.getState().insertRow({ id: '2', email: 'n@e.w' });
+    markMaybeCommitted();
+    queryRun.mockResolvedValue({
+      columns: [],
+      rows: [],
+      rowCount: 0,
+      durationMs: 1,
+      command: 'SELECT',
+    });
+    commitEditBatch.mockResolvedValue({ state: 'none', applied: 1 });
+    await useSession.getState().commitPendingEdits();
+    expect(commitEditBatch).toHaveBeenCalledOnce();
+    expect(tabAEdits()).toHaveLength(0);
+  });
+
+  it('a restored INSERT with a server-generated key cannot be checked, so it is held back', async () => {
+    await useSession.getState().insertRow({ email: 'n@e.w' });
+    markMaybeCommitted();
+    await useSession.getState().commitPendingEdits();
+    expect(commitEditBatch).not.toHaveBeenCalled();
+    expect(queryRun).not.toHaveBeenCalled();
+    expect(useSession.getState().editConflicts?.items[0]?.kind).toBe('maybe-saved');
+    expect(useSession.getState().pendingEditsError?.message).toMatch(/may already be saved/);
+    expect(tabAEdits()).toHaveLength(1);
+  });
+
+  it('a restored UPDATE needs no check: its guarded WHERE refuses to apply twice', async () => {
+    await useSession.getState().updateCell(0, 1, 'mine');
+    markMaybeCommitted();
+    commitEditBatch.mockResolvedValue({ state: 'none', applied: 1 });
+    await useSession.getState().commitPendingEdits();
+    expect(queryRun.mock.calls.some((c) => /LIMIT 2/.test(String(c[0])))).toBe(false);
+    expect(commitEditBatch).toHaveBeenCalledOnce();
   });
 });

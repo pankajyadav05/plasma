@@ -146,6 +146,22 @@ describe('resolving', () => {
     expect(keepMine([e], c as EditConflict)[0]?.unguarded).toBe(true);
   });
 
+  it('keep mine re-guards each column against the server; one unchanged column does not disable its check (P1-1)', () => {
+    const a = edit({ id: 'a', column: 'a', oldValue: 'a0', newValue: 'a1' });
+    const b = edit({ id: 'b', column: 'b', oldValue: 'b0', newValue: 'b1' });
+    const row = [
+      { column: 'id', value: '1' },
+      { column: 'a', value: 'aTHEIRS' },
+      { column: 'b', value: 'b0' },
+    ];
+    const c = one([a, b], { found: true, row })[0] as EditConflict;
+    const next = keepMine([a, b], c);
+    expect(next.map((e) => [e.column, e.oldValue, e.unguarded])).toEqual([
+      ['a', 'aTHEIRS', undefined],
+      ['b', 'b0', undefined],
+    ]);
+  });
+
   it('keep mine on a delete takes the server row as the new original', () => {
     const del = edit({
       id: 'd',

@@ -9,15 +9,17 @@ import {
   readdirSync,
   renameSync,
   rmSync,
+  statSync,
   writeSync,
 } from 'node:fs';
+import { mkdir, open, rename, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
-  MAX_JOURNAL_BYTES,
   type PreviousExit,
   type RecoveryJournal,
   type RecoveryLaunchInfo,
   type SessionMarker,
+  ingestJournal,
   journalHasContent,
   judgePreviousExit,
   mayReloadAfterCrash,
@@ -135,22 +137,118 @@ export function endSession(userData: string): void {
 
 // ─── Journal ─────────────────────────────────────────────────────────
 
+/** Write `text` to `path` atomically without blocking the event loop. `durable` adds the fsyncs. */
+export async function writeFileAtomicAsync(
+  path: string,
+  text: string,
+  durable: boolean,
+): Promise<void> {
+  const dir = join(path, '..');
+  await mkdir(dir, { recursive: true });
+  const tmp = `${path}.${process.pid}.tmp`;
+  const fh = await open(tmp, 'w', 0o600);
+  try {
+    await fh.writeFile(text);
+    if (durable) await fh.sync();
+  } finally {
+    await fh.close();
+  }
+  await rename(tmp, path);
+  if (durable) {
+    try {
+      const dfd = await open(dir, 'r');
+      try {
+        await dfd.sync();
+      } finally {
+        await dfd.close();
+      }
+    } catch {
+      // Windows cannot open a directory for fsync.
+    }
+  }
+}
+
 /**
- * Store the renderer's snapshot. Anything that is not a valid journal, or is
- * too large, is refused and leaves the previous snapshot in place (a bad write
- * must never replace a good journal). `null` clears the live journal.
+ * Keeps the live snapshot current without ever blocking main: writes are async
+ * and coalesced (while one is in flight only the newest request is kept), and
+ * each file is still replaced atomically. `durable` requests (blur, hide, a
+ * flush before a commit) also fsync; the debounced ones skip it, since a
+ * process kill cannot lose a completed rename. Anything not storable is left
+ * out part by part (`ingestJournal`), never refused whole.
  */
+export class JournalWriter {
+  private latest: { raw: unknown; durable: boolean; waiters: Array<(ok: boolean) => void> } | null =
+    null;
+  private running: Promise<void> | null = null;
+  private closed = false;
+
+  constructor(
+    private readonly userData: string,
+    private readonly log: (message: string) => void = () => undefined,
+  ) {}
+
+  /** Queue a snapshot (null clears). Resolves once it is on disk (or refused). */
+  save(raw: unknown, durable = false): Promise<boolean> {
+    if (this.closed) return Promise.resolve(false);
+    return new Promise((resolve) => {
+      const waiters = this.latest?.waiters ?? [];
+      waiters.push(resolve);
+      this.latest = { raw, durable: durable || (this.latest?.durable ?? false), waiters };
+      this.running ??= this.drain();
+    });
+  }
+
+  private async drain(): Promise<void> {
+    while (this.latest) {
+      const job = this.latest;
+      this.latest = null;
+      let ok = false;
+      try {
+        ok = await this.write(job.raw, job.durable);
+      } catch (err) {
+        this.log(`could not write the recovery snapshot: ${String(err)}`);
+      }
+      for (const w of job.waiters) w(ok);
+    }
+    this.running = null;
+  }
+
+  private async write(raw: unknown, durable: boolean): Promise<boolean> {
+    const path = journalPath(this.userData);
+    if (raw === null) {
+      await rm(path, { force: true });
+      return true;
+    }
+    const ingested = ingestJournal(raw);
+    if (!ingested) {
+      this.log('refused a recovery snapshot that is not a journal; the previous one stays');
+      return false;
+    }
+    if (ingested.dropped.length > 0) {
+      this.log(`recovery snapshot saved without: ${ingested.dropped.join('; ')}`);
+    }
+    await writeFileAtomicAsync(path, JSON.stringify(ingested.journal), durable);
+    if (this.closed) await rm(path, { force: true });
+    return true;
+  }
+
+  /** The app is quitting cleanly: nothing may be written (or recreated) after this. */
+  close(): void {
+    this.closed = true;
+    this.latest = null;
+  }
+}
+
+/** Synchronous variant for tests and one-off use: ingest, then replace the live snapshot. */
 export function saveJournal(userData: string, raw: unknown): boolean {
   if (raw === null) {
     rmSync(journalPath(userData), { force: true });
     return true;
   }
-  const journal = parseJournal(raw);
-  if (!journal) return false;
-  const text = JSON.stringify(journal);
-  if (Buffer.byteLength(text) > MAX_JOURNAL_BYTES) return false;
+  const ingested = ingestJournal(raw);
+  if (!ingested) return false;
   try {
-    writeFileAtomic(journalPath(userData), text);
+    writeFileAtomic(journalPath(userData), JSON.stringify(ingested.journal));
     return true;
   } catch {
     return false;
@@ -186,28 +284,80 @@ export function stageJournal(userData: string): RecoveryJournal | null {
   return journal;
 }
 
-/** Every snapshot waiting to be restored, newest first. Unreadable files are set aside. */
-export function readPending(userData: string): RecoveryJournal[] {
+/** A snapshot nobody restored or discarded for this long is let go. */
+export const PENDING_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;
+
+/**
+ * Every snapshot waiting to be restored, newest first. Unreadable files are set
+ * aside; snapshots older than `PENDING_MAX_AGE_MS` (and restored ones older than a
+ * week) are removed.
+ */
+export function readPending(userData: string, now = Date.now()): RecoveryJournal[] {
   const dir = pendingDir(userData);
   if (!existsSync(dir)) return [];
   const out: RecoveryJournal[] = [];
   for (const name of readdirSync(dir)) {
-    if (!name.endsWith('.json')) continue;
     const path = join(dir, name);
+    if (name.endsWith('.restored')) {
+      try {
+        if (now - statSync(path).mtimeMs > 7 * 24 * 60 * 60 * 1000) rmSync(path, { force: true });
+      } catch {
+        // gone already
+      }
+      continue;
+    }
+    if (!name.endsWith('.json')) continue;
     const journal = parseJournal(readText(path));
-    if (journal) out.push(journal);
-    else quarantine(path);
+    if (!journal) {
+      quarantine(path);
+      continue;
+    }
+    if (now - journal.savedAt > PENDING_MAX_AGE_MS) {
+      rmSync(path, { force: true });
+      continue;
+    }
+    out.push(journal);
   }
   return out.sort((a, b) => b.savedAt - a.savedAt);
 }
 
-/** Restored or discarded: forget the pending snapshot of one connection (all when omitted). */
-export function resolvePending(userData: string, connectionId?: string): void {
+/** Remember that a snapshot was announced, so a later launch does not announce it again. */
+export function markOffered(userData: string, connectionId: string): void {
+  const path = pendingPath(userData, connectionId);
+  const journal = parseJournal(readText(path));
+  if (!journal || journal.offered) return;
+  try {
+    writeFileAtomic(path, JSON.stringify({ ...journal, offered: true }));
+  } catch {
+    // Offered twice is better than not at all.
+  }
+}
+
+/**
+ * Restored or discarded: forget the pending snapshot of one connection (all when
+ * omitted). `keepAsRestored` sets it aside instead of deleting it, for the case
+ * where the restored state could not be written down yet: it is never restored a
+ * second time, but nothing is destroyed.
+ */
+export function resolvePending(
+  userData: string,
+  connectionId?: string,
+  keepAsRestored = false,
+): void {
   if (connectionId === undefined) {
     rmSync(pendingDir(userData), { recursive: true, force: true });
     return;
   }
-  rmSync(pendingPath(userData, connectionId), { force: true });
+  const path = pendingPath(userData, connectionId);
+  if (keepAsRestored && existsSync(path)) {
+    try {
+      renameSync(path, `${path.replace(/\.json$/, '')}.restored`);
+      return;
+    } catch {
+      // fall through to delete
+    }
+  }
+  rmSync(path, { force: true });
 }
 
 // ─── Runtime ─────────────────────────────────────────────────────────
@@ -218,11 +368,17 @@ export function resolvePending(userData: string, connectionId?: string): void {
  * Electron, so the decisions are testable; `index.ts` only wires it to IPC.
  */
 export class RecoveryRuntime {
-  /** Why the renderer should offer a restore; cleared once nothing is pending. */
+  /** Set only by a crash: the marker of a run that never ended, or a dead window. */
   cause: 'exit' | 'renderer' | null = null;
   private reloads: number[] = [];
+  private readonly writer: JournalWriter;
 
-  constructor(private readonly userData: string) {}
+  constructor(
+    private readonly userData: string,
+    log: (message: string) => void = () => undefined,
+  ) {
+    this.writer = new JournalWriter(userData, log);
+  }
 
   /** Start-up: judge the last run, set a crashed run's snapshot aside, write this run's marker. */
   start(info: {
@@ -251,26 +407,34 @@ export class RecoveryRuntime {
     return { reload: gate.reload };
   }
 
-  /** What the renderer needs to know on load. */
+  /**
+   * What the renderer needs to know on load. `unclean` / `cause` come only from a
+   * crash. Snapshots left over (not restored, not discarded) are offered once
+   * each, whatever the cause, and never mark a launch as a crash.
+   */
   launchInfo(hasLog: boolean): RecoveryLaunchInfo {
     const journals = readPending(this.userData);
-    // A snapshot left behind by a clean quit that never restored it is still offered.
-    const cause = this.cause ?? (journals.length > 0 ? 'exit' : null);
-    return { unclean: cause !== null, cause, journals, hasLog };
+    const announce = journals
+      .filter((j) => this.cause !== null || !j.offered)
+      .map((j) => j.connectionId);
+    for (const id of announce) markOffered(this.userData, id);
+    return { unclean: this.cause !== null, cause: this.cause, journals, announce, hasLog };
   }
 
   /** One connection's snapshot (or all) was restored or discarded. */
-  resolve(connectionId?: string): void {
-    resolvePending(this.userData, connectionId);
+  resolve(connectionId?: string, keepAsRestored = false): void {
+    resolvePending(this.userData, connectionId, keepAsRestored);
     if (readPending(this.userData).length === 0) this.cause = null;
   }
 
-  save(raw: unknown): boolean {
-    return saveJournal(this.userData, raw);
+  /** Queue the live snapshot (null clears). Never blocks main. */
+  save(raw: unknown, durable = false): Promise<boolean> {
+    return this.writer.save(raw, durable);
   }
 
   /** Clean quit (or an update restart that ends this process on purpose). */
   end(): void {
+    this.writer.close();
     endSession(this.userData);
   }
 }

@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   type JournalSource,
   buildJournal,
+  debounceFor,
   flushRecoveryJournal,
   installRecoveryJournal,
   suspendRecoveryJournal,
@@ -83,7 +84,7 @@ describe('buildJournal', () => {
     const j = buildJournal(
       source({
         tabs: [
-          tab({ id: 'big', sql: 'x'.repeat(600 * 1024) }),
+          tab({ id: 'big', sql: 'x'.repeat(2_100_000) }),
           tab({
             id: 'b',
             kind: 'table',
@@ -217,6 +218,8 @@ describe('installRecoveryJournal', () => {
     vi.advanceTimersByTime(300);
     expect(api.save).toHaveBeenCalledTimes(1);
     expect(api.save.mock.calls[0]?.[0].strip.tabs[0].sql).toBe('sel');
+    // the debounced path skips the fsync; blur / hide / unload ask for it
+    expect(api.save.mock.calls[0]?.[1]).toBe(false);
   });
 
   it('does not rewrite an identical snapshot (results arriving change tabs, not the strip)', () => {
@@ -231,6 +234,7 @@ describe('installRecoveryJournal', () => {
     set({ pendingEditsByTab: { b: [edit('b')] } });
     events.get('blur')?.();
     expect(api.save).toHaveBeenCalledTimes(1);
+    expect(api.save.mock.calls[0]?.[1]).toBe(true);
     set({ pendingEditsByTab: { b: [edit('b'), edit('b', { column: 'age' })] } });
     events.get('beforeunload')?.();
     expect(api.save).toHaveBeenCalledTimes(2);
@@ -266,5 +270,86 @@ describe('installRecoveryJournal', () => {
     });
     vi.advanceTimersByTime(300);
     expect(api.save).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('buildJournal: target, in-flight commits, size limits (P2-3, P2-6, P2-7, P1-4)', () => {
+  const withHost = (over: Partial<JournalSource> = {}) =>
+    source({
+      activeConfig: {
+        id: 'c1',
+        name: 'Local',
+        engine: 'postgres',
+        host: 'db.example',
+        port: 5432,
+        database: 'prod',
+        user: 'app',
+      },
+      ...over,
+    });
+
+  it('records where it was taken (no secrets)', () => {
+    const j = buildJournal(withHost(), 1);
+    expect(j?.target).toEqual({
+      engine: 'postgres',
+      host: 'db.example',
+      port: 5432,
+      database: 'prod',
+      user: 'app',
+    });
+    expect(JSON.stringify(j)).not.toMatch(/password/i);
+  });
+
+  it('flags the edits whose commit is in flight', () => {
+    const e1 = edit('b', { id: 'in-flight' });
+    const e2 = edit('b', { id: 'other', column: 'age' });
+    const j = buildJournal(
+      source({ pendingEditsByTab: { b: [e1, e2] }, commitInFlightIds: ['in-flight'] }),
+      1,
+    );
+    expect(j?.edits.map((e) => e.maybeCommitted)).toEqual([true, undefined]);
+  });
+
+  it('keeps an edit flagged once it was restored as "may already be saved"', () => {
+    const j = buildJournal(
+      source({ pendingEditsByTab: { b: [edit('b', { maybeCommitted: true })] } }),
+      1,
+    );
+    expect(j?.edits[0]?.maybeCommitted).toBe(true);
+  });
+
+  it('includes a big SQL buffer up to the journal limit and names one that is over it', () => {
+    const j = buildJournal(
+      source({
+        tabs: [
+          tab({ id: 'mid', title: 'mid.sql', sql: 'x'.repeat(900_000) }),
+          tab({ id: 'big', title: 'big.sql', sql: 'x'.repeat(2_100_000) }),
+        ],
+        activeTabId: 'mid',
+      }),
+      1,
+    );
+    expect(j?.strip.tabs.map((t) => t.title)).toEqual(['mid.sql']);
+    expect(j?.omitted).toEqual({ tabs: ['big.sql'], edits: 0 });
+  });
+
+  it('does not journal a DuckDB data-file session (nothing to reconnect to)', () => {
+    expect(
+      buildJournal(
+        source({
+          tabsConnectionId: 'duckdb-abc123',
+          activeConfig: { id: 'duckdb-abc123', engine: 'duckdb' },
+        }),
+        1,
+      ),
+    ).toBeNull();
+  });
+});
+
+describe('debounceFor', () => {
+  it('waits longer for a big snapshot, up to a cap', () => {
+    expect(debounceFor(1_000)).toBe(250);
+    expect(debounceFor(1_000_000)).toBe(1250);
+    expect(debounceFor(50_000_000)).toBe(2250);
   });
 });

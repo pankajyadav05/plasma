@@ -1,6 +1,7 @@
 import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { cellToText } from '@shared/cell-edit';
 import type { GuardValue } from '@shared/edit-guard';
 import type { ConnectionConfig } from '@shared/protocol';
 import { dialectFor } from '@shared/sql-dialect';
@@ -367,6 +368,44 @@ describe('concurrent edits (B1)', () => {
     );
     const fine = await drv.commitEditBatch(1, [del('2', nowRow)]);
     expect(fine).toMatchObject({ applied: 1, conflicts: [] });
+  });
+
+  it('a row holding a BLOB is deleted and updated without a false conflict (P1-3)', async () => {
+    await drv.query('CREATE TABLE blobs (id INTEGER PRIMARY KEY, data BLOB, loose, note TEXT)');
+    await drv.query("INSERT INTO blobs VALUES (1, x'deadbeef', x'00', 'n')");
+    await drv.query("INSERT INTO blobs VALUES (2, x'cafe', x'01', 'm')");
+    const load = async (id: number) => {
+      const res = await drv.query(`SELECT * FROM blobs WHERE id = ${id}`);
+      return res.columns.map((c, i) => ({
+        column: c.name,
+        value: cellToText(res.rows[0]?.[i], c.dataTypeName),
+        type: c.dataTypeName,
+      }));
+    };
+    const del = buildDeleteSql({
+      schema: 'main',
+      table: 'blobs',
+      pkValues: { id: '1' },
+      guards: await load(1),
+      dialect: sqlite,
+    });
+    const r1 = await drv.commitEditBatch(1, [
+      { sql: del.sql, params: del.params as unknown[], kind: 'delete' },
+    ]);
+    expect(r1).toMatchObject({ applied: 1, conflicts: [] });
+    const guards = (await load(2)).filter((g) => g.column !== 'id');
+    const upd = buildUpdateSql({
+      schema: 'main',
+      table: 'blobs',
+      set: { note: 'z' },
+      pkValues: { id: '2' },
+      guards,
+      dialect: sqlite,
+    });
+    const r2 = await drv.commitEditBatch(1, [
+      { sql: upd.sql, params: upd.params as unknown[], kind: 'update' },
+    ]);
+    expect(r2).toMatchObject({ applied: 1, conflicts: [] });
   });
 
   it('an INSERT with a key that now exists is reported as a duplicate; nothing else is saved', async () => {

@@ -23,6 +23,7 @@ import {
   writeFileAtomic,
 } from './session-recovery';
 
+const NOW = Date.now();
 let dir: string;
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), 'plasma-recovery-'));
@@ -39,7 +40,7 @@ const info = (over: Partial<Parameters<typeof beginSession>[1]> = {}) => ({
 
 const journal = (over: Partial<RecoveryJournal> = {}): RecoveryJournal => ({
   v: 1,
-  savedAt: 1_000,
+  savedAt: NOW,
   connectionId: 'c1',
   txnActive: false,
   strip: { v: 1, activeIndex: 0, tabs: [{ kind: 'sql', title: 'query-1.sql', sql: 'select 1' }] },
@@ -101,17 +102,11 @@ describe('journal writes', () => {
   });
 
   it('refuses anything that is not a journal and keeps the previous snapshot', () => {
-    saveJournal(dir, journal({ savedAt: 1 }));
-    for (const bad of [
-      {},
-      'x',
-      5,
-      { ...journal(), v: 9 },
-      { ...journal(), edits: [{ kind: 'x' }] },
-    ]) {
+    saveJournal(dir, journal({ savedAt: NOW + 1 }));
+    for (const bad of [{}, 'x', 5, { ...journal(), v: 9 }]) {
       expect(saveJournal(dir, bad)).toBe(false);
     }
-    expect(JSON.parse(readFileSync(live(), 'utf8')).savedAt).toBe(1);
+    expect(JSON.parse(readFileSync(live(), 'utf8')).savedAt).toBe(NOW + 1);
   });
 
   it('null clears the snapshot', () => {
@@ -121,10 +116,10 @@ describe('journal writes', () => {
   });
 
   it('a kill in the middle of a write leaves the previous complete file readable', () => {
-    saveJournal(dir, journal({ savedAt: 5 }));
+    saveJournal(dir, journal({ savedAt: NOW + 5 }));
     // What a kill between "write temp" and "rename" leaves: a half-written temp file.
     writeFileSync(`${live()}.999.tmp`, '{"v":1,"savedAt":6,"connec');
-    expect(stageJournal(dir)?.savedAt).toBe(5);
+    expect(stageJournal(dir)?.savedAt).toBe(NOW + 5);
   });
 
   it('writeFileAtomic replaces a file whole', () => {
@@ -146,15 +141,15 @@ describe('after a crash', () => {
   });
 
   it('keeps one snapshot per connection, newest first', () => {
-    saveJournal(dir, journal({ connectionId: 'a', savedAt: 1 }));
+    saveJournal(dir, journal({ connectionId: 'a', savedAt: NOW + 1 }));
     stageJournal(dir);
-    saveJournal(dir, journal({ connectionId: 'b', savedAt: 9 }));
+    saveJournal(dir, journal({ connectionId: 'b', savedAt: NOW + 9 }));
     stageJournal(dir);
     expect(readPending(dir).map((j) => j.connectionId)).toEqual(['b', 'a']);
   });
 
   it('an empty snapshot never replaces one that has content for the same connection', () => {
-    saveJournal(dir, journal({ savedAt: 1 }));
+    saveJournal(dir, journal({ savedAt: NOW + 1 }));
     stageJournal(dir);
     saveJournal(dir, emptyJournal());
     const kept = stageJournal(dir);
@@ -192,31 +187,31 @@ describe('after a crash', () => {
 });
 
 describe('RecoveryRuntime', () => {
-  it('a crash is offered with its snapshot; resolving ends the offer', () => {
+  it('a crash is offered with its snapshot; resolving ends the offer', async () => {
     const first = new RecoveryRuntime(dir);
     first.start(info());
-    first.save(journal({ edits: [] }));
+    await first.save(journal({ edits: [] }));
     // ...power cut: no first.end()...
     const second = new RecoveryRuntime(dir);
     expect(second.start(info()).kind).toBe('unclean');
     const launch = second.launchInfo(true);
-    expect(launch).toMatchObject({ unclean: true, cause: 'exit', hasLog: true });
+    expect(launch).toMatchObject({ unclean: true, cause: 'exit', hasLog: true, announce: ['c1'] });
     expect(launch.journals.map((j) => j.connectionId)).toEqual(['c1']);
     // the new session's own writes do not disturb it
-    second.save(emptyJournal());
+    await second.save(emptyJournal());
     expect(second.launchInfo(true).journals[0]?.strip.tabs[0]?.sql).toBe('select 1');
     second.resolve('c1');
     expect(second.launchInfo(true)).toMatchObject({ unclean: false, cause: null, journals: [] });
   });
 
-  it('a clean quit leaves nothing to offer', () => {
+  it('a clean quit leaves nothing to offer', async () => {
     const first = new RecoveryRuntime(dir);
     first.start(info());
-    first.save(journal());
+    await first.save(journal());
     first.end();
     const second = new RecoveryRuntime(dir);
     expect(second.start(info()).kind).toBe('clean');
-    expect(second.launchInfo(false)).toMatchObject({ unclean: false, journals: [] });
+    expect(second.launchInfo(false)).toMatchObject({ unclean: false, journals: [], announce: [] });
   });
 
   it('a crash with nothing saved is still reported, without a snapshot', () => {
@@ -228,24 +223,66 @@ describe('RecoveryRuntime', () => {
     expect(next.launchInfo(false).unclean).toBe(false);
   });
 
-  it('a snapshot nobody restored is offered again after a clean quit', () => {
+  it('a snapshot nobody restored is announced once, never as a crash, on later clean launches (P1-4)', async () => {
     const first = new RecoveryRuntime(dir);
     first.start(info());
-    first.save(journal());
-    // crash, then the second run starts but quits cleanly before reconnecting
+    await first.save(journal());
+    // crash; the second run announces it, then quits cleanly without restoring
     const second = new RecoveryRuntime(dir);
     second.start(info());
+    expect(second.launchInfo(false).announce).toEqual(['c1']);
     second.end();
     const third = new RecoveryRuntime(dir);
-    third.start(info());
-    expect(third.launchInfo(false).journals).toHaveLength(1);
-    expect(third.launchInfo(false).unclean).toBe(true);
+    expect(third.start(info()).kind).toBe('clean');
+    const again = third.launchInfo(false);
+    expect(again.journals).toHaveLength(1); // still restorable when its connection is opened
+    expect(again.unclean).toBe(false);
+    expect(again.cause).toBeNull();
+    expect(again.announce).toEqual([]);
+    third.end();
+    const fourth = new RecoveryRuntime(dir);
+    fourth.start(info());
+    expect(fourth.launchInfo(false).announce).toEqual([]);
   });
 
-  it('a window crash sets the snapshot aside and reloads, until it keeps crashing', () => {
+  it('a snapshot older than two weeks is let go', async () => {
+    const first = new RecoveryRuntime(dir);
+    first.start(info());
+    await first.save(journal({ savedAt: NOW - 15 * 24 * 3600 * 1000 }));
+    const second = new RecoveryRuntime(dir);
+    second.start(info());
+    expect(second.launchInfo(false).journals).toEqual([]);
+  });
+
+  it('several snapshots are all kept and announced, newest first', async () => {
     const rt = new RecoveryRuntime(dir);
     rt.start(info());
-    rt.save(journal());
+    await rt.save(journal({ connectionId: 'a', savedAt: NOW - 5 }));
+    stageJournal(dir);
+    await rt.save(journal({ connectionId: 'b', savedAt: NOW - 1 }));
+    stageJournal(dir);
+    const launch = rt.launchInfo(false);
+    expect(launch.journals.map((j) => j.connectionId)).toEqual(['b', 'a']);
+    rt.resolve('b');
+    expect(rt.launchInfo(false).journals.map((j) => j.connectionId)).toEqual(['a']);
+  });
+
+  it('a snapshot whose restore could not be written down is set aside, not restored twice (P2-1)', async () => {
+    const rt = new RecoveryRuntime(dir);
+    rt.start(info());
+    await rt.save(journal());
+    stageJournal(dir);
+    rt.resolve('c1', true);
+    expect(readPending(dir)).toEqual([]);
+    expect(readdirSync(join(dir, 'recovery', 'pending')).some((f) => f.endsWith('.restored'))).toBe(
+      true,
+    );
+  });
+
+  it('a window crash sets the snapshot aside and reloads, until it keeps crashing', async () => {
+    const rt = new RecoveryRuntime(dir);
+    rt.start(info());
+    await rt.save(journal());
     expect(rt.rendererGone(1_000).reload).toBe(true);
     expect(rt.launchInfo(false)).toMatchObject({ cause: 'renderer' });
     expect(rt.launchInfo(false).journals).toHaveLength(1);
@@ -255,10 +292,10 @@ describe('RecoveryRuntime', () => {
     expect(rt.rendererGone(4_000).reload).toBe(false);
   });
 
-  it('never writes a statement anywhere: the snapshot holds text only', () => {
+  it('never writes a statement anywhere: the snapshot holds text only', async () => {
     const rt = new RecoveryRuntime(dir);
     rt.start(info());
-    rt.save(
+    await rt.save(
       journal({
         strip: {
           v: 1,
@@ -272,5 +309,49 @@ describe('RecoveryRuntime', () => {
     expect(Object.keys(JSON.parse(text)).sort()).toEqual(
       ['connectionId', 'edits', 'savedAt', 'strip', 'txnActive', 'v'].sort(),
     );
+  });
+
+  it('coalesces a burst of writes: the last one wins and every caller is told', async () => {
+    const rt = new RecoveryRuntime(dir);
+    rt.start(info());
+    const results = await Promise.all(
+      [1, 2, 3, 4, 5].map((n) => rt.save(journal({ savedAt: NOW + n, txnActive: n === 5 }))),
+    );
+    expect(results.every(Boolean)).toBe(true);
+    expect(JSON.parse(readFileSync(live(), 'utf8')).savedAt).toBe(NOW + 5);
+  });
+
+  it('a write after a clean quit never brings the file back', async () => {
+    const rt = new RecoveryRuntime(dir);
+    rt.start(info());
+    await rt.save(journal());
+    rt.end();
+    expect(await rt.save(journal())).toBe(false);
+    expect(existsSync(live())).toBe(false);
+  });
+
+  it('one oversized edit does not cost the snapshot: it is left out and counted (P2-1)', async () => {
+    const rt = new RecoveryRuntime(dir);
+    rt.start(info());
+    const edit = (value: string) => ({
+      tabIndex: 0,
+      kind: 'update' as const,
+      schema: 's',
+      table: 't',
+      pkValues: { id: '1' },
+      column: 'c',
+      oldValue: 'x',
+      newValue: value,
+    });
+    const bad = { ...edit('y'), kind: 'truncate' };
+    await rt.save(
+      journal({
+        edits: [edit('ok'), edit('z'.repeat(5 * 1024 * 1024)), bad as never, edit('ok2')],
+      }),
+    );
+    const saved = JSON.parse(readFileSync(live(), 'utf8'));
+    expect(saved.edits.map((e: { newValue: string }) => e.newValue)).toEqual(['ok', 'ok2']);
+    expect(saved.omitted).toEqual({ tabs: [], edits: 2 });
+    expect(saved.strip.tabs[0].sql).toBe('select 1');
   });
 });

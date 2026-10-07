@@ -7,6 +7,7 @@ import {
 import { ipc } from '@/lib/ipc';
 import type { Filter, TableSort } from '@/lib/table-query';
 import type { ConnectionEngine } from '@shared/protocol';
+import { targetOf } from '@shared/recovery';
 import { engineCaps } from '@shared/sql-dialect';
 import { editsOf, pendingEditCount, rowKeyOf, withoutTabEdits } from './session-pending-edits';
 import { DEFAULT_SETTINGS } from './session-settings';
@@ -132,13 +133,14 @@ export function serializeTabs(tabs: readonly QueryTab[], activeTabId: string): P
 export function serializeTabsIndexed(
   tabs: readonly QueryTab[],
   activeTabId: string,
+  maxSqlChars = MAX_SQL_CHARS,
 ): { data: PersistedTabs; indexById: Map<string, number> } {
   const out: PersistedTab[] = [];
   const indexById = new Map<string, number>();
   let activeIndex = 0;
   for (const t of tabs) {
     if (t.kind === 'sql') {
-      if (t.sql.length > MAX_SQL_CHARS) continue;
+      if (t.sql.length > maxSqlChars) continue;
       if (t.id === activeTabId) activeIndex = out.length;
       indexById.set(t.id, out.length);
       out.push({
@@ -669,7 +671,10 @@ export function adoptConnectionTabs(
   const restore = state.settings.restoreWorkspace !== false || forced;
   // B2: a snapshot set aside after a crash wins over the saved strip (it is newer)
   // and is restored whatever "Restore tabs on launch" says: the close was not a choice.
-  const recovered = connId && engineCaps(engine).sql ? takeRecoveryFor(connId) : null;
+  const recovered =
+    connId && engineCaps(engine).sql
+      ? takeRecoveryFor(connId, state.activeConfig ? targetOf(state.activeConfig) : null)
+      : null;
   const recoveredStrip = recovered ? parsePersistedTabs(recovered.strip) : null;
   const persisted =
     recoveredStrip ??

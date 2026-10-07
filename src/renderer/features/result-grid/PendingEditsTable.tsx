@@ -44,6 +44,14 @@ export function PendingEditsTable({ edits }: { edits: PendingEdit[] }) {
                   )}
                 >
                   {kind === 'update' ? e.column : kind === 'insert' ? 'Insert' : 'Delete'}
+                  {e.maybeCommitted && (
+                    <span
+                      className="ml-1 text-[11px] text-[var(--wb-text-2)]"
+                      title="Plasma stopped while this was being committed. Check the data before committing it again."
+                    >
+                      may already be saved
+                    </span>
+                  )}
                 </td>
                 <td className="px-2 py-1.5 text-[var(--wb-text-2)]">
                   {e.schema}.{e.table}

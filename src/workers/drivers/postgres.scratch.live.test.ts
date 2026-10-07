@@ -118,7 +118,7 @@ suite('postgres driver (live, scratch database)', () => {
     expect(await value(rw, 2)).toBe('b2');
 
     const ok = await rw.commitEditBatch(1, [{ sql: UPDATE, params: ['batch', '2'] }]);
-    expect(ok).toEqual({ state: 'active', applied: 1 });
+    expect(ok).toEqual({ state: 'active', applied: 1, conflicts: [] });
     await rw.query('ROLLBACK');
     expect(rw.getTxnState()).toBe('none');
     expect(await value(rw, 1)).toBe('a2');

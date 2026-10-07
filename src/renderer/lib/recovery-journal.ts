@@ -2,7 +2,7 @@ import { toRecoveredEdit } from '@/lib/crash-recovery';
 import type { PendingEditsByTab } from '@/stores/session-pending-edits';
 import { serializeTabsIndexed } from '@/stores/session-tabs';
 import type { QueryTab } from '@/stores/session-types';
-import type { RecoveredEdit, RecoveryJournal } from '@shared/recovery';
+import { type RecoveredEdit, type RecoveryJournal, targetOf } from '@shared/recovery';
 import { engineCaps } from '@shared/sql-dialect';
 
 /**
@@ -21,9 +21,24 @@ export interface JournalSource {
   tabsConnectionId?: string | null;
   pendingEditsByTab: PendingEditsByTab;
   txnState?: string;
-  activeConfig: { id?: string; name?: string; engine?: string } | null;
-  savedConnections: ReadonlyArray<{ id: string; name: string; engine?: string }>;
+  /** Ids of the staged edits whose commit is in flight right now. */
+  commitInFlightIds?: string[];
+  activeConfig: ConnectionTarget | null;
+  savedConnections: ReadonlyArray<ConnectionTarget & { id: string; name: string }>;
 }
+
+interface ConnectionTarget {
+  id?: string;
+  name?: string;
+  engine?: string;
+  host?: string;
+  port?: number;
+  database?: string;
+  user?: string;
+}
+
+/** The largest SQL buffer the snapshot carries; bigger tabs are named in `omitted`. */
+export const JOURNAL_MAX_SQL_CHARS = 2_000_000;
 
 /**
  * The snapshot for the current workspace, or null when there is nothing to
@@ -38,17 +53,32 @@ export function buildJournal(
 ): RecoveryJournal | null {
   const connId = state.activeConfig?.id ?? fallbackConnectionId;
   if (!connId || state.tabsConnectionId !== connId) return null;
+  // A DuckDB data-file session is made of files the user dropped in: its id is not a saved
+  // connection, so there is nothing to reconnect to after a crash.
+  if (connId.startsWith('duckdb-')) return null;
   const saved = state.savedConnections.find((c) => c.id === connId);
   const engine = state.activeConfig?.engine ?? saved?.engine ?? 'postgres';
   if (!engineCaps(engine).sql) return null;
 
-  const { data, indexById } = serializeTabsIndexed(state.tabs, state.activeTabId);
+  const { data, indexById } = serializeTabsIndexed(
+    state.tabs,
+    state.activeTabId,
+    JOURNAL_MAX_SQL_CHARS,
+  );
+  const tooBig = state.tabs
+    .filter((t) => t.kind === 'sql' && t.sql.length > JOURNAL_MAX_SQL_CHARS)
+    .map((t) => t.title.slice(0, 200))
+    .slice(0, 50);
+  const inFlight = new Set(state.commitInFlightIds ?? []);
   const edits: RecoveredEdit[] = [];
   for (const [tabId, list] of Object.entries(state.pendingEditsByTab)) {
     const index = indexById.get(tabId);
     // A tab that is not saved (oversized buffer) cannot hold edits across a restart;
     // its table is reopened from the edit itself, so the edit is still written.
-    for (const e of list) edits.push(toRecoveredEdit(e, index ?? Number.MAX_SAFE_INTEGER));
+    for (const e of list) {
+      const r = toRecoveredEdit(e, index ?? Number.MAX_SAFE_INTEGER);
+      edits.push(inFlight.has(e.id) || e.maybeCommitted ? { ...r, maybeCommitted: true } : r);
+    }
   }
   return {
     v: 1,
@@ -58,9 +88,19 @@ export function buildJournal(
       ? { connectionName: state.activeConfig?.name ?? saved?.name }
       : {}),
     txnActive: state.txnState === 'active' || state.txnState === 'error',
+    ...(connectionTarget(state.activeConfig ?? saved)
+      ? { target: connectionTarget(state.activeConfig ?? saved) }
+      : {}),
+    ...(tooBig.length > 0 ? { omitted: { tabs: tooBig, edits: 0 } } : {}),
     strip: data as unknown as RecoveryJournal['strip'],
     edits,
   };
+}
+
+/** Where the connection points (never a secret), or undefined when there is nothing to compare. */
+function connectionTarget(c: ConnectionTarget | undefined | null) {
+  if (!c || c.host === undefined || c.database === undefined) return undefined;
+  return targetOf(c);
 }
 
 interface Store<S> {
@@ -69,11 +109,15 @@ interface Store<S> {
 }
 
 interface RecoveryApi {
-  save(j: RecoveryJournal | null): void;
+  save(j: RecoveryJournal | null, durable?: boolean): void;
   flush(j: RecoveryJournal | null): Promise<boolean>;
 }
 
 const DEBOUNCE_MS = 250;
+/** A big snapshot is rewritten less eagerly while typing; blur / hide / unload still write at once. */
+export function debounceFor(sizeChars: number): number {
+  return DEBOUNCE_MS + Math.min(2000, Math.floor(sizeChars / 100_000) * 100);
+}
 
 let flushNow: (() => Promise<boolean>) | null = null;
 let suspend: (() => void) | null = null;
@@ -113,16 +157,20 @@ export function installRecoveryJournal<S extends JournalSource & { connectionSta
   };
   const fingerprint = (j: RecoveryJournal) => JSON.stringify({ ...j, savedAt: 0 });
 
-  const write = () => {
+  let lastSize = 0;
+  const write = (durable = false) => {
     if (timer) clearTimeout(timer);
     timer = null;
     const j = current();
     if (!j) return;
     const text = fingerprint(j);
+    lastSize = text.length;
     if (text === lastText) return;
     lastText = text;
-    api.save(j);
+    api.save(j, durable);
   };
+  const writeNow = () => write(true);
+  const writeDebounced = () => write(false);
 
   const unsub = store.subscribe((state, prev) => {
     if (state.connectionState === 'connected' && state.activeConfig?.id) {
@@ -134,21 +182,22 @@ export function installRecoveryJournal<S extends JournalSource & { connectionSta
       state.activeTabId === prev.activeTabId &&
       state.pendingEditsByTab === prev.pendingEditsByTab &&
       state.txnState === prev.txnState &&
+      state.commitInFlightIds === prev.commitInFlightIds &&
       state.tabsConnectionId === prev.tabsConnectionId
     ) {
       return;
     }
     if (timer) clearTimeout(timer);
-    timer = setTimeout(write, DEBOUNCE_MS);
+    timer = setTimeout(writeDebounced, debounceFor(lastSize));
   });
 
   const onHide = () => {
     if (win.document && win.document.visibilityState !== 'hidden') return;
-    write();
+    writeNow();
   };
-  win.addEventListener('blur', write);
-  win.addEventListener('pagehide', write);
-  win.addEventListener('beforeunload', write);
+  win.addEventListener('blur', writeNow);
+  win.addEventListener('pagehide', writeNow);
+  win.addEventListener('beforeunload', writeNow);
   win.document?.addEventListener('visibilitychange', onHide);
 
   flushNow = async () => {
@@ -170,9 +219,9 @@ export function installRecoveryJournal<S extends JournalSource & { connectionSta
   return () => {
     unsub();
     if (timer) clearTimeout(timer);
-    win.removeEventListener('blur', write);
-    win.removeEventListener('pagehide', write);
-    win.removeEventListener('beforeunload', write);
+    win.removeEventListener('blur', writeNow);
+    win.removeEventListener('pagehide', writeNow);
+    win.removeEventListener('beforeunload', writeNow);
     win.document?.removeEventListener('visibilitychange', onHide);
     flushNow = null;
     suspend = null;

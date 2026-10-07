@@ -1,11 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import {
   type RecoveryJournal,
+  ingestJournal,
   journalHasContent,
   judgePreviousExit,
   mayReloadAfterCrash,
   migrateJournal,
   parseJournal,
+  sameTarget,
+  targetOf,
 } from './recovery';
 
 const journal = (over: Partial<RecoveryJournal> = {}): RecoveryJournal => ({
@@ -179,5 +182,72 @@ describe('mayReloadAfterCrash', () => {
     const r = mayReloadAfterCrash([0, 1_000, 2_000], 120_000);
     expect(r.reload).toBe(true);
     expect(r.history).toEqual([120_000]);
+  });
+});
+
+describe('ingestJournal (P2-1)', () => {
+  const edit = (tabIndex: number, value = 'v') => ({
+    tabIndex,
+    kind: 'update' as const,
+    schema: 's',
+    table: 't',
+    pkValues: { id: '1' },
+    column: 'c',
+    oldValue: 'o',
+    newValue: value,
+  });
+
+  it('keeps everything usable and counts what it left out', () => {
+    const out = ingestJournal({
+      ...journal(),
+      edits: [edit(0), { nonsense: true }, edit(0, 'x'.repeat(5 * 1024 * 1024))],
+    });
+    expect(out?.journal.edits).toHaveLength(1);
+    expect(out?.journal.omitted).toEqual({ tabs: [], edits: 2 });
+    expect(out?.dropped.length).toBeGreaterThan(0);
+  });
+
+  it('a tab too large to store is named, and later tabs and their edits move up', () => {
+    const big = { kind: 'sql', title: 'huge.sql', sql: 'x'.repeat(5 * 1024 * 1024) };
+    const out = ingestJournal({
+      ...journal(),
+      strip: {
+        v: 1,
+        activeIndex: 2,
+        tabs: [big, { kind: 'sql', title: 'a', sql: '1' }, { kind: 'sql', title: 'b', sql: '2' }],
+      },
+      edits: [edit(2), edit(0)],
+    });
+    expect(out?.journal.strip.tabs.map((t) => t.title)).toEqual(['a', 'b']);
+    expect(out?.journal.strip.activeIndex).toBe(1);
+    expect(out?.journal.omitted?.tabs).toEqual(['huge.sql']);
+    // edit on the kept tab moved to its new position; the one on the dropped tab reopens its table
+    expect(out?.journal.edits[0]?.tabIndex).toBe(1);
+    expect(out?.journal.edits[1]?.tabIndex).toBe(Number.MAX_SAFE_INTEGER);
+  });
+
+  it('sheds the largest edits first when the whole is over the limit', () => {
+    const out = ingestJournal(
+      { ...journal(), edits: [edit(0, 'a'), edit(0, 'b'.repeat(2000)), edit(0, 'c')] },
+      1500,
+    );
+    expect(out?.journal.edits.map((e) => e.newValue)).toEqual(['a', 'c']);
+    expect(out?.journal.omitted?.edits).toBe(1);
+  });
+
+  it('refuses only what is not a journal at all', () => {
+    expect(ingestJournal(null)).toBeNull();
+    expect(ingestJournal({ v: 1 })).toBeNull();
+    expect(ingestJournal({ ...journal(), v: 5 })).toBeNull();
+  });
+});
+
+describe('snapshot target (P2-6)', () => {
+  it('compares engine, host, port, database and user', () => {
+    const a = targetOf({ engine: 'postgres', host: 'h', port: 5432, database: 'prod', user: 'u' });
+    expect(sameTarget(a, { ...a })).toBe(true);
+    expect(sameTarget(a, { ...a, database: 'staging' })).toBe(false);
+    expect(sameTarget(a, { ...a, host: 'other' })).toBe(false);
+    expect(sameTarget(a, { ...a, user: 'admin' })).toBe(false);
   });
 });
