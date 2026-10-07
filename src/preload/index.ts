@@ -118,6 +118,10 @@ const api: PlasmaAPI = {
     actionResult: (res) => ipcRenderer.invoke(IpcChannel.AiActionResult, res),
     runReadOnly: (sql) => ipcRenderer.invoke(IpcChannel.AiRunReadOnly, sql),
   },
+  compare: {
+    run: (req) => ipcRenderer.invoke(IpcChannel.CompareRun, req),
+    cancel: (runId) => ipcRenderer.invoke(IpcChannel.CompareCancel, runId),
+  },
   sql: {
     format: (sql) => ipcRenderer.invoke(IpcChannel.FormatSql, sql),
   },

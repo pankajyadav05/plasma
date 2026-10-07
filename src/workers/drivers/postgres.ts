@@ -52,6 +52,7 @@ import {
 } from './pg-txn';
 import { plasmaPgTypes } from './pg-type-parsers';
 import { introspectPostgres } from './postgres-introspect';
+import { type AiQueryOpts, CancelFailedError } from './sql-engine';
 
 /** Rows counted past the display cap before Safe Run stops counting. */
 const SAFE_RUN_COUNT_CEILING = 1_000_000;
@@ -146,6 +147,8 @@ type QueryOpts = {
   timeoutMs?: number;
   /** Retained-bytes cap for this result (clamped to MAX_RESULT_BYTES_CEILING). */
   maxBytes?: number;
+  /** Raise the MAX_RESULT_ROWS ceiling for this read (Result Compare). */
+  rowCeiling?: number;
 };
 
 /** True while the client has a statement running or queued (best effort). */
@@ -895,7 +898,7 @@ export class PostgresDriver {
         const stop = appendBoundedRows(
           state,
           batch.rows,
-          Math.min(opts?.maxRows ?? MAX_RESULT_ROWS, MAX_RESULT_ROWS),
+          Math.min(opts?.maxRows ?? MAX_RESULT_ROWS, opts?.rowCeiling ?? MAX_RESULT_ROWS),
           maxBytes,
         );
         const accepted = state.rows.length - before;
@@ -980,11 +983,13 @@ export class PostgresDriver {
           );
         }),
       ]);
-      return res.rows[0]?.ok === true;
+      if (res.rows[0]?.ok === true) return true;
+      throw new CancelFailedError('the server refused pg_cancel_backend');
     } catch (err) {
+      if (err instanceof CancelFailedError) throw err;
       if (!isServerError(err)) this.markConnectionLost(`cancel (${which}) unanswered`);
       console.error(`[plasma] pg_cancel_backend (${which}) failed:`, err);
-      return false;
+      throw new CancelFailedError(err instanceof Error ? err.message : String(err));
     } finally {
       clearTimeout(timer);
     }
@@ -1309,22 +1314,32 @@ export class PostgresDriver {
     return res;
   }
 
-  async aiQuery(sql: string, params?: unknown[]): Promise<QueryResult> {
+  async aiQuery(sql: string, params?: unknown[], opts?: AiQueryOpts): Promise<QueryResult> {
     if (!isSingleSqlStatement(sql))
       throw new Error('rejected: AI queries must be a single SQL statement');
     // F12: serialised with other aux work so a sideband lookup can't land
     // inside this read-only transaction (or vice versa).
-    return this.withAux((client) => this.runAiQuery(client, sql, params));
+    return this.withAux((client) => this.runAiQuery(client, sql, params, opts));
   }
 
-  private async runAiQuery(client: ClientT, sql: string, params?: unknown[]): Promise<QueryResult> {
+  private async runAiQuery(
+    client: ClientT,
+    sql: string,
+    params?: unknown[],
+    opts?: AiQueryOpts,
+  ): Promise<QueryResult> {
     const start = Date.now();
     try {
       // F19: one statement, so nothing can land between BEGIN and READ ONLY.
       await client.query('BEGIN READ ONLY');
       // C18: a model-written query must not hold the aux session forever.
       await client.query('SET LOCAL statement_timeout = 30000');
-      const result = await this.runBounded(client, sql, params);
+      const result = await this.runBounded(
+        client,
+        sql,
+        params,
+        opts?.maxRows ? { maxRows: opts.maxRows, rowCeiling: opts.maxRows } : undefined,
+      );
       await client.query('COMMIT');
       return { ...result, durationMs: Date.now() - start };
     } catch (err) {

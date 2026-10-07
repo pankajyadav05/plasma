@@ -14,6 +14,8 @@ export function LiveAnnouncer() {
       ? {
           id: t.id,
           queryRunState: t.queryRunState,
+          phase: t.queryLifecycle?.phase,
+          lifeMessage: t.queryLifecycle?.message,
           queryResult: t.queryResult,
           queryError: t.queryError,
         }
@@ -30,6 +32,8 @@ export function LiveAnnouncer() {
   });
 
   const runState = tab?.queryRunState;
+  const phase = tab?.phase;
+  const lifeMessage = tab?.lifeMessage;
   const tabId = tab?.id;
   const result = tab?.queryResult ?? null;
   const error = tab?.queryError ?? null;
@@ -39,10 +43,20 @@ export function LiveAnnouncer() {
     prevRun.current = { id: tabId, state: runState };
     // Only announce a run that finished on the tab that was running.
     if (prev.id !== tabId || prev.state !== 'running' || runState === 'running') return;
-    const msg = describeQueryOutcome(result, error);
-    if (error) setAlert(msg);
+    const msg = describeQueryOutcome(result, error, phase, lifeMessage);
+    if (error && phase !== 'cancelled') setAlert(msg);
     else setStatus(msg);
-  }, [tabId, runState, result, error]);
+  }, [tabId, runState, result, error, phase, lifeMessage]);
+
+  // Cancelling is its own state: say it, so a stuck cancel is not silent.
+  const prevPhase = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    if (phase === 'cancelling' && prevPhase.current !== 'cancelling') setStatus('Cancelling query');
+    if (phase === 'queued' && prevPhase.current !== 'queued') {
+      setStatus('Query queued behind another');
+    }
+    prevPhase.current = phase;
+  }, [phase]);
 
   const wasConnected = useRef(false);
   useEffect(() => {

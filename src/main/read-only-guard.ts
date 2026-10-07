@@ -48,6 +48,8 @@ const WRITE_KINDS = new Set<string>([
 const READ_KINDS = new Set<string>([
   'connect',
   'testConnect',
+  'compareQuery', // its own read-only throwaway session
+  'compareCancel',
   'disconnect',
   'setStatementTimeout',
   'cancel',

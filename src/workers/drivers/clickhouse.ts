@@ -28,7 +28,14 @@ import {
 } from './clickhouse-introspect';
 import { clickhousePlanToJson } from './explain-plan';
 import type { EditBatchConflict } from './pg-txn';
-import type { ExportBatch, SqlEditUpdate, SqlEngineDriver, SqlQueryOpts } from './sql-engine';
+import {
+  type AiQueryOpts,
+  type ExportBatch,
+  type SqlEditUpdate,
+  type SqlEngineDriver,
+  type SqlQueryOpts,
+  aiReadOpts,
+} from './sql-engine';
 
 /**
  * ClickHouse driver (@clickhouse/client over the HTTP(S) interface; pure JS).
@@ -309,7 +316,7 @@ export class ClickhouseDriver implements SqlEngineDriver {
     command: string,
     opts: SqlQueryOpts | undefined,
   ): Promise<RawResult> {
-    const maxRows = Math.min(opts?.maxRows ?? MAX_RESULT_ROWS, MAX_RESULT_ROWS);
+    const maxRows = Math.min(opts?.maxRows ?? MAX_RESULT_ROWS, opts?.rowCeiling ?? MAX_RESULT_ROWS);
     const maxBytes = Math.min(opts?.maxBytes ?? MAX_RESULT_BYTES, MAX_RESULT_BYTES_CEILING);
     const state = emptyBoundState();
     let names: string[] | null = null;
@@ -354,7 +361,7 @@ export class ClickhouseDriver implements SqlEngineDriver {
     command: string,
     opts: SqlQueryOpts | undefined,
   ): Promise<RawResult> {
-    const maxRows = Math.min(opts?.maxRows ?? MAX_RESULT_ROWS, MAX_RESULT_ROWS);
+    const maxRows = Math.min(opts?.maxRows ?? MAX_RESULT_ROWS, opts?.rowCeiling ?? MAX_RESULT_ROWS);
     const maxBytes = Math.min(opts?.maxBytes ?? MAX_RESULT_BYTES, MAX_RESULT_BYTES_CEILING);
     const state = emptyBoundState();
     try {
@@ -414,13 +421,13 @@ export class ClickhouseDriver implements SqlEngineDriver {
     return { ...result, durationMs: Date.now() - start };
   }
 
-  async aiQuery(sql: string, params?: unknown[]): Promise<QueryResult> {
+  async aiQuery(sql: string, params?: unknown[], opts?: AiQueryOpts): Promise<QueryResult> {
     if (splitSqlStatements(sql).length !== 1) {
       throw new Error('rejected: AI queries must be a single SQL statement');
     }
     const { roClient } = this.requireClients();
     const start = Date.now();
-    const result = await this.execute(roClient, sql, params, { maxRows: 1000 }, false);
+    const result = await this.execute(roClient, sql, params, aiReadOpts(opts), false);
     return { ...result, durationMs: Date.now() - start };
   }
 

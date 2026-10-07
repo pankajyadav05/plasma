@@ -34,7 +34,14 @@ import {
   buildDuckdbSchema,
 } from './duckdb-introspect';
 import type { EditBatchConflict } from './pg-txn';
-import type { ExportBatch, SqlEditUpdate, SqlEngineDriver, SqlQueryOpts } from './sql-engine';
+import {
+  type AiQueryOpts,
+  type ExportBatch,
+  type SqlEditUpdate,
+  type SqlEngineDriver,
+  type SqlQueryOpts,
+  aiReadOpts,
+} from './sql-engine';
 import { XlsxError, xlsxSheetNames } from './xlsx-sheets';
 
 import type {
@@ -548,7 +555,7 @@ export class DuckdbDriver implements SqlEngineDriver {
     const columns = this.columnsOf(result);
     const typeIds = columns.map((_, i) => result.columnTypeId(i) as number);
     const state = emptyBoundState();
-    const maxRows = Math.min(opts?.maxRows ?? MAX_RESULT_ROWS, MAX_RESULT_ROWS);
+    const maxRows = Math.min(opts?.maxRows ?? MAX_RESULT_ROWS, opts?.rowCeiling ?? MAX_RESULT_ROWS);
     const maxBytes = Math.min(opts?.maxBytes ?? MAX_RESULT_BYTES, MAX_RESULT_BYTES_CEILING);
     const chunks = result.yieldRowsJson();
     try {
@@ -585,14 +592,12 @@ export class DuckdbDriver implements SqlEngineDriver {
     return { ...result, durationMs: Date.now() - start };
   }
 
-  async aiQuery(sql: string, params?: unknown[]): Promise<QueryResult> {
+  async aiQuery(sql: string, params?: unknown[], opts?: AiQueryOpts): Promise<QueryResult> {
     if (splitSqlStatements(sql).length !== 1) {
       throw new Error('rejected: AI queries must be a single SQL statement');
     }
     const start = Date.now();
-    const result = await this.locked(() =>
-      this.executeLocked(sql, params, { maxRows: 1000 }, true),
-    );
+    const result = await this.locked(() => this.executeLocked(sql, params, aiReadOpts(opts), true));
     return { ...result, durationMs: Date.now() - start };
   }
 

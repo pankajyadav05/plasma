@@ -9,6 +9,7 @@ import type { AiImage } from '@/lib/ai-images';
 import type { Filter, TableSort } from '@/lib/table-query';
 import type { AgentActionInput, AgentActionStatus } from '@shared/agent-actions';
 import type { AgentActionName, AiMessage, QueryResult } from '@shared/protocol';
+import type { QueryLifecycle } from '@shared/query-lifecycle';
 import type { VariableValue } from '@shared/sql-variables';
 import type { TableViewColumn, TableViewSpec } from '@shared/table-view';
 import type { StateCreator } from 'zustand';
@@ -44,6 +45,7 @@ export type QueryRunState = 'idle' | 'running';
  *  - os-console    → OpenSearch Dev Tools console (raw REST, O14)
  *  - er-diagram    → entity-relationship diagram of a schema / table selection
  *  - pg-listen     → Postgres LISTEN/NOTIFY tail
+ *  - result-compare → Result Compare of two result sets
  */
 export type TabKind =
   | 'sql'
@@ -59,7 +61,8 @@ export type TabKind =
   | 'os-sql'
   | 'os-console'
   | 'er-diagram'
-  | 'pg-listen';
+  | 'pg-listen'
+  | 'result-compare';
 export type TableViewMode = 'data' | 'structure' | 'definition';
 export type EntityKind =
   | 'table'
@@ -195,6 +198,8 @@ export interface QueryTab {
 
   // ── Common query state ──
   queryRunState: QueryRunState;
+  /** Explicit run lifecycle (queued / running / cancelling / …); `queryRunState` is its busy flag. */
+  queryLifecycle?: QueryLifecycle;
   queryResult: QueryResult | null;
   queryError: string | null;
   queryErrorSql: string | null;

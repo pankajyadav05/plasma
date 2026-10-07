@@ -760,6 +760,28 @@ export const QueryResult = z.object({
 });
 export type QueryResult = z.infer<typeof QueryResult>;
 
+/**
+ * What `query.cancel` found: the cancel signal was `sent` to the server
+ * (the run then fails with the engine's cancel error), nothing was in
+ * flight (`nothing-running`: it already finished or never started), the
+ * engine has no way to stop a statement (`unsupported`), or the server did
+ * not confirm the cancel (`failed`: no answer, refused).
+ */
+export type CancelOutcome = 'sent' | 'nothing-running' | 'unsupported' | 'failed';
+
+/**
+ * Result Compare: run one read-only statement on a saved connection (null =
+ * the active one). Same read-only path as the agent's run_query.
+ */
+export const CompareRunRequest = z.object({
+  connectionId: z.string().nullable(),
+  sql: z.string().min(1).max(200_000),
+  maxRows: z.number().int().positive().max(200_000).optional(),
+  /** Lets `compare.cancel(runId)` stop this run on another connection. */
+  runId: z.string().min(1).max(100).optional(),
+});
+export type CompareRunRequest = z.infer<typeof CompareRunRequest>;
+
 /** Result export formats (U16). */
 export const ExportFormat = z.enum(['csv', 'json', 'sql']);
 export type ExportFormat = z.infer<typeof ExportFormat>;
@@ -1373,7 +1395,21 @@ export const WorkerRequest = z.discriminatedUnion('kind', [
     id: z.string(),
     sql: z.string(),
     params: z.array(z.unknown()).optional(),
+    /** Result Compare: keep more than the agent's default cap. */
+    maxRows: z.number().int().positive().max(200_000).optional(),
   }),
+  // Result Compare on another saved connection: a throwaway read-only driver,
+  // one read-only statement, then gone. Never touches the live session.
+  z.object({
+    kind: z.literal('compareQuery'),
+    id: z.string(),
+    config: ConnectionConfig,
+    sql: z.string(),
+    maxRows: z.number().int().positive().max(200_000),
+    /** Names this run so `compareCancel` (and a deadline) can stop it. */
+    runId: z.string(),
+  }),
+  z.object({ kind: z.literal('compareCancel'), id: z.string(), runId: z.string() }),
   // LISTEN/NOTIFY tail: a dedicated listener connection, never the primary.
   z.object({ kind: z.literal('pgListen'), id: z.string(), channel: z.string().min(1) }),
   z.object({ kind: z.literal('pgUnlisten'), id: z.string(), channel: z.string().min(1) }),
@@ -1618,8 +1654,10 @@ export const WorkerResponse = z.discriminatedUnion('kind', [
   z.object({
     kind: z.literal('cancelled'),
     id: z.string(),
-    /** Postgres: false when nothing was in flight or the server refused the cancel. */
+    /** False when nothing was in flight. */
     delivered: z.boolean().optional(),
+    /** The cancel was attempted and the server did not confirm it. */
+    failed: z.boolean().optional(),
   }),
   /** Worker process finished bootstrapping and can accept requests (U20). */
   z.object({ kind: z.literal('ready'), id: z.string() }),
@@ -1993,6 +2031,11 @@ export const SettingsShape = z.object({
       }),
     )
     .default({}),
+  /**
+   * Saved Result Compare definitions (queries, connections, keys, ignore
+   * rules). Validated on read by `parseSavedComparison`; a bad entry is dropped.
+   */
+  savedComparisons: z.array(z.unknown()).optional(),
   /**
    * User-saved tab snapshots, keyed by connection id. Each entry captures
    * everything needed to recreate a tab — for SQL tabs the editor text,
@@ -2425,6 +2468,8 @@ export const IpcChannel = {
   AiActionResult: 'plasma:ai:action-result',
   /** The agent's read-only query: runs in a read-only session (`aiQuery`), result shown in a tab. */
   AiRunReadOnly: 'plasma:ai:run-readonly',
+  CompareRun: 'plasma:compare:run',
+  CompareCancel: 'plasma:compare:cancel',
   /** Renderer-facing event channel for streamed AI deltas. */
   AiEvent: 'plasma:ai:event',
   // SQL formatting (kept main-side so we can swap engines later without
@@ -2604,7 +2649,7 @@ export interface PlasmaAPI {
     safeRun(req: SafeRunStartRequest): Promise<SafeRunReport>;
     /** Commit or roll back the pending Safe Run. Idempotent after a timeout. */
     safeRunFinish(req: SafeRunFinishRequest): Promise<SafeRunOutcome>;
-    cancel(): Promise<void>;
+    cancel(): Promise<CancelOutcome>;
     /** Cancel whatever runs on the aux connection (AI tool query, lookups). */
     cancelAux(): Promise<void>;
     /**
@@ -2690,6 +2735,12 @@ export interface PlasmaAPI {
       queryString?: string;
       query?: string;
     }): Promise<OsFieldStats[]>;
+  };
+  compare: {
+    /** One read-only statement on a saved connection, for Result Compare. */
+    run(req: CompareRunRequest): Promise<QueryResult>;
+    /** Stop a compare run on another connection (its isolated session is closed). */
+    cancel(runId: string): Promise<void>;
   };
   ai: {
     /**

@@ -91,10 +91,28 @@ describe('long-job deadlines (SC-06)', () => {
   });
 
   it('maps a timed-out request to the message that stops its worker-side work', () => {
-    expect(cancelRequestFor({ kind: 'aiQuery', id: 'a', sql: 'select 1' }, 'c1')).toEqual({
+    expect(cancelRequestFor({ kind: 'query', id: 'a', sql: 'select 1' }, 'c1')).toEqual({
       kind: 'cancel',
       id: 'c1',
     });
+    // P2-9: a timed-out aux read must not cancel the user's primary query.
+    expect(cancelRequestFor({ kind: 'aiQuery', id: 'a', sql: 'select 1' }, 'c1')).toEqual({
+      kind: 'cancelAux',
+      id: 'c1',
+    });
+    expect(
+      cancelRequestFor(
+        {
+          kind: 'compareQuery',
+          id: 'a',
+          sql: 'select 1',
+          maxRows: 5,
+          runId: 'r9',
+          config: {} as never,
+        },
+        'c2',
+      ),
+    ).toEqual({ kind: 'compareCancel', id: 'c2', runId: 'r9' });
     expect(
       cancelRequestFor(
         { kind: 'osSearch', id: 'a', index: 'i', body: '{}', size: 10, requestId: 'r1' },

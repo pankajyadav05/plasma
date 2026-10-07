@@ -21,7 +21,15 @@ import type { Connection as CbConnection } from 'mysql2';
 import { mysqlPlanToJson } from './explain-plan';
 import { type MysqlRawSchema, buildMysqlSchema, mysqlIntrospectQueries } from './mysql-introspect';
 import { type EditBatchConflict, runEditBatch } from './pg-txn';
-import type { ExportBatch, SqlEditUpdate, SqlEngineDriver, SqlQueryOpts } from './sql-engine';
+import {
+  type AiQueryOpts,
+  CancelFailedError,
+  type ExportBatch,
+  type SqlEditUpdate,
+  type SqlEngineDriver,
+  type SqlQueryOpts,
+  aiReadOpts,
+} from './sql-engine';
 
 /**
  * MySQL / MariaDB driver (mysql2). Two connections, like the Postgres driver:
@@ -319,7 +327,7 @@ export class MysqlDriver implements SqlEngineDriver {
           const cells = row.map((v, i) => normalizeMysqlCell(v, fields[i]?.columnType));
           if (appendBoundedRows(state, [cells], maxRows, maxBytes)) {
             capped = true;
-            if (!internal) void this.killStatement(conn);
+            if (!internal) void this.killStatement(conn).catch(() => undefined);
           }
         } else if (row && typeof row === 'object') {
           header = row as typeof header;
@@ -365,13 +373,14 @@ export class MysqlDriver implements SqlEngineDriver {
   private async killStatement(conn: CbConnection): Promise<boolean> {
     const aux = this.aux;
     const id = (conn as unknown as { threadId?: number }).threadId;
-    if (!aux || !id || conn === aux) return false;
+    if (!aux || !id || conn === aux)
+      throw new CancelFailedError('no side connection to send KILL QUERY');
     this.killing = true;
     try {
       await this.exec(aux, `KILL QUERY ${Number(id)}`, [], true);
       return true;
-    } catch {
-      return false;
+    } catch (err) {
+      throw new CancelFailedError(err instanceof Error ? err.message : String(err));
     } finally {
       // The interrupted statement's error arrives a moment later.
       setTimeout(() => {
@@ -459,11 +468,11 @@ export class MysqlDriver implements SqlEngineDriver {
     return this.auxRead(sql, params, opts, opts?.timeoutMs);
   }
 
-  async aiQuery(sql: string, params?: unknown[]): Promise<QueryResult> {
+  async aiQuery(sql: string, params?: unknown[], opts?: AiQueryOpts): Promise<QueryResult> {
     if (splitSqlStatements(sql).length !== 1) {
       throw new Error('rejected: AI queries must be a single SQL statement');
     }
-    return this.auxRead(sql, params, { maxRows: 1000 }, 30_000);
+    return this.auxRead(sql, params, aiReadOpts(opts), 30_000);
   }
 
   async explain(sql: string, _analyze: boolean, params?: unknown[]): Promise<QueryResult> {

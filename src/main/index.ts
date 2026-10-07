@@ -21,7 +21,9 @@ import {
   AiListModelsRequest,
   type AppMeta,
   AppUnsavedState,
+  type CancelOutcome,
   CommitEditBatchRequest,
+  CompareRunRequest,
   ConnectionConfig,
   type ConnectionConfig as ConnectionConfigType,
   type ConnectionEngine,
@@ -1431,8 +1433,11 @@ function registerIpcHandlers() {
     }
   });
 
-  ipcMain.handle(IpcChannel.QueryCancel, async (): Promise<void> => {
-    await callWorker({ kind: 'cancel' }, 'cancelled');
+  ipcMain.handle(IpcChannel.QueryCancel, async (): Promise<CancelOutcome> => {
+    const res = await callWorker({ kind: 'cancel' }, 'cancelled');
+    if (res.failed) return 'failed';
+    if (res.delivered === undefined) return 'unsupported';
+    return res.delivered ? 'sent' : 'nothing-running';
   });
 
   ipcMain.handle(IpcChannel.QuerySideband, async (_e, payload: unknown): Promise<QueryResult> => {
@@ -1897,6 +1902,118 @@ function registerIpcHandlers() {
   // result nobody waits on is ignored.
   ipcMain.handle(IpcChannel.AiActionResult, (_e, raw: unknown): void => {
     submitAiActionResult(raw);
+  });
+
+  // Result Compare: one read-only statement on a saved connection. The active
+  // connection uses the agent's read-only path as is; any other saved
+  // connection gets a throwaway read-only session (tunnel included) that is
+  // closed right after, so the live session is never disturbed.
+  ipcMain.handle(IpcChannel.CompareCancel, async (_e, runId: unknown): Promise<void> => {
+    if (typeof runId !== 'string' || runId === '') return;
+    await callWorker({ kind: 'compareCancel', runId }, 'cancelled');
+  });
+
+  ipcMain.handle(IpcChannel.CompareRun, async (_e, raw: unknown): Promise<QueryResult> => {
+    const req = CompareRunRequest.parse(raw);
+    if (!isSingleSqlStatement(req.sql) || !isAgentReadSql(req.sql)) {
+      throw new Error(
+        'rejected: Compare runs one read-only statement (SELECT, WITH, SHOW, EXPLAIN)',
+      );
+    }
+    const maxRows = req.maxRows ?? 200_000;
+    if (req.connectionId === null || req.connectionId === activeConnectionId) {
+      if (!isSqlEngine(activeEngine)) throw new Error('no SQL connection');
+      const res = await callWorker({ kind: 'aiQuery', sql: req.sql, maxRows }, 'queryResult');
+      return res.result;
+    }
+    const targetId = req.connectionId;
+    const config = workspaceRuntime.connectConfigFor(targetId) ?? vaultGetFull(targetId);
+    if (!config) throw new Error('That connection is not saved any more.');
+    if (!isSqlEngine(config.engine ?? 'postgres')) {
+      throw new Error(
+        'Compare needs a SQL connection (Postgres, MySQL, SQLite, ClickHouse, DuckDB).',
+      );
+    }
+    const settings = SettingsShape.parse(getAllSettings());
+    assertTlsAllowedForTag(resolveTls(config), settings.connectionTags?.[config.id]);
+    const tunnelKey = `compare:${randomUUID()}`;
+    let tunnelled = false;
+    try {
+      let effective: ConnectionConfigType = await withTlsFiles(config);
+      if (config.engine === 'duckdb' && config.duckdb?.attachConnectionIds?.length) {
+        // Saved Postgres connections attached read-only, resolved here with their stored passwords.
+        effective = {
+          ...effective,
+          duckdb: {
+            files: config.duckdb.files,
+            installPostgresExtension: config.duckdb.installPostgresExtension,
+            installExcelExtension: config.duckdb.installExcelExtension,
+            attach: buildDuckdbAttachments(config.duckdb.attachConnectionIds, {
+              load: (id) => vaultGetFull(id),
+              sshFor: (id) => getFullSshConfig(id, settings.connectionSsh) !== null,
+            }),
+          },
+        };
+      }
+      const ssh = getFullSshConfig(config.id, settings.connectionSsh);
+      if (ssh) {
+        const refusal = sshUnsupportedReason(config);
+        if (refusal) throw new Error(refusal);
+        const local = await openTunnel({
+          id: tunnelKey,
+          ssh,
+          pgHost: config.host,
+          pgPort: config.port,
+        });
+        tunnelled = true;
+        effective = {
+          ...withTunnelServername(effective, config.host),
+          host: local.host,
+          port: local.port,
+        };
+      }
+      const executedAt = Date.now();
+      try {
+        const res = await callWorker(
+          {
+            kind: 'compareQuery',
+            config: { ...effective, readOnly: true },
+            sql: req.sql,
+            maxRows,
+            runId: req.runId ?? randomUUID(),
+          },
+          'queryResult',
+        );
+        try {
+          recordHistory({
+            connectionId: targetId,
+            sql: req.sql,
+            rowCount: res.result.rowCount,
+            durationMs: res.result.durationMs,
+            error: null,
+            executedAt,
+          });
+        } catch (err) {
+          logger.error('[plasma] history write failed (non-fatal):', err);
+        }
+        return res.result;
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        try {
+          recordHistory({
+            connectionId: targetId,
+            sql: req.sql,
+            rowCount: null,
+            durationMs: null,
+            error: message,
+            executedAt,
+          });
+        } catch {}
+        throw err;
+      }
+    } finally {
+      if (tunnelled) closeTunnel(tunnelKey);
+    }
   });
 
   // The agent's run_query: one read-only statement on the aux client inside a

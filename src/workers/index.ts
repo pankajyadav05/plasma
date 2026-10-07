@@ -17,11 +17,15 @@ import { OpenSearchDriver } from './drivers/opensearch';
 import { PostgresDriver } from './drivers/postgres';
 import { RedisDriver } from './drivers/redis';
 import { dispatchRedis } from './drivers/redis-dispatch';
-import type { SqlEngineDriver } from './drivers/sql-engine';
+import { CancelFailedError, type SqlEngineDriver } from './drivers/sql-engine';
 import { SqliteDriver } from './drivers/sqlite';
 import { ExportCancelledError, writeExportFromQueryStream, writeExportRows } from './export-file';
 import { RequestScheduler } from './request-scheduler';
-import { runIsolatedTestConnect } from './test-connect';
+import {
+  cancelIsolatedRun,
+  runIsolatedReadOnlyQuery,
+  runIsolatedTestConnect,
+} from './test-connect';
 
 /**
  * DB worker — runs in an Electron utilityProcess.
@@ -51,6 +55,18 @@ const clickhouse = new ClickhouseDriver();
 const duckdb = new DuckdbDriver();
 
 /** The active driver for SQL-workbench requests (query, edits, txn, export…). */
+/** Run a driver cancel and report it as delivered / nothing in flight / failed. */
+async function tryCancel(
+  fn: () => Promise<boolean> | undefined,
+): Promise<{ delivered?: boolean; failed?: boolean }> {
+  try {
+    return { delivered: await fn() };
+  } catch (err) {
+    if (err instanceof CancelFailedError) return { delivered: false, failed: true };
+    throw err;
+  }
+}
+
 function sqlDriver(): SqlEngineDriver | null {
   if (activeEngine === 'postgres') return pg;
   if (activeEngine === 'sqlite') return sqlite;
@@ -271,11 +287,11 @@ process.parentPort.on('message', async (evt: Electron.MessageEvent) => {
           importCancelled.add(req.jobId);
           // P2-17: a slow statement can't poll the flag; interrupt it server-side
           // (only while that import is the thing running on the primary).
-          const delivered =
+          const outcome =
             activeEngine === 'postgres' && runningImports.has(req.jobId)
-              ? await pg.cancelQuery()
-              : undefined;
-          send({ kind: 'cancelled', id: req.id, delivered });
+              ? await tryCancel(() => pg.cancelQuery())
+              : { delivered: undefined };
+          send({ kind: 'cancelled', id: req.id, ...outcome });
           break;
         }
         case 'explain': {
@@ -318,13 +334,29 @@ process.parentPort.on('message', async (evt: Electron.MessageEvent) => {
         case 'aiQuery': {
           const drv = sqlDriver();
           if (!drv) return unsupported(req.id, 'aiQuery');
-          const result = await drv.aiQuery(req.sql, req.params);
+          const result = await drv.aiQuery(req.sql, req.params, { maxRows: req.maxRows });
           send({ kind: 'queryResult', id: req.id, result });
           break;
         }
+        case 'compareQuery': {
+          // Isolated read-only session on another connection (Result Compare).
+          const result = await runIsolatedReadOnlyQuery(
+            req.config,
+            req.sql,
+            req.maxRows,
+            req.runId,
+          );
+          send({ kind: 'queryResult', id: req.id, result });
+          break;
+        }
+        case 'compareCancel': {
+          const outcome = await tryCancel(() => cancelIsolatedRun(req.runId));
+          send({ kind: 'cancelled', id: req.id, ...outcome });
+          break;
+        }
         case 'cancel': {
-          const delivered = await sqlDriver()?.cancelQuery();
-          send({ kind: 'cancelled', id: req.id, delivered });
+          const outcome = await tryCancel(() => sqlDriver()?.cancelQuery());
+          send({ kind: 'cancelled', id: req.id, ...outcome });
           break;
         }
         case 'introspect': {
@@ -453,13 +485,13 @@ process.parentPort.on('message', async (evt: Electron.MessageEvent) => {
           exportCancelled.add(req.jobId);
           // A long-running fetch is interrupted server-side; the writer also
           // checks the flag between batches.
-          const delivered = await sqlDriver()?.cancelQuery();
-          send({ kind: 'cancelled', id: req.id, delivered });
+          const outcome = await tryCancel(() => sqlDriver()?.cancelQuery());
+          send({ kind: 'cancelled', id: req.id, ...outcome });
           break;
         }
         case 'cancelAux': {
-          const delivered = await sqlDriver()?.cancelAux();
-          send({ kind: 'cancelled', id: req.id, delivered });
+          const outcome = await tryCancel(() => sqlDriver()?.cancelAux());
+          send({ kind: 'cancelled', id: req.id, ...outcome });
           break;
         }
 

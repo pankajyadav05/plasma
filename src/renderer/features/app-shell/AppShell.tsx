@@ -4,7 +4,7 @@ import { PendingEditsGateDialog } from '@/features/connection-manager/PendingEdi
 import { ProdGateDialog } from '@/features/connection-manager/ProdGateDialog';
 import { CloseTabsDialog } from '@/features/editor/CloseTabsDialog';
 import { EditorResizer } from '@/features/editor/EditorResizer';
-import { RunningPlaceholder } from '@/features/editor/RunningPlaceholder';
+import { RunProgressPanel } from '@/features/editor/RunStatus';
 import { SqlCanvas } from '@/features/editor/SqlCanvas';
 import { TabStrip } from '@/features/editor/TabStrip';
 import { VariablesBar } from '@/features/editor/VariablesBar';
@@ -49,6 +49,7 @@ const DbSearchDialog = lazyNamed(
   () => import('@/features/db-search/DbSearchDialog'),
   'DbSearchDialog',
 );
+const CompareView = lazyNamed(() => import('@/features/result-compare/CompareView'), 'CompareView');
 const PgListenView = lazyNamed(() => import('@/features/live-tail/PgListenView'), 'PgListenView');
 const ErDiagramView = lazyNamed(
   () => import('@/features/er-diagram/ErDiagramView'),
@@ -419,17 +420,23 @@ function PaneCanvas({ pane }: { pane?: PaneId } = {}) {
   const isSqlTab = kind === 'sql';
   const isDiagram = kind === 'er-diagram';
   const isListen = kind === 'pg-listen';
+  const isCompare = kind === 'result-compare';
   // Safe Run: the review replaces the result grid while one exists for this tab.
   const safeRunHere = useSession((s) => s.safeRun != null && s.safeRun.tabId === tabId) && isSqlTab;
   const hasResults = hasResultOrError || running || safeRunHere;
   const showEditor = isSqlTab && (!editorHidden || !hasResults);
-  const showGrid = !isDiagram && !isListen && (!isSqlTab || hasResults);
+  const showGrid = !isDiagram && !isListen && !isCompare && (!isSqlTab || hasResults);
   return (
     <main className="flex min-h-0 min-w-0 flex-1 flex-col bg-[var(--wb-content)]">
       <TabStrip pane={pane} />
       {isDiagram && (
         <Suspense fallback={null}>
           <ErDiagramView />
+        </Suspense>
+      )}
+      {isCompare && tabId && (
+        <Suspense fallback={null}>
+          <CompareView tabId={tabId} />
         </Suspense>
       )}
       {isListen && tabId && (
@@ -461,14 +468,15 @@ function ResultBody() {
     resultCount: t?.queryResults?.length ?? 0,
     error: t?.queryError ?? null,
     running: t?.queryRunState === 'running',
-    runStartedAt: (t?.runStartedAt as number | undefined) ?? null,
+    lifecycle: t?.queryLifecycle,
     activeResultIndex: t?.activeResultIndex ?? 0,
   }));
   const view = useWorkbench((s) => (tab.id ? (s.resultViews[tab.id] ?? 'data') : 'data'));
   // VF20: while the first statement runs, keep the pane with an elapsed
   // timer instead of collapsing it.
   if (tab.kind === 'sql' && tab.running && tab.resultCount === 0 && !tab.error) {
-    return <RunningPlaceholder startedAt={tab.runStartedAt} />;
+    const lifecycle = tab.lifecycle ?? { phase: 'running' as const, since: Date.now() };
+    return <RunProgressPanel lifecycle={lifecycle} />;
   }
   if (tab.kind === 'sql' && view === 'message') return <ResultMessagesPanel />;
   if (tab.kind === 'sql' && view === 'chart') {

@@ -17,8 +17,10 @@ import {
   Columns2,
   Copy,
   FileCode,
+  GitCompare,
   KeyRound,
   LayoutDashboard,
+  Loader2,
   Network,
   Pencil,
   Pin,
@@ -50,6 +52,7 @@ const TAB_ICON: Record<TabKind, LucideIcon> = {
   'os-console': Terminal,
   'er-diagram': Network,
   'pg-listen': Radio,
+  'result-compare': GitCompare,
 };
 
 /** Drag payload for moving a tab between panes. */
@@ -61,7 +64,10 @@ interface TabView {
   title: string;
   kind: TabKind;
   running: boolean;
+  cancelling: boolean;
+  queued: boolean;
   failed: boolean;
+  unknown: boolean;
   preview: boolean;
   dirty: boolean;
 }
@@ -76,8 +82,13 @@ function useTabViews(): TabView[] {
         [
           t.id,
           t.kind,
-          t.queryRunState === 'running' ? 1 : 0,
-          t.queryError ? 1 : 0,
+          t.queryRunState === 'running' ? (t.queryLifecycle?.phase ?? 'running') : '-',
+          ['failed', 'unknown', 'disconnected'].includes(t.queryLifecycle?.phase ?? '') ||
+          (t.queryError && !t.queryLifecycle?.phase)
+            ? t.queryLifecycle?.phase === 'unknown'
+              ? 2
+              : 1
+            : 0,
           isPreviewTab(t, edited) ? 1 : 0,
           isTabDirty(t) || edited.has(t.id) ? 1 : 0,
           t.title,
@@ -92,8 +103,11 @@ function useTabViews(): TabView[] {
         return {
           id: id!,
           kind: kind as TabKind,
-          running: running === '1',
-          failed: failed === '1',
+          running: running !== '-',
+          cancelling: running === 'cancelling',
+          queued: running === 'queued',
+          failed: failed !== '0',
+          unknown: failed === '2',
           preview: preview === '1',
           dirty: dirty === '1',
           title: title.join(SEP),
@@ -337,12 +351,20 @@ export function TabStrip({ pane }: { pane?: PaneId } = {}) {
               )}
               {t.dirty && <span className="sr-only">(unsaved)</span>}
               {t.running && (
-                <span className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-[var(--wb-accent)]" />
+                <Loader2
+                  className="h-3 w-3 shrink-0 animate-spin text-[var(--wb-accent)]"
+                  aria-label={t.queued ? 'Queued' : t.cancelling ? 'Cancelling' : 'Running'}
+                  data-testid="tab-running"
+                />
               )}
               {t.failed && (
                 <span
-                  className="h-1.5 w-1.5 shrink-0 rounded-full bg-destructive"
-                  title="Last run failed"
+                  className={cn(
+                    'h-1.5 w-1.5 shrink-0 rounded-full',
+                    t.unknown ? 'bg-[var(--status-warn)]' : 'bg-destructive',
+                  )}
+                  title={t.unknown ? 'Outcome unknown: check the data' : 'Last run failed'}
+                  data-testid="tab-error-dot"
                 />
               )}
             </div>

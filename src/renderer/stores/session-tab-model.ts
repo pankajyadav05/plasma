@@ -6,6 +6,14 @@
  */
 import { ipc } from '@/lib/ipc';
 import type { PgNotice, QueryResult, SchemaInfo } from '@shared/protocol';
+import {
+  IDLE_LIFECYCLE,
+  endsTransaction,
+  isBusyPhase,
+  lifecycleFromLegacyPatch,
+  reduceLifecycle,
+} from '@shared/query-lifecycle';
+import { looksLikeWrite } from './session-sql-heuristics';
 import type { QueryTab, SessionState } from './session-types';
 
 type SetFn = (fn: (s: SessionState) => Partial<SessionState>) => void;
@@ -37,6 +45,7 @@ export function createEmptyTab(pageSize: number, title = 'query-1.sql'): QueryTa
     kind: 'sql',
     sql: '',
     queryRunState: 'idle',
+    queryLifecycle: IDLE_LIFECYCLE,
     queryResult: null,
     queryError: null,
     queryErrorSql: null,
@@ -72,6 +81,7 @@ export function createTableTab(pageSize: number, schemaName: string, tableName: 
     kind: 'table',
     sql: '',
     queryRunState: 'idle',
+    queryLifecycle: IDLE_LIFECYCLE,
     queryResult: null,
     queryError: null,
     queryErrorSql: null,
@@ -135,7 +145,7 @@ export function patchActiveTab(
 ) {
   const activeId = get().activeTabId;
   set((state) => ({
-    tabs: state.tabs.map((t) => (t.id === activeId ? { ...t, ...patch } : t)),
+    tabs: state.tabs.map((t) => (t.id === activeId ? { ...t, ...withLifecycle(t, patch) } : t)),
   }));
 }
 
@@ -267,8 +277,59 @@ export function patchTabById(
   patch: Partial<QueryTab>,
 ) {
   set((state) => ({
-    tabs: state.tabs.map((t) => (t.id === tabId ? { ...t, ...patch } : t)),
+    tabs: state.tabs.map((t) => (t.id === tabId ? { ...t, ...withLifecycle(t, patch) } : t)),
   }));
+}
+
+/**
+ * Keep `queryLifecycle` in step with the legacy `queryRunState` flag for
+ * call sites that only flip the flag (table loads, AI runs, Safe Run). Paths
+ * that know more (cancel, connection loss, outcome unknown) set the
+ * lifecycle themselves and are left alone.
+ */
+function withLifecycle(tab: QueryTab, patch: Partial<QueryTab>): Partial<QueryTab> {
+  if ('queryLifecycle' in patch || !('queryRunState' in patch)) return patch;
+  const next = lifecycleFromLegacyPatch(
+    tab.queryLifecycle,
+    patch,
+    typeof patch.queryError === 'string' && patch.queryError.length > 0,
+    Date.now(),
+  );
+  return next ? { ...patch, queryLifecycle: next } : patch;
+}
+
+/**
+ * What a connection reset does to a tab's run. A run still in flight is not
+ * erased: it ends as disconnected (a read) or outcome unknown (a write that may
+ * have landed), and the late failure from its request cannot change that.
+ * An earlier "outcome unknown" is kept, since the user still has to check the data.
+ */
+function settleOnReset(t: QueryTab, now: number): Partial<QueryTab> | null {
+  const life = t.queryLifecycle;
+  if (life?.phase === 'unknown') return {};
+  if (!life || !isBusyPhase(life.phase)) return null;
+  const sql: string = (t.queryRunningSql as string | undefined) ?? '';
+  const queued = life.phase === 'queued';
+  const settled = reduceLifecycle(life, {
+    type: 'fail',
+    now,
+    message: queued
+      ? 'connection lost: the connection changed before this query started'
+      : 'connection lost: the connection changed while the query was running',
+    isWrite: !queued && sql !== '' && looksLikeWrite(sql),
+    commitLike: !queued && sql !== '' && endsTransaction(sql),
+    sql: sql || undefined,
+  });
+  const message = queued
+    ? 'The connection changed before this query started, so it did not run.'
+    : (settled.message ?? 'The connection changed while the query was running.');
+  return {
+    queryLifecycle: queued ? { ...settled, message } : settled,
+    queryError: message,
+    queryErrorSql: sql || null,
+    queryRunState: 'idle',
+    queryRunningRange: null,
+  };
 }
 
 /**
@@ -276,20 +337,34 @@ export function patchTabById(
  * a connection that is gone. `extra` adds fields the caller also resets.
  */
 export function clearTabResults(set: SetFn, extra: Partial<QueryTab> = {}): void {
+  const now = Date.now();
   set((state) => ({
-    tabs: state.tabs.map((t) => ({
-      ...t,
-      queryResult: null,
-      queryResults: [],
-      activeResultIndex: 0,
-      queryNotices: [],
-      queryError: null,
-      page: 0,
-      sortColumn: null,
-      selectedCell: null,
-      selectedRows: new Set<number>(),
-      ...extra,
-    })),
+    tabs: state.tabs.map((t) => {
+      const kept = settleOnReset(t, now);
+      const base = {
+        ...t,
+        queryResult: null,
+        queryResults: [],
+        activeResultIndex: 0,
+        queryNotices: [],
+        page: 0,
+        sortColumn: null,
+        selectedCell: null,
+        selectedRows: new Set<number>(),
+      };
+      if (kept === null) {
+        return { ...base, queryError: null, queryLifecycle: IDLE_LIFECYCLE, ...extra };
+      }
+      // Busy runs and unknown outcomes keep their status; the rest of `extra` still applies.
+      const {
+        queryRunState: _state,
+        queryRunningRange: _range,
+        queryLifecycle: _life,
+        queryError: _error,
+        ...rest
+      } = extra;
+      return { ...base, ...rest, ...kept };
+    }),
   }));
 }
 

@@ -374,13 +374,17 @@ export function createAgentActions(api: StoreApi<SessionState>): AgentActionApi 
     if (!tab0) return;
     const gen = (tab0.queryGeneration ?? 0) + 1;
     const connGen = get().connectionGen ?? 0;
+    const startedAt = Date.now();
     patchTabById(set, tabId, {
       queryRunState: 'running',
+      // Runs on the aux connection: it must not make a primary run look queued,
+      // and Cancel on this tab stops only this read.
+      queryLifecycle: { phase: 'running', since: startedAt, startedAt, aux: true },
       queryError: null,
       queryErrorSql: null,
       queryErrorRange: null,
       queryGeneration: gen,
-      runStartedAt: Date.now(),
+      runStartedAt: startedAt,
       queryResults: [],
       activeResultIndex: 0,
       queryResult: null,

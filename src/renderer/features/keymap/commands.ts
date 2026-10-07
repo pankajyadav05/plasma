@@ -5,6 +5,7 @@ import {
   saveSqlFile,
 } from '@/features/editor/sql-files';
 import { useMigrationDialog } from '@/features/migration/migration-dialog-store';
+import { useCompare } from '@/stores/compare';
 import { pickAndOpenDataFiles, useDataFiles } from '@/stores/data-files';
 import { isSplit, paneTabIds } from '@/stores/pane-state';
 import { usePanes } from '@/stores/panes';
@@ -42,6 +43,7 @@ export type CommandId =
   | 'checkMigration'
   | 'dbSearch'
   | 'erDiagram'
+  | 'compareResults'
   | 'pgListen'
   | 'redisKeyspace'
   | 'splitPane'
@@ -71,6 +73,7 @@ const POSTGRES_ONLY: ReadonlySet<CommandId> = new Set<CommandId>([
   'checkMigration',
   'dbSearch',
   'erDiagram',
+  'compareResults',
   'pgListen',
   'splitPane',
   'closePane',
@@ -324,6 +327,11 @@ export function runCommand(id: CommandId): boolean {
     case 'dbSearch':
       wb.setOverlay(wb.overlay === 'dbSearch' ? null : 'dbSearch');
       return true;
+    case 'compareResults': {
+      s.setCanvasMode('database');
+      useCompare.getState().open();
+      return true;
+    }
     case 'erDiagram': {
       // The schema of the active table tab, else the first user schema.
       const tab = activeTab(s);
