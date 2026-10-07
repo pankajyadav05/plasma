@@ -219,13 +219,55 @@ export const ConnectionInfo = z.object({
 });
 export type ConnectionInfo = z.infer<typeof ConnectionInfo>;
 
+/** Codes an error carried (SQLSTATE, errno, HTTP status...), next to its message. See `error-info.ts`. */
+export const ErrorInfoSchema = z.object({
+  code: z.string().optional(),
+  errno: z.number().optional(),
+  sqlstate: z.string().optional(),
+  status: z.number().optional(),
+  name: z.string().optional(),
+  type: z.string().optional(),
+  syscall: z.string().optional(),
+  level: z.string().optional(),
+  hostKey: z.enum(['changed', 'unknown']).optional(),
+  forwardError: z.string().optional(),
+  source: z.enum(['ssh', 'driver']).optional(),
+});
+
+/** A connect failure in plain words. See `connect-diagnosis.ts`. */
+export const ConnectDiagnosisSchema = z.object({
+  cause: z.string(),
+  title: z.string(),
+  detail: z.string(),
+  fixes: z.array(z.string()),
+  field: z.enum(['host', 'port', 'user', 'password', 'database', 'ssl', 'ssh']).optional(),
+  raw: z.string(),
+});
+
+/** One step of "Test connection". See `connect-stages.ts`. */
+export const ConnectStageSchema = z.object({
+  id: z.enum(['ssh', 'dns', 'tcp', 'tls', 'login', 'database']),
+  label: z.string(),
+  status: z.enum(['ok', 'failed', 'skipped']),
+  ms: z.number().optional(),
+  note: z.string().optional(),
+});
+
 export const ConnectionTestResult = z.discriminatedUnion('ok', [
   z.object({
     ok: z.literal(true),
     serverVersion: z.string(),
     engine: ConnectionEngine.default('postgres'),
+    stages: z.array(ConnectStageSchema).optional(),
+    /** Connected, but worth a note (an OpenSearch cluster that is red). */
+    warning: ConnectDiagnosisSchema.optional(),
   }),
-  z.object({ ok: z.literal(false), message: z.string() }),
+  z.object({
+    ok: z.literal(false),
+    message: z.string(),
+    diagnosis: ConnectDiagnosisSchema.optional(),
+    stages: z.array(ConnectStageSchema).optional(),
+  }),
 ]);
 export type ConnectionTestResult = z.infer<typeof ConnectionTestResult>;
 
@@ -1648,6 +1690,8 @@ export const WorkerResponse = z.discriminatedUnion('kind', [
     serverVersion: z.string(),
     engine: ConnectionEngine.default('postgres'),
     connectionGen: z.number().int().nonnegative().optional(),
+    /** OpenSearch test connect: green / yellow / red, when the cluster said. */
+    clusterStatus: z.string().nullable().optional(),
   }),
   z.object({ kind: z.literal('disconnected'), id: z.string() }),
   z.object({ kind: z.literal('queryResult'), id: z.string(), result: QueryResult }),
@@ -1683,6 +1727,8 @@ export const WorkerResponse = z.discriminatedUnion('kind', [
     kind: z.literal('error'),
     id: z.string(),
     message: z.string(),
+    /** The codes the error carried (SQLSTATE, errno, status...): what the diagnosis classifies by. */
+    info: ErrorInfoSchema.optional(),
     fatal: z.literal(CONNECTION_LOST).optional(),
     /** The transport died while a transaction was open — its work is gone (C5). */
     txnLost: z.boolean().optional(),

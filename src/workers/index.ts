@@ -1,5 +1,6 @@
 /// <reference types="electron" />
 import { CONNECTION_LOST, isConnectionLostError } from '@shared/connection-loss';
+import { errorInfoOf } from '@shared/error-info';
 import { assertOsSingleIndexName } from '@shared/os-write-policy';
 import {
   type ConnectionEngine,
@@ -202,8 +203,8 @@ process.parentPort.on('message', async (evt: Electron.MessageEvent) => {
         case 'testConnect': {
           // Isolated probe — throwaway driver, never disconnectAll() on
           // the live session. activeEngine stays untouched.
-          const { serverVersion, engine } = await runIsolatedTestConnect(req.config);
-          send({ kind: 'connected', id: req.id, serverVersion, engine });
+          const { serverVersion, engine, clusterStatus } = await runIsolatedTestConnect(req.config);
+          send({ kind: 'connected', id: req.id, serverVersion, engine, clusterStatus });
           break;
         }
         case 'setStatementTimeout': {
@@ -623,6 +624,7 @@ process.parentPort.on('message', async (evt: Electron.MessageEvent) => {
       kind: 'error',
       id: req.id,
       message: err instanceof Error ? err.message : String(err),
+      info: errorInfoOf(err),
       fatal: isConnectionLostError(err) ? CONNECTION_LOST : undefined,
       // C5: main must not replay anything into a fresh session when the
       // old one died with a transaction open.

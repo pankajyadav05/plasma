@@ -12,6 +12,8 @@ import { SqliteDriver } from './drivers/sqlite';
 export interface TestableDriver {
   connect(config: ConnectionConfig): Promise<string>;
   disconnect(): Promise<void>;
+  /** OpenSearch: `green` / `yellow` / `red` from the cluster health, null when it did not say. */
+  clusterStatus?(): Promise<string | null>;
 }
 
 export type DriverFactory = () => TestableDriver;
@@ -35,12 +37,16 @@ const defaultFactories: Record<ConnectionEngine, DriverFactory> = {
 export async function runIsolatedTestConnect(
   config: ConnectionConfig,
   overrides: Partial<Record<ConnectionEngine, DriverFactory>> = {},
-): Promise<{ serverVersion: string; engine: ConnectionEngine }> {
+): Promise<{ serverVersion: string; engine: ConnectionEngine; clusterStatus?: string | null }> {
   const engine: ConnectionEngine = config.engine ?? 'postgres';
   const driver = (overrides[engine] ?? defaultFactories[engine])();
   try {
     const serverVersion = await driver.connect(config);
-    return { serverVersion, engine };
+    // A cluster state is worth a note, never a failure: the connection itself worked.
+    const clusterStatus = driver.clusterStatus
+      ? await driver.clusterStatus().catch(() => null)
+      : undefined;
+    return { serverVersion, engine, ...(clusterStatus !== undefined ? { clusterStatus } : {}) };
   } finally {
     await driver.disconnect();
   }

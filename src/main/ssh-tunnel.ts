@@ -51,6 +51,8 @@ interface OpenTunnel {
 }
 
 const tunnels = new Map<TunnelKey, OpenTunnel>();
+/** Why the jump host last failed to open the database port, per tunnel id (read by the connection error). */
+const forwardErrors = new Map<TunnelKey, string>();
 const opening = new Map<
   TunnelKey,
   { promise: Promise<{ host: string; port: number }>; signature: string }
@@ -116,7 +118,12 @@ function attachHostVerifier(
   opts: Parameters<SshClient['connect']>[0],
   host: string,
   port: number,
-  hooks: { onReached: () => void; isLive: () => boolean },
+  hooks: {
+    onReached: () => void;
+    isLive: () => boolean;
+    /** The key was refused (by the user, or the prompt timed out): was it new or changed? */
+    onRejected: (kind: 'changed' | 'unknown') => void;
+  },
 ): void {
   opts.hostVerifier = (key: Buffer, verify: (valid: boolean) => void) => {
     // The server answered: the connect timer's job is done.
@@ -153,6 +160,7 @@ function attachHostVerifier(
         if (!ok || !hooks.isLive()) {
           // Also covers an Accept that arrives after the attempt already
           // failed: remembering a key for a dead connection would trust it later.
+          hooks.onRejected(decision.kind === 'mismatch' ? 'changed' : 'unknown');
           verify(false);
           return;
         }
@@ -175,6 +183,7 @@ function signatureOf(target: TunnelTarget): string {
 
 function destroyTunnel(id: string, t: OpenTunnel, reason: string): void {
   if (tunnels.get(id) === t) tunnels.delete(id);
+  forwardErrors.delete(id);
   for (const socket of t.sockets) socket.destroy();
   t.sockets.clear();
   try {
@@ -198,6 +207,7 @@ async function connectSsh(target: TunnelTarget): Promise<SshClient> {
     logger.error('[plasma-ssh] ssh client error', target.id, err.message);
   });
   let live = true;
+  let rejectedKey: 'changed' | 'unknown' | undefined;
   let connectTimer: ReturnType<typeof setTimeout> | undefined;
   try {
     await new Promise<void>((resolve, reject) => {
@@ -227,6 +237,9 @@ async function connectSsh(target: TunnelTarget): Promise<SshClient> {
       attachHostVerifier(opts, target.ssh.host, target.ssh.port, {
         onReached: () => clearTimeout(connectTimer),
         isLive: () => live,
+        onRejected: (kind) => {
+          rejectedKey = kind;
+        },
       });
       try {
         Object.assign(
@@ -250,7 +263,11 @@ async function connectSsh(target: TunnelTarget): Promise<SshClient> {
     } catch {
       // best-effort
     }
-    throw err;
+    // Say where it failed, so the connection error can talk about the jump host.
+    throw Object.assign(err instanceof Error ? err : new Error(String(err)), {
+      source: 'ssh' as const,
+      ...(rejectedKey ? { hostKey: rejectedKey } : {}),
+    });
   } finally {
     clearTimeout(connectTimer);
   }
@@ -269,6 +286,7 @@ async function createTunnel(target: TunnelTarget): Promise<{ host: string; port:
     ssh.forwardOut('127.0.0.1', 0, target.pgHost, target.pgPort, (err, stream) => {
       if (err) {
         logger.error('[plasma-ssh] forwardOut failed:', err);
+        forwardErrors.set(target.id, err.message);
         local.destroy();
         return;
       }
@@ -376,6 +394,11 @@ export function openTunnel(target: TunnelTarget): Promise<{ host: string; port: 
     });
   opening.set(target.id, { promise: attempt, signature: signatureOf(target) });
   return attempt;
+}
+
+/** Why the jump host could not open the database port for this tunnel, if it could not. */
+export function tunnelForwardError(id: string): string | undefined {
+  return forwardErrors.get(id);
 }
 
 /** Close the tunnel for `id` (no-op when none is open). */

@@ -79,6 +79,7 @@ import {
 } from './ai';
 import { listLocalModels, listOpenRouterModels, resolveModelsUrl } from './ai-models';
 import { type AuditDeps, recordAuditStatements, registerAuditIpc } from './audit-ipc';
+import { diagnosedError, runStagedTest } from './connect-diagnose';
 import {
   ConnectionRecovery,
   type RecoveredSession,
@@ -152,6 +153,7 @@ import {
   closeTunnel,
   openTunnel,
   setHostKeyPrompt,
+  tunnelForwardError,
 } from './ssh-tunnel';
 import { evaluateRestartMarker, installHandoverPending, readRestartMarker } from './update-restart';
 import { type UpdaterHost, disposeUpdater, initUpdater } from './updater';
@@ -600,7 +602,9 @@ async function callWorker<K extends WorkerResponse['kind']>(
           if (res.txnLost) Object.assign(lost, { txnLost: true });
           throw lost;
         }
-        throw new Error(res.message);
+        // The codes the error carried (SQLSTATE, errno, HTTP status...) travel with it,
+        // so a failed connect can be explained in plain words (connect-diagnosis.ts).
+        throw Object.assign(new Error(res.message), res.info ?? {});
       }
       if (res.kind !== expected) {
         throw new Error(`unexpected worker response: ${res.kind} (expected ${expected})`);
@@ -836,14 +840,24 @@ async function establishSession(config: ConnectionConfigType) {
         port: local.port,
       };
     }
-    const res = await callWorker(
-      {
-        kind: 'connect',
-        config: { ...effective, readOnly: config.readOnly ?? false },
-        statementTimeoutMs: currentQueryTimeoutMs(),
-      },
-      'connected',
-    );
+    let res: Awaited<ReturnType<typeof callWorker<'connected'>>>;
+    try {
+      res = await callWorker(
+        {
+          kind: 'connect',
+          config: { ...effective, readOnly: config.readOnly ?? false },
+          statementTimeoutMs: currentQueryTimeoutMs(),
+        },
+        'connected',
+      );
+    } catch (err) {
+      // Read before the cleanup closes the tunnel: the jump host's own reason.
+      if (ssh) {
+        const forwardError = tunnelForwardError(config.id);
+        if (forwardError) Object.assign(err as Error, { forwardError });
+      }
+      throw err;
+    }
     activeConnectionId = config.id;
     activeEngine = res.engine;
     // U27: keep what it takes to rebuild this session after a transport
@@ -863,6 +877,12 @@ async function establishSession(config: ConnectionConfigType) {
     clearSession();
     if (ssh) closeTunnel(config.id);
     await callWorker({ kind: 'disconnect' }, 'disconnected').catch(() => undefined);
+  }).catch((err: unknown) => {
+    // Say what went wrong in plain words: the message carries the diagnosis.
+    throw diagnosedError(err, config, {
+      ssh,
+      forwardError: (err as { forwardError?: string } | null)?.forwardError,
+    });
   });
 }
 
@@ -1083,39 +1103,72 @@ function registerIpcHandlers() {
     IpcChannel.ConnectionTest,
     async (_e, rawConfig: unknown, rawSsh: unknown): Promise<ConnectionTestResult> => {
       // C2: a throwaway driver in the worker (`testConnect`) and, for SSH,
-      // a throwaway tunnel — the live session is never touched.
+      // a throwaway tunnel — the live session is never touched. The test runs
+      // as steps (host, port, TLS, login, database) so a failure says where.
       const tunnelKey = `test:${randomUUID()}`;
       let tunnelled = false;
+      let config: ConnectionConfigType | null = null;
+      let ssh: ReturnType<typeof testSshConfig> = null;
       try {
-        const config = await withTlsFiles(withStoredPassword(parseConnectionConfig(rawConfig)));
-        const ssh = testSshConfig(config.id, rawSsh);
-        let effective: ConnectionConfigType = config;
+        config = await withTlsFiles(withStoredPassword(parseConnectionConfig(rawConfig)));
+        ssh = testSshConfig(config.id, rawSsh);
+        const tested = config;
         if (ssh) {
-          const refusal = sshUnsupportedReason(config);
+          const refusal = sshUnsupportedReason(tested);
           if (refusal) throw new Error(refusal);
-          const local = await openTunnel({
-            id: tunnelKey,
-            ssh,
-            pgHost: config.host,
-            pgPort: config.port,
-          });
-          tunnelled = true;
-          effective = {
-            ...withTunnelServername(config, config.host),
-            host: local.host,
-            port: local.port,
-          };
         }
-        const res = await callWorker(
-          { kind: 'testConnect', config: { ...effective, readOnly: effective.readOnly ?? false } },
-          'connected',
+        return await runStagedTest(
+          tested,
+          {
+            openTunnel: ssh
+              ? async () => {
+                  const local = await openTunnel({
+                    id: tunnelKey,
+                    ssh: ssh as NonNullable<typeof ssh>,
+                    pgHost: tested.host,
+                    pgPort: tested.port,
+                  });
+                  tunnelled = true;
+                  return local;
+                }
+              : undefined,
+            connect: async (target) => {
+              const effective: ConnectionConfigType = ssh
+                ? {
+                    ...withTunnelServername(tested, tested.host),
+                    host: target.host,
+                    port: target.port,
+                  }
+                : tested;
+              try {
+                const res = await callWorker(
+                  {
+                    kind: 'testConnect',
+                    config: { ...effective, readOnly: effective.readOnly ?? false },
+                  },
+                  'connected',
+                );
+                return {
+                  serverVersion: res.serverVersion,
+                  engine: res.engine,
+                  clusterStatus: res.clusterStatus,
+                };
+              } catch (err) {
+                if (ssh) {
+                  const forwardError = tunnelForwardError(tunnelKey);
+                  if (forwardError) Object.assign(err as Error, { forwardError });
+                }
+                throw err;
+              }
+            },
+            forwardError: () => tunnelForwardError(tunnelKey),
+          },
+          ssh,
         );
-        return { ok: true, serverVersion: res.serverVersion, engine: res.engine };
       } catch (err) {
-        return {
-          ok: false,
-          message: err instanceof Error ? err.message : String(err),
-        };
+        // Before the steps could start: a bad config, an unreadable certificate file.
+        const message = err instanceof Error ? err.message : String(err);
+        return { ok: false, message };
       } finally {
         if (tunnelled) closeTunnel(tunnelKey);
       }
