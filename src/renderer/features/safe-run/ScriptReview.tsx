@@ -342,11 +342,13 @@ function ScriptHeader({
               {status}
             </span>
           </div>
-          <div className="mt-1 text-[12px] text-[var(--wb-text-2)]">
-            {report.nested
-              ? 'Inside your open transaction (a savepoint). Commit keeps it in that transaction; it is saved to the database when you commit the transaction.'
-              : 'Held in one transaction on the primary connection. Other statements wait until you decide.'}
-          </div>
+          {safeRunPending(sr) && (
+            <div className="mt-1 text-[12px] text-[var(--wb-text-2)]">
+              {report.nested
+                ? 'Inside your open transaction (a savepoint). Commit keeps it in that transaction; it is saved to the database when you commit the transaction.'
+                : 'Held in one transaction on the primary connection. Other statements wait until you decide.'}
+            </div>
+          )}
         </div>
         {safeRunPending(sr) && sr.phase === 'review' && (
           <dl className="grid grid-cols-[auto_auto] gap-x-3 gap-y-0.5 text-[12px]">
