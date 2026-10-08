@@ -122,7 +122,7 @@ export const sqlEditor: DocPage = {
               [<UI key="a">Run Selected</UI>, <Keys key="a2" k="mod+Enter" />, 'The selected text, if any.'],
               [<UI key="b">Run Current</UI>, <Keys key="b2" k="mod+Enter" />, 'With no selection, the statement the cursor is in. The button reads Run Selected or Run Current to match.'],
               [<UI key="c">Run All</UI>, <Keys key="c2" k="mod+shift+Enter" />, 'The whole buffer, statement by statement.'],
-              [<UI key="d">Safe Run</UI>, <Keys key="d2" k="mod+alt+Enter" />, 'A dry run of an INSERT, UPDATE or DELETE (below).'],
+              [<UI key="d">Safe Run</UI>, <Keys key="d2" k="mod+alt+Enter" />, 'A dry run of an INSERT, UPDATE, DELETE or MERGE, or of a selected script of up to 20 of them (below).'],
               [<UI key="e">Cancel</UI>, <Keys key="e2" k="mod+." />, 'The statement that is running.'],
             ]}
           />
@@ -235,13 +235,54 @@ export const sqlEditor: DocPage = {
                   never holds locks open.
                 </LI>
                 <LI>
-                  A connection can <UI>Always Safe Run writes</UI>: then Run on a write does a Safe Run first. This is on by
+                  A connection can <UI>Always Safe Run writes</UI>: then Run on a single write does a Safe Run first. This is on by
                   default for Prod connections. It is not available on a read-only connection.
                 </LI>
               </UL>
               <P>
                 Safe Run is for data changes. For DDL the panel tells you to use a normal run.
               </P>
+              <P>
+                <B>Scripts.</B>{' '}Select several statements and press <Keys k="mod+alt+Enter" />{' '}to Safe Run them as a script: up to 20{' '}
+                <C>INSERT</C>, <C>UPDATE</C>, <C>DELETE</C>{' '}or <C>MERGE</C>{' '}statements (or <C>WITH</C>{' '}statements that end in
+                one of those), run in order in one transaction. With no selection, Safe Run takes the statement at the cursor,
+                as before.
+              </P>
+              <UL>
+                <LI>
+                  Every statement is checked before anything runs. Any other statement (a <C>SELECT</C>, DDL, <C>BEGIN</C>,{' '}
+                  <C>COMMIT</C>, <C>ROLLBACK</C>, <C>SAVEPOINT</C>, <C>SET</C>, <C>VACUUM</C>, <C>CALL</C>, <C>DO</C>) refuses the
+                  whole script and names the statement number. More than 20 statements is refused too. Empty statements are dropped.
+                </LI>
+                <LI>
+                  The review lists the statements with their row counts and timings. Select one (arrow keys, then Enter) to see
+                  its before and after rows. Later statements see the changes of earlier ones, so a statement&apos;s before
+                  rows are as of that point in the script.
+                </LI>
+                <LI>
+                  The row threshold applies to the total rows changed by the script, and <UI>Commit all</UI>{' '}turns red above it. The{' '}
+                  <UI>Safe Run timeout</UI>{' '}covers the whole script: if it runs out, everything is rolled back. On a Prod
+                  connection one confirmation lists every statement.
+                </LI>
+                <LI>
+                  <UI>Undo last statement</UI>{' '}rolls back only the last statement that ran and leaves the earlier ones pending.
+                  Repeat it as often as you like; undoing the only statement left rolls back the whole script.
+                </LI>
+                <LI>
+                  If a statement fails, its own changes are undone, the script stops, and the statements after it are marked not
+                  run. The earlier statements stay pending, and nothing is saved. <UI>Commit all</UI>{' '}is not offered; you can{' '}
+                  <UI>Roll back all</UI>, or choose the separate <UI>Commit 1–n</UI>{' '}button to save only the statements that
+                  succeeded. If the first statement fails, nothing is held open and the error is shown.
+                </LI>
+                <LI>
+                  Each statement keeps up to 500 before and after rows, and the script as a whole up to 2,000 per side; the
+                  panel says when rows are left out. Row counts keep counting past those limits (up to 1,000,000, shown with a +).
+                </LI>
+                <LI>
+                  A committed script is one history entry holding the whole script; on a connection that is audited, each
+                  committed statement gets its own <UI>Safe Run</UI>{' '}row.
+                </LI>
+              </UL>
             </>
           ),
         },
