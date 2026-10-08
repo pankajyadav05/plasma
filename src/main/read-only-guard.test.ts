@@ -14,6 +14,7 @@ describe('assertAllowedOnReadOnly (C1)', () => {
   it('refuses Safe Run of a write, but lets a finish through', () => {
     refused({ kind: 'safeRunStart', sql: 'DELETE FROM t', connectionGen: 1 });
     ok({ kind: 'safeRunFinish', runId: 'r', action: 'rollback' });
+    ok({ kind: 'safeRunUndoLast', runId: 'r' });
   });
 
   it('refuses structure DDL and imports, but lets an import be cancelled', () => {

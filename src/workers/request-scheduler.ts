@@ -43,6 +43,7 @@ const LANE_BY_KIND: Partial<Record<Kind, Lane>> = {
   rollbackTxn: 'primary',
   safeRunStart: 'primary',
   safeRunFinish: 'primary',
+  safeRunUndoLast: 'primary',
   exportQuery: 'primary',
   sidebandQuery: 'aux',
   aiQuery: 'aux',

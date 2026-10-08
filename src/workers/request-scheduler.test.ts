@@ -21,6 +21,7 @@ describe('laneFor', () => {
     expect(laneFor('commitEditBatch')).toBe('primary');
     expect(laneFor('safeRunStart')).toBe('primary');
     expect(laneFor('safeRunFinish')).toBe('primary');
+    expect(laneFor('safeRunUndoLast')).toBe('primary');
     expect(laneFor('aiQuery')).toBe('aux');
     expect(laneFor('cancel')).toBe('free');
     expect(laneFor('redisScan')).toBe('free');

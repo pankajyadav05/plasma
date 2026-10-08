@@ -52,6 +52,8 @@ import {
   type SafeRunOutcome,
   type SafeRunReport,
   SafeRunStartRequest,
+  SafeRunUndoRequest,
+  type SafeRunUndoResult,
   type SavedConnection,
   type SchemaInfo,
   type Settings,
@@ -1799,8 +1801,32 @@ function registerIpcHandlers() {
   // Safe Run: a write held open in a transaction until the user decides.
   // Read-only connections refuse it here and again in callWorker's guard;
   // the worker refuses anything else on the primary while one is pending.
-  let pendingSafeRun: { runId: string; sql: string; executedAt: number; affected: number } | null =
-    null;
+  /** What a committed run is recorded as: the script once in history, each statement in the audit log. */
+  interface PendingSafeRunRecord {
+    runId: string;
+    sql: string;
+    executedAt: number;
+    /** A script (steps in the report) rather than one statement. */
+    scripted: boolean;
+    statements: { sql: string; affected: number; durationMs: number }[];
+  }
+  const recordOf = (
+    report: SafeRunReport,
+    sql: string,
+    executedAt: number,
+  ): PendingSafeRunRecord => ({
+    runId: report.runId,
+    sql,
+    executedAt,
+    scripted: report.steps !== undefined,
+    statements: (report.steps ?? [])
+      .filter((st) => st.status === 'done')
+      .map((st) => ({ sql: st.statement, affected: st.affected, durationMs: st.durationMs }))
+      .concat(
+        report.steps ? [] : [{ sql, affected: report.affected, durationMs: report.durationMs }],
+      ),
+  });
+  let pendingSafeRun: PendingSafeRunRecord | null = null;
   ipcMain.handle(IpcChannel.QuerySafeRun, async (_e, raw: unknown): Promise<SafeRunReport> => {
     const req = SafeRunStartRequest.parse(raw);
     if (retainedSession?.config.readOnly === true) {
@@ -1817,14 +1843,29 @@ function registerIpcHandlers() {
       },
       'safeRunReport',
     );
-    pendingSafeRun = {
-      runId: res.report.runId,
-      sql: req.sql,
-      executedAt,
-      affected: res.report.affected,
-    };
+    pendingSafeRun = recordOf(res.report, req.sql, executedAt);
     return res.report;
   });
+
+  ipcMain.handle(
+    IpcChannel.QuerySafeRunUndo,
+    async (_e, raw: unknown): Promise<SafeRunUndoResult> => {
+      const req = SafeRunUndoRequest.parse(raw);
+      const res = await callWorker({ kind: 'safeRunUndoLast', runId: req.runId }, 'safeRunUndone');
+      if (pendingSafeRun?.runId === req.runId) {
+        if (res.result.report) {
+          pendingSafeRun = recordOf(
+            res.result.report,
+            pendingSafeRun.sql,
+            pendingSafeRun.executedAt,
+          );
+        } else {
+          pendingSafeRun = null;
+        }
+      }
+      return res.result;
+    },
+  );
 
   ipcMain.handle(
     IpcChannel.QuerySafeRunFinish,
@@ -1837,11 +1878,12 @@ function registerIpcHandlers() {
       const ran = pendingSafeRun?.runId === req.runId ? pendingSafeRun : null;
       if (ran) pendingSafeRun = null;
       if (ran && res.outcome.outcome === 'committed') {
+        const rows = ran.statements.reduce((n, st) => n + st.affected, 0);
         try {
           recordHistory({
             connectionId: activeConnectionId,
             sql: ran.sql,
-            rowCount: ran.affected,
+            rowCount: rows,
             durationMs: null,
             error: null,
             executedAt: ran.executedAt,
@@ -1849,15 +1891,16 @@ function registerIpcHandlers() {
         } catch (err) {
           logger.error('[plasma] history write failed (non-fatal):', err);
         }
-        recordAuditStatements(auditDeps, [
-          {
-            sql: ran.sql,
-            source: 'safe-run',
-            affectedRows: ran.affected,
+        recordAuditStatements(
+          auditDeps,
+          ran.statements.map((st) => ({
+            sql: st.sql,
+            source: 'safe-run' as const,
+            affectedRows: st.affected,
             ts: ran.executedAt,
-            durationMs: Date.now() - ran.executedAt,
-          },
-        ]);
+            durationMs: ran.scripted ? st.durationMs : Date.now() - ran.executedAt,
+          })),
+        );
       }
       return res.outcome;
     },

@@ -58,6 +58,7 @@ const READ_KINDS = new Set<string>([
   'commitTxn', // ends a (read-only) transaction
   'rollbackTxn',
   'safeRunFinish', // ends a Safe Run (which a read-only session can never start)
+  'safeRunUndoLast', // undoes part of a Safe Run (which a read-only session can never start)
   'redisCancel',
   'osCancel',
   'redisSubscribe',

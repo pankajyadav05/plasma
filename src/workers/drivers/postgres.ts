@@ -9,7 +9,7 @@ import type {
   SchemaInfo,
   TxnState,
 } from '@shared/protocol';
-import type { SafeRunOutcome, SafeRunReport } from '@shared/protocol';
+import type { SafeRunOutcome, SafeRunReport, SafeRunUndoResult } from '@shared/protocol';
 import type {
   DdlApplyRequest,
   DdlApplyResult,
@@ -25,6 +25,8 @@ import {
   emptyBoundState,
   nextCursorChunk,
 } from '@shared/result-bounds';
+import { planSafeRunScript } from '@shared/safe-run-script';
+import { splitSqlStatementRanges } from '@shared/sql-split';
 import { isSingleSqlStatement, isTxnExemptSql } from '@shared/sql-statements';
 import {
   type PlasmaTlsOptions,
@@ -40,7 +42,18 @@ import { runBootstrapSql } from './pg-bootstrap';
 import { type ImportHooks, applyDdl, runImport } from './pg-import';
 import { PgListener } from './pg-listener';
 import { enforceReadOnlySession } from './pg-readonly';
-import { type CappedRead, finishSafeRun, rollbackSafeRun, startSafeRun } from './pg-safe-run';
+import {
+  type CappedRead,
+  type SafeRunBody,
+  type SafeRunScriptState,
+  doneSteps,
+  finishSafeRun,
+  rollbackSafeRun,
+  scriptReportBody,
+  startSafeRun,
+  startSafeRunScript,
+  undoLastScriptStatement,
+} from './pg-safe-run';
 import {
   type EditBatchConflict,
   type EditBatchOutcome,
@@ -63,9 +76,14 @@ interface PendingSafeRun {
   runId: string;
   nested: boolean;
   expiresAt: number;
+  timeoutSec: number;
   timer: ReturnType<typeof setTimeout> | undefined;
   /** A finish (commit / rollback / timeout) is already in progress. */
   ending: boolean;
+  /** An undo is in progress (the review timer is stopped meanwhile). */
+  undoing: boolean;
+  /** Set for a script of several statements. */
+  script: SafeRunScriptState | null;
 }
 
 const errorMessage = (err: unknown): string => (err instanceof Error ? err.message : String(err));
@@ -1166,20 +1184,35 @@ export class PostgresDriver {
       runId,
       nested: this.txnStatus() === 'T',
       expiresAt: 0,
+      timeoutSec: opts.timeoutSec,
       timer: undefined,
       ending: false,
+      undoing: false,
+      script: null,
     };
     this.safeRun = claim;
     try {
-      const { body, nested } = await startSafeRun(
-        {
-          query: (text, values) => client.query(text, values),
-          readCapped: (text, cap) => this.readCapped(client, text, cap),
-          status: this.txnStatus(),
-        },
-        { runId, sql, explain: opts.explain },
-      );
-      claim.nested = nested;
+      const plan = planSafeRunScript(sql);
+      const scripted = plan.ok ? plan.statements.length > 1 : this.looksLikeScript(sql);
+      const deps = {
+        query: (text: string, values?: unknown[]) => client.query(text, values),
+        readCapped: (text: string, cap: number) => this.readCapped(client, text, cap),
+        status: this.txnStatus(),
+        takeNotices: () => this.takeNotices().map((n) => n.message),
+      };
+      let body: SafeRunBody;
+      if (scripted) {
+        // A script that does not qualify is refused with the statement number
+        // before anything executes (planSafeRunScript throws inside).
+        const started = await startSafeRunScript(deps, { runId, sql, explain: opts.explain });
+        claim.nested = started.nested;
+        claim.script = started.state;
+        body = scriptReportBody(runId, started.nested, started.state);
+      } else {
+        const started = await startSafeRun(deps, { runId, sql, explain: opts.explain });
+        claim.nested = started.nested;
+        body = started.body;
+      }
       claim.expiresAt = Date.now() + opts.timeoutSec * 1000;
       claim.timer = setTimeout(() => void this.expireSafeRun(runId), opts.timeoutSec * 1000);
       this.lastActivityAt = Date.now();
@@ -1195,6 +1228,11 @@ export class PostgresDriver {
     } finally {
       this.takeNotices();
     }
+  }
+
+  /** More than one statement by the splitter, whatever the validator says. */
+  private looksLikeScript(sql: string): boolean {
+    return splitSqlStatementRanges(sql).length > 1;
   }
 
   private async expireSafeRun(runId: string): Promise<void> {
@@ -1218,8 +1256,15 @@ export class PostgresDriver {
     }
   }
 
-  /** Commit or roll back the pending Safe Run. After a timeout, reports that instead. */
-  async safeRunFinish(runId: string, action: 'commit' | 'rollback'): Promise<SafeRunOutcome> {
+  /**
+   * Commit or roll back the pending Safe Run. After a timeout, reports that instead.
+   * A script that stopped at a failed statement can only be committed with
+   * `commitPartial`, which keeps the statements that succeeded.
+   */
+  async safeRunFinish(
+    runId: string,
+    action: 'commit' | 'commitPartial' | 'rollback',
+  ): Promise<SafeRunOutcome> {
     const pending = this.safeRun;
     if (!pending || pending.runId !== runId) {
       const ended = this.lastSafeRunEnd;
@@ -1227,11 +1272,28 @@ export class PostgresDriver {
       throw new Error('No Safe Run is pending: it may have timed out or the connection changed.');
     }
     if (pending.ending) throw new Error('This Safe Run is already ending.');
+    if (pending.undoing) throw new Error('This Safe Run is busy undoing a statement.');
+    const failedAt = pending.script?.failedAt ?? null;
+    if (action === 'commit' && failedAt !== null) {
+      throw new Error(
+        `The script stopped at statement ${failedAt}. Nothing was committed. Roll back, or commit only the statements that succeeded.`,
+      );
+    }
+    if (action === 'commitPartial' && failedAt === null) {
+      throw new Error('Only a script that stopped at a failed statement is committed in part.');
+    }
+    if (action !== 'rollback' && pending.script && doneSteps(pending.script).length === 0) {
+      throw new Error('No statement is pending, so there is nothing to commit.');
+    }
     pending.ending = true;
     clearTimeout(pending.timer);
     const client = await this.requireClient('primary');
     try {
-      await finishSafeRun({ query: (t) => client.query(t) }, pending.nested, action);
+      await finishSafeRun(
+        { query: (t) => client.query(t) },
+        pending.nested,
+        action === 'rollback' ? 'rollback' : 'commit',
+      );
     } finally {
       // A failed COMMIT (deferred constraint) ends the transaction and a
       // failed rollback means the connection is gone: nothing is pending.
@@ -1240,9 +1302,53 @@ export class PostgresDriver {
     this.lastActivityAt = Date.now();
     return {
       runId,
-      outcome: action === 'commit' ? 'committed' : 'rolledBack',
+      outcome: action === 'rollback' ? 'rolledBack' : 'committed',
       reason: 'user',
       txnState: this.txnState,
+    };
+  }
+
+  /**
+   * Script runs: roll back the last statement that ran, keep the earlier
+   * ones pending, and return the updated report. Undoing the only statement
+   * left is a roll back of the whole run (the outcome is returned instead).
+   */
+  async safeRunUndoLast(runId: string): Promise<SafeRunUndoResult> {
+    const pending = this.safeRun;
+    if (!pending || pending.runId !== runId) {
+      throw new Error('No Safe Run is pending: it may have timed out or the connection changed.');
+    }
+    const script = pending.script;
+    if (!script) throw new Error('Undo is for Safe Run scripts of several statements.');
+    if (pending.ending || pending.undoing) throw new Error('This Safe Run is busy.');
+    if (doneSteps(script).length === 0) throw new Error('There is no statement to undo.');
+    if (doneSteps(script).length === 1) {
+      const outcome = await this.safeRunFinish(runId, 'rollback');
+      return { report: null, outcome };
+    }
+    // Stop the review timer while the savepoint is rolled back, then re-arm it for
+    // the time that was left. A timeout that already started wins (checked above).
+    pending.undoing = true;
+    clearTimeout(pending.timer);
+    const client = await this.requireClient('primary');
+    try {
+      await undoLastScriptStatement({ query: (t) => client.query(t) }, script);
+    } finally {
+      pending.undoing = false;
+      if (this.safeRun === pending && !pending.ending) {
+        const left = Math.max(0, pending.expiresAt - Date.now());
+        pending.timer = setTimeout(() => void this.expireSafeRun(runId), left);
+      }
+    }
+    this.lastActivityAt = Date.now();
+    return {
+      report: {
+        ...scriptReportBody(runId, pending.nested, script),
+        expiresAt: pending.expiresAt,
+        timeoutSec: pending.timeoutSec,
+        txnState: this.txnState,
+      },
+      outcome: null,
     };
   }
 
