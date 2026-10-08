@@ -235,7 +235,7 @@ export const sqlEditor: DocPage = {
                   never holds locks open.
                 </LI>
                 <LI>
-                  A connection can <UI>Always Safe Run writes</UI>: then Run on a single write does a Safe Run first. This is on by
+                  A connection can <UI>Always Safe Run writes</UI>: then Run on a write does a Safe Run first, and so does Run on a script of 2 to 20 writes (a script that mixes in anything else runs normally). This is on by
                   default for Prod connections. It is not available on a read-only connection.
                 </LI>
               </UL>

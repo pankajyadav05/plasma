@@ -128,3 +128,34 @@ describe('script helpers', () => {
     expect(safeRunWarning(400, null, 1000).large).toBe(false);
   });
 });
+
+describe('shouldAutoSafeRun for scripts', () => {
+  const base = {
+    settings: { connectionTags: { p: 'prod' as const } },
+    connectionId: 'p',
+    engine: 'postgres',
+    readOnly: false,
+    sql: '',
+  };
+  it('sends 2 to 20 writes through a script Safe Run', () => {
+    expect(shouldAutoSafeRun({ ...base, sql: 'DELETE FROM a; UPDATE b SET x = 1;' })).toBe(true);
+    const twenty = Array.from({ length: 20 }, (_, i) => `DELETE FROM t${i};`).join('\n');
+    expect(shouldAutoSafeRun({ ...base, sql: twenty })).toBe(true);
+    expect(shouldAutoSafeRun({ ...base, sql: `${twenty}\nDELETE FROM t21;` })).toBe(false);
+  });
+  it("keeps today's behaviour when anything else is mixed in, or the setting is off", () => {
+    expect(shouldAutoSafeRun({ ...base, sql: 'DELETE FROM a; SELECT 1;' })).toBe(false);
+    expect(shouldAutoSafeRun({ ...base, sql: 'DELETE FROM a; COMMIT;' })).toBe(false);
+    expect(shouldAutoSafeRun({ ...base, sql: 'SELECT 1; SELECT 2;' })).toBe(false);
+    expect(
+      shouldAutoSafeRun({ ...base, readOnly: true, sql: 'DELETE FROM a; DELETE FROM b;' }),
+    ).toBe(false);
+    expect(
+      shouldAutoSafeRun({
+        ...base,
+        settings: { connectionTags: { p: 'prod' as const }, connectionAlwaysSafeRun: { p: false } },
+        sql: 'DELETE FROM a; DELETE FROM b;',
+      }),
+    ).toBe(false);
+  });
+});

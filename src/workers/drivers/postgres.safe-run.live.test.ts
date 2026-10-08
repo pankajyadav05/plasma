@@ -422,7 +422,7 @@ suite('postgres driver (live): Safe Run scripts', () => {
     await d.query('INSERT INTO ss_a VALUES (9, 9)');
     await expect(
       run('INSERT INTO ss_a VALUES (9, 1); INSERT INTO ss_a VALUES (10, 1);'),
-    ).rejects.toThrow(/Statement 1 failed/);
+    ).rejects.toThrow(/Statement 1 failed and was rolled back/);
     expect(d.getTxnState()).toBe('none');
     await expect(d.query('SELECT 1')).resolves.toBeTruthy();
     await reset();
@@ -629,6 +629,23 @@ suite('postgres driver (live): Safe Run scripts', () => {
     } finally {
       await d.setStatementTimeout?.(0);
     }
+    expect(await seen('SELECT count(*)::int FROM ss_a')).toEqual([[0]]);
+  });
+
+  it('Cancel stops a running script and ends it rolled back', async () => {
+    const running = run(
+      'INSERT INTO ss_a VALUES (80, 1); INSERT INTO ss_a SELECT 81, 1 FROM pg_sleep(5); INSERT INTO ss_a VALUES (82, 1);',
+    );
+    const settled = running.then(
+      () => 'resolved',
+      (e: Error) => e.message,
+    );
+    await new Promise((r) => setTimeout(r, 400));
+    await d.cancelQuery();
+    const result = await settled;
+    expect(result).toMatch(/Cancelled before it finished/);
+    expect(d.getTxnState()).toBe('none');
+    await expect(d.query('SELECT 1')).resolves.toBeTruthy();
     expect(await seen('SELECT count(*)::int FROM ss_a')).toEqual([[0]]);
   });
 });

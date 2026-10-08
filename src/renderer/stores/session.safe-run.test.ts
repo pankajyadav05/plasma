@@ -1,4 +1,4 @@
-import type { SafeRunReport, SafeRunStep } from '@shared/protocol';
+import { SAFE_RUN_STILL_OPEN, type SafeRunReport, type SafeRunStep } from '@shared/protocol';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const queryRun = vi.fn();
@@ -511,7 +511,9 @@ describe('Safe Run scripts', () => {
   });
 
   it('statement 1 failing is a plain failure (nothing is held open)', async () => {
-    safeRun.mockRejectedValue(new Error('Statement 1 failed: boom. Nothing was run.'));
+    safeRun.mockRejectedValue(
+      new Error('Statement 1 failed and was rolled back: boom. Nothing was saved.'),
+    );
     await state().runSafeRun({ sql: SCRIPT });
     expect(state().safeRun).toMatchObject({ phase: 'failed' });
     expect(state().safeRun?.error).toMatch(/Statement 1 failed/);
@@ -585,5 +587,101 @@ describe('Safe Run scripts', () => {
     expect(state().safeRun?.report?.steps).toBeUndefined();
     await state().undoSafeRun();
     expect(safeRunUndo).not.toHaveBeenCalled();
+  });
+});
+
+describe('Safe Run scripts: lifecycle holes', () => {
+  beforeEach(() => {
+    safeRunUndo.mockReset();
+    resetStore({ sql: SCRIPT });
+  });
+
+  it('closing the panel during an undo that REJECTS still rolls the run back', async () => {
+    safeRun.mockResolvedValue(scriptReport(['done', 'done', 'done']));
+    await state().runSafeRun({ sql: SCRIPT });
+    let reject: (e: Error) => void = () => {};
+    safeRunUndo.mockReturnValue(
+      new Promise((_r, rej) => {
+        reject = rej;
+      }),
+    );
+    safeRunFinish.mockResolvedValue({ runId: 'run-1', outcome: 'rolledBack', txnState: 'none' });
+    const undoing = state().undoSafeRun();
+    state().dismissSafeRun();
+    reject(new Error('worker deadline'));
+    await undoing;
+    expect(safeRunFinish).toHaveBeenCalledWith({ runId: 'run-1', action: 'rollback' });
+  });
+
+  it('a worker refusal of a commit keeps the review open with the reason', async () => {
+    safeRun.mockResolvedValue(scriptReport(['done', 'done']));
+    await state().runSafeRun({ sql: SCRIPT });
+    safeRunFinish.mockRejectedValue(
+      new Error(`${SAFE_RUN_STILL_OPEN}This Safe Run is busy undoing a statement.`),
+    );
+    await state().commitSafeRun();
+    expect(state().safeRun).toMatchObject({ phase: 'review', finishing: null });
+    expect(state().safeRun?.notice).toMatch(/busy undoing/);
+    // And it can still be rolled back.
+    safeRunFinish.mockResolvedValue({
+      runId: 'run-1',
+      outcome: 'rolledBack',
+      reason: 'user',
+      txnState: 'none',
+    });
+    await state().rollbackSafeRun();
+    expect(state().safeRun?.phase).toBe('rolledBack');
+  });
+
+  it("inside the user's transaction a lost commit reply means nothing was saved", async () => {
+    safeRun.mockResolvedValue(scriptReport(['done', 'done'], { nested: true }));
+    await state().runSafeRun({ sql: SCRIPT });
+    safeRunFinish.mockRejectedValue(new Error('Connection lost: terminated unexpectedly'));
+    await state().commitSafeRun();
+    expect(state().safeRun).toMatchObject({ phase: 'rolledBack', outcomeUnknown: false });
+    expect(state().safeRun?.error).toMatch(/Nothing was saved/);
+  });
+
+  it("inside the user's transaction a lost connection during the commit is a roll back", async () => {
+    safeRun.mockResolvedValue(scriptReport(['done', 'done'], { nested: true }));
+    await state().runSafeRun({ sql: SCRIPT });
+    safeRunFinish.mockReturnValue(new Promise(() => {}));
+    void state().commitSafeRun();
+    useSession.setState({ connectionState: 'idle' } as never);
+    expect(state().safeRun).toMatchObject({ phase: 'rolledBack', endReason: 'disconnect' });
+  });
+
+  it('phase failed + unknown outcome keeps the steps (the header must not claim a roll back)', async () => {
+    safeRun.mockResolvedValue(scriptReport(['done', 'done']));
+    await state().runSafeRun({ sql: SCRIPT });
+    safeRunFinish.mockRejectedValue(new Error('Connection lost'));
+    await state().commitSafeRun();
+    expect(state().safeRun).toMatchObject({ phase: 'failed', outcomeUnknown: true });
+    expect(state().safeRun?.report?.steps).toHaveLength(2);
+  });
+});
+
+describe('Run on connections that always Safe Run: scripts', () => {
+  it('sends a prod script of writes through one Safe Run after the gate', async () => {
+    resetStore({ tag: 'prod', sql: 'DELETE FROM a;\nUPDATE b SET x = 1;' });
+    await state().runQuery({ all: true });
+    expect(state().prodGate).not.toBeNull();
+    expect(safeRun).not.toHaveBeenCalled();
+    safeRun.mockResolvedValue(scriptReport(['done', 'done']));
+    state().confirmProdGate();
+    await vi.waitFor(() => expect(state().safeRun?.phase).toBe('review'));
+    expect(safeRun).toHaveBeenCalledWith(
+      expect.objectContaining({ sql: 'DELETE FROM a;\nUPDATE b SET x = 1;' }),
+    );
+    expect(queryRun).not.toHaveBeenCalled();
+  });
+
+  it('a script that mixes in a non-write keeps the normal Run', async () => {
+    resetStore({ tag: 'prod', sql: 'DELETE FROM a;\nSELECT 1;' });
+    queryRun.mockResolvedValue({ columns: [], rows: [], rowCount: 0, durationMs: 1 });
+    await state().runQuery({ all: true });
+    state().confirmProdGate();
+    await vi.waitFor(() => expect(queryRun).toHaveBeenCalled());
+    expect(safeRun).not.toHaveBeenCalled();
   });
 });

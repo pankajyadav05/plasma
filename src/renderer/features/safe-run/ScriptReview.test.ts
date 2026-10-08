@@ -32,7 +32,11 @@ const step = (index: number, status: SafeRunStep['status']): SafeRunStep => ({
   notices: [],
 });
 
-function render(statuses: SafeRunStep['status'][], phase: SafeRunState['phase'] = 'review') {
+function render(
+  statuses: SafeRunStep['status'][],
+  phase: SafeRunState['phase'] = 'review',
+  extra: Partial<SafeRunState> = {},
+) {
   const steps = statuses.map((s, i) => step(i + 1, s));
   const failed = steps.find((s) => s.status === 'failed');
   const report = {
@@ -75,6 +79,7 @@ function render(statuses: SafeRunStep['status'][], phase: SafeRunState['phase'] 
     connectionGen: 1,
     token: 1,
     nudge: 0,
+    ...extra,
   };
   return renderToStaticMarkup(
     createElement(ScriptReview, {
@@ -119,5 +124,27 @@ describe('ScriptReview', () => {
     expect(html).not.toContain('safe-run-commit"');
     expect(html).not.toContain('safe-run-rollback');
     expect(html).toContain('Committed 2 statements');
+  });
+});
+
+describe('ScriptReview status line', () => {
+  const statusOf = (html: string) => /data-testid="safe-run-status">([^<]*)</.exec(html)?.[1] ?? '';
+
+  it('never says rolled back when the outcome is unknown or the run did not finish', () => {
+    expect(statusOf(render(['done', 'done'], 'failed', { outcomeUnknown: true }))).toBe(
+      'Outcome unknown',
+    );
+    expect(statusOf(render(['done', 'done'], 'failed'))).toBe('Did not finish');
+  });
+  it('shows the end state, not "failed at", after a partial commit or a roll back', () => {
+    expect(statusOf(render(['done', 'failed', 'notRun'], 'committed'))).toBe(
+      'Committed statements before 2',
+    );
+    expect(statusOf(render(['done', 'failed', 'notRun'], 'rolledBack'))).toBe('Rolled back');
+    expect(statusOf(render(['done', 'failed', 'notRun'], 'review'))).toBe('Failed at statement 2');
+  });
+  it('words the partial-commit tooltip to include undone statements', () => {
+    const html = render(['done', 'failed']);
+    expect(html).toContain('any you undid');
   });
 });

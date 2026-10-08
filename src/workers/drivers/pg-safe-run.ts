@@ -1,6 +1,6 @@
 import { type DmlParse, buildBeforeSelect, parseDml, withReturning } from '@shared/dml-parse';
 import type { ColumnMeta, SafeRunReport, SafeRunStep } from '@shared/protocol';
-import { SAFE_RUN_ROW_CAP, SAFE_RUN_TOTAL_ROW_CAP } from '@shared/protocol';
+import { SAFE_RUN_ROW_CAP, SAFE_RUN_TOTAL_BYTES, SAFE_RUN_TOTAL_ROW_CAP } from '@shared/protocol';
 import { planSafeRunScript } from '@shared/safe-run-script';
 import { looksLikeWriteSql } from '@shared/sql-statements';
 import type { TxnStatus } from './pg-txn';
@@ -35,12 +35,16 @@ export interface CappedRead {
   exact: boolean;
   /** Command tag row count for statements that return no rows. */
   commandRowCount: number | undefined;
+  /** Bytes retained in `rows` (estimated). */
+  bytes?: number;
 }
 
 export interface SafeRunDeps {
   query(text: string, values?: unknown[]): Promise<{ rows: Record<string, unknown>[] }>;
   /** Cursor read that keeps the first `cap` rows and counts the rest. */
-  readCapped(sql: string, cap: number): Promise<CappedRead>;
+  readCapped(sql: string, cap: number, maxBytes?: number): Promise<CappedRead>;
+  /** True once the user pressed Cancel for this run (checked between steps). */
+  cancelled?(): boolean;
   status: TxnStatus;
   /** Server notices raised since the last call (script steps keep their own). */
   takeNotices?(): string[];
@@ -68,13 +72,15 @@ async function attempt<T>(deps: SafeRunDeps, fn: () => Promise<T>): Promise<T | 
     const out = await fn();
     await deps.query(`RELEASE SAVEPOINT ${SP_STEP}`);
     return out;
-  } catch {
+  } catch (err) {
     try {
       await deps.query(`ROLLBACK TO SAVEPOINT ${SP_STEP}`);
       await deps.query(`RELEASE SAVEPOINT ${SP_STEP}`);
     } catch {
       // The connection is gone; the caller's next query reports it.
     }
+    // A Cancel that lands on a side query must stop the run, not be swallowed.
+    if (deps.cancelled?.()) throw err;
     return null;
   }
 }
@@ -163,6 +169,8 @@ interface StatementOpts {
   explain: boolean;
   beforeCap: number;
   afterCap: number;
+  /** Bytes left for the whole run, shared by every read of every statement. */
+  budget?: { bytes: number };
 }
 
 /**
@@ -225,7 +233,10 @@ async function runStatement(
       ? buildBeforeSelect(parsed, { ctid: key.kind === 'ctid' && plainTable })
       : null;
     if (sel) {
-      const read = await attempt(deps, () => deps.readCapped(sel, opts.beforeCap));
+      const read = await attempt(deps, () =>
+        deps.readCapped(sel, opts.beforeCap, opts.budget?.bytes),
+      );
+      if (read && opts.budget) opts.budget.bytes -= read.bytes ?? 0;
       if (read) {
         const stripped = stripCtid(read);
         before = stripped.read;
@@ -254,7 +265,8 @@ async function runStatement(
       notes.push('The statement has its own RETURNING; its columns are shown.');
     }
   }
-  const written = await deps.readCapped(finalSql, opts.afterCap);
+  const written = await deps.readCapped(finalSql, opts.afterCap, opts.budget?.bytes);
+  if (opts.budget) opts.budget.bytes -= written.bytes ?? 0;
   const afterStripped = stripCtid(written);
   const afterRead = afterStripped.read;
   const returnsRows = afterRead.columns.length > 0;
@@ -441,9 +453,12 @@ export async function startSafeRunScript(
   let failedAt: number | null = null;
   let keptBefore = 0;
   let keptAfter = 0;
+  const budget = { bytes: SAFE_RUN_TOTAL_BYTES };
+  const cancelError = () => new Error('Cancelled before it finished. Nothing was saved.');
   try {
     for (let i = 0; i < statements.length; i++) {
       const n = i + 1;
+      if (deps.cancelled?.()) throw cancelError();
       const parsed = parseDml(statements[i]!);
       await deps.query(`SAVEPOINT ${scriptSavepoint(n)}`);
       drainNotices(deps);
@@ -458,6 +473,7 @@ export async function startSafeRunScript(
           explain: req.explain,
           beforeCap: cap,
           afterCap: cap,
+          budget,
         });
         steps[i] = {
           ...stmt,
@@ -471,6 +487,8 @@ export async function startSafeRunScript(
         keptBefore += stmt.before?.length ?? 0;
         keptAfter += stmt.after.length;
       } catch (err) {
+        // Cancel pressed: the whole run ends rolled back rather than waiting for review.
+        if (deps.cancelled?.()) throw cancelError();
         // The statement failed: undo just its own work. If even that fails the
         // connection is gone, and the outer handler reports the original error.
         try {
@@ -496,7 +514,9 @@ export async function startSafeRunScript(
   if (failedAt === 1) {
     // Nothing succeeded, so nothing is worth holding open.
     await rollbackSafe(deps, nested);
-    throw new Error(`Statement 1 failed: ${steps[0]!.error}. Nothing was run.`);
+    throw new Error(
+      `Statement 1 failed and was rolled back: ${steps[0]!.error}. Nothing was saved.`,
+    );
   }
   return { state: { text: req.sql.trim(), steps, failedAt }, nested };
 }

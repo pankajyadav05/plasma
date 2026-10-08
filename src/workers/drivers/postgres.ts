@@ -9,6 +9,7 @@ import type {
   SchemaInfo,
   TxnState,
 } from '@shared/protocol';
+import { SAFE_RUN_STILL_OPEN } from '@shared/protocol';
 import type { SafeRunOutcome, SafeRunReport, SafeRunUndoResult } from '@shared/protocol';
 import type {
   DdlApplyRequest,
@@ -82,6 +83,8 @@ interface PendingSafeRun {
   ending: boolean;
   /** An undo is in progress (the review timer is stopped meanwhile). */
   undoing: boolean;
+  /** Cancel was pressed while the run was still executing. */
+  cancelRequested: boolean;
   /** Set for a script of several statements. */
   script: SafeRunScriptState | null;
 }
@@ -975,6 +978,9 @@ export class PostgresDriver {
    * `pg_cancel_backend(pid)` from the dedicated control client (U19).
    */
   async cancelQuery(): Promise<boolean> {
+    // A Safe Run still executing must stop at its next step, even if this cancel
+    // lands between two queries and finds nothing in flight.
+    if (this.safeRun && this.safeRun.expiresAt === 0) this.safeRun.cancelRequested = true;
     if (!this.control || this.primaryBackendPid === null) return false;
     // Cancel is racy by nature: if the statement already finished, the
     // signal would hit whatever runs next. Nothing in flight, nothing to do.
@@ -1114,7 +1120,12 @@ export class PostgresDriver {
   }
 
   /** Cursor read that keeps the first `cap` rows and only counts the rest. */
-  private async readCapped(client: ClientT, sql: string, cap: number): Promise<CappedRead> {
+  private async readCapped(
+    client: ClientT,
+    sql: string,
+    cap: number,
+    maxBytes: number = MAX_RESULT_BYTES,
+  ): Promise<CappedRead> {
     const cursor = client.query(new Cursor(sql, [], { rowMode: 'array' }));
     const state = emptyBoundState();
     let columns: QueryResult['columns'] = [];
@@ -1135,7 +1146,7 @@ export class PostgresDriver {
         }
         if (batch.command) commandRowCount = batch.rowCount;
         total += batch.rows.length;
-        if (!state.truncated) appendBoundedRows(state, batch.rows, cap, MAX_RESULT_BYTES);
+        if (!state.truncated) appendBoundedRows(state, batch.rows, cap, Math.max(0, maxBytes));
         if (batch.rows.length === 0 || batch.rows.length < wanted) break;
         if (total >= SAFE_RUN_COUNT_CEILING) {
           exact = false;
@@ -1150,7 +1161,7 @@ export class PostgresDriver {
       await this.closeCursorBounded(client, cursor);
     }
     if (columns.length > 0) await this.resolveColumnTypeNames(columns);
-    return { columns, rows: state.rows, total, exact, commandRowCount };
+    return { columns, rows: state.rows, total, exact, commandRowCount, bytes: state.bytes };
   }
 
   /**
@@ -1188,6 +1199,7 @@ export class PostgresDriver {
       timer: undefined,
       ending: false,
       undoing: false,
+      cancelRequested: false,
       script: null,
     };
     this.safeRun = claim;
@@ -1196,7 +1208,9 @@ export class PostgresDriver {
       const scripted = plan.ok ? plan.statements.length > 1 : this.looksLikeScript(sql);
       const deps = {
         query: (text: string, values?: unknown[]) => client.query(text, values),
-        readCapped: (text: string, cap: number) => this.readCapped(client, text, cap),
+        readCapped: (text: string, cap: number, maxBytes?: number) =>
+          this.readCapped(client, text, cap, maxBytes),
+        cancelled: () => claim.cancelRequested,
         status: this.txnStatus(),
         takeNotices: () => this.takeNotices().map((n) => n.message),
       };
@@ -1272,18 +1286,23 @@ export class PostgresDriver {
       throw new Error('No Safe Run is pending: it may have timed out or the connection changed.');
     }
     if (pending.ending) throw new Error('This Safe Run is already ending.');
-    if (pending.undoing) throw new Error('This Safe Run is busy undoing a statement.');
+    if (pending.undoing)
+      throw new Error(`${SAFE_RUN_STILL_OPEN}This Safe Run is busy undoing a statement.`);
     const failedAt = pending.script?.failedAt ?? null;
     if (action === 'commit' && failedAt !== null) {
       throw new Error(
-        `The script stopped at statement ${failedAt}. Nothing was committed. Roll back, or commit only the statements that succeeded.`,
+        `${SAFE_RUN_STILL_OPEN}The script stopped at statement ${failedAt}. Nothing was committed. Roll back, or commit only the statements that succeeded.`,
       );
     }
     if (action === 'commitPartial' && failedAt === null) {
-      throw new Error('Only a script that stopped at a failed statement is committed in part.');
+      throw new Error(
+        `${SAFE_RUN_STILL_OPEN}Only a script that stopped at a failed statement is committed in part.`,
+      );
     }
     if (action !== 'rollback' && pending.script && doneSteps(pending.script).length === 0) {
-      throw new Error('No statement is pending, so there is nothing to commit.');
+      throw new Error(
+        `${SAFE_RUN_STILL_OPEN}No statement is pending, so there is nothing to commit.`,
+      );
     }
     pending.ending = true;
     clearTimeout(pending.timer);
@@ -1319,9 +1338,12 @@ export class PostgresDriver {
       throw new Error('No Safe Run is pending: it may have timed out or the connection changed.');
     }
     const script = pending.script;
-    if (!script) throw new Error('Undo is for Safe Run scripts of several statements.');
-    if (pending.ending || pending.undoing) throw new Error('This Safe Run is busy.');
-    if (doneSteps(script).length === 0) throw new Error('There is no statement to undo.');
+    if (!script)
+      throw new Error(`${SAFE_RUN_STILL_OPEN}Undo is for Safe Run scripts of several statements.`);
+    if (pending.ending || pending.undoing)
+      throw new Error(`${SAFE_RUN_STILL_OPEN}This Safe Run is busy.`);
+    if (doneSteps(script).length === 0)
+      throw new Error(`${SAFE_RUN_STILL_OPEN}There is no statement to undo.`);
     if (doneSteps(script).length === 1) {
       const outcome = await this.safeRunFinish(runId, 'rollback');
       return { report: null, outcome };

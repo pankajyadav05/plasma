@@ -10,7 +10,7 @@
 import { ipc } from '@/lib/ipc';
 import { safeRunTimeoutSec } from '@/lib/safe-run';
 import { resolveRunTarget } from '@/lib/sql-split';
-import type { QueryResult, SafeRunReport } from '@shared/protocol';
+import { type QueryResult, SAFE_RUN_STILL_OPEN, type SafeRunReport } from '@shared/protocol';
 import { classifyFailure } from '@shared/query-lifecycle';
 import { planSafeRunScript } from '@shared/safe-run-script';
 import { armProdGate, evaluateGate } from './session-prod-gate';
@@ -84,6 +84,9 @@ export interface SafeRunSlice {
 
 let tokenSeq = 0;
 
+const NESTED_LOST =
+  'The connection dropped, so your open transaction and this Safe Run were rolled back. Nothing was saved.';
+
 const COMMIT_UNKNOWN =
   'The connection dropped while the commit was being sent. The changes may or may not have been saved. Check the data before running anything again.';
 
@@ -144,7 +147,10 @@ export const createSafeRunSlice: SliceCreator<SafeRunSlice> = (set, get, api) =>
     if (lost && safeRunPending(sr)) {
       // A COMMIT that was already sent may have reached the server before the
       // connection went: the honest answer is "unknown", never "rolled back".
+      // Inside the user's own transaction a lost connection means that transaction is gone
+      // too, so nothing was saved: that case is a plain roll back, not an unknown outcome.
       if (
+        !sr.report?.nested &&
         sr.phase === 'finishing' &&
         (sr.finishing === 'commit' || sr.finishing === 'commitPartial')
       ) {
@@ -166,7 +172,9 @@ export const createSafeRunSlice: SliceCreator<SafeRunSlice> = (set, get, api) =>
           phase: 'rolledBack',
           endReason: 'disconnect',
           finishing: null,
-          error: 'The connection changed, so the transaction was rolled back. Nothing was saved.',
+          error: sr.report?.nested
+            ? NESTED_LOST
+            : 'The connection changed, so the transaction was rolled back. Nothing was saved.',
         },
       });
     }
@@ -196,8 +204,27 @@ export const createSafeRunSlice: SliceCreator<SafeRunSlice> = (set, get, api) =>
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      // A reply lost on the way back from COMMIT is not "nothing saved".
+      // The worker refused and the run is still open: stay in the review.
+      if (message.startsWith(SAFE_RUN_STILL_OPEN)) {
+        patchRun(token, {
+          phase: 'review',
+          finishing: null,
+          notice: message.slice(SAFE_RUN_STILL_OPEN.length),
+        });
+        return;
+      }
+      // A reply lost on the way back from COMMIT is not "nothing saved" ...
       const lost = classifyFailure(message, { isWrite: true, commitLike: true });
+      if (lost.phase === 'unknown' && report.nested) {
+        // ... except inside the user's transaction, which died with the connection.
+        patchRun(token, {
+          phase: 'rolledBack',
+          endReason: 'disconnect',
+          finishing: null,
+          error: NESTED_LOST,
+        });
+        return;
+      }
       if (lost.phase === 'unknown') {
         patchRun(token, {
           phase: 'failed',
@@ -375,6 +402,14 @@ export const createSafeRunSlice: SliceCreator<SafeRunSlice> = (set, get, api) =>
         }
         patchRun(token, { phase: 'review', finishing: null, report: res.report });
       } catch (err) {
+        const cur = get().safeRun;
+        if (!cur || cur.token !== token) {
+          // Closed while the undo ran: the worker may still hold the transaction.
+          await ipc.query
+            .safeRunFinish({ runId: report.runId, action: 'rollback' })
+            .catch(() => undefined);
+          return;
+        }
         // The run may well still be open: go back to the review so it can be rolled back.
         patchRun(token, {
           phase: 'review',
@@ -423,7 +458,16 @@ export const createSafeRunSlice: SliceCreator<SafeRunSlice> = (set, get, api) =>
           if (cur?.token === token) set({ safeRun: null });
           return;
         }
-        fail(token, `Roll back failed: ${err instanceof Error ? err.message : String(err)}`);
+        const message = err instanceof Error ? err.message : String(err);
+        if (message.startsWith(SAFE_RUN_STILL_OPEN)) {
+          patchRun(token, {
+            phase: 'review',
+            finishing: null,
+            notice: message.slice(SAFE_RUN_STILL_OPEN.length),
+          });
+          return;
+        }
+        fail(token, `Roll back failed: ${message}`);
       }
     },
 

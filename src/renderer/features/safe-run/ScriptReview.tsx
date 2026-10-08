@@ -281,20 +281,28 @@ function ScriptHeader({
 }: Pick<Props, 'sr' | 'report' | 'steps' | 'threshold' | 'msLeft' | 'pulse'>) {
   const warning = safeRunWarning(report.affected, null, threshold, report.affectedExact);
   const failedAt = report.failedAt ?? null;
+  // The end state of the run wins over "failed at statement k": after a partial
+  // commit or a roll back the script no longer has anything pending.
   const status =
-    sr.phase === 'finishing'
-      ? sr.finishing === 'undo'
-        ? 'Undoing…'
-        : sr.finishing === 'rollback'
-          ? 'Rolling back…'
-          : 'Committing…'
-      : failedAt !== null
-        ? `Failed at statement ${failedAt}`
-        : sr.phase === 'review'
-          ? 'Review'
-          : sr.phase === 'committed'
-            ? 'Committed'
-            : 'Rolled back';
+    sr.phase === 'committed'
+      ? failedAt !== null
+        ? `Committed statements before ${failedAt}`
+        : 'Committed'
+      : sr.phase === 'rolledBack'
+        ? 'Rolled back'
+        : sr.phase === 'failed'
+          ? sr.outcomeUnknown
+            ? 'Outcome unknown'
+            : 'Did not finish'
+          : sr.phase === 'finishing'
+            ? sr.finishing === 'undo'
+              ? 'Undoing…'
+              : sr.finishing === 'rollback'
+                ? 'Rolling back…'
+                : 'Committing…'
+            : failedAt !== null
+              ? `Failed at statement ${failedAt}`
+              : 'Review';
   return (
     <header
       className={cn(
@@ -325,7 +333,9 @@ function ScriptHeader({
             <span
               className={cn(
                 'text-[12px] font-medium',
-                failedAt !== null ? 'text-[var(--wb-danger-fill)]' : 'text-[var(--wb-text-2)]',
+                (failedAt !== null && sr.phase === 'review') || sr.phase === 'failed'
+                  ? 'text-[var(--wb-danger-fill)]'
+                  : 'text-[var(--wb-text-2)]',
               )}
               data-testid="safe-run-status"
             >
@@ -481,7 +491,7 @@ export function ScriptReview(props: Props) {
                 disabled={busy}
                 onClick={onCommitPartial}
                 data-testid="safe-run-commit-partial"
-                title={`Save only the ${statementsLabel(pendingCount)} that succeeded. Statement ${failedAt} and the ones after it are not saved.`}
+                title={`Save only the ${statementsLabel(pendingCount)} still pending. Statement ${failedAt}, the ones after it, and any you undid are not saved.`}
               >
                 {committing ? (
                   <Loader2 className="animate-spin" aria-hidden />

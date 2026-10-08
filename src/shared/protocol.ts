@@ -1277,6 +1277,13 @@ export const SAFE_RUN_ROW_CAP = 500;
 export const SAFE_RUN_MAX_STATEMENTS = 20;
 /** Rows kept per side (before / after) across a whole Safe Run script. */
 export const SAFE_RUN_TOTAL_ROW_CAP = 2000;
+/** Bytes kept (before and after rows together) across a whole Safe Run script. */
+/**
+ * Prefix of worker refusals that leave the Safe Run open (nothing ended); the
+ * renderer returns to the review instead of treating them as a failed run.
+ */
+export const SAFE_RUN_STILL_OPEN = 'Safe Run still open: ';
+export const SAFE_RUN_TOTAL_BYTES = 64 * 1024 * 1024;
 
 /** Renderer → main payload for `query.safeRun`. */
 export const SafeRunStartRequest = z.object({

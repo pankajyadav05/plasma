@@ -10,10 +10,18 @@ import {
 } from './pg-safe-run';
 
 function fake(
-  opts: { failOn?: string[]; dieAfterFailure?: boolean; status?: 'I' | 'T' | 'E' } = {},
+  opts: {
+    failOn?: string[];
+    dieAfterFailure?: boolean;
+    status?: 'I' | 'T' | 'E';
+    cancelAfterWrites?: number;
+    cancelOnQuery?: string;
+  } = {},
 ) {
   const log: string[] = [];
   let failed = false;
+  let writes = 0;
+  let cancelled = false;
   const read = (rows: number): CappedRead => ({
     columns: [],
     rows: [],
@@ -23,14 +31,22 @@ function fake(
   });
   const deps: SafeRunDeps = {
     status: opts.status ?? 'I',
+    cancelled: () => cancelled,
     async query(text) {
       log.push(text);
+      if (opts.cancelOnQuery && text.includes(opts.cancelOnQuery)) {
+        cancelled = true;
+        throw new Error('canceling statement due to user request');
+      }
       if (failed && opts.dieAfterFailure && /^ROLLBACK TO SAVEPOINT plasma_sr_/.test(text)) {
         throw new Error('Connection terminated');
       }
       return { rows: [] };
     },
     async readCapped(sql) {
+      writes++;
+      if (opts.cancelAfterWrites !== undefined && writes >= opts.cancelAfterWrites)
+        cancelled = true;
       if (opts.failOn?.some((f) => sql.includes(f))) {
         failed = true;
         throw new Error(`boom: ${sql}`);
@@ -105,7 +121,7 @@ describe('startSafeRunScript', () => {
     const { deps, log } = fake({ failOn: ['INSERT INTO a'] });
     await expect(
       startSafeRunScript(deps, script('INSERT INTO a VALUES (1)', 'DELETE FROM d')),
-    ).rejects.toThrow(/Statement 1 failed: boom/);
+    ).rejects.toThrow(/Statement 1 failed and was rolled back: boom/);
     expect(log.at(-1)).toBe('ROLLBACK');
   });
 
@@ -205,5 +221,58 @@ describe('worker protocol', () => {
         action: 'commitPartial',
       }).success,
     ).toBe(true);
+  });
+});
+
+describe('cancel and byte budget', () => {
+  it('Cancel stops the script before the next statement and ends rolled back', async () => {
+    const { deps, log } = fake({ cancelAfterWrites: 1 });
+    await expect(
+      startSafeRunScript(deps, script('DELETE FROM a', 'DELETE FROM b', 'DELETE FROM c')),
+    ).rejects.toThrow(/Cancelled before it finished/);
+    expect(log.at(-1)).toBe('ROLLBACK');
+    expect(log).not.toContain('SAVEPOINT plasma_sr_2');
+  });
+
+  it('a Cancel that lands on a side query is not swallowed', async () => {
+    const { deps, log } = fake({ cancelOnQuery: 'pg_class' });
+    await expect(
+      startSafeRunScript(deps, script('DELETE FROM a', 'DELETE FROM b')),
+    ).rejects.toThrow(/Cancelled before it finished/);
+    expect(log.at(-1)).toBe('ROLLBACK');
+    expect(log).not.toContain('SAVEPOINT plasma_sr_2');
+  });
+
+  it('shares one byte budget across statements and sides', async () => {
+    const seen: (number | undefined)[] = [];
+    const deps: SafeRunDeps = {
+      status: 'I',
+      async query() {
+        return { rows: [] };
+      },
+      async readCapped(_sql, _cap, maxBytes) {
+        seen.push(maxBytes);
+        return {
+          columns: [{ name: 'id', dataTypeID: 23, dataTypeName: 'int4' }],
+          rows: [[1]],
+          total: 5,
+          exact: true,
+          commandRowCount: 5,
+          bytes: 20 * 1024 * 1024,
+        };
+      },
+    };
+    const { state } = await startSafeRunScript(
+      deps,
+      script(
+        'INSERT INTO a VALUES (1)',
+        'INSERT INTO b VALUES (1)',
+        'INSERT INTO c VALUES (1)',
+        'INSERT INTO d VALUES (1)',
+      ),
+    );
+    // 64 MiB total: each write reads at most what is left, never a fresh budget.
+    expect(seen).toEqual([64, 44, 24, 4].map((m) => m * 1024 * 1024));
+    expect(state.steps.every((s) => s.afterTruncated)).toBe(true);
   });
 });
