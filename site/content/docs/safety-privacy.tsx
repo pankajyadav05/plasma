@@ -25,7 +25,7 @@ export const safetyPrivacy: DocPage = {
               [<Doc key="a" to="safety-privacy#read-only">Read-only connection</Doc>, 'Refuses every write on every engine.'],
               [<Doc key="b" to="safety-privacy#prod-gate">Prod tag</Doc>, 'Destructive SQL always asks; writes on Redis and OpenSearch ask; every statement is audited.'],
               [<Doc key="c" to="safety-privacy#safe-mode">Safe mode</Doc>, 'Asks before dangerous statements, every write, or every statement, or refuses writes.'],
-              [<Doc key="d" to="sql-editor#safe-run">Safe Run</Doc>, 'Shows the exact rows a write changes before you commit it.'],
+              [<Doc key="d" to="sql-editor#safe-run">Safe Run</Doc>, 'Shows the exact rows a write, or a script of up to 20 writes, changes before you commit it.'],
               [<Doc key="e" to="results#editing">Staged edits</Doc>, 'Grid changes wait for an explicit Commit, in one transaction.'],
               [<Doc key="f" to="results#conflicts">Conflict detection</Doc>, 'A commit does not overwrite a row someone else changed.'],
               [<Doc key="g" to="safety-privacy#audit-log">Audit log</Doc>, 'A tamper-evident record of what ran.'],

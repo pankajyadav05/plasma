@@ -84,6 +84,7 @@ describe('recoveryPolicy', () => {
     // Safe Run is never replayed onto a fresh session.
     expect(recoveryPolicy('safeRunStart')).toBe('reconnect-only');
     expect(recoveryPolicy('safeRunFinish')).toBe('reconnect-only');
+    expect(recoveryPolicy('safeRunUndoLast')).toBe('reconnect-only');
     expect(recoveryPolicy('redisCommand', { kind: 'redisCommand', parts: ['INCR', 'n'] })).toBe(
       'reconnect-only',
     );

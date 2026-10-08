@@ -404,7 +404,7 @@ function EditorActionBar({
           title={
             readOnlyConn
               ? 'Safe Run is not available on a read-only connection'
-              : `Dry run an INSERT / UPDATE / DELETE: see the rows it changes, then Commit or Roll back (${shortcut('safeRun')})`
+              : `Dry run an INSERT / UPDATE / DELETE, or a selection of up to 20 of them in one transaction: see the rows they change, then Commit or Roll back (${shortcut('safeRun')})`
           }
         >
           <ShieldCheck />

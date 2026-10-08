@@ -101,3 +101,61 @@ describe('formatCountdown', () => {
     expect(formatCountdown(-5)).toBe('0:00');
   });
 });
+
+describe('script helpers', () => {
+  it('labels the partial commit and counts pending statements', async () => {
+    const { partialCommitLabel, pendingStatementCount, statementsLabel, rowsLabel } = await import(
+      './safe-run'
+    );
+    expect(partialCommitLabel(1)).toBe('Commit 1');
+    expect(partialCommitLabel(4)).toBe('Commit 1–4');
+    expect(pendingStatementCount({})).toBe(1);
+    expect(
+      pendingStatementCount({
+        steps: [{ status: 'done' }, { status: 'failed' }, { status: 'notRun' }],
+      }),
+    ).toBe(1);
+    expect(statementsLabel(1)).toBe('1 statement');
+    expect(statementsLabel(3)).toBe('3 statements');
+    expect(rowsLabel(1)).toBe('1 row');
+    expect(rowsLabel(1200, false)).toBe('1,200+ rows');
+  });
+
+  it('judges the row threshold on the total of a script', async () => {
+    const { safeRunWarning } = await import('./safe-run');
+    // Three statements of 400 rows each are 1,200 rows in total.
+    expect(safeRunWarning(400 * 3, null, 1000).large).toBe(true);
+    expect(safeRunWarning(400, null, 1000).large).toBe(false);
+  });
+});
+
+describe('shouldAutoSafeRun for scripts', () => {
+  const base = {
+    settings: { connectionTags: { p: 'prod' as const } },
+    connectionId: 'p',
+    engine: 'postgres',
+    readOnly: false,
+    sql: '',
+  };
+  it('sends 2 to 20 writes through a script Safe Run', () => {
+    expect(shouldAutoSafeRun({ ...base, sql: 'DELETE FROM a; UPDATE b SET x = 1;' })).toBe(true);
+    const twenty = Array.from({ length: 20 }, (_, i) => `DELETE FROM t${i};`).join('\n');
+    expect(shouldAutoSafeRun({ ...base, sql: twenty })).toBe(true);
+    expect(shouldAutoSafeRun({ ...base, sql: `${twenty}\nDELETE FROM t21;` })).toBe(false);
+  });
+  it("keeps today's behaviour when anything else is mixed in, or the setting is off", () => {
+    expect(shouldAutoSafeRun({ ...base, sql: 'DELETE FROM a; SELECT 1;' })).toBe(false);
+    expect(shouldAutoSafeRun({ ...base, sql: 'DELETE FROM a; COMMIT;' })).toBe(false);
+    expect(shouldAutoSafeRun({ ...base, sql: 'SELECT 1; SELECT 2;' })).toBe(false);
+    expect(
+      shouldAutoSafeRun({ ...base, readOnly: true, sql: 'DELETE FROM a; DELETE FROM b;' }),
+    ).toBe(false);
+    expect(
+      shouldAutoSafeRun({
+        ...base,
+        settings: { connectionTags: { p: 'prod' as const }, connectionAlwaysSafeRun: { p: false } },
+        sql: 'DELETE FROM a; DELETE FROM b;',
+      }),
+    ).toBe(false);
+  });
+});

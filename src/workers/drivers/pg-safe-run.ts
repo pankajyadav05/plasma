@@ -1,6 +1,7 @@
-import { buildBeforeSelect, parseDml, withReturning } from '@shared/dml-parse';
-import type { ColumnMeta, SafeRunReport } from '@shared/protocol';
-import { SAFE_RUN_ROW_CAP } from '@shared/protocol';
+import { type DmlParse, buildBeforeSelect, parseDml, withReturning } from '@shared/dml-parse';
+import type { ColumnMeta, SafeRunReport, SafeRunStep } from '@shared/protocol';
+import { SAFE_RUN_ROW_CAP, SAFE_RUN_TOTAL_BYTES, SAFE_RUN_TOTAL_ROW_CAP } from '@shared/protocol';
+import { planSafeRunScript } from '@shared/safe-run-script';
 import { looksLikeWriteSql } from '@shared/sql-statements';
 import type { TxnStatus } from './pg-txn';
 
@@ -34,13 +35,19 @@ export interface CappedRead {
   exact: boolean;
   /** Command tag row count for statements that return no rows. */
   commandRowCount: number | undefined;
+  /** Bytes retained in `rows` (estimated). */
+  bytes?: number;
 }
 
 export interface SafeRunDeps {
   query(text: string, values?: unknown[]): Promise<{ rows: Record<string, unknown>[] }>;
   /** Cursor read that keeps the first `cap` rows and counts the rest. */
-  readCapped(sql: string, cap: number): Promise<CappedRead>;
+  readCapped(sql: string, cap: number, maxBytes?: number): Promise<CappedRead>;
+  /** True once the user pressed Cancel for this run (checked between steps). */
+  cancelled?(): boolean;
   status: TxnStatus;
+  /** Server notices raised since the last call (script steps keep their own). */
+  takeNotices?(): string[];
 }
 
 export interface SafeRunStart {
@@ -52,6 +59,12 @@ export interface SafeRunStart {
 
 export type SafeRunBody = Omit<SafeRunReport, 'expiresAt' | 'timeoutSec' | 'txnState'>;
 
+/** What one statement reports, without the run-level fields. */
+type StatementBody = Omit<
+  SafeRunStep,
+  'index' | 'status' | 'error' | 'beforeTruncated' | 'afterTruncated' | 'notices'
+>;
+
 /** Run `fn` under a savepoint; any failure is undone and reported as null. */
 async function attempt<T>(deps: SafeRunDeps, fn: () => Promise<T>): Promise<T | null> {
   await deps.query(`SAVEPOINT ${SP_STEP}`);
@@ -59,13 +72,15 @@ async function attempt<T>(deps: SafeRunDeps, fn: () => Promise<T>): Promise<T | 
     const out = await fn();
     await deps.query(`RELEASE SAVEPOINT ${SP_STEP}`);
     return out;
-  } catch {
+  } catch (err) {
     try {
       await deps.query(`ROLLBACK TO SAVEPOINT ${SP_STEP}`);
       await deps.query(`RELEASE SAVEPOINT ${SP_STEP}`);
     } catch {
       // The connection is gone; the caller's next query reports it.
     }
+    // A Cancel that lands on a side query must stop the run, not be swallowed.
+    if (deps.cancelled?.()) throw err;
     return null;
   }
 }
@@ -150,6 +165,137 @@ function planRows(plan: unknown): number | null {
   return typeof rows === 'number' && Number.isFinite(rows) ? rows : null;
 }
 
+interface StatementOpts {
+  explain: boolean;
+  beforeCap: number;
+  afterCap: number;
+  /** Bytes left for the whole run, shared by every read of every statement. */
+  budget?: { bytes: number };
+}
+
+/**
+ * Describe and run one parsed write inside the open transaction: catalog
+ * probe, optional EXPLAIN, BEFORE rows, the statement itself. Every
+ * auxiliary step runs under its own savepoint (see `attempt`); only the
+ * write itself can throw.
+ */
+async function runStatement(
+  deps: SafeRunDeps,
+  parsed: DmlParse,
+  opts: StatementOpts,
+): Promise<StatementBody> {
+  const started = Date.now();
+  const notes: string[] = [];
+
+  const ver = await attempt(deps, () => deps.query('SHOW server_version_num'));
+  const serverVersionNum = Number(Object.values(ver?.rows[0] ?? {})[0] ?? 0) || 0;
+
+  // The target relation: what kind it is and how its rows are identified.
+  let relkind: string | null = null;
+  let oid: number | null = null;
+  let hasChildren = false;
+  if (parsed.target) {
+    const rel = await attempt(deps, () =>
+      deps.query(
+        `SELECT c.oid::int8 AS oid, c.relkind::text AS relkind, c.relhassubclass AS kids
+           FROM pg_class c WHERE c.oid = to_regclass($1)`,
+        [parsed.target!.sql],
+      ),
+    );
+    const row = rel?.rows[0];
+    if (row) {
+      oid = Number(row.oid);
+      relkind = String(row.relkind);
+      hasChildren = row.kids === true;
+    }
+  }
+  const plainTable = relkind === 'r' && !hasChildren;
+  const key: KeyInfo =
+    oid !== null && relkind !== null && (relkind === 'r' || relkind === 'p')
+      ? await findKey(deps, oid, plainTable)
+      : { kind: 'none', columns: [] };
+
+  // Planner estimate. Plain EXPLAIN: the statement is parsed and planned, never run.
+  let estimateRows: number | null = null;
+  if (opts.explain) {
+    const plan = await attempt(deps, () =>
+      deps.query(`EXPLAIN (FORMAT JSON) ${parsed.sql.replace(/\s*;\s*$/, '')}`),
+    );
+    estimateRows = planRows(plan?.rows[0]?.['QUERY PLAN']);
+  }
+
+  // BEFORE rows: only for a single plain table, so the SELECT is exactly the write's row set.
+  let before: CappedRead | null = null;
+  let beforeCtids: string[] | null = null;
+  const snapshotOk = parsed.beforeSnapshot && (relkind === 'r' || relkind === 'p');
+  if (parsed.kind === 'update' || parsed.kind === 'delete') {
+    const sel = snapshotOk
+      ? buildBeforeSelect(parsed, { ctid: key.kind === 'ctid' && plainTable })
+      : null;
+    if (sel) {
+      const read = await attempt(deps, () =>
+        deps.readCapped(sel, opts.beforeCap, opts.budget?.bytes),
+      );
+      if (read && opts.budget) opts.budget.bytes -= read.bytes ?? 0;
+      if (read) {
+        const stripped = stripCtid(read);
+        before = stripped.read;
+        beforeCtids = stripped.ctids;
+      } else {
+        notes.push('The rows before the change could not be read; showing the result only.');
+      }
+    } else {
+      const why = parsed.reason ?? (relkind === null ? 'the target table was not found' : null);
+      if (why) notes.push(`Rows before the change are not shown: ${why}.`);
+      else if (relkind !== 'r' && relkind !== 'p') {
+        notes.push('Rows before the change are not shown: the target is not a plain table.');
+      }
+    }
+  }
+
+  // The write itself.
+  const wantCtid = key.kind === 'ctid' && plainTable;
+  let finalSql = withReturning(parsed, { ctid: wantCtid, serverVersionNum });
+  if (finalSql === null) {
+    finalSql = parsed.sql.replace(/\s*;\s*$/, '');
+    if (parsed.kind === 'merge' && !parsed.hasReturning && serverVersionNum < 170000) {
+      notes.push('MERGE ... RETURNING needs PostgreSQL 17; only the row count is shown.');
+    }
+    if (parsed.hasReturning && (parsed.kind === 'update' || parsed.kind === 'delete')) {
+      notes.push('The statement has its own RETURNING; its columns are shown.');
+    }
+  }
+  const written = await deps.readCapped(finalSql, opts.afterCap, opts.budget?.bytes);
+  if (opts.budget) opts.budget.bytes -= written.bytes ?? 0;
+  const afterStripped = stripCtid(written);
+  const afterRead = afterStripped.read;
+  const returnsRows = afterRead.columns.length > 0;
+  const affected = returnsRows ? written.total : (written.commandRowCount ?? 0);
+
+  const snapshot = before !== null;
+  const body: StatementBody = {
+    kind: parsed.kind as StatementBody['kind'],
+    statement: parsed.sql,
+    affected,
+    affectedExact: written.exact,
+    estimateRows,
+    mode: snapshot ? 'diff' : 'after-only',
+    note: notes.length > 0 ? notes.join(' ') : null,
+    keyKind: snapshot ? key.kind : 'none',
+    keyColumns: key.columns,
+    beforeColumns: before?.columns ?? [],
+    before: before?.rows ?? null,
+    beforeCtids: beforeCtids,
+    beforeTotal: before?.total ?? 0,
+    afterColumns: afterRead.columns,
+    after: afterRead.rows,
+    afterCtids: afterStripped.ctids,
+    afterTotal: returnsRows ? written.total : 0,
+    durationMs: Date.now() - started,
+  };
+  return body;
+}
+
 /** Begin, run and describe. Leaves the transaction open on success; rolls it back on error. */
 export async function startSafeRun(
   deps: SafeRunDeps,
@@ -172,114 +318,12 @@ export async function startSafeRun(
   const nested = deps.status === 'T';
   await deps.query(nested ? `SAVEPOINT ${SP_RUN}` : 'BEGIN');
   try {
-    const started = Date.now();
-    const notes: string[] = [];
-
-    const ver = await attempt(deps, () => deps.query('SHOW server_version_num'));
-    const serverVersionNum = Number(Object.values(ver?.rows[0] ?? {})[0] ?? 0) || 0;
-
-    // The target relation: what kind it is and how its rows are identified.
-    let relkind: string | null = null;
-    let oid: number | null = null;
-    let hasChildren = false;
-    if (parsed.target) {
-      const rel = await attempt(deps, () =>
-        deps.query(
-          `SELECT c.oid::int8 AS oid, c.relkind::text AS relkind, c.relhassubclass AS kids
-             FROM pg_class c WHERE c.oid = to_regclass($1)`,
-          [parsed.target!.sql],
-        ),
-      );
-      const row = rel?.rows[0];
-      if (row) {
-        oid = Number(row.oid);
-        relkind = String(row.relkind);
-        hasChildren = row.kids === true;
-      }
-    }
-    const plainTable = relkind === 'r' && !hasChildren;
-    const key: KeyInfo =
-      oid !== null && relkind !== null && (relkind === 'r' || relkind === 'p')
-        ? await findKey(deps, oid, plainTable)
-        : { kind: 'none', columns: [] };
-
-    // Planner estimate. Plain EXPLAIN: the statement is parsed and planned, never run.
-    let estimateRows: number | null = null;
-    if (req.explain) {
-      const plan = await attempt(deps, () =>
-        deps.query(`EXPLAIN (FORMAT JSON) ${parsed.sql.replace(/\s*;\s*$/, '')}`),
-      );
-      estimateRows = planRows(plan?.rows[0]?.['QUERY PLAN']);
-    }
-
-    // BEFORE rows: only for a single plain table, so the SELECT is exactly the write's row set.
-    let before: CappedRead | null = null;
-    let beforeCtids: string[] | null = null;
-    const snapshotOk = parsed.beforeSnapshot && (relkind === 'r' || relkind === 'p');
-    if (parsed.kind === 'update' || parsed.kind === 'delete') {
-      const sel = snapshotOk
-        ? buildBeforeSelect(parsed, { ctid: key.kind === 'ctid' && plainTable })
-        : null;
-      if (sel) {
-        const read = await attempt(deps, () => deps.readCapped(sel, cap));
-        if (read) {
-          const stripped = stripCtid(read);
-          before = stripped.read;
-          beforeCtids = stripped.ctids;
-        } else {
-          notes.push('The rows before the change could not be read; showing the result only.');
-        }
-      } else {
-        const why = parsed.reason ?? (relkind === null ? 'the target table was not found' : null);
-        if (why) notes.push(`Rows before the change are not shown: ${why}.`);
-        else if (relkind !== 'r' && relkind !== 'p') {
-          notes.push('Rows before the change are not shown: the target is not a plain table.');
-        }
-      }
-    }
-
-    // The write itself.
-    const wantCtid = key.kind === 'ctid' && plainTable;
-    let finalSql = withReturning(parsed, { ctid: wantCtid, serverVersionNum });
-    if (finalSql === null) {
-      finalSql = parsed.sql.replace(/\s*;\s*$/, '');
-      if (parsed.kind === 'merge' && !parsed.hasReturning && serverVersionNum < 170000) {
-        notes.push('MERGE ... RETURNING needs PostgreSQL 17; only the row count is shown.');
-      }
-      if (parsed.hasReturning && (parsed.kind === 'update' || parsed.kind === 'delete')) {
-        notes.push('The statement has its own RETURNING; its columns are shown.');
-      }
-    }
-    const written = await deps.readCapped(finalSql, cap);
-    const afterStripped = stripCtid(written);
-    const afterRead = afterStripped.read;
-    const returnsRows = afterRead.columns.length > 0;
-    const affected = returnsRows ? written.total : (written.commandRowCount ?? 0);
-
-    const snapshot = before !== null;
-    const body: SafeRunBody = {
-      runId: req.runId,
-      kind: parsed.kind as SafeRunBody['kind'],
-      statement: parsed.sql,
-      nested,
-      affected,
-      affectedExact: written.exact,
-      estimateRows,
-      mode: snapshot ? 'diff' : 'after-only',
-      note: notes.length > 0 ? notes.join(' ') : null,
-      keyKind: snapshot ? key.kind : 'none',
-      keyColumns: key.columns,
-      beforeColumns: before?.columns ?? [],
-      before: before?.rows ?? null,
-      beforeCtids: beforeCtids,
-      beforeTotal: before?.total ?? 0,
-      afterColumns: afterRead.columns,
-      after: afterRead.rows,
-      afterCtids: afterStripped.ctids,
-      afterTotal: returnsRows ? written.total : 0,
-      durationMs: Date.now() - started,
-    };
-    return { body, nested };
+    const stmt = await runStatement(deps, parsed, {
+      explain: req.explain,
+      beforeCap: cap,
+      afterCap: cap,
+    });
+    return { body: { runId: req.runId, nested, ...stmt }, nested };
   } catch (err) {
     await rollbackSafe(deps, nested);
     throw err;
@@ -318,3 +362,217 @@ export async function finishSafeRun(
 }
 
 export { rollbackSafe as rollbackSafeRun };
+
+// ─── Scripts: several writes, one transaction ──────────────────────────
+
+const MAX_NOTICE_CHARS = 300;
+const MAX_NOTICES_PER_STEP = 5;
+
+/** Savepoint taken before statement `n` (1-based) of a script. */
+export const scriptSavepoint = (n: number): string => `plasma_sr_${n}`;
+
+export interface SafeRunScriptStart {
+  runId: string;
+  /** The whole script as the user selected it; split and re-checked here. */
+  sql: string;
+  explain: boolean;
+}
+
+/** The live state of a script run, kept by the driver between calls. */
+export interface SafeRunScriptState {
+  /** The script, trimmed: the `statement` of the run-level report. */
+  text: string;
+  steps: SafeRunStep[];
+  /** Statement number the script stopped at, or null when all ran. */
+  failedAt: number | null;
+}
+
+const errText = (err: unknown): string => (err instanceof Error ? err.message : String(err));
+
+function emptyStep(index: number, sql: string, status: SafeRunStep['status']): SafeRunStep {
+  const p = parseDml(sql);
+  return {
+    index,
+    status,
+    error: null,
+    kind: (p.kind === 'other' ? 'cte' : p.kind) as SafeRunStep['kind'],
+    statement: p.sql || sql,
+    affected: 0,
+    affectedExact: true,
+    estimateRows: null,
+    mode: 'after-only',
+    note: null,
+    keyKind: 'none',
+    keyColumns: [],
+    beforeColumns: [],
+    before: null,
+    beforeCtids: null,
+    beforeTotal: 0,
+    afterColumns: [],
+    after: [],
+    afterCtids: null,
+    afterTotal: 0,
+    durationMs: 0,
+    beforeTruncated: false,
+    afterTruncated: false,
+    notices: [],
+  };
+}
+
+function drainNotices(deps: SafeRunDeps): string[] {
+  const all = deps.takeNotices?.() ?? [];
+  return all
+    .slice(0, MAX_NOTICES_PER_STEP)
+    .map((m) => (m.length > MAX_NOTICE_CHARS ? `${m.slice(0, MAX_NOTICE_CHARS)}…` : m));
+}
+
+/**
+ * Run a script of writes in order inside one transaction (a savepoint when
+ * the user already has one). Each statement gets its own savepoint. When a
+ * statement fails, its savepoint is rolled back, the script stops, and the
+ * earlier statements stay pending for the user to decide on. The only
+ * exception is statement 1 failing: nothing is pending then, so the whole
+ * run is rolled back and the error thrown, like a single statement.
+ *
+ * Later statements see the effects of earlier ones, so their BEFORE rows
+ * are as of that point in the script.
+ */
+export async function startSafeRunScript(
+  deps: SafeRunDeps,
+  req: SafeRunScriptStart,
+): Promise<{ state: SafeRunScriptState; nested: boolean }> {
+  const plan = planSafeRunScript(req.sql);
+  if (!plan.ok) throw new Error(plan.message);
+  const statements = plan.statements;
+  if (deps.status === 'E') throw new Error(ABORTED_MESSAGE);
+
+  const nested = deps.status === 'T';
+  await deps.query(nested ? `SAVEPOINT ${SP_RUN}` : 'BEGIN');
+
+  const steps = statements.map((sql, i) => emptyStep(i + 1, sql, 'notRun'));
+  let failedAt: number | null = null;
+  let keptBefore = 0;
+  let keptAfter = 0;
+  const budget = { bytes: SAFE_RUN_TOTAL_BYTES };
+  const cancelError = () => new Error('Cancelled before it finished. Nothing was saved.');
+  try {
+    for (let i = 0; i < statements.length; i++) {
+      const n = i + 1;
+      if (deps.cancelled?.()) throw cancelError();
+      const parsed = parseDml(statements[i]!);
+      await deps.query(`SAVEPOINT ${scriptSavepoint(n)}`);
+      drainNotices(deps);
+      // Both sides get the same cap so a diff stays pairable: the smaller of the
+      // per-statement cap and what is left of the run's total on either side.
+      const cap = Math.max(
+        0,
+        Math.min(SAFE_RUN_ROW_CAP, SAFE_RUN_TOTAL_ROW_CAP - Math.max(keptBefore, keptAfter)),
+      );
+      try {
+        const stmt = await runStatement(deps, parsed, {
+          explain: req.explain,
+          beforeCap: cap,
+          afterCap: cap,
+          budget,
+        });
+        steps[i] = {
+          ...stmt,
+          index: n,
+          status: 'done',
+          error: null,
+          beforeTruncated: stmt.beforeTotal > (stmt.before?.length ?? 0),
+          afterTruncated: stmt.afterTotal > stmt.after.length,
+          notices: drainNotices(deps),
+        };
+        keptBefore += stmt.before?.length ?? 0;
+        keptAfter += stmt.after.length;
+      } catch (err) {
+        // Cancel pressed: the whole run ends rolled back rather than waiting for review.
+        if (deps.cancelled?.()) throw cancelError();
+        // The statement failed: undo just its own work. If even that fails the
+        // connection is gone, and the outer handler reports the original error.
+        try {
+          await deps.query(`ROLLBACK TO SAVEPOINT ${scriptSavepoint(n)}`);
+          await deps.query(`RELEASE SAVEPOINT ${scriptSavepoint(n)}`);
+        } catch {
+          throw err;
+        }
+        steps[i] = {
+          ...emptyStep(n, statements[i]!, 'failed'),
+          error: errText(err),
+          notices: drainNotices(deps),
+        };
+        failedAt = n;
+        break;
+      }
+    }
+  } catch (err) {
+    await rollbackSafe(deps, nested);
+    throw err;
+  }
+
+  if (failedAt === 1) {
+    // Nothing succeeded, so nothing is worth holding open.
+    await rollbackSafe(deps, nested);
+    throw new Error(
+      `Statement 1 failed and was rolled back: ${steps[0]!.error}. Nothing was saved.`,
+    );
+  }
+  return { state: { text: req.sql.trim(), steps, failedAt }, nested };
+}
+
+/**
+ * Roll back the last statement that ran and drop it from the report. The
+ * caller has checked that at least two statements are still pending (undoing
+ * the only one is a plain roll back of the whole run).
+ */
+export async function undoLastScriptStatement(
+  deps: Pick<SafeRunDeps, 'query'>,
+  state: SafeRunScriptState,
+): Promise<void> {
+  const at = state.steps.map((s) => s.status).lastIndexOf('done');
+  if (at < 0) throw new Error('There is no statement to undo.');
+  const n = state.steps[at]!.index;
+  await deps.query(`ROLLBACK TO SAVEPOINT ${scriptSavepoint(n)}`);
+  await deps.query(`RELEASE SAVEPOINT ${scriptSavepoint(n)}`);
+  state.steps.splice(at, 1);
+}
+
+export const doneSteps = (state: SafeRunScriptState): SafeRunStep[] =>
+  state.steps.filter((s) => s.status === 'done');
+
+/** The run-level fields of a script report; the row images live in the steps. */
+export function scriptReportBody(
+  runId: string,
+  nested: boolean,
+  state: SafeRunScriptState,
+): SafeRunBody {
+  const done = doneSteps(state);
+  const first = state.steps[0]!;
+  const note =
+    'Statements ran in order in one transaction. Each statement sees the changes made by the ones before it, so its BEFORE rows are as of that point.';
+  return {
+    runId,
+    nested,
+    kind: first.kind,
+    statement: state.text,
+    affected: done.reduce((n, s) => n + s.affected, 0),
+    affectedExact: done.every((s) => s.affectedExact),
+    estimateRows: null,
+    mode: 'after-only',
+    note,
+    keyKind: 'none',
+    keyColumns: [],
+    beforeColumns: [],
+    before: null,
+    beforeCtids: null,
+    beforeTotal: 0,
+    afterColumns: [],
+    after: [],
+    afterCtids: null,
+    afterTotal: 0,
+    durationMs: state.steps.reduce((n, s) => n + s.durationMs, 0),
+    steps: state.steps,
+    failedAt: state.failedAt,
+  };
+}

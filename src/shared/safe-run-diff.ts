@@ -11,7 +11,10 @@
  *   - Anything else (MERGE, CTE, UPDATE without a before snapshot): the rows
  *     the statement returned, as `new`.
  */
-import type { ColumnMeta, SafeRunReport } from './protocol';
+import type { ColumnMeta, SafeRunReport, SafeRunStep } from './protocol';
+
+/** A single-statement report, or one step of a script report. */
+export type SafeRunDiffInput = SafeRunReport | SafeRunStep;
 
 export type DiffStatus = 'changed' | 'unchanged' | 'deleted' | 'inserted' | 'old' | 'new';
 
@@ -71,7 +74,7 @@ function mark(
   return { status, before, after, changed: new Array<boolean>(n).fill(false) };
 }
 
-export function buildSafeRunDiff(report: SafeRunReport): SafeRunDiff {
+export function buildSafeRunDiff(report: SafeRunDiffInput): SafeRunDiff {
   const afterOnlyColumns = report.afterColumns;
 
   if (report.kind === 'insert') {

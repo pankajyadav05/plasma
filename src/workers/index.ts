@@ -421,6 +421,12 @@ process.parentPort.on('message', async (evt: Electron.MessageEvent) => {
           send({ kind: 'safeRunDone', id: req.id, outcome });
           break;
         }
+        case 'safeRunUndoLast': {
+          if (activeEngine !== 'postgres') return unsupported(req.id, 'safeRunUndoLast');
+          const result = await pg.safeRunUndoLast(req.runId);
+          send({ kind: 'safeRunUndone', id: req.id, result });
+          break;
+        }
 
         case 'exportRows': {
           if (!sqlDriver()) return unsupported(req.id, 'exportRows');

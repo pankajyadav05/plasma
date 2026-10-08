@@ -13,6 +13,8 @@ interface Props {
   onOpenChange: (o: boolean) => void;
   title: string;
   description?: React.ReactNode;
+  /** Extra content under the description (a list, a summary). */
+  details?: React.ReactNode;
   confirmLabel?: string;
   cancelLabel?: string;
   variant?: 'destructive' | 'primary';
@@ -29,6 +31,7 @@ export function ConfirmDialog({
   onOpenChange,
   title,
   description,
+  details,
   confirmLabel = 'Confirm',
   cancelLabel = 'Cancel',
   variant = 'destructive',
@@ -41,6 +44,7 @@ export function ConfirmDialog({
           <DialogTitle>{title}</DialogTitle>
           {description && <DialogDescription>{description}</DialogDescription>}
         </DialogHeader>
+        {details}
         <DialogFooter>
           <Button variant="secondary" onClick={() => onOpenChange(false)}>
             {cancelLabel}

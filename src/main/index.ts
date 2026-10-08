@@ -48,10 +48,13 @@ import {
   type PingRequest,
   type PingResponse,
   type QueryResult,
+  SAFE_RUN_STILL_OPEN,
   SafeRunFinishRequest,
   type SafeRunOutcome,
   type SafeRunReport,
   SafeRunStartRequest,
+  SafeRunUndoRequest,
+  type SafeRunUndoResult,
   type SavedConnection,
   type SchemaInfo,
   type Settings,
@@ -150,6 +153,7 @@ import {
   parseRedisSetTtlArgs,
   parseRedisWriteArgs,
 } from './redis-ipc-args';
+import { type SafeRunRecord, historySql, recordOfReport } from './safe-run-record';
 import {
   deleteSchemaSnapshot,
   getSchemaSnapshot,
@@ -1799,8 +1803,7 @@ function registerIpcHandlers() {
   // Safe Run: a write held open in a transaction until the user decides.
   // Read-only connections refuse it here and again in callWorker's guard;
   // the worker refuses anything else on the primary while one is pending.
-  let pendingSafeRun: { runId: string; sql: string; executedAt: number; affected: number } | null =
-    null;
+  let pendingSafeRun: SafeRunRecord | null = null;
   ipcMain.handle(IpcChannel.QuerySafeRun, async (_e, raw: unknown): Promise<SafeRunReport> => {
     const req = SafeRunStartRequest.parse(raw);
     if (retainedSession?.config.readOnly === true) {
@@ -1817,31 +1820,81 @@ function registerIpcHandlers() {
       },
       'safeRunReport',
     );
-    pendingSafeRun = {
-      runId: res.report.runId,
-      sql: req.sql,
-      executedAt,
-      affected: res.report.affected,
-    };
+    pendingSafeRun = recordOfReport(res.report, req.sql, executedAt);
     return res.report;
   });
+
+  ipcMain.handle(
+    IpcChannel.QuerySafeRunUndo,
+    async (_e, raw: unknown): Promise<SafeRunUndoResult> => {
+      const req = SafeRunUndoRequest.parse(raw);
+      const res = await callWorker({ kind: 'safeRunUndoLast', runId: req.runId }, 'safeRunUndone');
+      if (pendingSafeRun?.runId === req.runId) {
+        pendingSafeRun = res.result.report
+          ? recordOfReport(
+              res.result.report,
+              pendingSafeRun.sql,
+              pendingSafeRun.executedAt,
+              pendingSafeRun,
+            )
+          : null;
+      }
+      return res.result;
+    },
+  );
 
   ipcMain.handle(
     IpcChannel.QuerySafeRunFinish,
     async (_e, raw: unknown): Promise<SafeRunOutcome> => {
       const req = SafeRunFinishRequest.parse(raw);
-      const res = await callWorker(
-        { kind: 'safeRunFinish', runId: req.runId, action: req.action },
-        'safeRunDone',
-      );
       const ran = pendingSafeRun?.runId === req.runId ? pendingSafeRun : null;
+      let res: Awaited<ReturnType<typeof callWorker<'safeRunDone'>>>;
+      try {
+        res = await callWorker(
+          { kind: 'safeRunFinish', runId: req.runId, action: req.action },
+          'safeRunDone',
+        );
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        // A refusal leaves the run open; anything else (a lost reply, a refused COMMIT)
+        // ended it, and what was being committed goes on record as an error.
+        if (message.startsWith(SAFE_RUN_STILL_OPEN)) throw err;
+        if (ran) pendingSafeRun = null;
+        if (ran && req.action !== 'rollback') {
+          const rows = ran.statements.reduce((n, st) => n + st.affected, 0);
+          try {
+            recordHistory({
+              connectionId: activeConnectionId,
+              sql: historySql(ran),
+              rowCount: rows,
+              durationMs: null,
+              error: message,
+              executedAt: ran.executedAt,
+            });
+          } catch (histErr) {
+            logger.error('[plasma] history write failed (non-fatal):', histErr);
+          }
+          recordAuditStatements(
+            auditDeps,
+            ran.statements.map((st) => ({
+              sql: st.sql,
+              source: 'safe-run' as const,
+              error: message,
+              ts: ran.executedAt,
+              durationMs: Date.now() - ran.executedAt,
+            })),
+          );
+        }
+        throw err;
+      }
       if (ran) pendingSafeRun = null;
       if (ran && res.outcome.outcome === 'committed') {
+        const rows = ran.statements.reduce((n, st) => n + st.affected, 0);
         try {
           recordHistory({
             connectionId: activeConnectionId,
-            sql: ran.sql,
-            rowCount: ran.affected,
+            sql: historySql(ran),
+            rowCount: rows,
             durationMs: null,
             error: null,
             executedAt: ran.executedAt,
@@ -1849,15 +1902,16 @@ function registerIpcHandlers() {
         } catch (err) {
           logger.error('[plasma] history write failed (non-fatal):', err);
         }
-        recordAuditStatements(auditDeps, [
-          {
-            sql: ran.sql,
-            source: 'safe-run',
-            affectedRows: ran.affected,
+        recordAuditStatements(
+          auditDeps,
+          ran.statements.map((st) => ({
+            sql: st.sql,
+            source: 'safe-run' as const,
+            affectedRows: st.affected,
             ts: ran.executedAt,
-            durationMs: Date.now() - ran.executedAt,
-          },
-        ]);
+            durationMs: ran.scripted ? st.durationMs : Date.now() - ran.executedAt,
+          })),
+        );
       }
       return res.outcome;
     },

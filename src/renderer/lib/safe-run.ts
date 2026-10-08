@@ -8,6 +8,7 @@ import {
   SAFE_RUN_DEFAULT_TIMEOUT_SEC,
   type Settings,
 } from '@shared/protocol';
+import { planSafeRunScript } from '@shared/safe-run-script';
 import { looksLikeWriteSql } from '@shared/sql-statements';
 
 type SafeRunSettings = Partial<
@@ -55,7 +56,11 @@ export function shouldAutoSafeRun(opts: {
   if ((opts.engine ?? 'postgres') !== 'postgres') return false;
   if (opts.readOnly === true) return false;
   if (!alwaysSafeRun(opts.settings, opts.connectionId)) return false;
-  return isPlainDml(opts.sql);
+  if (isPlainDml(opts.sql)) return true;
+  // Several statements, all of them writes Safe Run takes (2 to 20): one script Safe Run
+  // instead of autocommit. A script that mixes in anything else keeps the normal Run.
+  const plan = planSafeRunScript(opts.sql);
+  return plan.ok && plan.statements.length > 1;
 }
 
 export function safeRunThreshold(settings: SafeRunSettings | undefined): number {
@@ -111,4 +116,27 @@ export function formatCountdown(msLeft: number): string {
   const m = Math.floor(total / 60);
   const s = total % 60;
   return `${m}:${String(s).padStart(2, '0')}`;
+}
+
+/** Statements of a script report that ran and are pending. */
+export function pendingStatementCount(report: { steps?: { status: string }[] }): number {
+  return report.steps ? report.steps.filter((st) => st.status === 'done').length : 1;
+}
+
+/**
+ * Label of the explicit partial commit after a failure. Undo only ever
+ * removes the last statement that ran, so what is pending is always 1..m.
+ */
+export function partialCommitLabel(done: number): string {
+  return done <= 1 ? 'Commit 1' : `Commit 1\u2013${done}`;
+}
+
+/** "3 statements" / "1 statement". */
+export function statementsLabel(n: number): string {
+  return `${n.toLocaleString('en-US')} ${n === 1 ? 'statement' : 'statements'}`;
+}
+
+/** "5 rows" / "1 row", with a trailing + when the count stopped early. */
+export function rowsLabel(n: number, exact = true): string {
+  return `${n.toLocaleString('en-US')}${exact ? '' : '+'} ${n === 1 ? 'row' : 'rows'}`;
 }

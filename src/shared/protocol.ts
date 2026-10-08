@@ -1273,6 +1273,17 @@ export const SAFE_RUN_DEFAULT_TIMEOUT_SEC = 300;
 export const SAFE_RUN_DEFAULT_ROW_THRESHOLD = 1000;
 /** Rows kept per side (before / after) in a Safe Run report. */
 export const SAFE_RUN_ROW_CAP = 500;
+/** Statements a Safe Run script may hold. */
+export const SAFE_RUN_MAX_STATEMENTS = 20;
+/** Rows kept per side (before / after) across a whole Safe Run script. */
+export const SAFE_RUN_TOTAL_ROW_CAP = 2000;
+/** Bytes kept (before and after rows together) across a whole Safe Run script. */
+/**
+ * Prefix of worker refusals that leave the Safe Run open (nothing ended); the
+ * renderer returns to the review instead of treating them as a failed run.
+ */
+export const SAFE_RUN_STILL_OPEN = 'Safe Run still open: ';
+export const SAFE_RUN_TOTAL_BYTES = 64 * 1024 * 1024;
 
 /** Renderer → main payload for `query.safeRun`. */
 export const SafeRunStartRequest = z.object({
@@ -1287,21 +1298,27 @@ export type SafeRunStartRequest = z.infer<typeof SafeRunStartRequest>;
 
 export const SafeRunFinishRequest = z.object({
   runId: z.string().min(1),
-  action: z.enum(['commit', 'rollback']),
+  /**
+   * `commitPartial` is the only way to commit a script that stopped at a
+   * failed statement (it keeps the statements that succeeded); `commit`
+   * is refused for such a run.
+   */
+  action: z.enum(['commit', 'commitPartial', 'rollback']),
 });
 export type SafeRunFinishRequest = z.infer<typeof SafeRunFinishRequest>;
+
+/** Undo the last executed statement of a Safe Run script. */
+export const SafeRunUndoRequest = z.object({ runId: z.string().min(1) });
+export type SafeRunUndoRequest = z.infer<typeof SafeRunUndoRequest>;
 
 /** How BEFORE rows are matched to AFTER rows. */
 export const SafeRunKeyKind = z.enum(['pk', 'unique', 'ctid', 'none']);
 export type SafeRunKeyKind = z.infer<typeof SafeRunKeyKind>;
 
-/** What a Safe Run changed, held open in a transaction awaiting a decision. */
-export const SafeRunReport = z.object({
-  runId: z.string(),
+/** What one statement of a Safe Run changed (the fields shared by a report and a script step). */
+const SafeRunBodyFields = z.object({
   kind: z.enum(['insert', 'update', 'delete', 'merge', 'cte']),
   statement: z.string(),
-  /** Savepoint inside the user's own transaction rather than a new BEGIN. */
-  nested: z.boolean(),
   /** Rows the statement reported affecting. */
   affected: z.number().int().nonnegative(),
   /** False when the statement returned more rows than were counted. */
@@ -1325,10 +1342,44 @@ export const SafeRunReport = z.object({
   afterCtids: z.array(z.string()).nullable(),
   afterTotal: z.number().int().nonnegative(),
   durationMs: z.number(),
+});
+
+/**
+ * One statement of a Safe Run script. `done` ran and is pending; `failed`
+ * raised an error (its own work was rolled back); `notRun` was never sent.
+ */
+export const SafeRunStep = SafeRunBodyFields.extend({
+  /** 1-based position in the script (stays put when an earlier one is undone). */
+  index: z.number().int().positive(),
+  status: z.enum(['done', 'failed', 'notRun']),
+  /** The database error of a `failed` step. */
+  error: z.string().nullable(),
+  /** More BEFORE / AFTER rows existed than were kept (per-statement or total cap). */
+  beforeTruncated: z.boolean(),
+  afterTruncated: z.boolean(),
+  /** Server notices the statement raised (capped). */
+  notices: z.array(z.string()),
+});
+export type SafeRunStep = z.infer<typeof SafeRunStep>;
+
+/**
+ * What a Safe Run changed, held open in a transaction awaiting a decision.
+ * A script of several statements also carries `steps`; the other fields then
+ * describe the whole run (`affected` is the total over the statements that
+ * ran, `statement` is the script) and the row images live in the steps.
+ */
+export const SafeRunReport = SafeRunBodyFields.extend({
+  runId: z.string(),
+  /** Savepoint inside the user's own transaction rather than a new BEGIN. */
+  nested: z.boolean(),
   /** Epoch ms at which the worker rolls the transaction back by itself. */
   expiresAt: z.number(),
   timeoutSec: z.number().int(),
   txnState: z.enum(['none', 'active', 'error']),
+  /** Present for a script (two or more statements); absent for a single statement. */
+  steps: z.array(SafeRunStep).optional(),
+  /** The script stopped at this statement number (1-based); the run stays open for review. */
+  failedAt: z.number().int().positive().nullable().optional(),
 });
 export type SafeRunReport = z.infer<typeof SafeRunReport>;
 
@@ -1340,6 +1391,17 @@ export const SafeRunOutcome = z.object({
   txnState: z.enum(['none', 'active', 'error']),
 });
 export type SafeRunOutcome = z.infer<typeof SafeRunOutcome>;
+
+/**
+ * Result of "Undo last statement": the run is still open (`report`), or the
+ * last remaining statement was undone, which rolls the whole run back
+ * (`outcome`). Exactly one of the two is set.
+ */
+export const SafeRunUndoResult = z.object({
+  report: SafeRunReport.nullable(),
+  outcome: SafeRunOutcome.nullable(),
+});
+export type SafeRunUndoResult = z.infer<typeof SafeRunUndoResult>;
 
 // ─── Worker messages (main ↔ utilityProcess) ────────────────────────
 
@@ -1402,7 +1464,13 @@ export const WorkerRequest = z.discriminatedUnion('kind', [
     kind: z.literal('safeRunFinish'),
     id: z.string(),
     runId: z.string().min(1),
-    action: z.enum(['commit', 'rollback']),
+    action: z.enum(['commit', 'commitPartial', 'rollback']),
+  }),
+  /** Safe Run script: roll back the last executed statement and keep the earlier ones pending. */
+  z.object({
+    kind: z.literal('safeRunUndoLast'),
+    id: z.string(),
+    runId: z.string().min(1),
   }),
   /**
    * Grid edit batch (C7). Each update must affect exactly one row; any
@@ -1724,6 +1792,7 @@ export const WorkerResponse = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('txnState'), id: z.string(), state: TxnState }),
   z.object({ kind: z.literal('safeRunReport'), id: z.string(), report: SafeRunReport }),
   z.object({ kind: z.literal('safeRunDone'), id: z.string(), outcome: SafeRunOutcome }),
+  z.object({ kind: z.literal('safeRunUndone'), id: z.string(), result: SafeRunUndoResult }),
   z.object({
     kind: z.literal('editBatchResult'),
     id: z.string(),
@@ -2530,6 +2599,7 @@ export const IpcChannel = {
   QueryExplain: 'plasma:query:explain',
   QuerySafeRun: 'plasma:query:safeRun',
   QuerySafeRunFinish: 'plasma:query:safeRunFinish',
+  QuerySafeRunUndo: 'plasma:query:safeRunUndo',
   PgNoticeEvent: 'plasma:pg:notice',
   StructureApply: 'plasma:structure:apply',
   ImportPickFile: 'plasma:import:pickFile',
@@ -2779,6 +2849,8 @@ export interface PlasmaAPI {
     safeRun(req: SafeRunStartRequest): Promise<SafeRunReport>;
     /** Commit or roll back the pending Safe Run. Idempotent after a timeout. */
     safeRunFinish(req: SafeRunFinishRequest): Promise<SafeRunOutcome>;
+    /** Script runs: roll back the last executed statement; earlier ones stay pending. */
+    safeRunUndo(req: SafeRunUndoRequest): Promise<SafeRunUndoResult>;
     cancel(): Promise<CancelOutcome>;
     /** Cancel whatever runs on the aux connection (AI tool query, lookups). */
     cancelAux(): Promise<void>;
