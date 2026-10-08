@@ -30,24 +30,29 @@ export function Plate({
   );
 }
 
-/** Mono caption under a plate: "FIG 01.3  The thing". */
-export function Caption({ fig, children, className }: { fig: string; children: ReactNode; className?: string }) {
+/** Mono caption under a plate: a signal tick, then what the picture shows. */
+export function Caption({ children, className }: { children: ReactNode; className?: string }) {
   return (
     <p className={cn('label mt-5 flex items-baseline gap-3', className)}>
-      <span className="text-ink">{fig}</span>
-      <span className="h-px w-6 bg-rule translate-y-[-3px]" aria-hidden="true" />
+      <span className="h-[7px] w-[7px] shrink-0 translate-y-[-1px] bg-signal" aria-hidden="true" />
       <span className="normal-case tracking-normal text-[12.5px]">{children}</span>
     </p>
   );
 }
 
-/** Section header: hairline rule with the plate number and name. */
-export function SectionHead({ plate, name }: { plate: string; name: string }) {
+/** Section header: a hairline rule under a drafting cross, with the section name in words. */
+export function SectionHead({ name, tone = 'paper' }: { name: string; tone?: 'paper' | 'ink' }) {
+  const dark = tone === 'ink';
   return (
-    <div className="flex items-center gap-4 border-t border-ink pt-3" aria-hidden="true">
-      <span className="label text-ink">{plate}</span>
-      <span className="h-px flex-1 bg-rule" />
-      <span className="label">{name}</span>
+    <div
+      className={cn('relative flex items-center gap-4 border-t pt-3', dark ? 'border-paper/70' : 'border-ink')}
+      aria-hidden="true"
+    >
+      <svg viewBox="0 0 11 11" className="absolute -left-[5px] -top-[6px] h-[11px] w-[11px]">
+        <path d="M5.5 0v11M0 5.5h11" stroke="currentColor" strokeWidth="1" className={dark ? 'text-paper' : 'text-ink'} />
+      </svg>
+      <span className={cn('label', dark ? 'text-paper' : 'text-ink')}>{name}</span>
+      <span className={cn('h-px flex-1', dark ? 'bg-paper/20' : 'bg-rule')} />
     </div>
   );
 }

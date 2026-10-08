@@ -589,3 +589,145 @@ details[open] .faq-plus > span:last-child {
     transform: scale(1);
   }
 }
+
+/* ---------- Spec sheets (the hero engine row, generalised) ---------- */
+.sheet {
+  border-top: 1px solid var(--color-ink);
+  border-bottom: 1px solid var(--color-rule);
+}
+.sheet-cross {
+  color: var(--color-ink-2);
+  z-index: 2;
+}
+.sheet-cell {
+  padding: 20px 20px 24px;
+  border-left: 1px solid var(--color-rule);
+  border-top: 1px solid var(--color-rule);
+  transition: background-color 0.4s var(--ease-out-expo);
+}
+.sheet-kind {
+  color: var(--color-ink-2);
+}
+.sheet-tick {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  flex-shrink: 0;
+  background: var(--color-ink);
+  transition: background-color 0.3s;
+}
+.sheet-bar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -1px;
+  height: 2px;
+  background: var(--color-signal);
+  transform: scaleX(0);
+  transform-origin: left;
+  transition: transform 0.5s var(--ease-out-expo);
+  pointer-events: none;
+}
+.sheet-cell:hover {
+  background: color-mix(in srgb, var(--color-paper-2) 80%, transparent);
+}
+.sheet-cell:hover .sheet-bar,
+.sheet-cell:focus-within .sheet-bar {
+  transform: scaleX(1);
+}
+.sheet-cell:hover .sheet-tick {
+  background: var(--color-signal);
+}
+.sheet-wire {
+  display: none;
+}
+
+/* On ink: the same sheet drawn in paper. */
+.sheet-ink {
+  border-top-color: rgb(243 240 232 / 0.7);
+  border-bottom-color: rgb(243 240 232 / 0.15);
+}
+.sheet-ink .sheet-cross {
+  color: var(--color-paper);
+}
+.sheet-ink .sheet-cell {
+  border-color: rgb(243 240 232 / 0.15);
+}
+.sheet-ink .sheet-kind {
+  color: rgb(243 240 232 / 0.7);
+}
+.sheet-ink .sheet-tick {
+  background: var(--color-paper);
+}
+.sheet-ink .sheet-cell:hover {
+  background: #1d1c15;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  /* The wire runs the top rule once, when the sheet scrolls into view. */
+  .sheet.js .sheet-wire {
+    display: block;
+    position: absolute;
+    top: -1px;
+    left: 0;
+    right: 0;
+    height: 2px;
+    overflow: hidden;
+    z-index: 1;
+    pointer-events: none;
+  }
+  .sheet.js .sheet-wire::after {
+    content: '';
+    position: absolute;
+    inset: 0 auto 0 0;
+    width: 18%;
+    background: linear-gradient(to right, transparent, var(--color-signal) 70%, var(--color-signal));
+    animation: engine-wire 1.6s linear 0.1s both paused;
+  }
+  .sheet.js.in .sheet-wire::after {
+    animation-play-state: running;
+  }
+  .sheet.js .sheet-tick {
+    animation: sheet-on 0.7s var(--ease-out-expo) both paused;
+    animation-delay: calc(0.15s + min(var(--i, 0), 8) * 0.12s);
+  }
+  .sheet.js.in .sheet-tick {
+    animation-play-state: running;
+  }
+}
+@keyframes sheet-on {
+  0% {
+    background: var(--color-ink-3);
+    opacity: 0.25;
+    transform: scale(0.4);
+  }
+  50% {
+    background: var(--color-signal);
+    opacity: 1;
+    transform: scale(1.5);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* Detail callout on a capture: the magnified part of the screen. */
+.detail-inset {
+  border: 1px solid var(--color-ink);
+  border-radius: 10px;
+  overflow: hidden;
+  background-color: var(--color-paper-2);
+  box-shadow: 0 24px 48px -20px rgb(22 21 15 / 0.45);
+}
+.detail-label {
+  margin: 0;
+  border-top: 1px solid var(--color-rule);
+  background: var(--color-paper-2);
+  padding: 7px 10px;
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-ink-2);
+}

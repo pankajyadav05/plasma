@@ -8,9 +8,9 @@ import { usePlatform } from '@/lib/platform';
 
 const links = [
   { href: '#workbench', label: 'Workbench' },
-  { href: '#engines', label: 'Engines' },
+  { href: '#assistant', label: 'Assistant' },
   { href: '#guardrails', label: 'Guardrails' },
-  { href: '#shortcuts', label: 'Shortcuts' },
+  { href: '#engines', label: 'Engines' },
   { href: '#download', label: 'Download' },
 ];
 
@@ -42,7 +42,7 @@ export function Topbar() {
         </a>
 
         {/* The plate index replaces these links on wide screens. */}
-        <nav aria-label="Primary" className="hidden md:block xl:hidden">
+        <nav aria-label="Primary" className="hidden lg:block xl:hidden">
           <ul className="flex items-center gap-1">
             {links.map((l) => (
               <li key={l.href}>
@@ -60,7 +60,7 @@ export function Topbar() {
         </nav>
 
         <div className="flex items-center gap-2 sm:gap-3 xl:mx-auto xl:w-full xl:max-w-[1400px] xl:justify-end xl:px-[clamp(20px,4vw,56px)]">
-          <details className="group/menu relative md:hidden">
+          <details className="group/menu relative lg:hidden">
             <summary
               aria-label="Menu"
               className="mono grid h-10 cursor-pointer list-none place-items-center rounded-full px-3 text-[12px] font-medium uppercase tracking-[0.06em] text-ink-2 hover:bg-ink/[0.06] hover:text-ink [&::-webkit-details-marker]:hidden"

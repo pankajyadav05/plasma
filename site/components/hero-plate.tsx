@@ -115,8 +115,7 @@ export function HeroPlate({ captures }: { captures: Captures }) {
             })}
           </div>
           <p className="label hidden sm:block" aria-live="polite">
-            <span className="text-ink">Fig 00.{ENGINES.indexOf(active) + 1}</span>
-            <span className="mx-3 text-ink-3">/</span>
+            <span className="mr-3 inline-block h-[7px] w-[7px] bg-signal" aria-hidden="true" />
             {active.fig}
           </p>
         </div>
@@ -168,11 +167,9 @@ export function HeroPlate({ captures }: { captures: Captures }) {
                       }}
                     >
                       <span
-                        className="callout-dot mono grid h-[22px] w-[22px] place-items-center rounded-full bg-signal text-[10.5px] font-medium text-signal-ink ring-[3px] ring-paper-2 max-sm:h-[18px] max-sm:w-[18px] max-sm:text-[9px]"
+                        className="callout-dot block h-[12px] w-[12px] rounded-full bg-signal ring-[3px] ring-paper-2 max-sm:h-[10px] max-sm:w-[10px]"
                         style={{ '--d': `${1500 + c.n * 140}ms` } as CSSProperties}
-                      >
-                        {c.n}
-                      </span>
+                      />
                     </span>
                   ))}
                 </div>
@@ -233,15 +230,7 @@ export function HeroPlate({ captures }: { captures: Captures }) {
                     onBlur={() => setHot(null)}
                   >
                     <p className="mono text-[11.5px] font-medium leading-[22px] tracking-[0.04em] text-ink">
-                      {left ? (
-                        <>
-                          {c.title} <span className="text-signal">·</span> 0{c.n}
-                        </>
-                      ) : (
-                        <>
-                          0{c.n} <span className="text-signal">·</span> {c.title}
-                        </>
-                      )}
+                      {c.title}
                     </p>
                     <p className="mt-1 text-[14px] leading-[1.45] text-ink-2">{c.body}</p>
                   </div>
@@ -252,7 +241,7 @@ export function HeroPlate({ captures }: { captures: Captures }) {
         </div>
 
         {/* Legend for smaller screens */}
-        <ol
+        <ul
           className={cn(
             'mt-10 grid gap-x-10 gap-y-5 transition-opacity duration-300 sm:grid-cols-2 xl:hidden',
             showCallouts ? 'opacity-100' : 'hidden',
@@ -260,15 +249,13 @@ export function HeroPlate({ captures }: { captures: Captures }) {
         >
           {callouts.map((c) => (
             <li key={c.n} className="flex gap-4">
-              <span className="mono mt-0.5 grid h-[22px] w-[22px] shrink-0 place-items-center rounded-full bg-signal text-[10.5px] font-medium text-signal-ink">
-                {c.n}
-              </span>
+              <span aria-hidden="true" className="mt-[7px] block h-[10px] w-[10px] shrink-0 rounded-full bg-signal" />
               <p className="text-[15px] leading-[1.5] text-ink-2">
                 <span className="font-semibold text-ink">{c.title}.</span> {c.body}
               </p>
             </li>
           ))}
-        </ol>
+        </ul>
       </div>
     </div>
   );

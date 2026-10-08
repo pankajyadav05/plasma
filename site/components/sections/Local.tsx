@@ -1,24 +1,27 @@
 import { SectionHead } from '@/components/plate';
 import { Reveal } from '@/components/reveal';
+import { Sheet, SheetCell, SheetGrid } from '@/components/sheet';
 import { LearnMore } from '@/components/docs/learn-more';
 
 const LEDGER = [
-  ['Connections', 'On your computer'],
-  ['Query history', 'On your computer'],
-  ['Settings', 'On your computer'],
-  ['Saved passwords', 'Encrypted by your OS keychain'],
-  ['Account', 'Not necessary'],
-  ['AI prompts', 'Sent only when you use AI'],
+  ['Connections, history, settings', 'On your computer'],
+  ['Saved passwords', 'Your OS keychain'],
+  ['Account', 'None'],
+  ['Analytics', 'None'],
+  ['AI', 'Only when you use it, to the provider you chose'],
+  ['Model list', 'A public request to OpenRouter when a model picker is shown. No key, no data'],
+  ['MCP server', 'Off by default. This computer only'],
+  ['Update check', 'Asks the update feed for the latest version'],
 ] as const;
 
 export function Local() {
   return (
     <section id="local" aria-labelledby="local-title" className="py-24 md:py-32">
       <div className="wrap">
-        <SectionHead plate="Plate 05" name="Local-first" />
+        <SectionHead name="Local-first" />
 
         <div className="mt-14 grid gap-16 lg:grid-cols-12 lg:gap-10">
-          <div className="lg:col-span-7">
+          <div className="lg:col-span-6">
             <Reveal>
               <h2 id="local-title" className="display t-h2">
                 Local-first. No account.
@@ -29,40 +32,32 @@ export function Local() {
               </p>
               <LearnMore href="/docs/safety-privacy/#leaves-machine">What leaves your machine</LearnMore>
             </Reveal>
-            <div className="mt-14 grid max-w-[40em] gap-10 sm:grid-cols-2">
-              <Reveal className="border-t border-rule pt-6" delay={80}>
-                <p className="label text-ink">Team workspaces</p>
-                <p className="prose-p mt-3">
-                  Keep shared connections, queries and snippets in a .plasma folder in git. Passwords stay out of
-                  the folder.
-                </p>
-              </Reveal>
-              <Reveal className="border-t border-rule pt-6" delay={140}>
-                <p className="label text-ink">AI is optional</p>
-                <p className="prose-p mt-3">
-                  You supply your own OpenRouter key. Plasma sends row data only from connections where you allow
-                  it.
-                </p>
-              </Reveal>
-            </div>
+            <Reveal className="mt-14 max-w-[32em] border-t border-rule pt-6" delay={80}>
+              <p className="label text-ink">Team workspaces</p>
+              <p className="prose-p mt-3">
+                Keep shared connections, queries and snippets in a .plasma folder in git. Passwords stay out of the
+                folder.
+              </p>
+            </Reveal>
           </div>
 
-          <Reveal className="lg:col-span-5" delay={120}>
-            <p className="label border-b border-ink pb-3">Where your data stays</p>
-            <dl>
-              {LEDGER.map(([k, v], i) => (
-                <div
-                  key={k}
-                  className="grid grid-cols-[2.75rem_1fr] items-baseline gap-x-3 border-b border-rule py-4 sm:grid-cols-[2.75rem_9.5rem_1fr]"
-                >
-                  <span aria-hidden="true" className="mono row-span-2 text-[11.5px] text-ink-2 sm:row-span-1">
-                    05.{i + 1}
-                  </span>
-                  <dt className="text-[16px] font-semibold text-ink">{k}</dt>
-                  <dd className="col-start-2 text-[16px] text-ink-2 sm:col-start-3">{v}</dd>
-                </div>
-              ))}
-            </dl>
+          <Reveal className="lg:col-span-6" delay={120}>
+            <p className="label mb-3 text-ink">Where your data stays</p>
+            <Sheet>
+              <SheetGrid as="ul" label="Where your data stays">
+                {LEDGER.map(([k, v], i) => (
+                  <SheetCell
+                    as="li"
+                    key={k}
+                    index={i}
+                    className="grid grid-cols-1 gap-x-6 gap-y-1.5 !py-4 sm:grid-cols-[11rem_1fr] sm:items-baseline"
+                  >
+                    <span className="text-[16px] font-semibold text-ink">{k}</span>
+                    <span className="text-[16px] text-ink-2">{v}</span>
+                  </SheetCell>
+                ))}
+              </SheetGrid>
+            </Sheet>
           </Reveal>
         </div>
       </div>

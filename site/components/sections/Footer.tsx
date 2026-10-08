@@ -11,8 +11,10 @@ export function Footer() {
           <ul className="mono flex flex-wrap gap-x-8 gap-y-3 text-[12px] font-medium uppercase tracking-[0.06em]">
             {[
               ['/#workbench', 'Workbench'],
-              ['/#engines', 'Engines'],
+              ['/#assistant', 'Assistant'],
+              ['/#mcp', 'MCP'],
               ['/#guardrails', 'Guardrails'],
+              ['/#engines', 'Engines'],
               ['/docs/', 'Docs'],
               ['/#download', 'Download'],
             ].map(([h, l]) => (

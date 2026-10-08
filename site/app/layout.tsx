@@ -21,7 +21,7 @@ const martian = Martian_Mono({
 
 const TITLE = 'Plasma: desktop client for SQL, Redis and OpenSearch';
 const DESCRIPTION =
-  'Plasma is a free, open-source desktop client for Postgres, MySQL, SQLite, ClickHouse, DuckDB, Redis and OpenSearch. It stops dangerous changes before they run.';
+  'Plasma is a free, open-source desktop workbench for Postgres, MySQL, MariaDB, SQLite, ClickHouse, DuckDB, Redis and OpenSearch. It is careful with production, and its AI asks before it acts.';
 const SITE = 'https://plasma.codifyit.dev';
 
 export const metadata: Metadata = {

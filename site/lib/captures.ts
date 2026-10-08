@@ -26,6 +26,24 @@ export type CaptureKey =
   | 'redis'
   | 'opensearch';
 
+/**
+ * Captures that only exist as real v2 files. There is no older illustrative
+ * stand-in for them: until the file is on disk the key is simply absent and
+ * the page renders without that image.
+ */
+export type OptionalCaptureKey =
+  | 'ai-agent'
+  | 'ai-memory'
+  | 'mcp-proposal'
+  | 'mcp-settings'
+  | 'compare'
+  | 'conflict'
+  | 'notebook'
+  | 'diagnosis'
+  | 'recovery';
+
+export type AnyCaptureKey = CaptureKey | OptionalCaptureKey;
+
 export interface Capture {
   src: string;
   width: number;
@@ -88,6 +106,27 @@ const ALT: Record<CaptureKey, string> = {
     'Plasma OpenSearch workspace showing indices on the left and documents in the main pane.',
 };
 
+const OPTIONAL_ALT: Record<OptionalCaptureKey, string> = {
+  'ai-agent':
+    'Plasma assistant in the right sidebar: the agent proposes a query as an approval card with the statement and its buttons, and nothing runs until you click.',
+  'ai-memory':
+    'Plasma database memory: a short list of notes about one connection, each labelled with who wrote it.',
+  'mcp-proposal':
+    'Plasma asking for approval: a card titled Claude Code wants to change data, with the exact statement and a summary, waiting for you to approve or reject.',
+  'mcp-settings':
+    'Plasma settings for the MCP server: the on switch, the port, the setup snippet for each AI tool and the access level of each connection.',
+  compare:
+    'Plasma Result Compare: two result sets diffed by key, with added, removed and changed rows marked.',
+  conflict:
+    'Plasma dialog titled A row changed while you were editing, showing the value you loaded, the value on the server now and your value, with Keep mine and Take theirs.',
+  notebook:
+    'Plasma notebook: a document of SQL cells and Markdown notes, with the result of a cell under it.',
+  diagnosis:
+    'Plasma connection test listing each step in order, with the failing step marked and a plain-language explanation of what to try.',
+  recovery:
+    'Plasma after a crash: a notice naming how many tabs and unsaved edits were restored.',
+};
+
 type SizeMap = Record<string, { width: number; height: number }>;
 
 /** Tolerant reader: accepts {files:{name:{width,height}}}, {name:{w,h}} or {name:[w,h]}. */
@@ -113,10 +152,10 @@ function readSizes(dir: string): SizeMap {
   }
 }
 
-export function getCaptures(): Record<CaptureKey, Capture> {
+export function getCaptures(): Captures {
   const dir = path.join(process.cwd(), 'public', 'product', 'v2');
   const sizes = readSizes(dir);
-  const out = {} as Record<CaptureKey, Capture>;
+  const out = {} as Captures;
   for (const key of Object.keys(FALLBACKS) as CaptureKey[]) {
     const file = `${key}.webp`;
     const fb = FALLBACKS[key];
@@ -134,7 +173,14 @@ export function getCaptures(): Record<CaptureKey, Capture> {
       };
     }
   }
+  // Real-only captures: read the true size from v2/captures.json, skip when absent.
+  for (const key of Object.keys(OPTIONAL_ALT) as OptionalCaptureKey[]) {
+    const file = `${key}.webp`;
+    if (!fs.existsSync(path.join(dir, file))) continue;
+    const s = sizes[file] ?? { width: 2880, height: 1800 };
+    out[key] = { src: `/product/v2/${file}`, ...s, alt: OPTIONAL_ALT[key], real: true };
+  }
   return out;
 }
 
-export type Captures = Record<CaptureKey, Capture>;
+export type Captures = Record<CaptureKey, Capture> & Partial<Record<OptionalCaptureKey, Capture>>;

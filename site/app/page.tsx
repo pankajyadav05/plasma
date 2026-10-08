@@ -1,5 +1,8 @@
 import { PlateIndex } from '@/components/plate-index';
 import { Topbar } from '@/components/topbar';
+import { Assistant } from '@/components/sections/Assistant';
+import { Dependable } from '@/components/sections/Dependable';
+import { Mcp } from '@/components/sections/Mcp';
 import { Download } from '@/components/sections/Download';
 import { Engines } from '@/components/sections/Engines';
 import { FAQ } from '@/components/sections/FAQ';
@@ -22,8 +25,11 @@ export default function Page() {
         <main id="main" className="min-w-0">
           <Hero captures={captures} />
           <Workbench captures={captures} />
-          <Engines captures={captures} />
+          <Assistant captures={captures} />
+          <Mcp captures={captures} />
           <Guardrails />
+          <Dependable captures={captures} />
+          <Engines captures={captures} />
           <Shortcuts />
           <Local />
           <Download />

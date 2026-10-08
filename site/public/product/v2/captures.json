@@ -92,6 +92,69 @@
       "bytes": 399718,
       "shows": "OpenSearch connection (shop-search, 2.17.1): products index searched with category:Outdoor AND rating:[4.5 TO *], 27 hits, one document selected in the Details panel.",
       "capture": "Index > Open search, query_string entered and run, row 3 clicked. Full window."
+    },
+    "ai-agent.webp": {
+      "width": 2880,
+      "height": 1800,
+      "bytes": 232096,
+      "shows": "Workbench with the Assistant panel open over the orders grid: an earlier 'show the latest 10 orders' request whose show_table card was applied (grid sorted by placed_at, 10 rows), then 'Mark order 1042 as shipped' with a pending Change data card showing the summary, the UPDATE statement and the Preview with Safe Run / Reject buttons.",
+      "capture": "Full window, 1440x900 CSS px at 2x via Playwright _electron. Asked both questions in the Assistant panel, clicked Apply on the first card, left the second pending. Assistant replies come from a scripted local mock model (OpenAI-compatible server on 127.0.0.1) configured as the Local provider with model id llama-3.1-8b; data is a fictional shop in a throwaway Postgres cluster."
+    },
+    "ai-memory.webp": {
+      "width": 1280,
+      "height": 1340,
+      "bytes": 98188,
+      "shows": "Database memory dialog for connection 'shop' with five notes, sources mixed (You / Assistant): orders.total in shop currency, test-customer email domain, ignore the archive schema, VIP = customers.vip, cancelled/refunded orders have no payment row.",
+      "capture": "Assistant panel > memory button (book icon) with notes added through the memory API as user/agent. Cropped to the dialog plus margin (x 800-2080, y 230-1570 of the 2880x1800 window). Assistant replies come from a scripted local mock model (OpenAI-compatible server on 127.0.0.1) configured as the Local provider with model id llama-3.1-8b; data is a fictional shop in a throwaway Postgres cluster."
+    },
+    "mcp-proposal.webp": {
+      "width": 2880,
+      "height": 1800,
+      "bytes": 288334,
+      "shows": "An external MCP client's proposal in Plasma: the Assistant panel shows 'Claude Code wants to change data' with a pending Change data card (summary, UPDATE statement, Preview with Safe Run / Reject) over the orders grid.",
+      "capture": "MCP server enabled on port 47391 with access 'propose' on shop; token read from <userData>/mcp-token; real MCP session over HTTP (initialize with clientInfo 'Claude Code', then tools/call propose_change). Full window. Data is a fictional shop in a throwaway Postgres cluster."
+    },
+    "mcp-settings.webp": {
+      "width": 2880,
+      "height": 1800,
+      "bytes": 140652,
+      "shows": "Settings > MCP server: enabled and listening on 127.0.0.1:47391, token hidden (bullets), Claude Code setup snippet with the token masked, per-connection access list (shop: read and propose, shop-staging: structure and read queries, shop-analytics: structure only), and Recent calls from a real Claude Code MCP session.",
+      "capture": "Same session as mcp-proposal after declining the proposal; scrolled the settings pane slightly so every Recent calls row is visible. Token never revealed. Full window. Data is fictional."
+    },
+    "compare.webp": {
+      "width": 2880,
+      "height": 1800,
+      "bytes": 200492,
+      "shows": "Result Compare tab 'shop vs shop-staging': the same orders query on two connections keyed by id, with 2 added, 2 removed, 3 changed (old value struck through) and 14 unchanged rows, unchanged rows shown.",
+      "capture": "Command palette 'Compare results…', Side A and B both 'Run a query…' (B on shop-staging, a copy of the fictional database with a few edited rows), 'same' filter turned on. Full window. Data is fictional."
+    },
+    "conflict.webp": {
+      "width": 2880,
+      "height": 1800,
+      "bytes": 220420,
+      "shows": "Edit conflict dialog 'A row changed while you were editing' on public.customers id=1: column country with Original FR, Theirs (now) DE and Yours GB, with Take theirs / Keep mine, over the customers grid in edit mode with the 'Commit failed, nothing was saved' banner.",
+      "capture": "Edit mode on (toolbar safety button), country cell of row 1 edited with F2 to GB, the same row changed to DE from psql, then Ctrl+S. Full window. Data is fictional (throwaway Postgres cluster)."
+    },
+    "notebook.webp": {
+      "width": 2880,
+      "height": 1800,
+      "bytes": 130466,
+      "shows": "Notebook dialog on the shop connection: a rendered Markdown heading and note, then two SQL cells that were run, one showing revenue per day since 5 October and one the top three countries by revenue (join of orders and customers), each with its result table under the query.",
+      "capture": "Command palette 'Notebook…' with a draft of one Markdown and two SQL cells (loaded from the per-connection draft), each SQL cell run with its Run button. Full window. Data is fictional (throwaway Postgres cluster)."
+    },
+    "diagnosis.webp": {
+      "width": 2880,
+      "height": 1800,
+      "bytes": 147636,
+      "shows": "Connection editor after Test connection on a saved connection whose database name has a typo: the plain-language problem 'Database not found' with three things to try and the step trail Find the host, Reach the port, Log in (passed) and Open the database (failed); the Database field is flagged.",
+      "capture": "Saved connection shop-staging pointing at database shop_stagng (typo) on the throwaway cluster, opened with its edit pencil, Test pressed. Full window. Data is fictional."
+    },
+    "recovery.webp": {
+      "width": 2880,
+      "height": 1800,
+      "bytes": 115680,
+      "shows": "Crash recovery after a force-kill: Plasma relaunched on the same profile with the restored workspace (query-1.sql showing its unsaved multi-line SQL, query-2.sql and the customers table tab, all with unsaved markers) and the toast 'Plasma closed unexpectedly. Restored 3 tabs and 1 unsaved edit' with Discard edits and Show crash log.",
+      "capture": "Two SQL tabs with unsaved SQL typed in plus the customers table with one staged cell edit; waited for the recovery journal, sent SIGKILL to the Electron main process, relaunched with the same PLASMA_USER_DATA (safeStorage stub re-applied) and reloaded. Full window. Data is fictional."
     }
   }
 }

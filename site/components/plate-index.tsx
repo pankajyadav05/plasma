@@ -4,16 +4,19 @@ import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { cn } from '@/lib/cn';
 
-/** The plates of the page, in order. `id` is the section's anchor. */
+/** The sections of the page, in order. `id` is the section's anchor. */
 export const PLATES = [
-  { id: 'top', n: '00', name: 'Home' },
-  { id: 'workbench', n: '01', name: 'Workbench' },
-  { id: 'engines', n: '02', name: 'Engines' },
-  { id: 'guardrails', n: '03', name: 'Guardrails' },
-  { id: 'shortcuts', n: '04', name: 'Shortcuts' },
-  { id: 'local', n: '05', name: 'Local-first' },
-  { id: 'download', n: '06', name: 'Download' },
-  { id: 'faq', n: 'A', name: 'Questions' },
+  { id: 'top', name: 'Home' },
+  { id: 'workbench', name: 'Workbench' },
+  { id: 'assistant', name: 'Assistant' },
+  { id: 'mcp', name: 'MCP server' },
+  { id: 'guardrails', name: 'Guardrails' },
+  { id: 'dependable', name: 'Dependable' },
+  { id: 'engines', name: 'Engines' },
+  { id: 'shortcuts', name: 'Shortcuts' },
+  { id: 'local', name: 'Local-first' },
+  { id: 'download', name: 'Download' },
+  { id: 'faq', name: 'Questions' },
 ] as const;
 
 /**

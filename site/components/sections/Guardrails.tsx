@@ -3,6 +3,7 @@
 import { Lock } from 'lucide-react';
 import { useRef, useState, type KeyboardEvent } from 'react';
 import { Plate, SectionHead } from '@/components/plate';
+import { Sheet, SheetCell, SheetGrid } from '@/components/sheet';
 import { Reveal } from '@/components/reveal';
 import { cn } from '@/lib/cn';
 import { LearnMore } from '@/components/docs/learn-more';
@@ -12,43 +13,52 @@ const LEVELS = [
     id: 'off',
     name: 'Off',
     tag: 'Runs',
-    outcome: 'The statement runs immediately.',
+    outcome: 'The statement runs immediately. On a Prod connection it still asks first.',
     detail: null,
-    angle: -66,
+    angle: -60,
   },
   {
     id: 'dangerous',
-    name: 'Confirm dangerous',
+    name: 'Confirm dangerous statements',
     tag: 'Asks first',
-    outcome: 'Plasma asks before DROP, TRUNCATE, and DELETE or UPDATE without WHERE.',
+    outcome: 'Plasma asks before DROP, TRUNCATE, any DELETE, and an UPDATE without WHERE.',
     detail: 'Default',
-    angle: -22,
+    angle: -30,
+  },
+  {
+    id: 'writes',
+    name: 'Confirm every write',
+    tag: 'Asks first',
+    outcome: 'Plasma asks before any statement that may write.',
+    detail: null,
+    angle: 0,
   },
   {
     id: 'all',
-    name: 'Confirm all',
+    name: 'Confirm every statement',
     tag: 'Asks first',
-    outcome: 'Plasma asks before each statement.',
+    outcome: 'Plasma asks before every statement.',
     detail: null,
-    angle: 22,
+    angle: 30,
   },
   {
     id: 'readonly',
     name: 'Read-only',
     tag: 'Refused',
-    outcome: 'Plasma blocks all writes on this connection.',
+    outcome: 'Plasma refuses statements that write.',
     detail: null,
-    angle: 66,
+    angle: 60,
   },
 ] as const;
 
 const CELLS = [
-  ['Safe Run', 'Do a dry run of a change. Examine the changed rows, then commit or roll back.'],
-  ['Production tag', 'Connections with the Prod tag ask for one more confirmation.'],
-  ['Read-only connections', 'The main process blocks writes. The UI cannot bypass this block.'],
-  ['Migration check', 'Plasma finds unsafe DDL and shows the locks that it takes.'],
-  ['Audit log', 'Plasma records each statement on Prod connections. Changes to the log are visible.'],
-  ['Presentation mode', 'Plasma hides personal data when you share your screen.'],
+  ['Preview', 'Safe Run', 'On PostgreSQL, shows the exact rows a write changes before you commit it, or roll it back.'],
+  ['Gate', 'Production tag', 'Destructive SQL always asks, the connection capsule turns red, and every statement is audited.'],
+  ['Enforced', 'Read-only connections', 'Refuses every write on every engine. The main process checks it, so the interface cannot bypass it.'],
+  ['Compare', 'Conflict detection', 'A commit does not overwrite a row someone else changed. You choose Keep mine or Take theirs.'],
+  ['Lint', 'Migration check', 'On PostgreSQL, flags unsafe DDL in a script and shows the table locks each statement takes.'],
+  ['Record', 'Audit log', 'A tamper-evident record of every statement on Prod connections, and of every MCP tool call.'],
+  ['Hide', 'Masking and presentation mode', 'Hides sensitive values on screen, in the clipboard and in the AI context.'],
 ] as const;
 
 const CX = 130;
@@ -122,7 +132,7 @@ export function Guardrails() {
   return (
     <section id="guardrails" aria-labelledby="guardrails-title" className="py-24 md:py-32">
       <div className="wrap">
-        <SectionHead plate="Plate 03" name="Guardrails" />
+        <SectionHead name="Guardrails" />
 
         <div className="mt-14 grid gap-8 lg:grid-cols-12">
           <Reveal className="lg:col-span-8">
@@ -131,8 +141,7 @@ export function Guardrails() {
             </h2>
           </Reveal>
           <Reveal className="lg:col-span-4 lg:self-end" delay={100}>
-            <p className="lede">Plasma stops dangerous statements before they run.</p>
-            <LearnMore href="/docs/safety-privacy/">How the guards work</LearnMore>
+            <p className="lede">Plasma stops dangerous statements before they run, and shows you the effect before you commit.</p>
           </Reveal>
         </div>
 
@@ -140,9 +149,9 @@ export function Guardrails() {
           {/* The dial */}
           <Plate className="h-full lg:col-span-6" frameClassName="h-full">
             <div className="flex h-full flex-col p-6 sm:p-9">
-              <p className="label">Safe mode · Setting</p>
-              <div className="mt-6 flex flex-col items-center gap-8 sm:flex-row sm:items-center sm:gap-10">
-                <div className="flex w-full max-w-[280px] shrink-0 justify-center">
+              <p className="label">Safe mode</p>
+              <div className="mt-6 flex flex-col items-center gap-6">
+                <div className="flex w-full max-w-[260px] shrink-0 justify-center">
                   <Gauge index={i} />
                 </div>
                 <div
@@ -165,7 +174,7 @@ export function Guardrails() {
                         tabIndex={on ? 0 : -1}
                         onClick={() => setI(idx)}
                         onKeyDown={(e) => onKey(e, idx)}
-                        className="group relative flex w-full items-center gap-5 rounded-md py-3 text-left"
+                        className="group relative flex w-full items-center gap-5 rounded-md py-2.5 text-left"
                       >
                         <span
                           aria-hidden="true"
@@ -191,7 +200,9 @@ export function Guardrails() {
                           {l.name}
                         </span>
                         {l.detail && (
-                          <span className="label rounded-full border border-rule px-2 py-0.5 text-[10px]">{l.detail}</span>
+                          <span className="label shrink-0 whitespace-nowrap rounded-full border border-rule px-2 py-0.5 text-[10px]">
+                            {l.detail}
+                          </span>
                         )}
                       </button>
                     );
@@ -209,9 +220,9 @@ export function Guardrails() {
             <div className="flex h-full flex-col">
               <div className="flex items-center justify-between border-b border-rule px-6 py-3.5 sm:px-8">
                 <p className="mono text-[11.5px] tracking-[0.03em] text-ink-2">
-                  commerce <span className="text-ink-3">/</span> public
+                  shop <span className="text-ink-3">/</span> public
                 </p>
-                <span className="label rounded-full border border-ink px-2.5 py-0.5 text-[10px] text-ink">Prod</span>
+                <span className="label text-[10px]">Editor</span>
               </div>
               <div className="flex flex-1 flex-col px-6 py-8 sm:px-8">
                 <p className="label text-ink-3" style={{ color: 'var(--color-ink-2)' }}>
@@ -237,14 +248,14 @@ export function Guardrails() {
                         {lvl.outcome}
                       </p>
                     )}
-                    {(lvl.id === 'dangerous' || lvl.id === 'all') && (
+                    {(lvl.id === 'dangerous' || lvl.id === 'writes' || lvl.id === 'all') && (
                       <>
                         <p className="text-[24px] font-bold leading-tight tracking-[-0.01em] text-ink" style={{ fontVariationSettings: "'wdth' 108" }}>
                           {lvl.outcome}
                         </p>
                         <div aria-hidden="true" className="mt-5 flex gap-2">
                           <span className="mono rounded-full border border-ink-3 px-4 py-1.5 text-[11.5px] text-ink-2">Cancel</span>
-                          <span className="mono rounded-full bg-ink px-4 py-1.5 text-[11.5px] text-paper">Run anyway</span>
+                          <span className="mono rounded-full bg-ink px-4 py-1.5 text-[11.5px] text-paper">Run</span>
                         </div>
                       </>
                     )}
@@ -263,17 +274,21 @@ export function Guardrails() {
           </Plate>
         </Reveal>
 
-        <dl className="mt-16 grid gap-x-8 gap-y-10 sm:grid-cols-2 lg:grid-cols-3">
-          {CELLS.map(([t, d], n) => (
-            <Reveal key={t} delay={n * 70} className="border-t border-ink pt-4">
-              <dt className="label text-ink">
-                <span className="mr-3 text-ink-3">03.{n + 1}</span>
-                {t}
-              </dt>
-              <dd className="mt-3 text-[16px] leading-[1.5] text-ink-2">{d}</dd>
-            </Reveal>
-          ))}
-        </dl>
+        <Sheet className="mt-16">
+          <SheetGrid as="ul" label="The guards" className="sm:grid-cols-2 lg:grid-cols-4">
+            {CELLS.map(([kind, t, d], n) => (
+              <SheetCell as="li" key={t} kind={kind} index={n}>
+                <span className="mt-4 block text-[19px] font-bold leading-snug tracking-[-0.01em] text-ink" style={{ fontVariationSettings: "'wdth' 108" }}>
+                  {t}
+                </span>
+                <span className="mt-2 block text-[15.5px] leading-[1.5] text-ink-2">{d}</span>
+              </SheetCell>
+            ))}
+            <li className="sheet-cell relative flex items-end">
+              <LearnMore href="/docs/safety-privacy/">How the guards work</LearnMore>
+            </li>
+          </SheetGrid>
+        </Sheet>
       </div>
     </section>
   );

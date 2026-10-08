@@ -2,7 +2,9 @@
 
 import Link from 'next/link';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { SectionHead } from '@/components/plate';
 import { Reveal } from '@/components/reveal';
+import { Crosses } from '@/components/sheet';
 import { cn } from '@/lib/cn';
 import { usePlatform } from '@/lib/platform';
 
@@ -80,11 +82,7 @@ export function Shortcuts() {
       className="on-ink relative bg-ink py-24 text-paper md:py-32"
     >
       <div className="wrap">
-        <div className="flex items-center gap-4 border-t border-paper/70 pt-3" aria-hidden="true">
-          <span className="label text-paper">Plate 04</span>
-          <span className="h-px flex-1 bg-paper/20" />
-          <span className="label text-paper/70">Shortcuts</span>
-        </div>
+        <SectionHead name="Shortcuts" tone="ink" />
 
         <div className="mt-14 grid gap-8 lg:grid-cols-12">
           <Reveal className="lg:col-span-8">
@@ -107,7 +105,9 @@ export function Shortcuts() {
         </div>
 
         <Reveal delay={80}>
-          <ul className="mt-16 grid gap-px overflow-hidden rounded-[14px] border border-paper/15 bg-paper/15 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="relative mt-16 border-t border-paper/70">
+          <Crosses />
+          <ul className="grid gap-px overflow-hidden border-b border-paper/15 bg-paper/15 sm:grid-cols-2 lg:grid-cols-4">
             {SHORTCUTS.map((s) => {
               const on = lit === s.id;
               return (
@@ -147,6 +147,7 @@ export function Shortcuts() {
               );
             })}
           </ul>
+          </div>
         </Reveal>
       </div>
     </section>
