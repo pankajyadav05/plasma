@@ -91,7 +91,14 @@ async function downloadVerified(dir: string): Promise<string> {
   const file = join(dir, 'Plasma-Setup-3.1.0-x64.exe');
   writeFileSync(file, INSTALLER);
   autoUpdater.emit('update-downloaded', { ...offered, downloadedFile: file });
-  await settle();
+  // The feed check is async; on a busy CI runner it can outlast a fixed pause.
+  await vi.waitFor(
+    () => {
+      if (!['downloaded', 'error'].includes(getLastUpdateStatus().kind))
+        throw new Error('not settled');
+    },
+    { timeout: 3000, interval: 10 },
+  );
   return file;
 }
 
