@@ -1,21 +1,17 @@
 import { Button } from '@/components/ui/button';
-import { type DataColumn, DataTable } from '@/components/ui/data-table';
+import { DataTable } from '@/components/ui/data-table';
 import { MigrationCheckPanel } from '@/features/migration/MigrationCheckPanel';
-import { cellToText } from '@/features/result-grid/cell-edit';
 import { cn } from '@/lib/cn';
-import { formatCountdown, safeRunThreshold, safeRunWarning } from '@/lib/safe-run';
+import { formatCountdown, safeRunThreshold, safeRunWarning, statementsLabel } from '@/lib/safe-run';
 import { useSession } from '@/stores/session';
 import { type SafeRunState, safeRunPending } from '@/stores/session-safe-run';
 import type { SafeRunReport } from '@shared/protocol';
-import { type DiffRow, type SafeRunDiff, buildSafeRunDiff } from '@shared/safe-run-diff';
+import { type SafeRunDiff, buildSafeRunDiff } from '@shared/safe-run-diff';
+import { planSafeRunScript } from '@shared/safe-run-script';
 import { AlertTriangle, Check, Loader2, RotateCcw, ShieldCheck, X } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
-
-const MAX_CELL_CHARS = 400;
-
-const TINT_CHANGED = 'bg-[color-mix(in_srgb,var(--status-warn)_24%,transparent)]';
-const TINT_INSERTED = 'bg-[color-mix(in_srgb,var(--wb-accent)_20%,transparent)]';
-const TINT_DELETED = 'bg-[color-mix(in_srgb,var(--wb-danger-fill)_20%,transparent)]';
+import { ScriptReview } from './ScriptReview';
+import { buildColumns } from './diff-columns';
 
 const VERB: Record<SafeRunReport['kind'], { noun: string; verb: string }> = {
   update: { noun: 'UPDATE', verb: 'updated' },
@@ -24,109 +20,6 @@ const VERB: Record<SafeRunReport['kind'], { noun: string; verb: string }> = {
   merge: { noun: 'MERGE', verb: 'affected' },
   cte: { noun: 'WITH', verb: 'affected' },
 };
-
-function text(value: unknown, type: string | undefined): string | null {
-  if (value === undefined) return null;
-  const t = cellToText(value, type);
-  if (t === null) return null;
-  return t.length > MAX_CELL_CHARS ? `${t.slice(0, MAX_CELL_CHARS)}…` : t;
-}
-
-function Cell({ value, type }: { value: unknown; type: string | undefined }) {
-  const t = text(value, type);
-  if (t === null) return <span className="text-[var(--grid-null)]">NULL</span>;
-  if (t === '') return <span className="text-[var(--grid-null)]">''</span>;
-  return <>{t}</>;
-}
-
-/** A cell that fills the whole `<td>` so the tint reaches its edges. */
-function Fill({ className, children }: { className?: string; children: React.ReactNode }) {
-  return (
-    <span className={cn('-mx-2.5 block h-6 truncate px-2.5 leading-6', className)}>{children}</span>
-  );
-}
-
-function opMark(status: DiffRow['status']): { mark: string; label: string; className: string } {
-  switch (status) {
-    case 'changed':
-      return { mark: '~', label: 'changed', className: 'text-[var(--status-warn)]' };
-    case 'inserted':
-    case 'new':
-      return { mark: '+', label: 'new row', className: 'text-[var(--wb-accent-text)]' };
-    case 'deleted':
-    case 'old':
-      return { mark: '−', label: 'removed row', className: 'text-[var(--wb-danger-fill)]' };
-    default:
-      return { mark: '', label: 'unchanged', className: 'text-[var(--wb-text-3)]' };
-  }
-}
-
-function buildColumns(diff: SafeRunDiff): DataColumn<DiffRow>[] {
-  const op: DataColumn<DiffRow> = {
-    key: '__op',
-    label: '',
-    width: 28,
-    sans: true,
-    render: (row) => {
-      const m = opMark(row.status);
-      return (
-        <span className={cn('font-semibold', m.className)} role="img" aria-label={m.label}>
-          {m.mark}
-        </span>
-      );
-    },
-  };
-  const cols = diff.columns.map<DataColumn<DiffRow>>((c, i) => ({
-    key: `c${i}`,
-    label: c.name,
-    title: `${c.name} — ${c.dataTypeName ?? ''}`,
-    render: (row) => {
-      const type = c.dataTypeName;
-      const before = row.before?.[i];
-      const after = row.after?.[i];
-      switch (row.status) {
-        case 'changed':
-          if (row.changed[i]) {
-            return (
-              <Fill className={TINT_CHANGED}>
-                <span className="text-[var(--wb-text-3)] line-through">
-                  <Cell value={before} type={type} />
-                </span>
-                <span className="px-1 text-[var(--wb-text-3)]" aria-hidden>
-                  →
-                </span>
-                <span className="font-medium">
-                  <Cell value={after} type={type} />
-                </span>
-              </Fill>
-            );
-          }
-          return <Cell value={after} type={type} />;
-        case 'unchanged':
-          return (
-            <span className="text-[var(--wb-text-2)]">
-              <Cell value={after} type={type} />
-            </span>
-          );
-        case 'inserted':
-        case 'new':
-          return (
-            <Fill className={TINT_INSERTED}>
-              <Cell value={after} type={type} />
-            </Fill>
-          );
-        default:
-          return (
-            <Fill className={cn(TINT_DELETED, 'text-[var(--wb-text-2)] line-through')}>
-              <Cell value={before ?? after} type={type} />
-            </Fill>
-          );
-      }
-    },
-    titleOf: (row) => text(row.after?.[i] ?? row.before?.[i], c.dataTypeName) ?? 'NULL',
-  }));
-  return [op, ...cols];
-}
 
 function useNow(active: boolean): number {
   const [now, setNow] = useState(() => Date.now());
@@ -148,6 +41,8 @@ export function SafeRunPanel() {
   const sr = useSession((s) => s.safeRun);
   const threshold = useSession((s) => safeRunThreshold(s.settings));
   const commit = useSession((s) => s.commitSafeRun);
+  const commitPartial = useSession((s) => s.commitSafeRunPartial);
+  const undo = useSession((s) => s.undoSafeRun);
   const rollback = useSession((s) => s.rollbackSafeRun);
   const dismiss = useSession((s) => s.dismissSafeRun);
   const [showUnchanged, setShowUnchanged] = useState(false);
@@ -208,7 +103,22 @@ export function SafeRunPanel() {
           </Button>
         </div>
       )}
-      {report && diff && (
+      {report?.steps && (
+        <ScriptReview
+          sr={sr}
+          report={report}
+          steps={report.steps}
+          threshold={threshold}
+          msLeft={msLeft}
+          pulse={pulse}
+          onCommit={() => void commit()}
+          onCommitPartial={() => void commitPartial()}
+          onRollback={() => void rollback('user')}
+          onUndo={() => void undo()}
+          onClose={dismiss}
+        />
+      )}
+      {report && diff && !report.steps && (
         <>
           <ReviewHeader
             sr={sr}
@@ -217,6 +127,14 @@ export function SafeRunPanel() {
             msLeft={msLeft}
             pulse={pulse}
           />
+          {sr.notice && (
+            <p
+              role="alert"
+              className="border-b border-[var(--wb-separator)] px-4 py-1.5 text-[12px] text-[var(--wb-text)]"
+            >
+              {sr.notice}
+            </p>
+          )}
           {report.note && (
             <p className="border-b border-[var(--wb-separator)] bg-[var(--wb-toolbar-group)] px-4 py-1.5 text-[12px] text-[var(--wb-text-2)]">
               {report.note}
@@ -251,12 +169,16 @@ export function SafeRunPanel() {
 }
 
 function RunningBar({ sr, onCancel }: { sr: SafeRunState; onCancel: () => void }) {
+  const plan = useMemo(() => planSafeRunScript(sr.sql), [sr.sql]);
+  const count = plan.ok ? plan.statements.length : 1;
   return (
     <div className="flex items-center gap-3 px-4 py-3">
       <Loader2 className="h-4 w-4 animate-spin text-[var(--wb-text-2)]" aria-hidden />
       <div className="min-w-0 flex-1">
         <div className="text-[13px] text-[var(--wb-text)]">
-          Running inside a transaction. Nothing is saved yet.
+          {count > 1
+            ? `Running ${statementsLabel(count)} inside one transaction. Nothing is saved yet.`
+            : 'Running inside a transaction. Nothing is saved yet.'}
         </div>
         <div className="truncate font-mono text-[12px] text-[var(--wb-text-3)]">{sr.sql}</div>
       </div>
@@ -272,7 +194,9 @@ function FailedBar({ sr, onClose }: { sr: SafeRunState; onClose: () => void }) {
     <div role="alert" className="flex items-start gap-3 px-4 py-3">
       <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-[var(--wb-danger-fill)]" aria-hidden />
       <div className="min-w-0 flex-1">
-        <div className="text-[13px] font-medium text-[var(--wb-text)]">Safe Run did not finish</div>
+        <div className="text-[13px] font-medium text-[var(--wb-text)]">
+          {sr.outcomeUnknown ? 'Outcome unknown' : 'Safe Run did not finish'}
+        </div>
         <div className="whitespace-pre-wrap text-[13px] text-[var(--wb-text-2)]">{sr.error}</div>
         <div className="mt-1 truncate font-mono text-[12px] text-[var(--wb-text-3)]">{sr.sql}</div>
         {/* Safe Run is DML-only; for DDL show what a normal Run would do. */}

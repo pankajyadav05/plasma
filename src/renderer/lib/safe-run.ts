@@ -112,3 +112,26 @@ export function formatCountdown(msLeft: number): string {
   const s = total % 60;
   return `${m}:${String(s).padStart(2, '0')}`;
 }
+
+/** Statements of a script report that ran and are pending. */
+export function pendingStatementCount(report: { steps?: { status: string }[] }): number {
+  return report.steps ? report.steps.filter((st) => st.status === 'done').length : 1;
+}
+
+/**
+ * Label of the explicit partial commit after a failure. Undo only ever
+ * removes the last statement that ran, so what is pending is always 1..m.
+ */
+export function partialCommitLabel(done: number): string {
+  return done <= 1 ? 'Commit 1' : `Commit 1\u2013${done}`;
+}
+
+/** "3 statements" / "1 statement". */
+export function statementsLabel(n: number): string {
+  return `${n.toLocaleString('en-US')} ${n === 1 ? 'statement' : 'statements'}`;
+}
+
+/** "5 rows" / "1 row", with a trailing + when the count stopped early. */
+export function rowsLabel(n: number, exact = true): string {
+  return `${n.toLocaleString('en-US')}${exact ? '' : '+'} ${n === 1 ? 'row' : 'rows'}`;
+}

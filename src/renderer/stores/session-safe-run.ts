@@ -1,15 +1,18 @@
 /**
- * Safe Run slice: a dry run for writes. The worker runs the statement in a
- * transaction (or savepoint) and holds it open; this slice owns the review
- * that follows and the Commit / Roll back decision.
+ * Safe Run slice: a dry run for writes. The worker runs the statement (or a
+ * script of up to 20 statements) in one transaction (or savepoint) and holds
+ * it open; this slice owns the review that follows and the Commit / Roll back
+ * decision, plus "Undo last statement" for scripts.
  *
  * One Safe Run exists at a time because it owns the primary connection:
  * the worker refuses every other statement on it until the run ends.
  */
 import { ipc } from '@/lib/ipc';
-import { isSafeRunnable, safeRunTimeoutSec } from '@/lib/safe-run';
-import { resolveRunTarget, splitSqlStatements } from '@/lib/sql-split';
+import { safeRunTimeoutSec } from '@/lib/safe-run';
+import { resolveRunTarget } from '@/lib/sql-split';
 import type { QueryResult, SafeRunReport } from '@shared/protocol';
+import { classifyFailure } from '@shared/query-lifecycle';
+import { planSafeRunScript } from '@shared/safe-run-script';
 import { armProdGate, evaluateGate } from './session-prod-gate';
 import { activeTab, patchTabById, resultPatch } from './session-tab-model';
 import type { SliceCreator } from './session-types';
@@ -26,6 +29,9 @@ export type SafeRunPhase =
 /** Why a run ended without the user pressing Roll back. */
 export type SafeRunEndReason = 'user' | 'timeout' | 'disconnect' | 'tab';
 
+/** What the in-flight `finishing` phase is doing. */
+export type SafeRunFinishing = 'commit' | 'commitPartial' | 'rollback' | 'undo';
+
 export interface SafeRunState {
   tabId: string;
   sql: string;
@@ -33,6 +39,12 @@ export interface SafeRunState {
   report: SafeRunReport | null;
   error: string | null;
   endReason: SafeRunEndReason | null;
+  /** A COMMIT was on its way when the connection dropped: it may or may not have been saved. */
+  outcomeUnknown: boolean;
+  /** A message that does not end the review (an undo that did not go through). */
+  notice: string | null;
+  /** Set while `phase` is `finishing`. */
+  finishing: SafeRunFinishing | null;
   connectionGen: number;
   /** Identifies this run in async continuations. */
   token: number;
@@ -57,7 +69,12 @@ export interface SafeRunSlice {
    * it in a held-open transaction and show what it changed.
    */
   runSafeRun(opts?: { sql?: string; base?: number; gated?: boolean }): Promise<void>;
+  /** Commit everything. Refused for a script that stopped at a failed statement. */
   commitSafeRun(): Promise<void>;
+  /** Commit only the statements that succeeded before a failed one (explicit, separate action). */
+  commitSafeRunPartial(): Promise<void>;
+  /** Script runs: roll back the last statement that ran and keep the earlier ones pending. */
+  undoSafeRun(): Promise<void>;
   rollbackSafeRun(reason?: SafeRunEndReason): Promise<void>;
   /** Close the panel. A pending run is rolled back first. */
   dismissSafeRun(): void;
@@ -67,6 +84,9 @@ export interface SafeRunSlice {
 
 let tokenSeq = 0;
 
+const COMMIT_UNKNOWN =
+  'The connection dropped while the commit was being sent. The changes may or may not have been saved. Check the data before running anything again.';
+
 export const createSafeRunSlice: SliceCreator<SafeRunSlice> = (set, get, api) => {
   const patchRun = (token: number, patch: Partial<SafeRunState>) => {
     const cur = get().safeRun;
@@ -75,20 +95,33 @@ export const createSafeRunSlice: SliceCreator<SafeRunSlice> = (set, get, api) =>
   };
 
   const fail = (token: number, error: string) =>
-    patchRun(token, { phase: 'failed', error, report: get().safeRun?.report ?? null });
+    patchRun(token, {
+      phase: 'failed',
+      error,
+      finishing: null,
+      report: get().safeRun?.report ?? null,
+    });
 
-  /** Show the finished write in the tab like any other DML result. */
+  /** Show the finished write(s) in the tab like any other DML result. */
   const publishResult = (tabId: string, report: SafeRunReport) => {
-    const result: QueryResult = {
+    const one = (r: {
+      kind: SafeRunReport['kind'];
+      affected: number;
+      durationMs: number;
+      statement: string;
+    }): QueryResult => ({
       columns: [],
       rows: [],
-      rowCount: report.affected,
-      durationMs: report.durationMs,
-      command: report.kind === 'cte' ? 'WITH' : report.kind.toUpperCase(),
-      sql: report.statement,
-    };
+      rowCount: r.affected,
+      durationMs: r.durationMs,
+      command: r.kind === 'cte' ? 'WITH' : r.kind.toUpperCase(),
+      sql: r.statement,
+    });
+    const results = report.steps
+      ? report.steps.filter((st) => st.status === 'done').map(one)
+      : [one(report)];
     patchTabById(set, tabId, {
-      ...resultPatch([result], 0),
+      ...resultPatch(results, 0),
       queryError: null,
       queryErrorSql: null,
       queryErrorRange: null,
@@ -109,16 +142,76 @@ export const createSafeRunSlice: SliceCreator<SafeRunSlice> = (set, get, api) =>
     const lost =
       state.connectionState !== 'connected' || (state.connectionGen ?? 0) !== sr.connectionGen;
     if (lost && safeRunPending(sr)) {
+      // A COMMIT that was already sent may have reached the server before the
+      // connection went: the honest answer is "unknown", never "rolled back".
+      if (
+        sr.phase === 'finishing' &&
+        (sr.finishing === 'commit' || sr.finishing === 'commitPartial')
+      ) {
+        set({
+          safeRun: {
+            ...sr,
+            phase: 'failed',
+            endReason: 'disconnect',
+            outcomeUnknown: true,
+            finishing: null,
+            error: COMMIT_UNKNOWN,
+          },
+        });
+        return;
+      }
       set({
         safeRun: {
           ...sr,
           phase: 'rolledBack',
           endReason: 'disconnect',
+          finishing: null,
           error: 'The connection changed, so the transaction was rolled back. Nothing was saved.',
         },
       });
     }
   });
+
+  const finishCommit = async (action: 'commit' | 'commitPartial') => {
+    const sr = get().safeRun;
+    if (!sr || sr.phase !== 'review' || !sr.report) return;
+    const { token, report } = sr;
+    patchRun(token, { phase: 'finishing', finishing: action, notice: null });
+    try {
+      const out = await ipc.query.safeRunFinish({ runId: report.runId, action });
+      if ((get().connectionGen ?? 0) === sr.connectionGen) set({ txnState: out.txnState });
+      if (out.outcome === 'committed') {
+        patchRun(token, { phase: 'committed', endReason: 'user', finishing: null });
+        publishResult(sr.tabId, report);
+      } else {
+        patchRun(token, {
+          phase: 'rolledBack',
+          endReason: out.reason ?? 'user',
+          finishing: null,
+          error:
+            out.reason === 'timeout'
+              ? 'The review window ran out, so the change was rolled back. Nothing was saved.'
+              : null,
+        });
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      // A reply lost on the way back from COMMIT is not "nothing saved".
+      const lost = classifyFailure(message, { isWrite: true, commitLike: true });
+      if (lost.phase === 'unknown') {
+        patchRun(token, {
+          phase: 'failed',
+          endReason: 'disconnect',
+          outcomeUnknown: true,
+          finishing: null,
+          error: COMMIT_UNKNOWN,
+        });
+        return;
+      }
+      patchRun(token, { finishing: null });
+      fail(token, `Commit failed: ${message}. Nothing was saved.`);
+    }
+  };
 
   return {
     safeRun: null,
@@ -166,6 +259,9 @@ export const createSafeRunSlice: SliceCreator<SafeRunSlice> = (set, get, api) =>
         report: null,
         error: null,
         endReason: null,
+        outcomeUnknown: false,
+        notice: null,
+        finishing: null,
         connectionGen: gen,
         token,
         nudge: 0,
@@ -176,16 +272,9 @@ export const createSafeRunSlice: SliceCreator<SafeRunSlice> = (set, get, api) =>
         refuse('This connection is read-only, so Safe Run is not available.');
         return;
       }
-      if (splitSqlStatements(script).length !== 1) {
-        refuse(
-          'Safe Run takes one statement at a time. Select a single INSERT, UPDATE, DELETE or MERGE.',
-        );
-        return;
-      }
-      if (!isSafeRunnable(script)) {
-        refuse(
-          'Safe Run is for INSERT, UPDATE, DELETE and MERGE statements. Use Run for anything else.',
-        );
+      const plan = planSafeRunScript(script);
+      if (!plan.ok) {
+        refuse(plan.message);
         return;
       }
 
@@ -241,30 +330,57 @@ export const createSafeRunSlice: SliceCreator<SafeRunSlice> = (set, get, api) =>
 
     async commitSafeRun() {
       const sr = get().safeRun;
-      if (!sr || sr.phase !== 'review' || !sr.report) return;
+      // A script that stopped at a failed statement is never committed by this
+      // path: only the explicit "Commit the statements that succeeded" button does.
+      if (sr?.report?.failedAt != null) return;
+      await finishCommit('commit');
+    },
+
+    async commitSafeRunPartial() {
+      const sr = get().safeRun;
+      if (sr?.report?.failedAt == null) return;
+      await finishCommit('commitPartial');
+    },
+
+    async undoSafeRun() {
+      const sr = get().safeRun;
+      if (!sr || sr.phase !== 'review' || !sr.report?.steps) return;
       const { token, report } = sr;
-      patchRun(token, { phase: 'finishing' });
+      patchRun(token, { phase: 'finishing', finishing: 'undo', notice: null });
       try {
-        const out = await ipc.query.safeRunFinish({ runId: report.runId, action: 'commit' });
-        if ((get().connectionGen ?? 0) === sr.connectionGen) set({ txnState: out.txnState });
-        if (out.outcome === 'committed') {
-          patchRun(token, { phase: 'committed', endReason: 'user' });
-          publishResult(sr.tabId, report);
-        } else {
+        const res = await ipc.query.safeRunUndo({ runId: report.runId });
+        const cur = get().safeRun;
+        if (res.report && (!cur || cur.token !== token)) {
+          // Closed while the undo ran: do not leave the rest of the script open.
+          await ipc.query
+            .safeRunFinish({ runId: report.runId, action: 'rollback' })
+            .catch(() => undefined);
+          return;
+        }
+        if (res.outcome) {
+          // The last statement left was undone: that is a roll back of the whole run.
+          if ((get().connectionGen ?? 0) === sr.connectionGen) {
+            set({ txnState: res.outcome.txnState });
+          }
           patchRun(token, {
             phase: 'rolledBack',
-            endReason: out.reason ?? 'user',
+            endReason: res.outcome.reason ?? 'user',
+            finishing: null,
             error:
-              out.reason === 'timeout'
+              res.outcome.reason === 'timeout'
                 ? 'The review window ran out, so the change was rolled back. Nothing was saved.'
                 : null,
           });
+          return;
         }
+        patchRun(token, { phase: 'review', finishing: null, report: res.report });
       } catch (err) {
-        fail(
-          token,
-          `Commit failed: ${err instanceof Error ? err.message : String(err)}. Nothing was saved.`,
-        );
+        // The run may well still be open: go back to the review so it can be rolled back.
+        patchRun(token, {
+          phase: 'review',
+          finishing: null,
+          notice: `Undo did not go through: ${err instanceof Error ? err.message : String(err)}`,
+        });
       }
     },
 
@@ -282,7 +398,7 @@ export const createSafeRunSlice: SliceCreator<SafeRunSlice> = (set, get, api) =>
         return;
       }
       if (sr.phase === 'finishing') return;
-      patchRun(token, { phase: 'finishing' });
+      patchRun(token, { phase: 'finishing', finishing: 'rollback', notice: null });
       try {
         const out = await ipc.query.safeRunFinish({ runId: report.runId, action: 'rollback' });
         if ((get().connectionGen ?? 0) === sr.connectionGen) set({ txnState: out.txnState });

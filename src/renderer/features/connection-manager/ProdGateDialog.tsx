@@ -1,7 +1,9 @@
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
+import { statementsLabel } from '@/lib/safe-run';
 import { effectiveSafeMode } from '@/stores/safe-mode';
 import { useSession } from '@/stores/session';
 import { CLICKHOUSE_MUTATION_WARNING, clickhouseMutation } from '@shared/clickhouse-mutation';
+import { firstLine, planSafeRunScript } from '@shared/safe-run-script';
 import { engineCaps } from '@shared/sql-dialect';
 
 /**
@@ -24,9 +26,39 @@ export function ProdGateDialog() {
     (s) => effectiveSafeMode(s.settings, s.activeConfig?.id) === 'read-only',
   );
 
+  // A Safe Run script: list every statement, since one confirmation covers them all.
+  const plan = gate?.safe ? planSafeRunScript(gate.sql) : null;
+  const statements = plan?.ok && plan.statements.length > 1 ? plan.statements : null;
+
   return (
     <ConfirmDialog
       open={Boolean(gate)}
+      details={
+        statements && (
+          <div data-testid="prod-gate-statements" className="text-[13px] text-[var(--wb-text-2)]">
+            <p className="m-0 mb-1">
+              This Safe Run has {statementsLabel(statements.length)}. They run in order in one
+              transaction, and nothing is saved until you commit.
+            </p>
+            <ol className="m-0 max-h-40 list-none overflow-auto rounded-[6px] border border-[var(--wb-separator)] p-0">
+              {statements.map((sql, i) => (
+                <li
+                  // biome-ignore lint/suspicious/noArrayIndexKey: a fixed, ordered list
+                  key={i}
+                  className="flex gap-2 border-b border-[var(--wb-separator)] px-2 py-1 font-mono text-[12px] last:border-b-0"
+                >
+                  <span className="w-5 shrink-0 text-right tabular-nums text-[var(--wb-text-3)]">
+                    {i + 1}
+                  </span>
+                  <span className="truncate" title={sql}>
+                    {firstLine(sql)}
+                  </span>
+                </li>
+              ))}
+            </ol>
+          </div>
+        )
+      }
       onOpenChange={(o) => {
         if (!o) cancelProdGate();
       }}
