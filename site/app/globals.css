@@ -22,6 +22,7 @@
   --color-sqlite: #0f80cc;
   --color-clickhouse: #c9a400;
   --color-duckdb: #8a6d00;
+  --color-mariadb: #003545;
 
   --font-display: var(--font-archivo), 'Helvetica Neue', Arial, sans-serif;
   --font-sans: var(--font-archivo), 'Helvetica Neue', Arial, sans-serif;
@@ -447,4 +448,65 @@ details[open] .faq-plus > span:last-child {
 }
 .docs-search::-webkit-search-cancel-button:hover {
   color: var(--color-ink);
+}
+
+/* Hero: the engines Plasma connects to, as a logo row. */
+.engine-logo {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--color-ink-2);
+  opacity: 0.72;
+  transition:
+    color 0.35s var(--ease-out-expo),
+    opacity 0.35s var(--ease-out-expo),
+    transform 0.35s var(--ease-out-expo);
+}
+.engine-logo svg {
+  transition: color 0.35s var(--ease-out-expo);
+}
+.engine-logo:hover {
+  color: var(--color-ink);
+  opacity: 1;
+  transform: translateY(-2px);
+}
+.engine-logo:hover svg {
+  color: var(--brand);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .engine-still .engine-logo {
+    animation: fade-up 0.9s var(--ease-out-expo) both;
+    animation-delay: calc(560ms + var(--i, 0) * 60ms);
+  }
+  .engine-track {
+    animation: engine-loop 32s linear infinite;
+  }
+  .engine-marquee:hover .engine-track {
+    animation-play-state: paused;
+  }
+}
+.engine-marquee {
+  -webkit-mask-image: linear-gradient(to right, transparent, #000 8%, #000 92%, transparent);
+  mask-image: linear-gradient(to right, transparent, #000 8%, #000 92%, transparent);
+}
+@keyframes engine-loop {
+  to {
+    transform: translateX(-50%);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .engine-marquee {
+    -webkit-mask-image: none;
+    mask-image: none;
+  }
+  .engine-track {
+    width: auto;
+    flex-wrap: wrap;
+    row-gap: 18px;
+    column-gap: 28px;
+    padding-right: 0;
+  }
+  .engine-copy {
+    display: none;
+  }
 }
