@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { cn } from '@/lib/cn';
 
@@ -99,6 +100,20 @@ export function PlateIndex() {
             );
           })}
         </ol>
+        <Link
+          href="/docs/"
+          className="group mt-8 flex items-baseline justify-between gap-3 rounded-sm border-t border-rule pt-5 pr-2"
+        >
+          <span className="flex flex-col">
+            <span className="mono text-[11.5px] font-medium tracking-[0.06em] text-ink-3 group-hover:text-ink-2">B</span>
+            <span className="mt-0.5 text-[15px] font-semibold leading-tight tracking-[-0.005em] text-ink-2 group-hover:text-ink">
+              Docs
+            </span>
+          </span>
+          <span aria-hidden="true" className="text-signal">
+            &rarr;
+          </span>
+        </Link>
       </nav>
     </aside>
   );

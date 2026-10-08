@@ -5,6 +5,7 @@ import { useRef, useState, type KeyboardEvent } from 'react';
 import { Plate, SectionHead } from '@/components/plate';
 import { Reveal } from '@/components/reveal';
 import { cn } from '@/lib/cn';
+import { LearnMore } from '@/components/docs/learn-more';
 
 const LEVELS = [
   {
@@ -131,6 +132,7 @@ export function Guardrails() {
           </Reveal>
           <Reveal className="lg:col-span-4 lg:self-end" delay={100}>
             <p className="lede">Plasma stops dangerous statements before they run.</p>
+            <LearnMore href="/docs/safety-privacy/">How the guards work</LearnMore>
           </Reveal>
         </div>
 

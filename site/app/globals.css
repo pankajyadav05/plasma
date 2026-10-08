@@ -3,6 +3,7 @@
 @source "../app/**/*.{ts,tsx}";
 @source "../components/**/*.{ts,tsx}";
 @source "../lib/**/*.{ts,tsx}";
+@source "../content/**/*.{ts,tsx}";
 
 /* PLASMA field manual. Warm paper, ink-black type, one signal colour. */
 @theme {
@@ -428,4 +429,22 @@ details[open] .faq-plus > span:last-child {
 }
 .outcome {
   animation: outcome-in 0.5s var(--ease-out-expo) both;
+}
+
+/* Docs search: a quiet clear button instead of the browser's blue one. */
+.docs-search::-webkit-search-cancel-button {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 14px;
+  width: 14px;
+  cursor: pointer;
+  background: currentColor;
+  color: var(--color-ink-3);
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 14 14'%3E%3Cpath d='M3 3l8 8M11 3l-8 8' stroke='black' stroke-width='1.6' stroke-linecap='round'/%3E%3C/svg%3E")
+    center / contain no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 14 14'%3E%3Cpath d='M3 3l8 8M11 3l-8 8' stroke='black' stroke-width='1.6' stroke-linecap='round'/%3E%3C/svg%3E")
+    center / contain no-repeat;
+}
+.docs-search::-webkit-search-cancel-button:hover {
+  color: var(--color-ink);
 }

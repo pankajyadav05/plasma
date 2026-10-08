@@ -10,10 +10,11 @@ export function Footer() {
           <Wordmark className="text-[clamp(4rem,2rem+10vw,10rem)] !leading-[0.85] text-paper" />
           <ul className="mono flex flex-wrap gap-x-8 gap-y-3 text-[12px] font-medium uppercase tracking-[0.06em]">
             {[
-              ['#workbench', 'Workbench'],
-              ['#engines', 'Engines'],
-              ['#guardrails', 'Guardrails'],
-              ['#download', 'Download'],
+              ['/#workbench', 'Workbench'],
+              ['/#engines', 'Engines'],
+              ['/#guardrails', 'Guardrails'],
+              ['/docs/', 'Docs'],
+              ['/#download', 'Download'],
             ].map(([h, l]) => (
               <li key={h}>
                 <a href={h} className="text-paper/70 transition-colors hover:text-paper">

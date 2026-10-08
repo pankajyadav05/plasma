@@ -2,6 +2,7 @@ import Image from 'next/image';
 import { Plate, SectionHead } from '@/components/plate';
 import { Reveal } from '@/components/reveal';
 import type { CaptureKey, Captures } from '@/lib/captures';
+import { LearnMore } from '@/components/docs/learn-more';
 
 const FEATURED: {
   name: string;
@@ -63,6 +64,7 @@ export function Engines({ captures }: { captures: Captures }) {
           </Reveal>
           <Reveal className="lg:col-span-4 lg:self-end" delay={100}>
             <p className="prose-p">Each engine gets the tools it needs. The keys and the guardrails stay the same.</p>
+            <LearnMore href="/docs/connections/">Connect to your database</LearnMore>
           </Reveal>
         </div>
 

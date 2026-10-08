@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { GITHUB_URL, GithubIcon } from '@/components/github-icon';
 import { Wordmark } from '@/components/wordmark';
@@ -12,6 +13,9 @@ const links = [
   { href: '#shortcuts', label: 'Shortcuts' },
   { href: '#download', label: 'Download' },
 ];
+
+const NAV_LINK =
+  'relative rounded-full px-3.5 py-2 text-[15px] font-medium text-ink-2 transition-colors duration-200 hover:text-ink focus-visible:text-ink after:absolute after:inset-x-3.5 after:bottom-1 after:h-px after:origin-left after:scale-x-0 after:bg-ink after:transition-transform after:duration-300 hover:after:scale-x-100 focus-visible:after:scale-x-100';
 
 export function Topbar() {
   const [scrolled, setScrolled] = useState(false);
@@ -42,14 +46,16 @@ export function Topbar() {
           <ul className="flex items-center gap-1">
             {links.map((l) => (
               <li key={l.href}>
-                <a
-                  href={l.href}
-                  className="relative rounded-full px-3.5 py-2 text-[15px] font-medium text-ink-2 transition-colors duration-200 hover:text-ink focus-visible:text-ink after:absolute after:inset-x-3.5 after:bottom-1 after:h-px after:origin-left after:scale-x-0 after:bg-ink after:transition-transform after:duration-300 hover:after:scale-x-100 focus-visible:after:scale-x-100"
-                >
+                <a href={l.href} className={NAV_LINK}>
                   {l.label}
                 </a>
               </li>
             ))}
+            <li>
+              <Link href="/docs/" className={NAV_LINK}>
+                Docs
+              </Link>
+            </li>
           </ul>
         </nav>
 
@@ -77,9 +83,23 @@ export function Topbar() {
                     </a>
                   </li>
                 ))}
+                <li>
+                  <Link
+                    href="/docs/"
+                    className="block rounded-lg px-3 py-2.5 text-[15px] font-medium text-ink-2 hover:bg-ink/[0.06] hover:text-ink"
+                  >
+                    Docs
+                  </Link>
+                </li>
               </ul>
             </nav>
           </details>
+          <Link
+            href="/docs/"
+            className="mono hidden rounded-full px-3 py-2 text-[12px] font-medium uppercase tracking-[0.06em] text-ink-2 transition-colors hover:text-ink xl:inline-flex"
+          >
+            Docs
+          </Link>
           <a
             href={GITHUB_URL}
             aria-label="Plasma on GitHub"
@@ -89,7 +109,7 @@ export function Topbar() {
           </a>
           <a
             href={primary?.url ?? '#download'}
-            className="inline-flex h-10 items-center rounded-full bg-signal px-5 text-[15px] font-bold text-signal-ink transition-[transform,background-color] duration-200 hover:bg-[#b83a22] active:scale-[0.97]"
+            className="inline-flex h-10 items-center rounded-full bg-signal px-4 text-[15px] font-bold sm:px-5 text-signal-ink transition-[transform,background-color] duration-200 hover:bg-[#b83a22] active:scale-[0.97]"
           >
             Download
           </a>

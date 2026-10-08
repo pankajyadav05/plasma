@@ -1,5 +1,6 @@
 import { SectionHead } from '@/components/plate';
 import { Reveal } from '@/components/reveal';
+import { LearnMore } from '@/components/docs/learn-more';
 
 const LEDGER = [
   ['Connections', 'On your computer'],
@@ -26,6 +27,7 @@ export function Local() {
                 Plasma keeps your connections, history and settings on your computer. Your OS keychain encrypts
                 saved passwords.
               </p>
+              <LearnMore href="/docs/safety-privacy/#leaves-machine">What leaves your machine</LearnMore>
             </Reveal>
             <div className="mt-14 grid max-w-[40em] gap-10 sm:grid-cols-2">
               <Reveal className="border-t border-rule pt-6" delay={80}>

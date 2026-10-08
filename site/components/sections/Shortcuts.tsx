@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Reveal } from '@/components/reveal';
 import { cn } from '@/lib/cn';
@@ -95,6 +96,13 @@ export function Shortcuts() {
             <p className="max-w-[28em] text-[17.5px] leading-[1.55] text-paper/70">
               Push a shortcut on your keyboard. The matching keys come on here.
             </p>
+            <Link
+              href="/docs/shortcuts/"
+              className="mono mt-6 inline-flex items-center gap-2 text-[12px] font-medium uppercase tracking-[0.06em] text-paper underline decoration-signal decoration-2 underline-offset-[5px] transition-colors hover:text-signal"
+            >
+              All shortcuts
+              <span aria-hidden="true">&rarr;</span>
+            </Link>
           </Reveal>
         </div>
 

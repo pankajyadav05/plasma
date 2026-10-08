@@ -6,6 +6,7 @@ import { Caption, Plate, SectionHead } from '@/components/plate';
 import { Reveal } from '@/components/reveal';
 import { cn } from '@/lib/cn';
 import type { CaptureKey, Captures } from '@/lib/captures';
+import { LearnMore } from '@/components/docs/learn-more';
 
 interface Row {
   ref: string;
@@ -63,6 +64,7 @@ export function Workbench({ captures }: { captures: Captures }) {
                   Each table and query opens in a tab. The sidebar shows your schema. The grid works like a
                   spreadsheet.
                 </p>
+                <LearnMore href="/docs/getting-started/">Tour the workbench</LearnMore>
               </Reveal>
 
               {/* Sticky plate, desktop only. Mobile rows expand inline. */}

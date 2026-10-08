@@ -20,7 +20,9 @@ Postgres: schema-aware SQL editing, results, multi-statement scripts, schema bro
 
 Saved connections, preferences and query history are stored locally. Saved database passwords use OS-backed encryption. Optional OpenRouter AI sends prompts and included context to the provider; never claim that nothing leaves the machine. Do not claim all session/tab state persists across restarts or that all credential types are encrypted.
 
-Apache-2.0 source is at https://github.com/pankajyadav05/plasma. Supported published downloads are macOS Apple Silicon/Intel and Windows x64 installer/portable. macOS builds are unsigned. Download constants and platform detection live in lib/version.ts and lib/platform.ts.
+Apache-2.0 source is at https://github.com/pankajyadav05/plasma. Published downloads are macOS Apple Silicon (arm64 dmg and zip, no Intel build), Windows x64 (installer and portable) and Linux x64 (AppImage and .deb). macOS and Windows builds are unsigned; updates are checked with an ed25519-signed manifest (see docs/release.md). Download constants and platform detection live in lib/version.ts and lib/platform.ts.
+
+The documentation section lives at /docs (app/docs, content/docs, components/docs). Every statement there must be checked against the current app code in src/, bin/, docs/ and electron-builder.yml; labels, shortcuts and setting names are copied from the code, and unconfirmed details are left out.
 
 ## Brand Commitments
 

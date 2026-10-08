@@ -1,3 +1,4 @@
+import Link from 'next/link';
 import { HeroPlate } from '@/components/hero-plate';
 import type { Captures } from '@/lib/captures';
 import { ENGINE_LIST } from '@/lib/engines';
@@ -35,10 +36,27 @@ export function Hero({ captures }: { captures: Captures }) {
           className="h-fade mt-12 grid gap-10 border-t border-rule pt-8 md:mt-16 lg:grid-cols-12 lg:gap-8"
           style={{ '--d': '520ms' } as React.CSSProperties}
         >
-          <p className="lede lg:col-span-6">
-            Plasma is a free, open-source desktop client. It connects to seven database engines. It stops
-            dangerous changes before they run.
-          </p>
+          <div className="lg:col-span-6">
+            <p className="lede">
+              Plasma is a free, open-source desktop client. It connects to seven database engines. It stops
+              dangerous changes before they run.
+            </p>
+            <div className="mt-7 flex flex-wrap items-center gap-3">
+              <a
+                href="#download"
+                className="inline-flex h-11 items-center rounded-full bg-signal px-6 text-[15px] font-bold text-signal-ink transition-[transform,background-color] duration-200 hover:bg-[#b83a22] active:scale-[0.97]"
+              >
+                Download
+              </a>
+              <Link
+                href="/docs/"
+                className="inline-flex h-11 items-center gap-2 rounded-full border border-ink/25 px-6 text-[15px] font-bold text-ink transition-colors duration-200 hover:border-ink hover:bg-ink hover:text-paper"
+              >
+                Read the docs
+                <span aria-hidden="true">&rarr;</span>
+              </Link>
+            </div>
+          </div>
           <div className="lg:col-span-5 lg:col-start-8">
             <p className="label">Engines</p>
             <ul className="mt-4 flex flex-wrap gap-2" aria-label="Supported engines">
