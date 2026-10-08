@@ -26,11 +26,6 @@ export function Hero({ captures }: { captures: Captures }) {
         </h1>
 
         <EngineRow />
-
-        <p className="lede h-fade mt-8 max-w-[38ch] md:mt-10" style={{ '--d': '760ms' } as React.CSSProperties}>
-          Plasma is a free, open-source desktop client. It connects to seven database engines. It stops dangerous
-          changes before they run.
-        </p>
       </div>
 
       <HeroPlate captures={captures} />

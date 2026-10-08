@@ -450,63 +450,142 @@ details[open] .faq-plus > span:last-child {
   color: var(--color-ink);
 }
 
-/* Hero: the engines Plasma connects to, as a logo row. */
-.engine-logo {
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
+/* Hero: the engines Plasma connects to, as a ruled spec sheet. */
+.engine-sheet {
+  border-top: 1px solid var(--color-ink);
+  border-bottom: 1px solid var(--color-rule);
+}
+.engine-cross {
   color: var(--color-ink-2);
-  opacity: 0.72;
-  transition:
-    color 0.35s var(--ease-out-expo),
-    opacity 0.35s var(--ease-out-expo),
-    transform 0.35s var(--ease-out-expo);
+  z-index: 2;
 }
-.engine-logo svg {
-  transition: color 0.35s var(--ease-out-expo);
+.engine-cell {
+  padding: 18px 16px 20px;
+  border-left: 1px solid var(--color-rule);
+  border-top: 1px solid var(--color-rule);
+  background: transparent;
+  transition: background-color 0.4s var(--ease-out-expo);
 }
-.engine-logo:hover {
-  color: var(--color-ink);
-  opacity: 1;
-  transform: translateY(-2px);
+/* Hairlines only between cells: no outer left edge, no top rule on the first row. */
+.engine-cell:nth-child(-n + 2) {
+  border-top: 0;
 }
-.engine-logo:hover svg {
+.engine-cell:nth-child(2n + 1) {
+  border-left: 0;
+}
+@media (min-width: 640px) {
+  .engine-cell:nth-child(-n + 4) {
+    border-top: 0;
+  }
+  .engine-cell:nth-child(2n + 1) {
+    border-left: 1px solid var(--color-rule);
+  }
+  .engine-cell:nth-child(4n + 1) {
+    border-left: 0;
+  }
+}
+@media (min-width: 1280px) {
+  .engine-cell {
+    border-top: 0;
+  }
+  .engine-cell:nth-child(4n + 1) {
+    border-left: 1px solid var(--color-rule);
+  }
+  .engine-cell:first-child {
+    border-left: 0;
+  }
+}
+.engine-mark {
   color: var(--brand);
+  transition: transform 0.5s var(--ease-out-expo);
+}
+.engine-bar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -1px;
+  height: 2px;
+  background: var(--color-signal);
+  transform: scaleX(0);
+  transform-origin: left;
+  transition: transform 0.5s var(--ease-out-expo);
+}
+.engine-cell:hover {
+  background: color-mix(in srgb, var(--color-paper-2) 80%, transparent);
+}
+.engine-cell:hover .engine-bar {
+  transform: scaleX(1);
+}
+.engine-cell:hover .engine-mark {
+  transform: translateY(-2px) rotate(-4deg) scale(1.08);
+}
+@media (min-width: 1280px) {
+  .engine-cell {
+    padding: 20px 18px 22px;
+  }
+}
+.engine-wire {
+  display: none;
 }
 @media (prefers-reduced-motion: no-preference) {
-  .engine-still .engine-logo {
-    animation: fade-up 0.9s var(--ease-out-expo) both;
-    animation-delay: calc(560ms + var(--i, 0) * 60ms);
+  /* The wire: a short signal segment runs the top rule once, clipped to the sheet. */
+  .engine-wire {
+    display: block;
+    position: absolute;
+    top: -1px;
+    left: 0;
+    right: 0;
+    height: 2px;
+    overflow: hidden;
+    z-index: 1;
+    pointer-events: none;
   }
-  .engine-track {
-    animation: engine-loop 32s linear infinite;
+  .engine-wire::after {
+    content: '';
+    position: absolute;
+    inset: 0 auto 0 0;
+    width: 18%;
+    background: linear-gradient(to right, transparent, var(--color-signal) 70%, var(--color-signal));
+    animation: engine-wire 1.6s linear 0.65s both;
   }
-  .engine-marquee:hover .engine-track {
-    animation-play-state: paused;
+  /* Each mark comes on as the wire passes its column. */
+  .engine-mark {
+    animation: engine-on 0.7s var(--ease-out-expo) both;
+    animation-delay: calc(0.72s + var(--i, 0) * 0.17s);
+  }
+  .engine-kind,
+  .engine-name > span {
+    animation: fade-in 0.8s var(--ease-out-expo) both;
+    animation-delay: calc(0.7s + var(--i, 0) * 0.17s);
   }
 }
-.engine-marquee {
-  -webkit-mask-image: linear-gradient(to right, transparent, #000 8%, #000 92%, transparent);
-  mask-image: linear-gradient(to right, transparent, #000 8%, #000 92%, transparent);
-}
-@keyframes engine-loop {
-  to {
-    transform: translateX(-50%);
+@keyframes engine-wire {
+  0% {
+    transform: translateX(-100%);
+    opacity: 1;
+  }
+  85% {
+    opacity: 1;
+  }
+  100% {
+    transform: translateX(560%);
+    opacity: 0;
   }
 }
-@media (prefers-reduced-motion: reduce) {
-  .engine-marquee {
-    -webkit-mask-image: none;
-    mask-image: none;
+@keyframes engine-on {
+  0% {
+    color: var(--color-ink-3);
+    opacity: 0.25;
+    filter: blur(2px);
+    transform: scale(0.85);
   }
-  .engine-track {
-    width: auto;
-    flex-wrap: wrap;
-    row-gap: 18px;
-    column-gap: 28px;
-    padding-right: 0;
+  45% {
+    filter: blur(0);
+    transform: scale(1.12);
   }
-  .engine-copy {
-    display: none;
+  100% {
+    color: var(--brand);
+    opacity: 1;
+    transform: scale(1);
   }
 }

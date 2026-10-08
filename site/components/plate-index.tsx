@@ -64,12 +64,12 @@ export function PlateIndex() {
                 <a
                   href={`#${p.id}`}
                   aria-current={on ? 'location' : undefined}
-                  className="group relative flex gap-4 rounded-sm py-2.5 pl-0 pr-2"
+                  className="group relative flex gap-4 rounded-sm py-2 pl-0 pr-2"
                 >
                   <span
                     aria-hidden="true"
                     className={cn(
-                      'relative z-10 mt-[5px] h-[7px] w-[7px] shrink-0 rounded-full border transition-colors duration-300',
+                      'relative z-10 mt-[6px] h-[7px] w-[7px] shrink-0 rounded-full border transition-colors duration-300',
                       on
                         ? 'border-signal bg-signal'
                         : past
@@ -80,15 +80,7 @@ export function PlateIndex() {
                   <span className="flex flex-col">
                     <span
                       className={cn(
-                        'mono text-[11.5px] font-medium tracking-[0.06em] transition-colors duration-300',
-                        on ? 'text-signal' : 'text-ink-3 group-hover:text-ink-2',
-                      )}
-                    >
-                      {p.n}
-                    </span>
-                    <span
-                      className={cn(
-                        'mt-0.5 text-[15px] font-semibold leading-tight tracking-[-0.005em] transition-colors duration-300',
+                        'text-[15px] font-semibold leading-tight tracking-[-0.005em] transition-colors duration-300',
                         on ? 'text-ink' : 'text-ink-2 group-hover:text-ink',
                       )}
                     >
@@ -104,11 +96,8 @@ export function PlateIndex() {
           href="/docs/"
           className="group mt-8 flex items-baseline justify-between gap-3 rounded-sm border-t border-rule pt-5 pr-2"
         >
-          <span className="flex flex-col">
-            <span className="mono text-[11.5px] font-medium tracking-[0.06em] text-ink-3 group-hover:text-ink-2">B</span>
-            <span className="mt-0.5 text-[15px] font-semibold leading-tight tracking-[-0.005em] text-ink-2 group-hover:text-ink">
-              Docs
-            </span>
+          <span className="text-[15px] font-semibold leading-tight tracking-[-0.005em] text-ink-2 group-hover:text-ink">
+            Docs
           </span>
           <span aria-hidden="true" className="text-signal">
             &rarr;
