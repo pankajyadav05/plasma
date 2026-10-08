@@ -167,7 +167,7 @@ export function mcpToolDefs(): McpToolDef[] {
       name: 'propose_change',
       title: 'Propose a change',
       description:
-        'Propose ONE statement that changes data or schema. Nothing runs until the user approves it in Plasma. Only works on the connection currently open in Plasma. Waits up to 10 minutes for the answer and returns what happened.',
+        'Propose ONE statement that changes data or schema. Nothing runs until the user approves it in Plasma. Only works on the connection currently open in Plasma. Waits up to 45 seconds for the answer; if the user has not decided yet it returns a proposal_id: call check_proposal with it until the status is no longer waiting_for_approval. The proposal expires after 10 minutes without an answer.',
       inputSchema: {
         type: 'object',
         properties: {
