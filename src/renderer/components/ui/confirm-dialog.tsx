@@ -15,6 +15,8 @@ interface Props {
   description?: React.ReactNode;
   /** Extra content under the description (a list, a summary). */
   details?: React.ReactNode;
+  /** Wider dialog, for details such as a statement list. */
+  wide?: boolean;
   confirmLabel?: string;
   cancelLabel?: string;
   variant?: 'destructive' | 'primary';
@@ -32,6 +34,7 @@ export function ConfirmDialog({
   title,
   description,
   details,
+  wide = false,
   confirmLabel = 'Confirm',
   cancelLabel = 'Cancel',
   variant = 'destructive',
@@ -39,7 +42,7 @@ export function ConfirmDialog({
 }: Props) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-[440px]">
+      <DialogContent className={wide ? 'max-w-[640px]' : 'max-w-[440px]'}>
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
           {description && <DialogDescription>{description}</DialogDescription>}

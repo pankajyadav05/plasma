@@ -33,24 +33,28 @@ export function ProdGateDialog() {
   return (
     <ConfirmDialog
       open={Boolean(gate)}
+      wide={statements !== null}
       details={
         statements && (
-          <div data-testid="prod-gate-statements" className="text-[13px] text-[var(--wb-text-2)]">
+          <div
+            data-testid="prod-gate-statements"
+            className="min-w-0 text-[13px] text-[var(--wb-text-2)]"
+          >
             <p className="m-0 mb-1">
               This Safe Run has {statementsLabel(statements.length)}. They run in order in one
               transaction, and nothing is saved until you commit.
             </p>
-            <ol className="m-0 max-h-40 list-none overflow-auto rounded-[6px] border border-[var(--wb-separator)] p-0">
+            <ol className="m-0 max-h-40 min-w-0 list-none overflow-y-auto overflow-x-hidden rounded-[6px] border border-[var(--wb-separator)] p-0">
               {statements.map((sql, i) => (
                 <li
                   // biome-ignore lint/suspicious/noArrayIndexKey: a fixed, ordered list
                   key={i}
-                  className="flex gap-2 border-b border-[var(--wb-separator)] px-2 py-1 font-mono text-[12px] last:border-b-0"
+                  className="flex min-w-0 gap-2 border-b border-[var(--wb-separator)] px-2 py-1 font-mono text-[12px] last:border-b-0"
                 >
                   <span className="w-5 shrink-0 text-right tabular-nums text-[var(--wb-text-3)]">
                     {i + 1}
                   </span>
-                  <span className="truncate" title={sql}>
+                  <span className="min-w-0 flex-1 truncate" title={sql}>
                     {firstLine(sql)}
                   </span>
                 </li>

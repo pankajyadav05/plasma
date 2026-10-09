@@ -96,15 +96,15 @@ export function UpdateBadge() {
 }
 
 /** 16px ring; a spinning arc when the percentage is not known yet. */
-function ProgressRing({ percent }: { percent: number | null }) {
+export function ProgressRing({ percent, size = 16 }: { percent: number | null; size?: number }) {
   const r = 6;
   const c = 2 * Math.PI * r;
   const value = percent == null ? 25 : Math.max(2, Math.min(100, percent));
   return (
     <svg
       viewBox="0 0 16 16"
-      width="16"
-      height="16"
+      width={size}
+      height={size}
       aria-hidden="true"
       className={percent == null ? 'animate-spin' : undefined}
     >

@@ -3,6 +3,7 @@ import { databaseLabel } from '@/lib/engine-meta';
 import { type CanvasMode, useSession } from '@/stores/session';
 import { engineCaps } from '@shared/sql-dialect';
 import { Activity, Clock, Cog, Database } from 'lucide-react';
+import { UpdateTile } from './UpdateTile';
 
 interface RailItem {
   mode: CanvasMode;
@@ -16,7 +17,7 @@ interface RailItem {
  * workspace. The database tile is captioned with the database name;
  * History and Activity are Postgres-only workspaces (history records SQL,
  * the monitor polls pg_stat_activity), so Redis / OpenSearch show only
- * the database tile. Settings sits at the bottom.
+ * the database tile. Updates and Settings sit at the bottom.
  */
 export function IconRail() {
   const canvasMode = useSession((s) => s.canvasMode);
@@ -61,6 +62,7 @@ export function IconRail() {
         <Tile key={it.mode} item={it} active={canvasMode === it.mode} onPick={setCanvasMode} />
       ))}
       <div className="flex-1" />
+      <UpdateTile />
       <Tile
         item={{ mode: 'settings', icon: <Cog />, label: 'Settings', title: 'Settings' }}
         active={canvasMode === 'settings'}
