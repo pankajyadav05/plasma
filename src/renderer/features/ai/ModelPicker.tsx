@@ -302,7 +302,9 @@ export function ModelPicker({
             )}
           >
             <VendorMark vendor={vendorKey} name={markName} modelName={current?.name} />
-            <span className="truncate">{label}</span>
+            <span className="truncate" title={label}>
+              {cli && current ? current.name : label}
+            </span>
             <ChevronDown className="h-3 w-3 shrink-0 opacity-70" />
           </button>
         ) : (

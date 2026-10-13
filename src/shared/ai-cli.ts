@@ -31,25 +31,31 @@ export function cliProviderName(provider: AiCliProvider): string {
   return provider === 'codex' ? 'Codex' : 'Claude Code';
 }
 
-const CODEX_PLANS: Record<string, string> = {
-  free: 'ChatGPT Free',
-  go: 'ChatGPT Go',
-  plus: 'ChatGPT Plus',
-  pro: 'ChatGPT Pro',
-  prolite: 'ChatGPT Pro',
-  team: 'ChatGPT Team',
-  business: 'ChatGPT Business',
-  enterprise: 'ChatGPT Enterprise',
-  edu: 'ChatGPT Edu',
-};
+/** Keyword -> label, first match wins ("self_serve_business_prolite" is a Business plan). */
+const CODEX_PLANS: Array<[RegExp, string]> = [
+  [/enterprise/, 'ChatGPT Enterprise'],
+  [/business/, 'ChatGPT Business'],
+  [/team/, 'ChatGPT Team'],
+  [/edu/, 'ChatGPT Edu'],
+  [/pro/, 'ChatGPT Pro'],
+  [/plus/, 'ChatGPT Plus'],
+  [/\bgo\b/, 'ChatGPT Go'],
+  [/free/, 'ChatGPT Free'],
+];
+
+const words = (raw: string) =>
+  raw
+    .trim()
+    .replace(/[_-]+/g, ' ')
+    .replace(/\b\w/g, (c) => c.toUpperCase());
 
 /** "plus" -> "ChatGPT Plus", "max" -> "Claude Max". */
 export function cliPlanLabel(provider: AiCliProvider, raw: string): string {
-  const key = raw.trim().toLowerCase();
+  const key = raw.trim().toLowerCase().replace(/[_-]+/g, ' ');
   if (provider === 'codex') {
-    return CODEX_PLANS[key] ?? `ChatGPT ${key.charAt(0).toUpperCase()}${key.slice(1)}`.trim();
+    return CODEX_PLANS.find(([re]) => re.test(key))?.[1] ?? `ChatGPT ${words(key)}`.trim();
   }
-  return `Claude ${key.charAt(0).toUpperCase()}${key.slice(1)}`.trim();
+  return `Claude ${words(key)}`.trim();
 }
 
 /** The settings row: "Signed in · ChatGPT Plus", "Not installed", ... */

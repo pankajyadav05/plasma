@@ -58,6 +58,9 @@ describe('provider helpers', () => {
     expect(cliPlanLabel('codex', 'plus')).toBe('ChatGPT Plus');
     expect(cliPlanLabel('claude-code', 'max')).toBe('Claude Max');
     expect(cliPlanLabel('claude-code', 'Pro')).toBe('Claude Pro');
+    expect(cliPlanLabel('codex', 'self_serve_business_prolite')).toBe('ChatGPT Business');
+    expect(cliPlanLabel('codex', 'prolite')).toBe('ChatGPT Pro');
+    expect(cliPlanLabel('codex', 'new_thing')).toBe('ChatGPT New Thing');
   });
 
   it('the status request takes a provider and nothing else', () => {
