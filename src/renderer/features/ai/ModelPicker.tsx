@@ -1,9 +1,11 @@
 import { Input } from '@/components/ui/input';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { cliModelOf } from '@/lib/ai-config';
 import { cn } from '@/lib/cn';
 import { ipc } from '@/lib/ipc';
 import { MOD, isMac } from '@/lib/platform';
 import { useSession } from '@/stores/session';
+import { cliProviderName, isAiCliProvider } from '@shared/ai-cli';
 import {
   type AiModel,
   type AiModelsResult,
@@ -77,6 +79,8 @@ export function useCurrentModelVision(): { name: string; state: 'yes' | 'no' | '
   const orModel = useSession((s) => s.settings.openrouterModel);
   useSyncExternalStore(subscribeLoaded, loadedVersion);
   if (provider === 'local') return { name: 'The local model', state: 'unknown' };
+  if (provider === 'claude-code') return { name: 'Claude Code', state: 'yes' };
+  if (provider === 'codex') return { name: 'Codex', state: 'unknown' };
   const id = orModel?.trim() ?? '';
   const found = loaded.get('or')?.models.find((m) => m.id === id);
   if (!found) return { name: id ? stubModel(id).name : 'This model', state: 'unknown' };
@@ -234,19 +238,25 @@ export function ModelPicker({
   const localUrl = useSession((s) => s.settings.aiLocalUrl);
   const orModel = useSession((s) => s.settings.openrouterModel);
   const localModel = useSession((s) => s.settings.aiLocalModel);
+  const cliModel = useSession((s) => cliModelOf(s.settings));
   const favorites = useSession((s) => s.settings.aiFavoriteModels ?? EMPTY);
   const recents = useSession((s) => s.settings.aiRecentModels ?? EMPTY);
   const updateSettings = useSession((s) => s.updateSettings);
 
-  const local = provider === 'local';
-  const currentId = (local ? localModel : orModel)?.trim() ?? '';
+  // A CLI provider lists its own models like a local server does: one flat list, no stars.
+  const cli = isAiCliProvider(provider) ? provider : null;
+  const local = provider === 'local' || cli !== null;
+  const currentId = (cli ? cliModel : provider === 'local' ? localModel : orModel)?.trim() ?? '';
   const [openState, setOpenState] = useState(false);
   const open = openProp ?? openState;
   const setOpen = (v: boolean) => {
     setOpenState(v);
     onOpenChange?.(v);
   };
-  const { result, loading, refresh } = useAiModelList(local ? `local:${localUrl}` : 'or', open);
+  const { result, loading, refresh } = useAiModelList(
+    cli ? `cli:${cli}` : local ? `local:${localUrl}` : 'or',
+    open,
+  );
   const models = result?.models ?? EMPTY_MODELS;
 
   const current = useMemo(
@@ -255,7 +265,9 @@ export function ModelPicker({
   );
 
   const choose = (id: string) => {
-    if (local) void updateSettings({ aiLocalModel: id });
+    if (cli) {
+      void updateSettings(cli === 'codex' ? { aiCodexModel: id } : { aiClaudeCodeModel: id });
+    } else if (local) void updateSettings({ aiLocalModel: id });
     else void updateSettings({ openrouterModel: id, aiRecentModels: pushRecent(recents, id) });
     setOpen(false);
   };
@@ -264,7 +276,12 @@ export function ModelPicker({
     void updateSettings({ aiFavoriteModels: next });
   };
 
-  const label = current ? current.name : local ? 'Choose a model' : 'Choose a model';
+  // A CLI provider is named with its model: "Codex · gpt-6.1-sol".
+  const label = cli
+    ? `${cliProviderName(cli)} · ${current ? current.name : 'default model'}`
+    : current
+      ? current.name
+      : 'Choose a model';
   const vendorKey = current ? current.vendor : 'other';
   const markName = current ? current.vendorName : '?';
 
@@ -328,7 +345,8 @@ export function ModelPicker({
           result={result}
           loading={loading}
           local={local}
-          localUrl={localUrl}
+          localUrl={cli ? `${cliProviderName(cli)} on this computer` : localUrl}
+          cliName={cli ? cliProviderName(cli) : null}
           currentId={currentId}
           favorites={favorites}
           recents={recents}
@@ -353,6 +371,7 @@ type BodyProps = {
   loading: boolean;
   local: boolean;
   localUrl: string;
+  cliName: string | null;
   currentId: string;
   favorites: string[];
   recents: string[];
@@ -597,7 +616,12 @@ function PickerBody(props: BodyProps) {
                 ),
               )}
               {items.length === 0 && (
-                <EmptyList query={query.trim()} error={result?.error} local={local} />
+                <EmptyList
+                  query={query.trim()}
+                  error={result?.error}
+                  local={local}
+                  cliName={props.cliName}
+                />
               )}
               {items.length > 0 && result?.error && models.length === 0 && (
                 <p className="px-2 pt-2 text-[12px] leading-snug text-[var(--wb-text-3)]">
@@ -940,10 +964,12 @@ function EmptyList({
   query,
   error,
   local,
+  cliName,
 }: {
   query: string;
   error: string | undefined;
   local: boolean;
+  cliName: string | null;
 }) {
   return (
     <div className="flex h-full min-h-32 flex-col items-center justify-center gap-1 px-6 text-center">
@@ -952,16 +978,20 @@ function EmptyList({
           ? `No models match "${query}"`
           : error
             ? 'Could not load the model list'
-            : local
-              ? 'The local server lists no models'
-              : 'No models'}
+            : cliName
+              ? `${cliName} lists no models`
+              : local
+                ? 'The local server lists no models'
+                : 'No models'}
       </div>
       <div className="text-[12px] leading-snug text-[var(--wb-text-3)]">
         {error && !query
           ? error
-          : local
-            ? 'Type the model name your server runs to use it.'
-            : 'Type a model id, like anthropic/claude-sonnet-5.5, to use it.'}
+          : cliName
+            ? 'Type a model name to use it.'
+            : local
+              ? 'Type the model name your server runs to use it.'
+              : 'Type a model id, like anthropic/claude-sonnet-5.5, to use it.'}
       </div>
     </div>
   );

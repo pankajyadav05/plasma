@@ -5,7 +5,13 @@ vi.mock('./logger', () => ({
   logger: { warn: vi.fn(), error: vi.fn(), info: vi.fn() },
 }));
 
-import { cancelAiChat, setAiToolExecutor, startAiChat, submitAiActionResult } from './ai';
+import {
+  type AiChatOptions,
+  cancelAiChat,
+  setAiToolExecutor,
+  startAiChat,
+  submitAiActionResult,
+} from './ai';
 import { createToolEndpoint } from './ai-cli/tool-endpoint';
 import type { CliRun, CliRunResult } from './ai-cli/types';
 
@@ -72,7 +78,7 @@ describe('CLI providers through startAiChat', () => {
   async function start(
     id: string,
     extra: Partial<AiChatRequest>,
-    options: Record<string, unknown>,
+    options: Partial<AiChatOptions>,
     script: (run: CliRun) => Promise<CliRunResult> = async () => ({ ok: true }),
     provider: 'codex' | 'claude-code' = 'codex',
   ) {

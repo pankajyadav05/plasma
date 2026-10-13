@@ -20,7 +20,7 @@ describe('buildCodexArgs', () => {
 
   it('starts the app server and disables every power feature', () => {
     expect(args[0]).toBe('app-server');
-    const disabled = args.filter((a, i) => args[i - 1] === '--disable');
+    const disabled = args.filter((_a, i) => args[i - 1] === '--disable');
     expect(disabled).toEqual([...CODEX_DISABLED_FEATURES]);
     for (const f of [
       'shell_tool',
