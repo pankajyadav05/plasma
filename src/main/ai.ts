@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { normalizeAction } from '@shared/agent-actions';
 import { buildAgentSystemPrompt } from '@shared/agent-prompt';
+import { isAiCliProvider } from '@shared/ai-cli';
 import { type AiContent, capHistoryImages, contentText, countImages } from '@shared/ai-images';
 import { memoryActionResult } from '@shared/ai-memory';
 import { taskMaxTokens, taskSystemPrompt } from '@shared/ai-tasks';
@@ -15,6 +16,7 @@ import {
 import { compactSchema } from '@shared/schema-compact';
 import { isSqlEngine } from '@shared/sql-dialect';
 import type { BrowserWindow } from 'electron';
+import { type CliChatDeps, runCliChat } from './ai-cli/run';
 import type { MemoryToolHooks } from './ai-memory';
 import { buildOpenRouterBody } from './ai-policy';
 import { logger } from './logger';
@@ -181,8 +183,15 @@ export function submitAiActionResult(raw: unknown): boolean {
 }
 
 export type AiChatOptions = {
-  /** Where the request goes. Default: OpenRouter. `local` needs no API key. */
-  provider?: 'openrouter' | 'local';
+  /**
+   * Where the request goes. Default: OpenRouter. `local` needs no API key;
+   * `codex` / `claude-code` drive the user's own installed CLI (their plan, no key).
+   */
+  provider?: 'openrouter' | 'local' | 'codex' | 'claude-code';
+  /** Provider `codex` / `claude-code`: the model, the program path override and where Plasma keeps its files. */
+  cli?: { model: string; binaryOverride: string; userData: string; appVersion: string };
+  /** Test seam for the CLI runner. */
+  cliDeps?: CliChatDeps;
   /** Base URL of the local server (provider `local`). */
   localUrl?: string;
   /** Model name on the local server (provider `local`); required. */
@@ -492,7 +501,10 @@ export async function startAiChat(
   defaultModel: string,
   options: AiChatOptions = {},
 ): Promise<{ accepted: boolean; reason?: string }> {
-  if (options.provider === 'local') {
+  const viaCli = isAiCliProvider(options.provider);
+  if (viaCli) {
+    if (!options.cli) return { accepted: false, reason: 'The CLI provider is not set up.' };
+  } else if (options.provider === 'local') {
     const local = resolveLocalAiEndpoint(options.localUrl);
     if (!local.ok) return { accepted: false, reason: local.error };
     if (!options.localModel?.trim()) {
@@ -521,7 +533,8 @@ export async function startAiChat(
 
   // Fire the SSE pump asynchronously — caller awaits the queueing only,
   // not the full completion.
-  void pump(win, req, apiKey, defaultModel, controller, options);
+  if (viaCli) void pumpCli(win, req, controller, options);
+  else void pump(win, req, apiKey, defaultModel, controller, options);
   return { accepted: true };
 }
 
@@ -779,6 +792,66 @@ async function pump(
     send({ kind: 'error', requestId: req.requestId, message });
   } finally {
     // Only drop our own controller: a retry may have registered a new one.
+    if (inflight.get(req.requestId) === controller) inflight.delete(req.requestId);
+    cancelPendingActions(req.requestId);
+  }
+}
+
+/**
+ * A chat through the user's Codex or Claude Code. The prompt, the offered tools
+ * and every tool call are the same ones `pump` uses (`prepareChat`,
+ * `executeToolCall`); only the transport differs.
+ */
+async function pumpCli(
+  win: BrowserWindow,
+  req: AiChatRequest,
+  controller: AbortController,
+  options: AiChatOptions,
+): Promise<void> {
+  const send = (evt: AiChatEvent) => {
+    if (!win.isDestroyed()) win.webContents.send('plasma:ai:event', evt);
+  };
+  try {
+    const cli = options.cli;
+    if (!cli || !isAiCliProvider(options.provider)) return;
+    const { readMemory, build, tools, maxRounds } = prepareChat(req, options);
+    const messages = build(readMemory()?.text);
+    const first = messages[0];
+    const system = first?.role === 'system' ? first.content : '';
+    await runCliChat(
+      {
+        provider: options.provider,
+        requestId: req.requestId,
+        send,
+        model: cli.model.trim(),
+        binaryOverride: cli.binaryOverride,
+        userData: cli.userData,
+        appVersion: cli.appVersion,
+        system,
+        history: messages,
+        tools,
+        maxRounds,
+        executeCall: (call, signal) =>
+          executeToolCall(call, {
+            send,
+            req,
+            options,
+            signal,
+            windowGone: () => win.isDestroyed(),
+          }),
+        signal: controller.signal,
+      },
+      options.cliDeps,
+    );
+  } catch (err) {
+    if (!controller.signal.aborted) {
+      send({
+        kind: 'error',
+        requestId: req.requestId,
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+  } finally {
     if (inflight.get(req.requestId) === controller) inflight.delete(req.requestId);
     cancelPendingActions(req.requestId);
   }

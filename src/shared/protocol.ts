@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { AiCliStatus, AiCliStatusRequest } from './ai-cli';
 import {
   AI_MAX_IMAGES_PER_MESSAGE,
   AI_MAX_IMAGES_PER_REQUEST,
@@ -2041,7 +2042,15 @@ export const SettingsShape = z.object({
   /** The last 5 models used, newest first. */
   aiRecentModels: z.array(z.string()).catch([]).default([]),
   /** Where AI requests go: OpenRouter (key) or a model server on this machine (Ollama, LM Studio). */
-  aiProvider: z.enum(['openrouter', 'local']).catch('openrouter').default('openrouter'),
+  aiProvider: z
+    .enum(['openrouter', 'local', 'codex', 'claude-code'])
+    .catch('openrouter')
+    .default('openrouter'),
+  /** Codex / Claude Code providers: the model ('' = the CLI's default) and an optional path to the program. */
+  aiCodexModel: z.string().default(''),
+  aiClaudeCodeModel: z.string().default('sonnet'),
+  aiCodexPath: z.string().default(''),
+  aiClaudeCodePath: z.string().default(''),
   /** Base URL of a local OpenAI-compatible server; main only talks to loopback addresses. */
   aiLocalUrl: z.string().default('http://127.0.0.1:11434/v1'),
   aiLocalModel: z.string().default(''),
@@ -2657,6 +2666,8 @@ export const IpcChannel = {
   AiCancel: 'plasma:ai:cancel',
   /** The model list for the picker: OpenRouter's live catalogue (cached) or a local server's. */
   AiListModels: 'plasma:ai:list-models',
+  /** Is the Codex / Claude Code CLI installed and signed in (never returns the account e-mail). */
+  AiCliStatus: 'plasma:ai:cli-status',
   /** The renderer's answer to an agent action card (applied / rejected / …). */
   AiActionResult: 'plasma:ai:action-result',
   /** The user clicked Approve on a card: from here main must wait for the real outcome. */
@@ -2956,6 +2967,8 @@ export interface PlasmaAPI {
     cancel(requestId: string): Promise<void>;
     /** Models for the picker: OpenRouter's catalogue (6 h cache) or the local server's list. */
     listModels(opts?: AiListModelsRequest): Promise<AiModelsResult>;
+    /** Installed / signed-in state of the Codex or Claude Code CLI, for the settings row. */
+    cliStatus(req: AiCliStatusRequest): Promise<AiCliStatus>;
     /** Answer an agent `action` event (the user approved, rejected, … the card). */
     actionResult(res: AiActionResult): Promise<void>;
     /** Tell main the user approved a card (it may be an MCP proposal that must not be withdrawn now). */

@@ -4,6 +4,7 @@ import { readFile, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { type AiCliStatus, AiCliStatusRequest, isAiCliProvider } from '@shared/ai-cli';
 import { isMemoryEnabled } from '@shared/ai-memory';
 import { isAgentReadSql } from '@shared/ai-readonly-sql';
 import { sshUnsupportedReason } from '@shared/connection-endpoint';
@@ -86,6 +87,8 @@ import {
   startAiChat,
   submitAiActionResult,
 } from './ai';
+import { closeCliEndpoint, ensureEmptyDir } from './ai-cli/run';
+import { getCliStatus, listCliModels } from './ai-cli/status';
 import {
   addMemory,
   deleteMemory,
@@ -625,6 +628,8 @@ app.on('will-quit', () => {
   // B2: reaching here is a clean quit; a crash never does. (A second instance
   // that lost the lock must not remove the running one's marker.)
   if (hasInstanceLock) recovery.end();
+  cancelAllAiChats();
+  void closeCliEndpoint();
   cancelAllJobs();
   closeAllTunnels();
   void mcpService?.stop();
@@ -2136,7 +2141,8 @@ function registerIpcHandlers() {
     // falls back to the legacy claudeApiKey slot from v0.0.10. A local model
     // needs none, and nothing is read from the vault for it.
     const provider = settings.aiProvider;
-    const apiKey = provider === 'local' ? '' : getApiKey();
+    const viaCli = isAiCliProvider(provider);
+    const apiKey = provider === 'local' || viaCli ? '' : getApiKey();
     // Row-data tools only when the active connection opted in (C18).
     // SC-05: bind the chat to the connection it started on and re-check the
     // opt-in every time a tool is about to run (the user may switch to prod
@@ -2156,6 +2162,17 @@ function registerIpcHandlers() {
       memoryTools,
       localUrl: settings.aiLocalUrl,
       localModel: settings.aiLocalModel,
+      ...(viaCli
+        ? {
+            cli: {
+              model: provider === 'codex' ? settings.aiCodexModel : settings.aiClaudeCodeModel,
+              binaryOverride:
+                provider === 'codex' ? settings.aiCodexPath : settings.aiClaudeCodePath,
+              userData: app.getPath('userData'),
+              appVersion: app.getVersion(),
+            },
+          }
+        : {}),
       allowRowData: isAiRowDataAllowed(chatConnectionId, settings.connectionAiRowData),
       allowSchema: isAiSchemaAllowed(chatConnectionId, settings),
       toolGuard: () => {
@@ -2296,12 +2313,32 @@ function registerIpcHandlers() {
     const { refresh } = AiListModelsRequest.parse(raw ?? {});
     const settings = SettingsShape.parse(getAllSettings());
     if (settings.aiProvider === 'local') return listLocalModels(settings.aiLocalUrl);
+    if (isAiCliProvider(settings.aiProvider)) {
+      const codex = settings.aiProvider === 'codex';
+      const dir = await ensureEmptyDir(app.getPath('userData'));
+      return listCliModels(
+        settings.aiProvider,
+        codex ? settings.aiCodexPath : settings.aiClaudeCodePath,
+        dir,
+      );
+    }
     return listOpenRouterModels(
       { refresh },
       {
         cachePath: join(app.getPath('userData'), 'ai-models.json'),
         url: resolveModelsUrl(process.env.PLASMA_AI_MODELS_URL),
       },
+    );
+  });
+
+  ipcMain.handle(IpcChannel.AiCliStatus, async (_e, raw: unknown): Promise<AiCliStatus> => {
+    const { provider } = AiCliStatusRequest.parse(raw);
+    const settings = SettingsShape.parse(getAllSettings());
+    const dir = await ensureEmptyDir(app.getPath('userData'));
+    return getCliStatus(
+      provider,
+      provider === 'codex' ? settings.aiCodexPath : settings.aiClaudeCodePath,
+      dir,
     );
   });
 
