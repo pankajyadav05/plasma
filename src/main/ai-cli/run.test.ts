@@ -62,7 +62,7 @@ describe('buildCliPrompt', () => {
     const big = 'x'.repeat(CLI_TRANSCRIPT_MAX_CHARS);
     const { prompt } = buildCliPrompt([
       { role: 'user', content: `OLDEST ${big}` },
-      { role: 'assistant', content: `NEWEST-REPLY` },
+      { role: 'assistant', content: 'NEWEST-REPLY' },
       { role: 'user', content: 'now' },
     ]);
     expect(prompt).toContain('[earlier messages left out]');
