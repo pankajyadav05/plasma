@@ -84,3 +84,25 @@ export const CLI_INSTALL_DOCS: Record<AiCliProvider, string> = {
 export function cliBadge(provider: AiCliProvider, model: string | undefined): string {
   return `${cliProviderName(provider)} · ${model?.trim() || 'default model'}`;
 }
+
+/** Choose (or reset) the program a CLI provider runs. Only main opens the file picker. */
+export const AiCliChoosePathRequest = z.object({
+  provider: AiCliProvider,
+  /** Forget the chosen path and look for the program by itself again. */
+  reset: z.boolean().optional(),
+});
+export type AiCliChoosePathRequest = z.infer<typeof AiCliChoosePathRequest>;
+
+export type AiCliChoosePathResult = {
+  /** The path now stored ('' = none: Plasma looks for the program itself). */
+  path: string;
+  /** Why the chosen file was refused. */
+  error?: string;
+};
+
+/** The only file names a CLI provider may run: `codex` / `claude`, with the Windows suffixes. */
+export function cliBasenameOk(provider: AiCliProvider, file: string): boolean {
+  const base = file.split(/[\\/]/).pop() ?? '';
+  const name = provider === 'codex' ? 'codex' : 'claude';
+  return new RegExp(`^${name}(\\.exe|\\.cmd)?$`, 'i').test(base);
+}

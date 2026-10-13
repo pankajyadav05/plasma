@@ -18,7 +18,7 @@ import type { CliRun } from './types';
 describe('buildClaudeArgs', () => {
   const args = buildClaudeArgs({
     model: 'haiku',
-    system: 'SYS',
+    systemPromptPath: '/tmp/sys.txt',
     mcpConfigPath: '/tmp/cfg.json',
     hasTools: true,
   });
@@ -36,21 +36,30 @@ describe('buildClaudeArgs', () => {
   });
 
   it('passes the system prompt, model and the MCP config path', () => {
-    expect(arg('--system-prompt')).toBe('SYS');
+    expect(arg('--system-prompt-file')).toBe('/tmp/sys.txt');
+    // The prompt itself is never on argv (length limit on Windows, visible in `ps`).
+    expect(args).not.toContain('--system-prompt');
+    expect(args).not.toContain('SYS');
+    expect(args).toContain('--disable-slash-commands');
     expect(arg('--model')).toBe('haiku');
     expect(arg('--mcp-config')).toBe('/tmp/cfg.json');
   });
 
   it('pre-approves only the plasma server, and only when there are tools', () => {
-    expect(arg('--allowedTools')).toBe('mcp__plasma');
-    const none = buildClaudeArgs({ model: 'm', system: 's', mcpConfigPath: 'p', hasTools: false });
+    expect(arg('--allowedTools')).toBe('mcp__plasma_chat');
+    const none = buildClaudeArgs({
+      model: 'm',
+      systemPromptPath: 's',
+      mcpConfigPath: 'p',
+      hasTools: false,
+    });
     expect(none).not.toContain('--allowedTools');
   });
 
   it('never carries the bearer token on argv', () => {
     const cfg = claudeMcpConfig({ url: 'http://127.0.0.1:1/mcp', token: 'SECRET-TOKEN' });
     expect(args.join(' ')).not.toContain('SECRET-TOKEN');
-    expect(JSON.parse(cfg).mcpServers.plasma).toEqual({
+    expect(JSON.parse(cfg).mcpServers.plasma_chat).toEqual({
       type: 'http',
       url: 'http://127.0.0.1:1/mcp',
       headers: { Authorization: 'Bearer SECRET-TOKEN' },
@@ -107,8 +116,8 @@ describe('createClaudeParser', () => {
         L({
           type: 'system',
           subtype: 'init',
-          tools: ['mcp__plasma__run_query', 'Bash'],
-          mcp_servers: [{ name: 'plasma', status: 'connected' }],
+          tools: ['mcp__plasma_chat__run_query', 'Bash'],
+          mcp_servers: [{ name: 'plasma_chat', status: 'connected' }],
         }),
       ),
     ).toEqual([{ kind: 'init', plasmaConnected: true, foreignTools: 1 }]);
@@ -121,7 +130,7 @@ describe('createClaudeParser', () => {
           type: 'system',
           subtype: 'init',
           tools: [],
-          mcp_servers: [{ name: 'plasma', status: 'failed' }],
+          mcp_servers: [{ name: 'plasma_chat', status: 'failed' }],
         }),
       ),
     ).toEqual([{ kind: 'init', plasmaConnected: false, foreignTools: 0 }]);
@@ -204,7 +213,7 @@ describe('runClaude with a fake CLI', () => {
     dir = mkdtempSync(join(tmpdir(), 'plasma-claude-test-'));
   });
   afterEach(() => {
-    unsetEnv('FAKE_MODE', 'FAKE_PID_FILE');
+    unsetEnv('FAKE_MODE', 'FAKE_PID_FILE', 'FAKE_SYS_OUT');
     rmSync(dir, { recursive: true, force: true });
   });
 
@@ -214,12 +223,15 @@ describe('runClaude with a fake CLI', () => {
   ) {
     const mcpConfigPath = join(dir, 'mcp.json');
     writeFileSync(mcpConfigPath, claudeMcpConfig(tokenUrl), { mode: 0o600 });
+    const systemPromptPath = join(dir, 'system.txt');
+    writeFileSync(systemPromptPath, 'the system prompt', { mode: 0o600 });
     const deltas: string[] = [];
     const run: CliRun = {
       launch: { command: process.execPath, args: [FAKE, 'claude'] },
       cwd: dir,
       model: 'haiku',
-      system: 'sys',
+      system: 'the system prompt',
+      systemPromptPath,
       prompt: 'hi',
       images: [],
       endpoint: tokenUrl,
@@ -231,6 +243,13 @@ describe('runClaude with a fake CLI', () => {
     };
     return { run, deltas };
   }
+
+  it('hands the system prompt over as a file with the same text', async () => {
+    process.env.FAKE_SYS_OUT = join(dir, 'seen.txt');
+    const { run } = baseRun();
+    expect(await runClaude(run)).toEqual({ ok: true });
+    expect(readFileSync(join(dir, 'seen.txt'), 'utf8')).toBe('the system prompt');
+  });
 
   it('streams the main conversation text and finishes ok', async () => {
     const { run, deltas } = baseRun();

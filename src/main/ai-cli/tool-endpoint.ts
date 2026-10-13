@@ -144,15 +144,21 @@ export function createToolEndpoint(opts: { version?: string } = {}): ToolEndpoin
     async register(run) {
       const p = await ensure();
       const token = randomBytes(32).toString('base64url');
+      let chain: Promise<void> = Promise.resolve();
       const handler = createMcpHandler({
         version: opts.version ?? '0',
         instructions: 'Plasma database tools for this chat.',
         tools: () => run.tools,
         callTool: async (name, args, ctx) => {
-          const text = await run.call(name, args, ctx.signal);
+          // One call at a time, in arrival order, like pump (a Codex script may fire several).
+          const turn = chain.then(() => run.call(name, args, ctx.signal));
+          chain = turn.then(
+            () => undefined,
+            () => undefined,
+          );
+          const text = await turn;
           return textResult(text, text.startsWith('{"error":'));
         },
-        // The CLI may issue a few calls at once; the chat's own round cap bounds the total.
         maxInFlight: 8,
       });
       const key = sha(token);

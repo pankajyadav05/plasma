@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import { constants, accessSync, readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { delimiter, join } from 'node:path';
+import { cliBasenameOk } from '@shared/ai-cli';
 
 /**
  * Where is the `codex` / `claude` program? A GUI app does not inherit the shell
@@ -99,6 +100,8 @@ export async function resolveBinary(
 ): Promise<Resolved | null> {
   const typed = override?.trim();
   if (typed) {
+    // Whatever the stored path says, only a file called codex / claude runs.
+    if (!cliBasenameOk(name === 'codex' ? 'codex' : 'claude-code', typed)) return null;
     return deps.isExecutable(typed) ? { path: typed, source: 'override' } : null;
   }
   const names = candidateNames(name, deps);

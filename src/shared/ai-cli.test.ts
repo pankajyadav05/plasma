@@ -3,6 +3,7 @@ import {
   AiCliStatusRequest,
   CLI_INSTALL_DOCS,
   cliBadge,
+  cliBasenameOk,
   cliPlanLabel,
   cliProviderName,
   isAiCliProvider,
@@ -61,6 +62,16 @@ describe('provider helpers', () => {
     expect(cliPlanLabel('codex', 'self_serve_business_prolite')).toBe('ChatGPT Business');
     expect(cliPlanLabel('codex', 'prolite')).toBe('ChatGPT Pro');
     expect(cliPlanLabel('codex', 'new_thing')).toBe('ChatGPT New Thing');
+  });
+
+  it('only files called codex / claude may be chosen', () => {
+    expect(cliBasenameOk('codex', '/usr/bin/codex')).toBe(true);
+    expect(cliBasenameOk('codex', 'C:\\npm\\Codex.CMD')).toBe(true);
+    expect(cliBasenameOk('claude-code', '/a/claude.exe')).toBe(true);
+    expect(cliBasenameOk('claude-code', '/a/codex')).toBe(false);
+    expect(cliBasenameOk('codex', '/bin/sh')).toBe(false);
+    expect(cliBasenameOk('codex', '/a/codex.sh')).toBe(false);
+    expect(cliBasenameOk('codex', '/a/mycodex')).toBe(false);
   });
 
   it('the status request takes a provider and nothing else', () => {

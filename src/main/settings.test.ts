@@ -131,6 +131,17 @@ describe('SSH secrets follow their bastion (SC-08)', () => {
     applySettingsPatch({ sshKnownHosts: { 'evil:22': { type: 'ssh-ed25519', key: 'AAAA' } } });
     expect(getAllSettings().sshKnownHosts).toBeUndefined();
   });
+
+  it('ignores a renderer attempt to set the program a CLI provider runs', () => {
+    applySettingsPatch({
+      aiCodexPath: '/tmp/evil',
+      aiClaudeCodePath: '/tmp/evil',
+      aiCodexModel: 'm',
+    });
+    expect(getAllSettings().aiCodexPath ?? '').toBe('');
+    expect(getAllSettings().aiClaudeCodePath ?? '').toBe('');
+    expect(getAllSettings().aiCodexModel).toBe('m');
+  });
 });
 
 describe('vault prefix deletes are literal (SC-26)', () => {

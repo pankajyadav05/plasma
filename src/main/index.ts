@@ -1,10 +1,18 @@
 import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { readFile, stat } from 'node:fs/promises';
+import { readFile, realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { type AiCliStatus, AiCliStatusRequest, isAiCliProvider } from '@shared/ai-cli';
+import {
+  AiCliChoosePathRequest,
+  type AiCliChoosePathResult,
+  type AiCliStatus,
+  AiCliStatusRequest,
+  cliBasenameOk,
+  cliProviderName,
+  isAiCliProvider,
+} from '@shared/ai-cli';
 import { isMemoryEnabled } from '@shared/ai-memory';
 import { isAgentReadSql } from '@shared/ai-readonly-sql';
 import { sshUnsupportedReason } from '@shared/connection-endpoint';
@@ -165,7 +173,7 @@ import {
 } from './schema-snapshots';
 import { SessionGate, connectOrCleanUp } from './session-gate';
 import { RecoveryRuntime } from './session-recovery';
-import { applySettingsPatch, getAllSettings, getPublicSettings } from './settings';
+import { applySettingsPatch, getAllSettings, getPublicSettings, setSetting } from './settings';
 import { formatSql } from './sql-format';
 import {
   allowSqlitePath,
@@ -2341,6 +2349,44 @@ function registerIpcHandlers() {
       dir,
     );
   });
+
+  ipcMain.handle(
+    IpcChannel.AiCliChoosePath,
+    async (e, raw: unknown): Promise<AiCliChoosePathResult> => {
+      const { provider, reset } = AiCliChoosePathRequest.parse(raw);
+      const key = provider === 'codex' ? 'aiCodexPath' : 'aiClaudeCodePath';
+      if (reset) {
+        setSetting(key, '');
+        return { path: '' };
+      }
+      const current = SettingsShape.parse(getAllSettings())[key];
+      const win = BrowserWindow.fromWebContents(e.sender);
+      const opts = {
+        title: `Choose the ${cliProviderName(provider)} program`,
+        properties: ['openFile' as const],
+      };
+      const r = win ? await dialog.showOpenDialog(win, opts) : await dialog.showOpenDialog(opts);
+      const picked = r.canceled ? undefined : r.filePaths[0];
+      if (!picked) return { path: current };
+      // npm installs `codex` as a symlink to a .js file, so the NAME that is checked is the
+      // one the user picked; the target only has to be a real file.
+      try {
+        if (!(await stat(await realpath(picked))).isFile()) throw new Error('not a file');
+      } catch {
+        return { path: current, error: 'That file could not be read.' };
+      }
+      if (!cliBasenameOk(provider, picked)) {
+        return {
+          path: current,
+          error: `The file must be called ${provider === 'codex' ? 'codex' : 'claude'} (or ${
+            provider === 'codex' ? 'codex' : 'claude'
+          }.exe / .cmd on Windows).`,
+        };
+      }
+      setSetting(key, picked);
+      return { path: picked };
+    },
+  );
 
   ipcMain.handle(IpcChannel.AiCancel, async (_e, requestId: unknown): Promise<void> => {
     if (typeof requestId !== 'string') return;

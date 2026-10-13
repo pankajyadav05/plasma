@@ -36,6 +36,13 @@ describe('resolveBinary order', () => {
     expect(await resolveBinary('codex', '/nope/codex', d)).toBeNull();
   });
 
+  it('an override that is not called codex / claude is refused, as is the wrong program', async () => {
+    const d = deps(['/x/bash', '/x/claude', '/x/codex.exe']);
+    expect(await resolveBinary('codex', '/x/bash', d)).toBeNull();
+    expect(await resolveBinary('codex', '/x/claude', d)).toBeNull();
+    expect((await resolveBinary('codex', '/x/codex.exe', d))?.source).toBe('override');
+  });
+
   it('then PATH, in order', async () => {
     const d = deps(['/opt/bin/claude', '/usr/bin/claude']);
     expect(await resolveBinary('claude', '', d)).toEqual({

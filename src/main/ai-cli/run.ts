@@ -25,6 +25,7 @@ import type { CliRun, CliRunResult } from './types';
  */
 
 export const CLI_TRANSCRIPT_MAX_CHARS = 60_000;
+export const CLI_CALLS_PER_ROUND = 3;
 
 export type HistoryMessage = { role: 'system' | 'user' | 'assistant'; content: AiContent };
 
@@ -150,6 +151,7 @@ export async function runCliChat(input: CliChatInput, deps: CliChatDeps = {}): P
 
   let registration: Awaited<ReturnType<ToolEndpoint['register']>> | null = null;
   let configPath: string | undefined;
+  let systemPath: string | undefined;
   try {
     const cwd = await ensureEmptyDir(input.userData);
     const offered = new Set(
@@ -164,7 +166,8 @@ export async function runCliChat(input: CliChatInput, deps: CliChatDeps = {}): P
           if (!offered.has(name))
             return JSON.stringify({ error: `rejected: ${name} is not available` });
           calls++;
-          if (calls > input.maxRounds) {
+          // One Codex exec script may make several calls: the cap is per call, 3 per round.
+          if (calls > input.maxRounds * CLI_CALLS_PER_ROUND) {
             return JSON.stringify({
               error:
                 'rejected: too many tool calls in this chat. Answer the user now with what you already have.',
@@ -181,6 +184,8 @@ export async function runCliChat(input: CliChatInput, deps: CliChatDeps = {}): P
     if (provider === 'claude-code') {
       configPath = join(input.userData, 'ai-cli', `mcp-${randomUUID()}.json`);
       await writeFile(configPath, claudeMcpConfig(ep), { mode: 0o600 });
+      systemPath = join(input.userData, 'ai-cli', `system-${randomUUID()}.txt`);
+      await writeFile(systemPath, input.system, { mode: 0o600 });
     }
     const { prompt, images } = buildCliPrompt(input.history);
     const run: CliRun = {
@@ -192,6 +197,8 @@ export async function runCliChat(input: CliChatInput, deps: CliChatDeps = {}): P
       images,
       endpoint: ep,
       ...(configPath ? { mcpConfigPath: configPath } : {}),
+      ...(systemPath ? { systemPromptPath: systemPath } : {}),
+      toolNames: [...offered],
       onDelta: (text) => {
         if (!signal.aborted) send({ kind: 'delta', requestId, text });
       },
@@ -212,5 +219,6 @@ export async function runCliChat(input: CliChatInput, deps: CliChatDeps = {}): P
   } finally {
     registration?.revoke();
     if (configPath) await rm(configPath, { force: true }).catch(() => undefined);
+    if (systemPath) await rm(systemPath, { force: true }).catch(() => undefined);
   }
 }

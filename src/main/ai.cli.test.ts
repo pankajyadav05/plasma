@@ -290,16 +290,16 @@ describe('CLI providers through startAiChat', () => {
     setAiToolExecutor(async () => '{"rows":[]}');
     const out: string[] = [];
     const { finished } = await start('c11', {}, { allowRowData: true }, async (run) => {
-      // A plain chat allows 5 rounds.
-      for (let i = 0; i < 7; i++) {
+      // A plain chat allows 5 rounds, 3 calls each.
+      for (let i = 0; i < 17; i++) {
         out.push(textOf(await callTool(run, 'query_database', { sql: `select ${i}` }, 10 + i)));
       }
       return { ok: true };
     });
     await finished;
-    expect(out.slice(0, 5).every((t) => t === '{"rows":[]}')).toBe(true);
-    expect(out[5]).toMatch(/too many tool calls/);
-    expect(out[6]).toMatch(/too many tool calls/);
+    expect(out.slice(0, 15).every((t) => t === '{"rows":[]}')).toBe(true);
+    expect(out[15]).toMatch(/too many tool calls/);
+    expect(out[16]).toMatch(/too many tool calls/);
   });
 
   it('the agent gets a longer cap than a plain chat', async () => {
@@ -310,15 +310,15 @@ describe('CLI providers through startAiChat', () => {
       { agent: true },
       { allowRowData: true },
       async (run) => {
-        for (let i = 0; i < 9; i++) {
+        for (let i = 0; i < 25; i++) {
           out.push(textOf(await callTool(run, 'query_database', { sql: `select ${i}` }, 10 + i)));
         }
         return { ok: true };
       },
     );
     await finished;
-    expect(out.slice(0, 8).every((t) => t === '{"rows":[]}')).toBe(true);
-    expect(out[8]).toMatch(/too many tool calls/);
+    expect(out.slice(0, 24).every((t) => t === '{"rows":[]}')).toBe(true);
+    expect(out[24]).toMatch(/too many tool calls/);
   });
 
   it('revokes the token when the run ends', async () => {

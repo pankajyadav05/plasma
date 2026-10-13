@@ -150,6 +150,10 @@ export function applySettingsPatch(patch: unknown): Settings {
     // Host-key trust is changed only by the host-key prompt flow in main
     // (SC-28): a compromised renderer must not pre-approve a MITM key.
     'sshKnownHosts',
+    // The program a CLI provider runs is chosen with the main-process file picker only
+    // (`AiCliChoosePath`): a compromised renderer must not point Plasma at an executable.
+    'aiCodexPath',
+    'aiClaudeCodePath',
     ...RESPONSE_ONLY_KEYS,
     // Also strip has* flags if any slipped in
     'hasOpenrouterApiKey',

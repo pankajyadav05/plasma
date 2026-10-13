@@ -24,13 +24,19 @@ async function mcp(url, token, method, params, id = 1) {
 
 if (kind === 'claude') {
   const cfgPath = argv[argv.indexOf('--mcp-config') + 1];
+  // The system prompt must come from a file, never from argv; slash commands must be off.
+  const sysFile = argv[argv.indexOf('--system-prompt-file') + 1];
+  if (!sysFile || argv.includes('--system-prompt') || !argv.includes('--disable-slash-commands'))
+    process.exit(3);
+  if (process.env.FAKE_SYS_OUT)
+    writeFileSync(process.env.FAKE_SYS_OUT, readFileSync(sysFile, 'utf8'));
   const cfg = JSON.parse(readFileSync(cfgPath, 'utf8'));
-  const server = cfg.mcpServers?.plasma;
+  const server = cfg.mcpServers?.plasma_chat;
   out({
     type: 'system',
     subtype: 'init',
-    tools: mode === 'foreign' ? ['Bash'] : server ? ['mcp__plasma__query_database'] : [],
-    mcp_servers: server ? [{ name: 'plasma', status: 'connected' }] : [],
+    tools: mode === 'foreign' ? ['Bash'] : server ? ['mcp__plasma_chat__query_database'] : [],
+    mcp_servers: server ? [{ name: 'plasma_chat', status: 'connected' }] : [],
   });
   rl.once('line', async () => {
     if (mode === 'auth') {
@@ -108,8 +114,9 @@ if (kind === 'codex') {
     const i = argv.findIndex((a) => a.startsWith(`${key}=`));
     return i >= 0 ? JSON.parse(argv[i].slice(key.length + 1)) : null;
   };
-  const url = cfg('mcp_servers.plasma.url');
+  const url = cfg('mcp_servers.plasma_chat.url');
   let nextServerId = 100;
+  let threadConfig = {};
   const waiting = new Map();
   const askServer = (method, params) =>
     new Promise((resolve) => {
@@ -124,12 +131,37 @@ if (kind === 'codex') {
       return;
     }
     if (m.method === 'initialize') return out({ id: m.id, result: { userAgent: 'fake' } });
+    if (m.method === 'config/read') {
+      if (mode === 'config-fails') return out({ id: m.id, error: { message: 'nope' } });
+      return out({
+        id: m.id,
+        result: { config: { mcp_servers: { userfs: { url: 'x' }, plasma_chat: { url: 'y' } } } },
+      });
+    }
+    if (m.method === 'mcpServerStatus/list') {
+      const off =
+        m.params?.threadId &&
+        threadConfig['mcp_servers.userfs.enabled'] === false &&
+        mode !== 'userfs-on';
+      return out({
+        id: m.id,
+        result: {
+          data: [
+            { name: 'plasma_chat', runtimeStatus: 'connected' },
+            { name: 'userfs', runtimeStatus: off ? null : 'connected' },
+          ],
+        },
+      });
+    }
     if (m.method === 'thread/start') {
+      threadConfig = m.params.config ?? {};
+      if (process.env.FAKE_THREAD_OUT)
+        writeFileSync(process.env.FAKE_THREAD_OUT, JSON.stringify(m.params));
       out({ id: m.id, result: { thread: { id: 'T1' } } });
       if (url)
         out({
           method: 'mcpServer/startupStatus/updated',
-          params: { threadId: 'T1', name: 'plasma', status: 'ready', error: null },
+          params: { threadId: 'T1', name: 'plasma_chat', status: 'ready', error: null },
         });
       return;
     }
@@ -167,14 +199,18 @@ if (kind === 'codex') {
             threadId: 'T1',
             turnId: 'U1',
             willRetry: false,
-            error: { message: '401 Unauthorized' },
+            error: { message: 'Not logged in. Run `codex login`.' },
           },
         });
         out({
           method: 'turn/completed',
           params: {
             threadId: 'T1',
-            turn: { id: 'U1', status: 'failed', error: { message: '401 Unauthorized' } },
+            turn: {
+              id: 'U1',
+              status: 'failed',
+              error: { message: 'Not logged in. Run `codex login`.' },
+            },
           },
         });
         return;
@@ -190,7 +226,7 @@ if (kind === 'codex') {
       });
       const a2 = await askServer('mcpServer/elicitation/request', {
         threadId: 'T1',
-        serverName: 'plasma',
+        serverName: 'plasma_chat',
       });
       const a3 = await askServer('mcpServer/elicitation/request', {
         threadId: 'T1',

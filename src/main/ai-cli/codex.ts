@@ -9,7 +9,8 @@ import type { CliRun, CliRunResult } from './types';
  * machine switched off, and Plasma's own tools offered as one MCP server.
  */
 
-export const CODEX_MCP_SERVER = 'plasma';
+/** Not `plasma`: that name may be the user's own entry for Plasma's MCP server, and entries merge. */
+export const CODEX_MCP_SERVER = 'plasma_chat';
 export const CODEX_TOKEN_ENV = 'PLASMA_CHAT_MCP_TOKEN';
 
 /**
@@ -115,6 +116,18 @@ export function answerServerRequest(
   }
 }
 
+/** Names of MCP servers in a status list, other than Plasma's, that are not switched off. */
+export function runningForeignServers(result: unknown): string[] {
+  const data = isObj(result) && Array.isArray(result.data) ? result.data : null;
+  if (!data) return ['?'];
+  const out: string[] = [];
+  for (const s of data) {
+    if (!isObj(s) || typeof s.name !== 'string' || s.name === CODEX_MCP_SERVER) continue;
+    if (s.runtimeStatus !== null && s.runtimeStatus !== 'disabled') out.push(s.name);
+  }
+  return out;
+}
+
 export type CodexEvent =
   | { kind: 'delta'; text: string }
   | { kind: 'message-start' }
@@ -176,8 +189,9 @@ export function parseCodexNotification(
 }
 
 const NOT_SIGNED_IN = 'Not signed in to Codex. Run `codex login` in a terminal.';
+/** The specific messages of a signed-out Codex; a bare "401" or "sign in" is not enough. */
 const AUTH_RE =
-  /not logged in|log ?in required|unauthori[sz]ed|401|sign in|token.*(expired|invalid)/i;
+  /not logged in|log ?in required|run `?codex login|401 unauthorized|access token (is |has )?(expired|invalid)|refresh token (is |has )?(expired|invalid|was)/i;
 
 export function codexErrorMessage(raw: string): string {
   const text = redactCliMessage(raw.trim());
@@ -215,7 +229,6 @@ async function runOnce(run: CliRun, skip: ReadonlySet<string>): Promise<AttemptR
   let sawMessage = false;
   let emitted = '';
   let proc: CliProcess | null = null;
-  let finishTimer: ReturnType<typeof setTimeout> | null = null;
   let resolveTurn: () => void = () => undefined;
   const turnFinished = new Promise<void>((r) => {
     resolveTurn = r;
@@ -308,8 +321,8 @@ async function runOnce(run: CliRun, skip: ReadonlySet<string>): Promise<AttemptR
   const onAbort = () => {
     if (threadId && turnId)
       proc?.write({ id: ++nextId, method: 'turn/interrupt', params: { threadId, turnId } });
-    finishTimer = setTimeout(() => proc?.kill(), 250);
-    finishTimer.unref?.();
+    // Kill at once (this also runs on quit): nothing may outlive the app.
+    proc?.kill();
   };
   if (run.signal.aborted) onAbort();
   else run.signal.addEventListener('abort', onAbort, { once: true });
@@ -330,6 +343,16 @@ async function runOnce(run: CliRun, skip: ReadonlySet<string>): Promise<AttemptR
     if (init.error) throw new Error(String((init.error as Json).message ?? 'initialize failed'));
     proc.write({ method: 'initialized' });
 
+    // Which MCP servers does this Codex know? Everything but ours is switched off for this thread.
+    const cfg = await request('config/read', {});
+    if (cfg.error || !isObj(cfg.result) || !isObj(cfg.result.config)) {
+      throw new Error(
+        'Plasma could not read the Codex configuration, so it did not start the chat.',
+      );
+    }
+    const servers = isObj(cfg.result.config.mcp_servers) ? cfg.result.config.mcp_servers : {};
+    const others = Object.keys(servers).filter((n) => n !== CODEX_MCP_SERVER);
+
     const started = await request('thread/start', {
       cwd: run.cwd,
       approvalPolicy: 'never',
@@ -337,6 +360,14 @@ async function runOnce(run: CliRun, skip: ReadonlySet<string>): Promise<AttemptR
       ephemeral: true,
       ...(run.model ? { model: run.model } : {}),
       developerInstructions: run.system,
+      // The user's own MCP servers (~/.codex/config.toml) stay off: their tools would be
+      // reachable from code mode without Plasma's guards. Ours is limited to what the chat offers.
+      config: {
+        ...Object.fromEntries(others.map((n) => [`mcp_servers.${n}.enabled`, false])),
+        ...(run.endpoint && run.toolNames
+          ? { [`mcp_servers.${CODEX_MCP_SERVER}.enabled_tools`]: run.toolNames }
+          : {}),
+      },
     });
     const thread =
       isObj(started.result) && isObj(started.result.thread) ? started.result.thread : null;
@@ -357,6 +388,15 @@ async function runOnce(run: CliRun, skip: ReadonlySet<string>): Promise<AttemptR
     }
     if (run.endpoint && mcpFailed) {
       throw new Error("Codex could not connect to Plasma's tools.");
+    }
+
+    // Trust but verify: no server other than ours may be running in this thread.
+    const status = await request('mcpServerStatus/list', { threadId, detail: 'toolsAndAuthOnly' });
+    const live = status.error ? ['?'] : runningForeignServers(status.result);
+    if (live.length > 0) {
+      throw new Error(
+        "Codex has MCP servers of its own switched on, so Plasma did not start the chat. Turn them off in Codex's settings.",
+      );
     }
 
     const turn = await request('turn/start', {
@@ -385,7 +425,6 @@ async function runOnce(run: CliRun, skip: ReadonlySet<string>): Promise<AttemptR
   killer.unref?.();
   const exit = await exited;
   clearTimeout(killer);
-  if (finishTimer) clearTimeout(finishTimer);
   run.signal.removeEventListener('abort', onAbort);
 
   if (run.signal.aborted) return { done: { ok: false, aborted: true, message: '' } };

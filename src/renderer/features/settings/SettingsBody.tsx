@@ -930,12 +930,24 @@ function CliProviderRows({ provider }: { provider: AiCliProvider }) {
     }
   }, [provider]);
 
-  // Check on open, when the provider changes and after the path is edited.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: `path` is the trigger.
+  // Check when the section opens or the provider changes, and on Refresh: never per keystroke.
   useEffect(() => {
     setStatus(null);
     void refresh();
-  }, [refresh, path]);
+  }, [refresh]);
+
+  const [pathError, setPathError] = useState('');
+  const choose = async (reset: boolean) => {
+    setPathError('');
+    try {
+      const r = await ipc.ai.cliChoosePath({ provider, ...(reset ? { reset: true } : {}) });
+      if (r.error) setPathError(r.error);
+      useSession.setState((st) => ({ settings: { ...st.settings, [pathKey]: r.path } }));
+      if (r.path !== path) void refresh();
+    } catch {
+      setPathError('Could not choose the file.');
+    }
+  };
 
   // Codex starts on its own default model: show its name instead of "default".
   useEffect(() => {
@@ -1013,16 +1025,31 @@ function CliProviderRows({ provider }: { provider: AiCliProvider }) {
         <ModelPicker variant="field" />
       </Row>
       <Row
-        label={`${name} path`}
-        htmlFor={`ai-${provider}-path`}
-        hint={`Only if Plasma cannot find ${name} by itself. Leave empty to look on PATH and in the usual folders.`}
+        label={`${name} program`}
+        hint={`Only if Plasma cannot find ${name} by itself. The file must be called ${
+          provider === 'codex' ? 'codex' : 'claude'
+        }. Without a choice Plasma looks on PATH and in the usual folders.`}
       >
-        <DebouncedSettingsInput
-          id={`ai-${provider}-path`}
-          value={path}
-          onCommit={(v) => void updateSettings({ [pathKey]: v.trim() })}
-          placeholder={provider === 'codex' ? '/usr/local/bin/codex' : '/usr/local/bin/claude'}
-        />
+        <div className="flex min-h-[26px] flex-wrap items-center gap-2">
+          <span
+            className="min-w-0 max-w-[360px] truncate font-mono text-[12px] text-[var(--wb-text-2)]"
+            title={path || undefined}
+            data-testid="ai-cli-path"
+          >
+            {path || 'Found automatically'}
+          </span>
+          <Button type="button" variant="secondary" size="sm" onClick={() => void choose(false)}>
+            Choose…
+          </Button>
+          {path && (
+            <Button type="button" variant="secondary" size="sm" onClick={() => void choose(true)}>
+              Reset
+            </Button>
+          )}
+        </div>
+        {pathError && (
+          <p className="mt-1 text-[12px] leading-snug text-[var(--status-warn)]">{pathError}</p>
+        )}
       </Row>
     </>
   );

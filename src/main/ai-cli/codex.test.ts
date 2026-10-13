@@ -10,6 +10,7 @@ import {
   codexErrorMessage,
   parseCodexNotification,
   runCodex,
+  runningForeignServers,
 } from './codex';
 import { FAKE_CLI as FAKE, alive, unsetEnv, waitDead } from './test-util';
 import { createToolEndpoint } from './tool-endpoint';
@@ -49,9 +50,9 @@ describe('buildCodexArgs', () => {
   });
 
   it('offers the plasma server by URL, with the token only named, never carried', () => {
-    expect(args).toContain('mcp_servers.plasma.url="http://127.0.0.1:4000/mcp"');
-    expect(args).toContain(`mcp_servers.plasma.bearer_token_env_var="${CODEX_TOKEN_ENV}"`);
-    expect(args).toContain('mcp_servers.plasma.default_tools_approval_mode="approve"');
+    expect(args).toContain('mcp_servers.plasma_chat.url="http://127.0.0.1:4000/mcp"');
+    expect(args).toContain(`mcp_servers.plasma_chat.bearer_token_env_var="${CODEX_TOKEN_ENV}"`);
+    expect(args).toContain('mcp_servers.plasma_chat.default_tools_approval_mode="approve"');
     expect(args.join(' ')).not.toMatch(/Bearer\s|Authorization|\.bearer_token=|http_headers/i);
   });
 
@@ -70,7 +71,9 @@ describe('buildCodexArgs', () => {
 
 describe('answerServerRequest', () => {
   it('approves Plasma MCP calls and nothing else', () => {
-    expect(answerServerRequest('mcpServer/elicitation/request', { serverName: 'plasma' })).toEqual({
+    expect(
+      answerServerRequest('mcpServer/elicitation/request', { serverName: 'plasma_chat' }),
+    ).toEqual({
       result: { action: 'accept', content: null, _meta: null },
     });
     expect(answerServerRequest('mcpServer/elicitation/request', { serverName: 'evil' })).toEqual({
@@ -182,10 +185,10 @@ describe('parseCodexNotification', () => {
     expect(
       parseCodexNotification(
         'mcpServer/startupStatus/updated',
-        { threadId: 'z', name: 'plasma', status: 'ready', error: null },
+        { threadId: 'z', name: 'plasma_chat', status: 'ready', error: null },
         T,
       ),
-    ).toEqual({ kind: 'mcp-status', name: 'plasma', status: 'ready', error: null });
+    ).toEqual({ kind: 'mcp-status', name: 'plasma_chat', status: 'ready', error: null });
   });
 });
 
@@ -194,6 +197,13 @@ describe('codexErrorMessage', () => {
     expect(codexErrorMessage('401 Unauthorized')).toBe(
       'Not signed in to Codex. Run `codex login` in a terminal.',
     );
+  });
+  it('does not mistake a stray 401 or "sign in" for a signed-out Codex', () => {
+    expect(codexErrorMessage('request 4012 failed')).toBe('request 4012 failed');
+    expect(codexErrorMessage('Could not sign in to the mcp server x')).toBe(
+      'Could not sign in to the mcp server x',
+    );
+    expect(codexErrorMessage('Not logged in')).toMatch(/Not signed in to Codex/);
   });
   it('keeps the CLI message otherwise, without tokens', () => {
     expect(codexErrorMessage('Selected model is at capacity')).toBe(
@@ -204,13 +214,32 @@ describe('codexErrorMessage', () => {
   });
 });
 
+describe('runningForeignServers', () => {
+  it('flags any other server that is not switched off', () => {
+    expect(
+      runningForeignServers({
+        data: [
+          { name: 'plasma_chat', runtimeStatus: 'connected' },
+          { name: 'userfs', runtimeStatus: null },
+          { name: 'git', runtimeStatus: 'connected' },
+        ],
+      }),
+    ).toEqual(['git']);
+    expect(
+      runningForeignServers({ data: [{ name: 'plasma_chat', runtimeStatus: 'connected' }] }),
+    ).toEqual([]);
+    // An answer that cannot be read is not a pass.
+    expect(runningForeignServers(null)).toEqual(['?']);
+  });
+});
+
 describe('runCodex with a fake CLI', () => {
   let dir: string;
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), 'plasma-codex-test-'));
   });
   afterEach(() => {
-    unsetEnv('FAKE_MODE', 'FAKE_PID_FILE', 'FAKE_REJECT');
+    unsetEnv('FAKE_MODE', 'FAKE_PID_FILE', 'FAKE_REJECT', 'FAKE_THREAD_OUT');
     rmSync(dir, { recursive: true, force: true });
   });
 
@@ -276,6 +305,40 @@ describe('runCodex with a fake CLI', () => {
       reg.revoke();
       await endpoint.close();
     }
+  });
+
+  it('switches off the user`s own MCP servers and limits ours to the offered tools', async () => {
+    process.env.FAKE_THREAD_OUT = join(dir, 'thread.json');
+    const { run } = baseRun(
+      { toolNames: ['run_query', 'show_table'] },
+      { url: 'http://127.0.0.1:1/mcp', token: 't' },
+    );
+    expect(await runCodex(run)).toEqual({ ok: true });
+    const params = JSON.parse(readFileSync(join(dir, 'thread.json'), 'utf8'));
+    expect(params.config).toEqual({
+      'mcp_servers.userfs.enabled': false,
+      'mcp_servers.plasma_chat.enabled_tools': ['run_query', 'show_table'],
+    });
+    expect(params.sandbox).toBe('read-only');
+    expect(params.approvalPolicy).toBe('never');
+  });
+
+  it('refuses the chat when the Codex configuration cannot be read', async () => {
+    process.env.FAKE_MODE = 'config-fails';
+    const { run, deltas } = baseRun();
+    const res = await runCodex(run);
+    expect(res).toMatchObject({ ok: false });
+    expect((res as { message: string }).message).toMatch(/could not read the Codex configuration/);
+    expect(deltas).toEqual([]);
+  });
+
+  it('refuses the chat when a server of the user is still running', async () => {
+    process.env.FAKE_MODE = 'userfs-on';
+    const { run, deltas } = baseRun();
+    const res = await runCodex(run);
+    expect(res).toMatchObject({ ok: false });
+    expect((res as { message: string }).message).toMatch(/MCP servers of its own/);
+    expect(deltas).toEqual([]);
   });
 
   it('retries without a feature flag the installed Codex does not know', async () => {

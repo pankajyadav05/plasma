@@ -1,5 +1,10 @@
 import { z } from 'zod';
-import type { AiCliStatus, AiCliStatusRequest } from './ai-cli';
+import type {
+  AiCliChoosePathRequest,
+  AiCliChoosePathResult,
+  AiCliStatus,
+  AiCliStatusRequest,
+} from './ai-cli';
 import {
   AI_MAX_IMAGES_PER_MESSAGE,
   AI_MAX_IMAGES_PER_REQUEST,
@@ -2668,6 +2673,8 @@ export const IpcChannel = {
   AiListModels: 'plasma:ai:list-models',
   /** Is the Codex / Claude Code CLI installed and signed in (never returns the account e-mail). */
   AiCliStatus: 'plasma:ai:cli-status',
+  /** Pick (or reset) the Codex / Claude Code program with the native file picker. */
+  AiCliChoosePath: 'plasma:ai:cli-choose-path',
   /** The renderer's answer to an agent action card (applied / rejected / …). */
   AiActionResult: 'plasma:ai:action-result',
   /** The user clicked Approve on a card: from here main must wait for the real outcome. */
@@ -2969,6 +2976,8 @@ export interface PlasmaAPI {
     listModels(opts?: AiListModelsRequest): Promise<AiModelsResult>;
     /** Installed / signed-in state of the Codex or Claude Code CLI, for the settings row. */
     cliStatus(req: AiCliStatusRequest): Promise<AiCliStatus>;
+    /** Open the file picker for the CLI program (main validates the name), or reset the choice. */
+    cliChoosePath(req: AiCliChoosePathRequest): Promise<AiCliChoosePathResult>;
     /** Answer an agent `action` event (the user approved, rejected, … the card). */
     actionResult(res: AiActionResult): Promise<void>;
     /** Tell main the user approved a card (it may be an MCP proposal that must not be withdrawn now). */

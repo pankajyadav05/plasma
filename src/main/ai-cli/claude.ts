@@ -7,11 +7,13 @@ import type { CliRun, CliRunResult } from './types';
  * built-in tool switched off, and Plasma's own tools offered as one MCP server.
  */
 
-export const CLAUDE_MCP_SERVER = 'plasma';
+/** Not `plasma`: that name may be the user's own entry for Plasma's MCP server. */
+export const CLAUDE_MCP_SERVER = 'plasma_chat';
 
 export interface ClaudeArgsInput {
   model: string;
-  system: string;
+  /** Path of the 0600 file holding the system prompt (not on argv: length limit, visible in `ps`). */
+  systemPromptPath: string;
   /** Path of the 0600 file holding the MCP config (the token is inside, not on argv). */
   mcpConfigPath: string;
   hasTools: boolean;
@@ -35,8 +37,9 @@ export function buildClaudeArgs(input: ClaudeArgsInput): string[] {
     '--setting-sources',
     '',
     '--no-session-persistence',
-    '--system-prompt',
-    input.system,
+    '--system-prompt-file',
+    input.systemPromptPath,
+    '--disable-slash-commands',
     '--model',
     input.model,
     ...(input.hasTools ? ['--allowedTools', `mcp__${CLAUDE_MCP_SERVER}`] : []),
@@ -199,7 +202,7 @@ export async function runClaude(run: CliRun): Promise<CliRunResult> {
       ...run.launch.args,
       ...buildClaudeArgs({
         model: run.model,
-        system: run.system,
+        systemPromptPath: run.systemPromptPath ?? '',
         mcpConfigPath: run.mcpConfigPath ?? '',
         hasTools: run.endpoint !== null,
       }),
@@ -259,7 +262,7 @@ export async function runClaude(run: CliRun): Promise<CliRunResult> {
   if (blocked) return { ok: false, message: blocked };
   if (r?.isError) {
     const text = redactCliMessage(r.text.trim());
-    if (/not logged in|\/login|authenticat/i.test(text)) {
+    if (/not logged in|\/login/i.test(text)) {
       return {
         ok: false,
         message: 'Not signed in to Claude Code. Run `claude` in a terminal and sign in.',
@@ -268,7 +271,7 @@ export async function runClaude(run: CliRun): Promise<CliRunResult> {
     return { ok: false, message: text || 'Claude Code reported an error.' };
   }
   const tail = redactCliMessage(exit.stderrTail.trim());
-  if (/not logged in|\/login|authenticat/i.test(tail)) {
+  if (/not logged in|\/login/i.test(tail)) {
     return {
       ok: false,
       message: 'Not signed in to Claude Code. Run `claude` in a terminal and sign in.',

@@ -123,7 +123,7 @@ export const settings: DocPage = {
           <DocTable
             head={['Setting', 'What it does']}
             rows={[
-              [<UI key="a">Provider</UI>, 'OpenRouter, Local model, Codex or Claude Code. The last two use the program you installed and your own plan; they show whether it is installed and signed in, a Refresh button, a model picker and an optional path to the program.'],
+              [<UI key="a">Provider</UI>, 'OpenRouter, Local model, Codex or Claude Code. The last two use the program you installed and your own plan; they show whether it is installed and signed in, a Refresh button, a model picker and a file picker (Choose…, Reset) for the program’s location.'],
               [<UI key="b">OpenRouter API key</UI>, 'Your key, encrypted with the OS keychain and never shown again. Remove key deletes it.'],
               [<UI key="c">Server URL</UI>, 'Local model only. Ollama http://127.0.0.1:11434/v1 (the default); LM Studio http://127.0.0.1:1234/v1. Only localhost addresses are accepted.'],
               [<UI key="d">Model</UI>, 'The model picker. Type an id that is not listed to use it.'],

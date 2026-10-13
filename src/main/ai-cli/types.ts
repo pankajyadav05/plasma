@@ -13,6 +13,10 @@ export interface CliRun {
   images: Array<{ mediaType: string; data: string; url: string }>;
   /** Plasma's tools for this chat; null = a task, no tools at all. */
   endpoint: { url: string; token: string } | null;
+  /** Claude: file holding the system prompt. */
+  systemPromptPath?: string;
+  /** Names of the tools offered (Codex limits its MCP server to these). */
+  toolNames?: string[];
   /** Claude: file holding the MCP config. */
   mcpConfigPath?: string;
   onDelta(text: string): void;

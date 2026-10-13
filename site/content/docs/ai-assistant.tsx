@@ -65,7 +65,7 @@ export const aiAssistant: DocPage = {
               [
                 'Codex',
                 <>
-                  Nothing, if <C>codex</C>{' '}is installed and signed in. Optionally its path and a <UI>Model</UI>.
+                  Nothing, if <C>codex</C>{' '}is installed and signed in. Optionally the program&rsquo;s location and a <UI>Model</UI>.
                 </>,
                 <>
                   OpenAI, through the Codex program on this computer, under your ChatGPT plan. See{' '}
@@ -75,7 +75,7 @@ export const aiAssistant: DocPage = {
               [
                 'Claude Code',
                 <>
-                  Nothing, if <C>claude</C>{' '}is installed and signed in. Optionally its path and a <UI>Model</UI>{' '}(<C>sonnet</C>,{' '}
+                  Nothing, if <C>claude</C>{' '}is installed and signed in. Optionally the program&rsquo;s location and a <UI>Model</UI>{' '}(<C>sonnet</C>,{' '}
                   <C>opus</C>{' '}or <C>haiku</C>).
                 </>,
                 <>
@@ -119,7 +119,7 @@ export const aiAssistant: DocPage = {
             If you already have <B>Codex</B>{' '}(a ChatGPT plan) or <B>Claude Code</B>{' '}(a Claude plan) installed and signed in, Plasma
             can drive that program instead of using an API key. Choose <UI>Codex</UI>{' '}or <UI>Claude Code</UI>{' '}as the{' '}
             <UI>Provider</UI>. Plasma finds the program on your PATH, in your login shell&rsquo;s PATH and in the usual install folders;
-            you can also type its path. The row under the provider shows whether it is installed, its version and whether you are
+            you can also choose the program yourself with the file picker (the file must be called <C>codex</C>{' '}or <C>claude</C>). The row under the provider shows whether it is installed, its version and whether you are
             signed in (with the plan name, never your e-mail address). <UI>Refresh</UI>{' '}checks again.
           </P>
           <UL>
@@ -134,16 +134,21 @@ export const aiAssistant: DocPage = {
               says so, with the reset time when the program reports one.
             </LI>
             <LI>
-              <B>What is turned off.</B>{' '}Plasma starts the program with its shell, file, browser, web search, plugin, hook and
-              sub-agent tools switched off and runs it in an empty folder that Plasma owns. For Claude Code that is every built-in tool,
-              and it reads no settings, <C>CLAUDE.md</C>{' '}or memory from disk. For Codex the sandbox is read-only and nothing is
-              approved except calls to Plasma&rsquo;s own tools; Codex keeps a small code tool because this version of Codex reaches any
-              MCP tool through it, and in our check, asking it to read a file failed. The only tools the model has are the ones Plasma
-              offers in the chat, and each one goes through the same guards and approval cards as with OpenRouter.
+              <B>What is turned off.</B>{' '}Plasma runs the program in an empty folder that Plasma owns, with no approval prompts.
+              For <B>Claude Code</B>, every built-in tool is off, and so are slash commands and skills; the only tools are Plasma&rsquo;s.
+              Claude Code may still read its own sign-in and configuration files, so Plasma does not claim it reads nothing from disk. For{' '}
+              <B>Codex</B>, the shell, file-edit, browser, web search, plugin, hook and app features are switched off, the sandbox is
+              read-only, and your own MCP servers from <C>~/.codex/config.toml</C>{' '}are switched off for Plasma chats. What remains
+              is not nothing: Codex still has <C>apply_patch</C>{' '}(the read-only sandbox blocks it), a clock tool, MCP-resource tools
+              and sub-agent tools (which have the same limits), and a small code tool, because this version of Codex reaches any MCP
+              tool through it. In our check, asking Codex or Claude Code to read <C>/etc/hostname</C>{' '}failed. If Plasma cannot
+              confirm that your own Codex MCP servers are off, it does not start the chat. Every call to one of Plasma&rsquo;s tools
+              goes through the same guards and approval cards as with OpenRouter, one at a time.
             </LI>
             <LI>
               <B>No session is kept.</B>{' '}Every message starts a new run: Plasma sends the conversation so far, as a short transcript,
-              with your latest message and asks the program not to save the conversation. What the program records beyond that, such as
+              with your latest message and asks the program not to save the conversation. Database memory notes are read once when a message
+              is sent and not refreshed while the program works on it. What the program records beyond that, such as
               usage in your account, is up to OpenAI or Anthropic. The tools run in a loopback server that is open only while a chat
               runs, with a random key for that chat; it is separate from the <Doc to="mcp-server">MCP server</Doc>{' '}you may enable.
             </LI>
