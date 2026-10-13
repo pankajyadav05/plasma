@@ -53,7 +53,8 @@ export function SidebarSearch({
 
 /** Search field + trailing tool buttons, padded like TablePlus. */
 export function SidebarSearchRow({ children }: { children: React.ReactNode }) {
-  return <div className="flex shrink-0 items-center gap-1.5 px-2.5 pb-2">{children}</div>;
+  // pt-0.5 leaves room for the 2px focus ring: the sidebar body clips overflow.
+  return <div className="flex shrink-0 items-center gap-1.5 px-2.5 pb-2 pt-0.5">{children}</div>;
 }
 
 /** Row chrome shared by tree rows: 24px, radius 5, subtle hover, --wb-selected when active. */

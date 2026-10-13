@@ -72,7 +72,7 @@ function SidebarModeSwitch() {
   const mode = useWorkbench((s) => s.sidebarMode);
   const setMode = useWorkbench((s) => s.setSidebarMode);
   return (
-    <div className="shrink-0 px-2.5 pb-2 pt-2">
+    <div className="shrink-0 px-2.5 pb-1.5 pt-2">
       <Segmented<SidebarMode>
         ariaLabel="Sidebar mode"
         variant="plain"
