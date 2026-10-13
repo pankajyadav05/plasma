@@ -133,6 +133,24 @@ if (kind === 'codex') {
         });
       return;
     }
+    if (m.method === 'account/read')
+      return out({
+        id: m.id,
+        result: {
+          account: { type: 'chatgpt', email: 'secret@example.com', planType: 'plus' },
+          requiresOpenaiAuth: false,
+        },
+      });
+    if (m.method === 'model/list')
+      return out({
+        id: m.id,
+        result: {
+          data: [
+            { id: 'x', model: 'gpt-fake-1', displayName: 'Fake One', isDefault: true },
+            { id: 'y', model: 'gpt-fake-2', hidden: true },
+          ],
+        },
+      });
     if (m.method === 'turn/interrupt') return out({ id: m.id, result: {} });
     if (m.method === 'turn/start') {
       out({ id: m.id, result: { turn: { id: 'U1' } } });
