@@ -1,9 +1,18 @@
 import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { readFile, stat } from 'node:fs/promises';
+import { readFile, realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import {
+  AiCliChoosePathRequest,
+  type AiCliChoosePathResult,
+  type AiCliStatus,
+  AiCliStatusRequest,
+  cliBasenameOk,
+  cliProviderName,
+  isAiCliProvider,
+} from '@shared/ai-cli';
 import { isMemoryEnabled } from '@shared/ai-memory';
 import { isAgentReadSql } from '@shared/ai-readonly-sql';
 import { sshUnsupportedReason } from '@shared/connection-endpoint';
@@ -86,6 +95,8 @@ import {
   startAiChat,
   submitAiActionResult,
 } from './ai';
+import { closeCliEndpoint, ensureEmptyDir } from './ai-cli/run';
+import { getCliStatus, listCliModels } from './ai-cli/status';
 import {
   addMemory,
   deleteMemory,
@@ -162,7 +173,7 @@ import {
 } from './schema-snapshots';
 import { SessionGate, connectOrCleanUp } from './session-gate';
 import { RecoveryRuntime } from './session-recovery';
-import { applySettingsPatch, getAllSettings, getPublicSettings } from './settings';
+import { applySettingsPatch, getAllSettings, getPublicSettings, setSetting } from './settings';
 import { formatSql } from './sql-format';
 import {
   allowSqlitePath,
@@ -625,6 +636,8 @@ app.on('will-quit', () => {
   // B2: reaching here is a clean quit; a crash never does. (A second instance
   // that lost the lock must not remove the running one's marker.)
   if (hasInstanceLock) recovery.end();
+  cancelAllAiChats();
+  void closeCliEndpoint();
   cancelAllJobs();
   closeAllTunnels();
   void mcpService?.stop();
@@ -2136,7 +2149,8 @@ function registerIpcHandlers() {
     // falls back to the legacy claudeApiKey slot from v0.0.10. A local model
     // needs none, and nothing is read from the vault for it.
     const provider = settings.aiProvider;
-    const apiKey = provider === 'local' ? '' : getApiKey();
+    const viaCli = isAiCliProvider(provider);
+    const apiKey = provider === 'local' || viaCli ? '' : getApiKey();
     // Row-data tools only when the active connection opted in (C18).
     // SC-05: bind the chat to the connection it started on and re-check the
     // opt-in every time a tool is about to run (the user may switch to prod
@@ -2156,6 +2170,17 @@ function registerIpcHandlers() {
       memoryTools,
       localUrl: settings.aiLocalUrl,
       localModel: settings.aiLocalModel,
+      ...(viaCli
+        ? {
+            cli: {
+              model: provider === 'codex' ? settings.aiCodexModel : settings.aiClaudeCodeModel,
+              binaryOverride:
+                provider === 'codex' ? settings.aiCodexPath : settings.aiClaudeCodePath,
+              userData: app.getPath('userData'),
+              appVersion: app.getVersion(),
+            },
+          }
+        : {}),
       allowRowData: isAiRowDataAllowed(chatConnectionId, settings.connectionAiRowData),
       allowSchema: isAiSchemaAllowed(chatConnectionId, settings),
       toolGuard: () => {
@@ -2296,6 +2321,15 @@ function registerIpcHandlers() {
     const { refresh } = AiListModelsRequest.parse(raw ?? {});
     const settings = SettingsShape.parse(getAllSettings());
     if (settings.aiProvider === 'local') return listLocalModels(settings.aiLocalUrl);
+    if (isAiCliProvider(settings.aiProvider)) {
+      const codex = settings.aiProvider === 'codex';
+      const dir = await ensureEmptyDir(app.getPath('userData'));
+      return listCliModels(
+        settings.aiProvider,
+        codex ? settings.aiCodexPath : settings.aiClaudeCodePath,
+        dir,
+      );
+    }
     return listOpenRouterModels(
       { refresh },
       {
@@ -2304,6 +2338,55 @@ function registerIpcHandlers() {
       },
     );
   });
+
+  ipcMain.handle(IpcChannel.AiCliStatus, async (_e, raw: unknown): Promise<AiCliStatus> => {
+    const { provider } = AiCliStatusRequest.parse(raw);
+    const settings = SettingsShape.parse(getAllSettings());
+    const dir = await ensureEmptyDir(app.getPath('userData'));
+    return getCliStatus(
+      provider,
+      provider === 'codex' ? settings.aiCodexPath : settings.aiClaudeCodePath,
+      dir,
+    );
+  });
+
+  ipcMain.handle(
+    IpcChannel.AiCliChoosePath,
+    async (e, raw: unknown): Promise<AiCliChoosePathResult> => {
+      const { provider, reset } = AiCliChoosePathRequest.parse(raw);
+      const key = provider === 'codex' ? 'aiCodexPath' : 'aiClaudeCodePath';
+      if (reset) {
+        setSetting(key, '');
+        return { path: '' };
+      }
+      const current = SettingsShape.parse(getAllSettings())[key];
+      const win = BrowserWindow.fromWebContents(e.sender);
+      const opts = {
+        title: `Choose the ${cliProviderName(provider)} program`,
+        properties: ['openFile' as const],
+      };
+      const r = win ? await dialog.showOpenDialog(win, opts) : await dialog.showOpenDialog(opts);
+      const picked = r.canceled ? undefined : r.filePaths[0];
+      if (!picked) return { path: current };
+      // npm installs `codex` as a symlink to a .js file, so the NAME that is checked is the
+      // one the user picked; the target only has to be a real file.
+      try {
+        if (!(await stat(await realpath(picked))).isFile()) throw new Error('not a file');
+      } catch {
+        return { path: current, error: 'That file could not be read.' };
+      }
+      if (!cliBasenameOk(provider, picked)) {
+        return {
+          path: current,
+          error: `The file must be called ${provider === 'codex' ? 'codex' : 'claude'} (or ${
+            provider === 'codex' ? 'codex' : 'claude'
+          }.exe / .cmd on Windows).`,
+        };
+      }
+      setSetting(key, picked);
+      return { path: picked };
+    },
+  );
 
   ipcMain.handle(IpcChannel.AiCancel, async (_e, requestId: unknown): Promise<void> => {
     if (typeof requestId !== 'string') return;

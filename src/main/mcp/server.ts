@@ -44,7 +44,7 @@ export function hostAllowed(host: string | undefined, port: number): boolean {
   return h === `127.0.0.1:${port}` || h === `localhost:${port}`;
 }
 
-function send(
+export function send(
   res: ServerResponse,
   status: number,
   body?: unknown,
@@ -61,13 +61,13 @@ function send(
   res.end(text);
 }
 
-const header = (req: IncomingMessage, name: string): string | undefined => {
+export const header = (req: IncomingMessage, name: string): string | undefined => {
   const v = req.headers[name];
   return Array.isArray(v) ? v[0] : v;
 };
 
 /** The body as text, or the HTTP status to refuse it with. */
-function readBody(
+export function readBody(
   req: IncomingMessage,
 ): Promise<{ ok: true; text: string } | { ok: false; status: number }> {
   return new Promise((resolve) => {

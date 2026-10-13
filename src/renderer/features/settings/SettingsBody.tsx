@@ -11,13 +11,23 @@ import {
 import { SectionHeading } from '@/components/ui/view-parts';
 import { Segmented } from '@/components/ui/workbench';
 import { PgBinDirField } from '@/features/backup/PgBinDirField';
+import { ipc } from '@/lib/ipc';
 import { isMac } from '@/lib/platform';
 import { describeCheckedAt, describeUpdateStatus } from '@/lib/update-status';
 import { useUpdate } from '@/lib/use-update';
 import { SAFE_MODE_LABEL, SAFE_MODE_LEVELS } from '@/stores/safe-mode';
 import { useSession } from '@/stores/session';
 import { useSupportBundle } from '@/stores/support-bundle';
+import { openExternal } from '@/stores/update-toasts';
 import { ROW_LIMIT_CHOICES, useWorkbench } from '@/stores/workbench';
+import {
+  type AiCliProvider,
+  type AiCliStatus,
+  CLI_INSTALL_DOCS,
+  cliProviderName,
+  describeCliStatus,
+  isAiCliProvider,
+} from '@shared/ai-cli';
 import { cheatSheetSections, formatBinding, formatKeys } from '@shared/keymap';
 import { LINT_RULES, LINT_RULE_IDS } from '@shared/pg-migration-lint';
 import type { Settings } from '@shared/protocol';
@@ -752,29 +762,44 @@ function AiSection() {
   const settings = useSession((s) => s.settings);
   const clearAiApiKey = useSession((s) => s.clearAiApiKey);
   const updateSettings = useSession((s) => s.updateSettings);
+  const cli = isAiCliProvider(settings.aiProvider) ? settings.aiProvider : null;
   const local = settings.aiProvider === 'local';
   return (
     <Rows>
       <Row
         label="Provider"
+        htmlFor="ai-provider"
         hint={
-          local
-            ? 'A model on this machine: no key, no account, and no data leaves your computer.'
-            : 'OpenRouter reaches Claude, GPT, Gemini, Qwen and more with one key. Or run a model on this machine.'
+          cli ? (
+            <>
+              Uses the {cliProviderName(cli)} CLI on this computer and{' '}
+              {cli === 'codex' ? 'your ChatGPT plan' : 'your Claude plan'}. Plasma turns off its
+              shell, file and web tools; it can only use Plasma&apos;s tools. The schema and
+              row-data switches below apply as they do for OpenRouter.
+            </>
+          ) : local ? (
+            'A model on this machine: no key, no account, and no data leaves your computer.'
+          ) : (
+            'OpenRouter reaches Claude, GPT, Gemini, Qwen and more with one key. Or run a model on this machine, or use the Codex or Claude Code you already have.'
+          )
         }
       >
-        <Segmented<'openrouter' | 'local'>
-          ariaLabel="AI provider"
-          variant="track"
-          value={local ? 'local' : 'openrouter'}
-          onChange={(v) => void updateSettings({ aiProvider: v })}
+        <Choice
+          id="ai-provider"
+          value={settings.aiProvider}
+          onChange={(v) => void updateSettings({ aiProvider: v as Settings['aiProvider'] })}
           options={[
             { value: 'openrouter', label: 'OpenRouter' },
             { value: 'local', label: 'Local model' },
+            { value: 'codex', label: 'Codex' },
+            { value: 'claude-code', label: 'Claude Code' },
           ]}
+          width="w-[200px]"
         />
       </Row>
-      {local ? (
+      {cli ? (
+        <CliProviderRows provider={cli} />
+      ) : local ? (
         <>
           <Row
             label="Server URL"
@@ -875,6 +900,158 @@ function AiSection() {
         onChange={(v) => void updateSettings({ aiAutoApplyViews: v })}
       />
     </Rows>
+  );
+}
+
+/** Settings rows of a CLI provider: is it installed and signed in, its model, an optional path. */
+function CliProviderRows({ provider }: { provider: AiCliProvider }) {
+  const settings = useSession((s) => s.settings);
+  const updateSettings = useSession((s) => s.updateSettings);
+  const [status, setStatus] = useState<AiCliStatus | null>(null);
+  const [busy, setBusy] = useState(false);
+  const pathKey = provider === 'codex' ? 'aiCodexPath' : 'aiClaudeCodePath';
+  const path = settings[pathKey] ?? '';
+  const model = provider === 'codex' ? settings.aiCodexModel : settings.aiClaudeCodeModel;
+  const name = cliProviderName(provider);
+
+  const refresh = useCallback(async () => {
+    setBusy(true);
+    try {
+      setStatus(await ipc.ai.cliStatus({ provider }));
+    } catch {
+      setStatus({
+        provider,
+        installed: false,
+        signedIn: false,
+        error: `Could not check ${cliProviderName(provider)}.`,
+      });
+    } finally {
+      setBusy(false);
+    }
+  }, [provider]);
+
+  // Check when the section opens or the provider changes, and on Refresh: never per keystroke.
+  useEffect(() => {
+    setStatus(null);
+    void refresh();
+  }, [refresh]);
+
+  const [pathError, setPathError] = useState('');
+  const choose = async (reset: boolean) => {
+    setPathError('');
+    try {
+      const r = await ipc.ai.cliChoosePath({ provider, ...(reset ? { reset: true } : {}) });
+      if (r.error) setPathError(r.error);
+      useSession.setState((st) => ({ settings: { ...st.settings, [pathKey]: r.path } }));
+      if (r.path !== path) void refresh();
+    } catch {
+      setPathError('Could not choose the file.');
+    }
+  };
+
+  // Codex starts on its own default model: show its name instead of "default".
+  useEffect(() => {
+    if (provider !== 'codex' || model.trim() !== '' || !status?.signedIn) return;
+    let live = true;
+    void ipc.ai
+      .listModels()
+      .then((r) => {
+        const first = r.models[0]?.id;
+        if (live && first) void updateSettings({ aiCodexModel: first });
+      })
+      .catch(() => undefined);
+    return () => {
+      live = false;
+    };
+  }, [provider, model, status?.signedIn, updateSettings]);
+
+  const shown = describeCliStatus(status);
+  return (
+    <>
+      <Row label="Status">
+        <div className="flex min-h-[26px] flex-wrap items-center gap-2" data-testid="ai-cli-status">
+          <span
+            aria-hidden
+            className={
+              shown.tone === 'ok'
+                ? 'h-2 w-2 shrink-0 rounded-full bg-[var(--status-local)]'
+                : shown.tone === 'warn'
+                  ? 'h-2 w-2 shrink-0 rounded-full bg-[var(--status-warn)]'
+                  : 'h-2 w-2 shrink-0 rounded-full bg-[var(--wb-text-3)]'
+            }
+          />
+          <span className="text-[13px] text-[var(--wb-text)]">{shown.text}</span>
+          {status?.installed && status.version && (
+            <span className="text-[12px] text-[var(--wb-text-3)]">v{status.version}</span>
+          )}
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            onClick={() => void refresh()}
+            disabled={busy}
+          >
+            {busy ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <RotateCw className="h-3.5 w-3.5" />
+            )}
+            Refresh
+          </Button>
+          {status && !status.installed && (
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              onClick={() => openExternal(CLI_INSTALL_DOCS[provider])}
+            >
+              How to install {name}
+            </Button>
+          )}
+        </div>
+      </Row>
+      <Row
+        label="Model"
+        hint={
+          provider === 'codex' ? (
+            <>The models {name} offers for your plan. Type a name to use one that is not listed.</>
+          ) : (
+            <>
+              <code>sonnet</code>, <code>opus</code> or <code>haiku</code>, or a full model name.
+            </>
+          )
+        }
+      >
+        <ModelPicker variant="field" />
+      </Row>
+      <Row
+        label={`${name} program`}
+        hint={`Only if Plasma cannot find ${name} by itself. The file must be called ${
+          provider === 'codex' ? 'codex' : 'claude'
+        }. Without a choice Plasma looks on PATH and in the usual folders.`}
+      >
+        <div className="flex min-h-[26px] flex-wrap items-center gap-2">
+          <span
+            className="min-w-0 max-w-[360px] truncate font-mono text-[12px] text-[var(--wb-text-2)]"
+            title={path || undefined}
+            data-testid="ai-cli-path"
+          >
+            {path || 'Found automatically'}
+          </span>
+          <Button type="button" variant="secondary" size="sm" onClick={() => void choose(false)}>
+            Choose…
+          </Button>
+          {path && (
+            <Button type="button" variant="secondary" size="sm" onClick={() => void choose(true)}>
+              Reset
+            </Button>
+          )}
+        </div>
+        {pathError && (
+          <p className="mt-1 text-[12px] leading-snug text-[var(--status-warn)]">{pathError}</p>
+        )}
+      </Row>
+    </>
   );
 }
 

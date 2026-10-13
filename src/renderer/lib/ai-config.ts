@@ -1,3 +1,4 @@
+import { cliBadge, cliProviderName, isAiCliProvider } from '@shared/ai-cli';
 /**
  * Which AI provider is set up, what it is called, and what a chat sends.
  * Pure, so the wording the panel shows ("What is sent") is tested.
@@ -11,6 +12,8 @@ type ProviderSettings = Partial<
     | 'aiProvider'
     | 'aiLocalModel'
     | 'aiLocalUrl'
+    | 'aiCodexModel'
+    | 'aiClaudeCodeModel'
     | 'openrouterModel'
     | 'hasOpenrouterApiKey'
     | 'hasClaudeApiKey'
@@ -19,9 +22,19 @@ type ProviderSettings = Partial<
   >
 >;
 
-/** AI is ready to use: a key for OpenRouter, a model name for a local server. */
+/** The model chosen for Codex / Claude Code ('' = the CLI's own default). */
+export function cliModelOf(s: ProviderSettings): string {
+  return (s.aiProvider === 'codex' ? s.aiCodexModel : s.aiClaudeCodeModel)?.trim() ?? '';
+}
+
+/**
+ * AI is ready to use: a key for OpenRouter, a model name for a local server. A
+ * CLI provider needs no key: the program holds the sign-in, and a missing or
+ * signed-out program is reported plainly when a chat starts.
+ */
 export function aiConfigured(s: ProviderSettings | undefined): boolean {
   if (!s) return false;
+  if (isAiCliProvider(s.aiProvider)) return true;
   if (s.aiProvider === 'local') return Boolean(s.aiLocalModel?.trim());
   return Boolean(
     s.hasOpenrouterApiKey || s.hasClaudeApiKey || s.openrouterApiKey || s.claudeApiKey,
@@ -30,6 +43,8 @@ export function aiConfigured(s: ProviderSettings | undefined): boolean {
 
 /** What is missing, for notices and rejected requests. */
 export function aiSetupHint(s: ProviderSettings | undefined): string {
+  const provider = s?.aiProvider;
+  if (isAiCliProvider(provider)) return `Check ${cliProviderName(provider)} in Settings, AI.`;
   return s?.aiProvider === 'local'
     ? 'Choose a local model in Settings, AI.'
     : 'Add an OpenRouter key in Settings, AI.';
@@ -60,12 +75,18 @@ export function modelLabel(model: string): string {
 
 /** Header badge: "Anthropic · claude-sonnet-4.5" or "Local · llama3.1". */
 export function aiBadgeLabel(s: ProviderSettings): string {
+  if (isAiCliProvider(s.aiProvider)) return cliBadge(s.aiProvider, cliModelOf(s));
   if (s.aiProvider === 'local') return `Local · ${s.aiLocalModel?.trim() || 'no model set'}`;
   return modelLabel(s.openrouterModel ?? '');
 }
 
 /** Tooltip for the badge: where requests go. */
 export function aiBadgeTitle(s: ProviderSettings): string {
+  if (isAiCliProvider(s.aiProvider)) {
+    return `${cliModelOf(s) || 'The default model'} through the ${cliProviderName(s.aiProvider)} program on this computer, under your own ${
+      s.aiProvider === 'codex' ? 'ChatGPT' : 'Claude'
+    } account`;
+  }
   return s.aiProvider === 'local'
     ? `${s.aiLocalModel?.trim() || 'No model'} on this machine (${s.aiLocalUrl ?? ''}). Nothing leaves your computer.`
     : `${s.openrouterModel} via OpenRouter (your API key)`;
@@ -73,6 +94,7 @@ export function aiBadgeTitle(s: ProviderSettings): string {
 
 /** "OpenRouter · anthropic/claude-sonnet-4.5" or "Local · llama3.1". */
 function providerLine(s: ProviderSettings): string {
+  if (isAiCliProvider(s.aiProvider)) return cliBadge(s.aiProvider, cliModelOf(s));
   return s.aiProvider === 'local'
     ? `Local · ${s.aiLocalModel?.trim() || 'no model set'}`
     : `OpenRouter · ${s.openrouterModel ?? ''}`;

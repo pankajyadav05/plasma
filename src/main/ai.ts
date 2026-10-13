@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { normalizeAction } from '@shared/agent-actions';
 import { buildAgentSystemPrompt } from '@shared/agent-prompt';
+import { isAiCliProvider } from '@shared/ai-cli';
 import { type AiContent, capHistoryImages, contentText, countImages } from '@shared/ai-images';
 import { memoryActionResult } from '@shared/ai-memory';
 import { taskMaxTokens, taskSystemPrompt } from '@shared/ai-tasks';
@@ -15,6 +16,7 @@ import {
 import { compactSchema } from '@shared/schema-compact';
 import { isSqlEngine } from '@shared/sql-dialect';
 import type { BrowserWindow } from 'electron';
+import { type CliChatDeps, runCliChat } from './ai-cli/run';
 import type { MemoryToolHooks } from './ai-memory';
 import { buildOpenRouterBody } from './ai-policy';
 import { logger } from './logger';
@@ -181,8 +183,15 @@ export function submitAiActionResult(raw: unknown): boolean {
 }
 
 export type AiChatOptions = {
-  /** Where the request goes. Default: OpenRouter. `local` needs no API key. */
-  provider?: 'openrouter' | 'local';
+  /**
+   * Where the request goes. Default: OpenRouter. `local` needs no API key;
+   * `codex` / `claude-code` drive the user's own installed CLI (their plan, no key).
+   */
+  provider?: 'openrouter' | 'local' | 'codex' | 'claude-code';
+  /** Provider `codex` / `claude-code`: the model, the program path override and where Plasma keeps its files. */
+  cli?: { model: string; binaryOverride: string; userData: string; appVersion: string };
+  /** Test seam for the CLI runner. */
+  cliDeps?: CliChatDeps;
   /** Base URL of the local server (provider `local`). */
   localUrl?: string;
   /** Model name on the local server (provider `local`); required. */
@@ -492,7 +501,10 @@ export async function startAiChat(
   defaultModel: string,
   options: AiChatOptions = {},
 ): Promise<{ accepted: boolean; reason?: string }> {
-  if (options.provider === 'local') {
+  const viaCli = isAiCliProvider(options.provider);
+  if (viaCli) {
+    if (!options.cli) return { accepted: false, reason: 'The CLI provider is not set up.' };
+  } else if (options.provider === 'local') {
     const local = resolveLocalAiEndpoint(options.localUrl);
     if (!local.ok) return { accepted: false, reason: local.error };
     if (!options.localModel?.trim()) {
@@ -521,7 +533,8 @@ export async function startAiChat(
 
   // Fire the SSE pump asynchronously — caller awaits the queueing only,
   // not the full completion.
-  void pump(win, req, apiKey, defaultModel, controller, options);
+  if (viaCli) void pumpCli(win, req, controller, options);
+  else void pump(win, req, apiKey, defaultModel, controller, options);
   return { accepted: true };
 }
 
@@ -566,40 +579,8 @@ async function pump(
       }
     | { role: 'tool'; tool_call_id: string; content: string };
 
-  const engine = req.engine ?? 'postgres';
-  const allowSchema = options.allowSchema === true;
+  const { task, readMemory, build, tools, maxRounds } = prepareChat(req, options);
   const local = options.provider === 'local';
-  // One-shot tasks (Fix with AI, Explain plan, NL filter) are Postgres-only,
-  // use their own system prompt and never get row-data tools.
-  const task = engine === 'postgres' ? req.task : undefined;
-  // U06: only offer row-data tools when the active connection opted in.
-  const allowRowData = options.allowRowData === true && !task;
-  // Agent actions are offered on SQL engines whatever the row-data opt-in
-  // says: they put the user's click between the model and every effect, and
-  // what they send back is gated separately (`shapeActionResult`).
-  const agentMode = req.agent === true && !task && isSqlEngine(engine);
-  const readMemory = (): MemorySection | null =>
-    typeof options.memory === 'function' ? options.memory() : (options.memory ?? null);
-  const build = (mem: string | undefined): InternalMsg[] =>
-    task
-      ? buildTaskMessages(task, req.messages, allowSchema ? req.schema : null, mem)
-      : agentMode
-        ? buildAgentMessages(
-            req.messages,
-            engine,
-            allowSchema ? req.schema : null,
-            allowSchema ? req.context : undefined,
-            allowRowData,
-            mem,
-            options.memoryTools !== undefined,
-          )
-        : buildMessages(
-            req.messages,
-            engine,
-            allowSchema ? req.schema : null,
-            allowSchema ? req.engineContext : undefined,
-            mem,
-          );
   let memoryText = readMemory()?.text;
   const messages: InternalMsg[] = build(memoryText);
   const sentImages = !task && req.messages.some((m) => countImages(m.content) > 0);
@@ -608,11 +589,6 @@ async function pump(
     : req.model?.trim()
       ? req.model
       : defaultModel;
-  const tools: readonly unknown[] = [
-    ...(agentMode ? TOOLS_AGENT : []),
-    ...(agentMode && options.memoryTools ? TOOLS_MEMORY : []),
-    ...(allowRowData ? toolsForEngine(engine) : []),
-  ];
   const fetchImpl = options.fetchImpl ?? fetch;
   const endpoint = local
     ? (() => {
@@ -620,7 +596,6 @@ async function pump(
         return r.ok ? r.endpoint : ENDPOINT;
       })()
     : ENDPOINT;
-  const maxRounds = agentMode ? MAX_AGENT_TOOL_ROUNDS : MAX_TOOL_ROUNDS;
 
   try {
     for (let round = 0; round <= maxRounds; round++) {
@@ -788,37 +763,16 @@ async function pump(
       for (const call of calls) {
         // SC-05: Stop must also stop tool calls that are still queued.
         if (controller.signal.aborted) return;
-        let parsedArgs: Record<string, unknown>;
-        try {
-          parsedArgs = JSON.parse(call.arguments || '{}');
-        } catch {
-          parsedArgs = {};
-        }
-        let result: string;
-        try {
-          if (ACTION_TOOL_NAMES.has(call.name)) {
-            result = await runAgentAction({
-              send,
-              req,
-              call,
-              args: parsedArgs,
-              options,
-              signal: controller.signal,
-              windowGone: () => win.isDestroyed(),
-            });
-          } else {
-            const refusal = options.toolGuard?.() ?? null;
-            result = refusal
-              ? JSON.stringify({ error: `rejected: ${refusal}` })
-              : toolExecutor
-                ? await toolExecutor(call.name, parsedArgs)
-                : JSON.stringify({ error: 'tools are not available' });
-          }
-        } catch (err) {
-          result = JSON.stringify({
-            error: err instanceof Error ? err.message : String(err),
-          });
-        }
+        const result = await executeToolCall(
+          { id: call.id, name: call.name, arguments: call.arguments },
+          {
+            send,
+            req,
+            options,
+            signal: controller.signal,
+            windowGone: () => win.isDestroyed(),
+          },
+        );
         if (controller.signal.aborted) return;
         messages.push({ role: 'tool', tool_call_id: call.id, content: result });
       }
@@ -840,6 +794,157 @@ async function pump(
     // Only drop our own controller: a retry may have registered a new one.
     if (inflight.get(req.requestId) === controller) inflight.delete(req.requestId);
     cancelPendingActions(req.requestId);
+  }
+}
+
+/**
+ * A chat through the user's Codex or Claude Code. The prompt, the offered tools
+ * and every tool call are the same ones `pump` uses (`prepareChat`,
+ * `executeToolCall`); only the transport differs.
+ */
+async function pumpCli(
+  win: BrowserWindow,
+  req: AiChatRequest,
+  controller: AbortController,
+  options: AiChatOptions,
+): Promise<void> {
+  const send = (evt: AiChatEvent) => {
+    if (!win.isDestroyed()) win.webContents.send('plasma:ai:event', evt);
+  };
+  try {
+    const cli = options.cli;
+    if (!cli || !isAiCliProvider(options.provider)) return;
+    const { readMemory, build, tools, maxRounds } = prepareChat(req, options);
+    const messages = build(readMemory()?.text);
+    const first = messages[0];
+    const system = first?.role === 'system' ? first.content : '';
+    await runCliChat(
+      {
+        provider: options.provider,
+        requestId: req.requestId,
+        send,
+        model: cli.model.trim(),
+        binaryOverride: cli.binaryOverride,
+        userData: cli.userData,
+        appVersion: cli.appVersion,
+        system,
+        history: messages,
+        tools,
+        maxRounds,
+        executeCall: (call, signal) =>
+          executeToolCall(call, {
+            send,
+            req,
+            options,
+            signal,
+            windowGone: () => win.isDestroyed(),
+          }),
+        signal: controller.signal,
+      },
+      options.cliDeps,
+    );
+  } catch (err) {
+    if (!controller.signal.aborted) {
+      send({
+        kind: 'error',
+        requestId: req.requestId,
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+  } finally {
+    if (inflight.get(req.requestId) === controller) inflight.delete(req.requestId);
+    cancelPendingActions(req.requestId);
+  }
+}
+
+/** What a chat request turns into: mode, offered tools and a builder for the prompt messages. */
+function prepareChat(req: AiChatRequest, options: AiChatOptions) {
+  const engine = req.engine ?? 'postgres';
+  const allowSchema = options.allowSchema === true;
+  // One-shot tasks (Fix with AI, Explain plan, NL filter) are Postgres-only,
+  // use their own system prompt and never get row-data tools.
+  const task = engine === 'postgres' ? req.task : undefined;
+  // U06: only offer row-data tools when the active connection opted in.
+  const allowRowData = options.allowRowData === true && !task;
+  // Agent actions are offered on SQL engines whatever the row-data opt-in
+  // says: they put the user's click between the model and every effect, and
+  // what they send back is gated separately (`shapeActionResult`).
+  const agentMode = req.agent === true && !task && isSqlEngine(engine);
+  const readMemory = (): MemorySection | null =>
+    typeof options.memory === 'function' ? options.memory() : (options.memory ?? null);
+  const build = (mem: string | undefined): ChatMsg[] =>
+    task
+      ? buildTaskMessages(task, req.messages, allowSchema ? req.schema : null, mem)
+      : agentMode
+        ? buildAgentMessages(
+            req.messages,
+            engine,
+            allowSchema ? req.schema : null,
+            allowSchema ? req.context : undefined,
+            allowRowData,
+            mem,
+            options.memoryTools !== undefined,
+          )
+        : buildMessages(
+            req.messages,
+            engine,
+            allowSchema ? req.schema : null,
+            allowSchema ? req.engineContext : undefined,
+            mem,
+          );
+  const tools: readonly unknown[] = [
+    ...(agentMode ? TOOLS_AGENT : []),
+    ...(agentMode && options.memoryTools ? TOOLS_MEMORY : []),
+    ...(allowRowData ? toolsForEngine(engine) : []),
+  ];
+  const maxRounds = agentMode ? MAX_AGENT_TOOL_ROUNDS : MAX_TOOL_ROUNDS;
+  return { engine, task, allowRowData, agentMode, readMemory, build, tools, maxRounds };
+}
+
+export type ToolCallContext = {
+  send: (evt: AiChatEvent) => void;
+  req: AiChatRequest;
+  options: AiChatOptions;
+  signal: AbortSignal;
+  windowGone: () => boolean;
+};
+
+/**
+ * One tool call of the model, whichever provider carried it (the OpenAI-style
+ * pump or a CLI's MCP endpoint): agent actions go to the user as cards, the
+ * rest runs through the tool executor behind `toolGuard`. Always returns the
+ * text the model sees; never throws.
+ */
+export async function executeToolCall(
+  call: { id: string; name: string; arguments: string },
+  ctx: ToolCallContext,
+): Promise<string> {
+  let parsedArgs: Record<string, unknown>;
+  try {
+    parsedArgs = JSON.parse(call.arguments || '{}');
+  } catch {
+    parsedArgs = {};
+  }
+  try {
+    if (ACTION_TOOL_NAMES.has(call.name)) {
+      return await runAgentAction({
+        send: ctx.send,
+        req: ctx.req,
+        call,
+        args: parsedArgs,
+        options: ctx.options,
+        signal: ctx.signal,
+        windowGone: ctx.windowGone,
+      });
+    }
+    const refusal = ctx.options.toolGuard?.() ?? null;
+    return refusal
+      ? JSON.stringify({ error: `rejected: ${refusal}` })
+      : toolExecutor
+        ? await toolExecutor(call.name, parsedArgs)
+        : JSON.stringify({ error: 'tools are not available' });
+  } catch (err) {
+    return JSON.stringify({ error: err instanceof Error ? err.message : String(err) });
   }
 }
 
