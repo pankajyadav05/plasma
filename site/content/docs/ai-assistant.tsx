@@ -10,7 +10,7 @@ export const aiAssistant: DocPage = {
   title: 'AI assistant',
   group: 'AI',
   summary:
-    'An optional assistant that works on your workbench through approval cards. It uses your own OpenRouter key or a model on your machine, and this page says exactly what is sent, and when.',
+    'An optional assistant that works on your workbench through approval cards. It uses your own OpenRouter key, a model on your machine, or your Codex or Claude Code plan, and this page says exactly what is sent, and when.',
   sections: [
     {
       id: 'overview',
@@ -25,7 +25,8 @@ export const aiAssistant: DocPage = {
           </P>
           <Callout kind="warning" title="Your data goes to the provider you choose">
             Prompts, and the context listed under <Doc to="ai-assistant#what-is-sent">What is sent</Doc>, are sent to OpenRouter
-            (and from there to the model&rsquo;s vendor) or to the local server you name. Plasma does not claim otherwise. The
+            (and from there to the model&rsquo;s vendor), to OpenAI or Anthropic through the Codex or Claude Code program you
+            installed, or to the local server you name. Plasma does not claim otherwise. The
             only way to keep everything on your machine is the local provider, and even then the data goes to whatever server you
             run at that address.
           </Callout>
@@ -61,6 +62,26 @@ export const aiAssistant: DocPage = {
                 </>,
                 'Only localhost addresses are accepted. No key, no account.',
               ],
+              [
+                'Codex',
+                <>
+                  Nothing, if <C>codex</C>{' '}is installed and signed in. Optionally its path and a <UI>Model</UI>.
+                </>,
+                <>
+                  OpenAI, through the Codex program on this computer, under your ChatGPT plan. See{' '}
+                  <Doc to="ai-assistant#cli-providers">Your Codex or Claude Code plan</Doc>.
+                </>,
+              ],
+              [
+                'Claude Code',
+                <>
+                  Nothing, if <C>claude</C>{' '}is installed and signed in. Optionally its path and a <UI>Model</UI>{' '}(<C>sonnet</C>,{' '}
+                  <C>opus</C>{' '}or <C>haiku</C>).
+                </>,
+                <>
+                  Anthropic, through the Claude Code program on this computer, under your Claude plan.
+                </>,
+              ],
             ]}
           />
           <UL>
@@ -83,8 +104,54 @@ export const aiAssistant: DocPage = {
           </UL>
           <P>
             Until a provider is ready the panel says <UI>No API key</UI>{' '}(or <UI>No local model</UI>) and offers <UI>Open
-            Settings</UI>.
+            Settings</UI>. Codex and Claude Code need no key: if the program is missing or signed out, the chat says so when you send
+            a message.
           </P>
+        </>
+      ),
+    },
+    {
+      id: 'cli-providers',
+      title: 'Your Codex or Claude Code plan',
+      body: (
+        <>
+          <P>
+            If you already have <B>Codex</B>{' '}(a ChatGPT plan) or <B>Claude Code</B>{' '}(a Claude plan) installed and signed in, Plasma
+            can drive that program instead of using an API key. Choose <UI>Codex</UI>{' '}or <UI>Claude Code</UI>{' '}as the{' '}
+            <UI>Provider</UI>. Plasma finds the program on your PATH, in your login shell&rsquo;s PATH and in the usual install folders;
+            you can also type its path. The row under the provider shows whether it is installed, its version and whether you are
+            signed in (with the plan name, never your e-mail address). <UI>Refresh</UI>{' '}checks again.
+          </P>
+          <UL>
+            <LI>
+              <B>Sign-in stays with the program.</B>{' '}Plasma never sees or stores your ChatGPT or Claude credentials. If you are not
+              signed in, run <C>codex login</C>{' '}or <C>claude</C>{' '}in a terminal.
+            </LI>
+            <LI>
+              <B>Where the data goes.</B>{' '}The same items listed under <Doc to="ai-assistant#what-is-sent">What is sent</Doc>{' '}go to
+              OpenAI (Codex) or Anthropic (Claude Code) through the program, under your own account and your plan&rsquo;s limits and
+              terms. The schema and row-data switches apply exactly as they do for OpenRouter. When a plan limit is reached, the panel
+              says so, with the reset time when the program reports one.
+            </LI>
+            <LI>
+              <B>What is turned off.</B>{' '}Plasma starts the program with its shell, file, browser, web search, plugin, hook and
+              sub-agent tools switched off and runs it in an empty folder that Plasma owns. For Claude Code that is every built-in tool,
+              and it reads no settings, <C>CLAUDE.md</C>{' '}or memory from disk. For Codex the sandbox is read-only and nothing is
+              approved except calls to Plasma&rsquo;s own tools; Codex keeps a small code tool because this version of Codex reaches any
+              MCP tool through it, and in our check, asking it to read a file failed. The only tools the model has are the ones Plasma
+              offers in the chat, and each one goes through the same guards and approval cards as with OpenRouter.
+            </LI>
+            <LI>
+              <B>No session is kept.</B>{' '}Every message starts a new run: Plasma sends the conversation so far, as a short transcript,
+              with your latest message and asks the program not to save the conversation. What the program records beyond that, such as
+              usage in your account, is up to OpenAI or Anthropic. The tools run in a loopback server that is open only while a chat
+              runs, with a random key for that chat; it is separate from the <Doc to="mcp-server">MCP server</Doc>{' '}you may enable.
+            </LI>
+            <LI>
+              <B>Stop</B>{' '}ends the run and the program&rsquo;s process. The program is also stopped when you close the window or quit,
+              and after ten minutes in total.
+            </LI>
+          </UL>
         </>
       ),
     },
