@@ -52,6 +52,8 @@ export const AiModelSchema = z.object({
   expires: z.number().nullable(),
   /** Codex / Claude Code lists only: other names the model answers to ("sonnet"). */
   aliases: z.array(z.string()).optional(),
+  /** Short chip name, when the derived one ("Claude Haiku 5.5" -> "Haiku 5.5") is not right. */
+  shortName: z.string().optional(),
   /** The CLI's (or Plasma's list's) default model. */
   isDefault: z.boolean().optional(),
   /** Older model, shown under "Older models". */

@@ -19,7 +19,7 @@ import {
   stubModel,
   vendorMonogram,
 } from '@shared/ai-models';
-import { findCliModel } from '@shared/cli-models';
+import { findCliModel, shortModelName } from '@shared/cli-models';
 import {
   AlertTriangle,
   Boxes,
@@ -232,7 +232,10 @@ export function ModelPicker({
   open: openProp,
   onOpenChange,
   imagesAttached = false,
+  dense: denseProp = false,
 }: {
+  /** Composer chip in a tight panel: no logo or chevron, so the name stays whole. */
+  dense?: boolean;
   /** `composer`: a quiet chip under the chat input. `field`: a full-width settings field. */
   variant?: 'composer' | 'field';
   className?: string;
@@ -254,6 +257,8 @@ export function ModelPicker({
   // A CLI provider lists its own models like a local server does: one flat list, no stars.
   const cli = isAiCliProvider(provider) ? provider : null;
   const local = provider === 'local' || cli !== null;
+  // Only a CLI chip has a short name; the others keep their logo and chevron.
+  const dense = denseProp && cli !== null;
   const currentId = (cli ? cliModel : provider === 'local' ? localModel : orModel)?.trim() ?? '';
   const [openState, setOpenState] = useState(false);
   const open = openProp ?? openState;
@@ -314,14 +319,15 @@ export function ModelPicker({
               'hover:bg-[var(--wb-control-hover)] hover:text-[var(--wb-text)]',
               'data-[state=open]:bg-[var(--wb-control)] data-[state=open]:text-[var(--wb-text)]',
               'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+              dense && 'px-1.5',
               className,
             )}
           >
-            <VendorMark vendor={vendorKey} name={markName} modelName={current?.name} />
+            {!dense && <VendorMark vendor={vendorKey} name={markName} modelName={current?.name} />}
             <span className="truncate" title={label}>
-              {cli && current ? current.name : label}
+              {cli && current ? shortModelName(current) : label}
             </span>
-            <ChevronDown className="h-3 w-3 shrink-0 opacity-70" />
+            {!dense && <ChevronDown className="h-3 w-3 shrink-0 opacity-70" />}
           </button>
         ) : (
           <button
@@ -356,7 +362,17 @@ export function ModelPicker({
           e.preventDefault();
           (e.currentTarget as HTMLElement).querySelector('input')?.focus();
         }}
-        className="flex h-[min(440px,var(--radix-popover-content-available-height))] w-[min(560px,calc(100vw-24px))] overflow-hidden p-0"
+        data-testid="ai-model-popover"
+        className={cn(
+          'flex overflow-hidden p-0',
+          // A CLI provider lists a few models and a local server a handful: the panel fits its
+          // list (up to a cap, then it scrolls). OpenRouter keeps its tall panel with the rail.
+          cli
+            ? 'max-h-[min(344px,var(--radix-popover-content-available-height))] w-[min(320px,calc(100vw-24px))]'
+            : local
+              ? 'max-h-[min(400px,var(--radix-popover-content-available-height))] w-[min(400px,calc(100vw-24px))]'
+              : 'h-[min(440px,var(--radix-popover-content-available-height))] w-[min(560px,calc(100vw-24px))]',
+        )}
       >
         <PickerBody
           models={models}
@@ -373,6 +389,7 @@ export function ModelPicker({
           onToggleFavorite={toggleFavorite}
           onRefresh={() => void refresh()}
           imagesAttached={imagesAttached && !local}
+          compact={cli !== null}
         />
       </PopoverContent>
     </Popover>
@@ -400,6 +417,8 @@ type BodyProps = {
   onToggleFavorite: (id: string) => void;
   onRefresh: () => void;
   imagesAttached: boolean;
+  /** Codex / Claude Code: tight rows and a slim footer. */
+  compact?: boolean;
 };
 
 function PickerBody(props: BodyProps) {
@@ -549,7 +568,12 @@ function PickerBody(props: BodyProps) {
         />
       )}
       <div className="flex min-w-0 flex-1 flex-col">
-        <div className="shrink-0 border-b border-[var(--wb-separator)] p-2">
+        <div
+          className={cn(
+            'shrink-0 border-b border-[var(--wb-separator)]',
+            props.compact ? 'p-1.5' : 'p-2',
+          )}
+        >
           <div className="flex items-center gap-1.5">
             <div className="relative min-w-0 flex-1">
               <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--wb-text-3)]" />
@@ -617,10 +641,13 @@ function PickerBody(props: BodyProps) {
           role="listbox"
           tabIndex={-1}
           aria-label="Models"
-          className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-1.5"
+          className={cn(
+            'min-h-0 flex-1 overflow-y-auto overscroll-contain',
+            props.compact ? 'p-1' : 'p-1.5',
+          )}
         >
           {loading && models.length === 0 && !result?.error ? (
-            <Skeleton />
+            <Skeleton compact={props.compact === true} />
           ) : (
             <>
               {items.map((item) =>
@@ -646,6 +673,7 @@ function PickerBody(props: BodyProps) {
                     favorite={item.kind === 'model' && favorites.includes(item.model.id)}
                     canFavorite={!local}
                     cli={props.cliList !== null}
+                    compact={props.compact === true}
                     now={now}
                     onHover={() => setHiKey(item.key)}
                     onActivate={() => activate(item)}
@@ -678,6 +706,7 @@ function PickerBody(props: BodyProps) {
           cliName={props.cliName}
           onRefresh={props.onRefresh}
           now={now}
+          compact={props.compact === true}
         />
       </div>
     </div>
@@ -795,6 +824,7 @@ function Row({
   favorite,
   canFavorite,
   cli,
+  compact,
   now,
   onHover,
   onActivate,
@@ -809,6 +839,7 @@ function Row({
   canFavorite: boolean;
   /** Codex / Claude Code row: name, then the model id in mono. */
   cli: boolean;
+  compact: boolean;
   now: number;
   onHover: () => void;
   onActivate: () => void;
@@ -858,7 +889,7 @@ function Row({
         aria-disabled
         tabIndex={-1}
         data-testid="ai-model-update-required"
-        className="flex h-11 w-full cursor-default items-center gap-2 rounded-[6px] px-2 opacity-60"
+        className="flex h-9 w-full cursor-default items-center gap-2 rounded-[6px] px-2 opacity-60"
       >
         <span className="w-3.5 shrink-0" />
         <div className="min-w-0 flex-1">
@@ -916,7 +947,7 @@ function Row({
       tabIndex={-1}
       onMouseMove={onHover}
       onClick={onActivate}
-      className={cn(shell, 'h-11')}
+      className={cn(shell, compact ? 'h-9' : 'h-11')}
     >
       <span className="grid w-3.5 shrink-0 place-items-center">
         {current && (
@@ -1018,11 +1049,11 @@ function Row({
   );
 }
 
-function Skeleton() {
+function Skeleton({ compact }: { compact: boolean }) {
   return (
     <div aria-hidden className="flex flex-col">
-      {[62, 48, 70, 54, 66, 44].map((w) => (
-        <div key={w} className="flex h-11 items-center gap-2 px-2">
+      {(compact ? [62, 48, 70] : [62, 48, 70, 54, 66, 44]).map((w) => (
+        <div key={w} className={cn('flex items-center gap-2 px-2', compact ? 'h-9' : 'h-11')}>
           <span className="w-3.5 shrink-0" />
           <div className="flex flex-1 flex-col gap-1.5">
             <span
@@ -1087,7 +1118,9 @@ function Footer({
   cliName,
   onRefresh,
   now,
+  compact,
 }: {
+  compact: boolean;
   cliName: string | null;
   result: AiModelsResult | null;
   loading: boolean;
@@ -1127,7 +1160,12 @@ function Footer({
     text = loading ? 'Loading models…' : 'OpenRouter';
   }
   return (
-    <div className="flex h-8 shrink-0 items-center gap-2 border-t border-[var(--wb-separator)] px-3 text-[11px] text-[var(--wb-text-3)]">
+    <div
+      className={cn(
+        'flex shrink-0 items-center gap-2 border-t border-[var(--wb-separator)] text-[11px] text-[var(--wb-text-3)]',
+        compact ? 'h-7 px-2.5' : 'h-8 px-3',
+      )}
+    >
       <div className="min-w-0 flex-1 truncate" title={result?.error}>
         {text}
       </div>
