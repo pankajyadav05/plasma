@@ -1,10 +1,17 @@
 import { execFile } from 'node:child_process';
+import { readFile, stat } from 'node:fs/promises';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import type { AiCliProvider, AiCliStatus } from '@shared/ai-cli';
 import { cliPlanLabel, cliProviderName } from '@shared/ai-cli';
-import type { AiModel, AiModelsResult } from '@shared/ai-models';
-import { cliEnv, spawnCli } from './proc';
+import type { AiModelsResult } from '@shared/ai-models';
+import { redactCliMessage } from './claude';
+import { buildCodexModels, claudeModelsForVersion } from './cli-models';
+import { type ManifestStore, manifestStore } from './model-manifest';
+import { type CliExit, cliEnv, codexEnv, spawnCli } from './proc';
 import { type CliName, type ResolveDeps, defaultResolveDeps, resolveBinary } from './resolve';
 import { launchSpec } from './resolve';
+import { ensureShellEnv } from './shell-env';
 
 /**
  * Is the CLI installed, which version, is the user signed in, and the models it
@@ -37,10 +44,17 @@ export function parseClaudeAuth(text: string): { signedIn: boolean; plan?: strin
   }
 }
 
-/** Codex `account/read` result. */
+/**
+ * Codex `account/read` result. Signed out ONLY when it says so: no account and
+ * the server asks for an OpenAI login. No account and no login required is a
+ * custom provider (nothing to sign in to).
+ */
 export function parseCodexAccount(result: unknown): { signedIn: boolean; plan?: string } {
-  const account = (result as { account?: unknown } | null)?.account;
-  if (!account || typeof account !== 'object') return { signedIn: false };
+  const r = result as { account?: unknown; requiresOpenaiAuth?: unknown } | null;
+  const account = r?.account;
+  if (!account || typeof account !== 'object') {
+    return { signedIn: !!r && r.requiresOpenaiAuth === false };
+  }
   const a = account as { type?: unknown; planType?: unknown };
   if (a.type === 'chatgpt') {
     return {
@@ -55,36 +69,118 @@ export function parseCodexAccount(result: unknown): { signedIn: boolean; plan?: 
   return { signedIn: true };
 }
 
-function run(
-  file: string,
-  args: string[],
-  timeoutMs: number,
-): Promise<{ ok: boolean; stdout: string }> {
+/** `initialize` answers `userAgent: "codex_cli_rs/0.162.1 (Mac OS ...)"`: the version after the slash. */
+export function versionFromUserAgent(userAgent: unknown): string | undefined {
+  if (typeof userAgent !== 'string') return undefined;
+  const v = /\/([^\s]+)/.exec(userAgent)?.[1];
+  return v && /^\d+\.\d+/.test(v) ? v : undefined;
+}
+
+/**
+ * Why a program did not answer, in a few redacted words: the spawn error, the
+ * `env: node: No such file or directory` of an npm script without node, or the
+ * exit code and the last line of stderr.
+ */
+export function failureReason(
+  exit: Pick<CliExit, 'code' | 'signal' | 'stderrTail' | 'spawnError' | 'timedOut'> | null,
+): string {
+  if (!exit) return 'no answer';
+  if (exit.spawnError) {
+    return exit.spawnError === 'ENOENT'
+      ? 'the program was not found (ENOENT)'
+      : `could not start (${exit.spawnError})`;
+  }
+  if (exit.timedOut) return 'no answer in time';
+  const lines = redactCliMessage(exit.stderrTail)
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+  const envLine = lines.find((l) => /^env: .*No such file or directory/i.test(l));
+  if (envLine) return envLine;
+  const last = lines.at(-1)?.slice(0, 160);
+  const how = exit.signal ? `stopped by ${exit.signal}` : `exited with code ${exit.code ?? '?'}`;
+  return last ? `${how}: ${last}` : how;
+}
+
+type RunResult = {
+  ok: boolean;
+  stdout: string;
+  stderr: string;
+  code: unknown;
+  /** The program was stopped for taking too long. */
+  timedOut: boolean;
+};
+
+function run(file: string, args: string[], timeoutMs: number): Promise<RunResult> {
   const spec = launchSpec(file, args);
   return new Promise((resolve) => {
     execFile(
       spec.command,
       spec.args,
       { timeout: timeoutMs, windowsHide: true, maxBuffer: 256 * 1024, env: cliEnv() },
-      (err, stdout) => resolve({ ok: !err, stdout: String(stdout) }),
+      (err, stdout, stderr) =>
+        resolve({
+          ok: !err,
+          stdout: String(stdout),
+          stderr: String(stderr),
+          code: (err as NodeJS.ErrnoException | null)?.code,
+          timedOut: Boolean((err as { killed?: boolean } | null)?.killed),
+        }),
     );
   });
 }
 
-/** Ask a Codex app-server a few things and stop it. Null when it could not answer. */
-export async function codexQuery(
+/** Why `run` failed: spawn error or exit code, plus an `env: node:` style line. */
+function runFailure(r: RunResult): string {
+  return failureReason({
+    code: typeof r.code === 'number' ? r.code : null,
+    signal: null,
+    stderrTail: r.stderr,
+    spawnError: typeof r.code === 'string' ? r.code : undefined,
+    timedOut: r.timedOut,
+  });
+}
+
+export type CodexAnswer =
+  | {
+      ok: true;
+      userAgent?: string;
+      /** One entry per asked method, in order: its result, or null when that method errored. */
+      results: Array<unknown | null>;
+      /** The error text of each method that errored (same order, '' when none). */
+      errors: string[];
+    }
+  | { ok: false; reason: string };
+
+export interface CodexConn {
+  ask(method: string, params: unknown): Promise<{ result: unknown } | { error: string }>;
+  userAgent?: string;
+  /** `initialize`'s codexHome, when Codex says. */
+  codexHome?: string;
+  /** Epoch ms just before the program was started. */
+  spawnedAtMs: number;
+}
+
+export type CodexSession<T> =
+  | { ok: true; value: T; userAgent?: string }
+  | { ok: false; reason: string };
+
+/** Start `codex app-server`, initialize, run `fn`, stop it. `ok: false` says why it could not answer. */
+export async function codexSession<T>(
   file: string,
   cwd: string,
-  methods: Array<[string, unknown]>,
+  fn: (conn: CodexConn) => Promise<T>,
   timeoutMs = 15_000,
-): Promise<unknown[] | null> {
+): Promise<CodexSession<T>> {
+  await ensureShellEnv();
   const spec = launchSpec(file, ['app-server']);
   const ctl = new AbortController();
   const pending = new Map<number, (m: Record<string, unknown>) => void>();
+  const spawnedAtMs = Date.now();
   const proc = spawnCli({
     command: spec.command,
     args: spec.args,
-    env: cliEnv(),
+    env: codexEnv(),
     cwd,
     signal: ctl.signal,
     timeoutMs,
@@ -97,89 +193,152 @@ export async function codexQuery(
       }
     },
   });
-  const ask = (id: number, method: string, params: unknown) =>
+  let nextId = 0;
+  const raw = (method: string, params: unknown) =>
     new Promise<Record<string, unknown>>((resolve) => {
+      const id = ++nextId;
       pending.set(id, resolve);
       proc.write({ id, method, params });
     });
+  let exited: CliExit | null = null;
+  const gone = proc.done.then((x) => {
+    exited = x;
+    return null;
+  });
   const give = new Promise<null>((r) => {
     const t = setTimeout(() => r(null), timeoutMs);
     t.unref?.();
-    void proc.done.then(() => r(null));
   });
   try {
     const out = await Promise.race([
-      (async () => {
-        const init = await ask(1, 'initialize', {
+      (async (): Promise<CodexSession<T> | null> => {
+        const init = await raw('initialize', {
           clientInfo: { name: 'plasma', title: 'Plasma', version: '0' },
           capabilities: null,
         });
-        if (init.error) return null;
-        proc.write({ method: 'initialized' });
-        const results: unknown[] = [];
-        let id = 1;
-        for (const [method, params] of methods) {
-          const r = await ask(++id, method, params);
-          results.push(r.error ? null : r.result);
+        if (init.error) {
+          const msg = (init.error as { message?: unknown }).message;
+          return { ok: false, reason: redactCliMessage(String(msg ?? 'initialize failed')) };
         }
-        return results;
+        proc.write({ method: 'initialized' });
+        const info = (init.result ?? {}) as { userAgent?: unknown; codexHome?: unknown };
+        const userAgent = typeof info.userAgent === 'string' ? info.userAgent : undefined;
+        const value = await fn({
+          async ask(method, params) {
+            const r = await raw(method, params);
+            const msg = (r.error as { message?: unknown } | undefined)?.message;
+            return r.error
+              ? { error: redactCliMessage(String(msg ?? 'failed')) }
+              : { result: r.result };
+          },
+          ...(userAgent ? { userAgent } : {}),
+          ...(typeof info.codexHome === 'string' ? { codexHome: info.codexHome } : {}),
+          spawnedAtMs,
+        });
+        return { ok: true, value, ...(userAgent ? { userAgent } : {}) };
       })(),
+      gone,
       give,
     ]);
-    return out;
+    if (out) return out;
+    // Nobody answered: the program ended (why?) or the wait ran out.
+    return {
+      ok: false,
+      reason: failureReason(
+        (exited as CliExit | null) ?? { code: null, signal: null, stderrTail: '', timedOut: true },
+      ),
+    };
   } finally {
     ctl.abort();
     await proc.done;
   }
 }
 
-export function codexModelsFrom(result: unknown): AiModel[] {
-  const data = (result as { data?: unknown } | null)?.data;
-  if (!Array.isArray(data)) return [];
-  const out: AiModel[] = [];
-  for (const raw of data) {
-    const m = raw as { id?: unknown; model?: unknown; displayName?: unknown; hidden?: unknown };
-    const id = typeof m.model === 'string' && m.model ? m.model : m.id;
-    if (typeof id !== 'string' || !id || m.hidden === true) continue;
-    out.push(
-      cliModel('openai', 'OpenAI', id, typeof m.displayName === 'string' ? m.displayName : id),
-    );
-  }
-  return out;
+/** Ask a Codex app-server a few things and stop it. */
+export async function codexQuery(
+  file: string,
+  cwd: string,
+  methods: Array<[string, unknown]>,
+  timeoutMs = 15_000,
+): Promise<CodexAnswer> {
+  const r = await codexSession(
+    file,
+    cwd,
+    async (c) => {
+      const results: unknown[] = [];
+      const errors: string[] = [];
+      for (const [method, params] of methods) {
+        const a = await c.ask(method, params);
+        results.push('result' in a ? a.result : null);
+        errors.push('error' in a ? a.error : '');
+      }
+      return { results, errors };
+    },
+    timeoutMs,
+  );
+  if (!r.ok) return r;
+  return { ok: true, ...(r.userAgent ? { userAgent: r.userAgent } : {}), ...r.value };
 }
 
-export const CLAUDE_MODELS: AiModel[] = [
-  cliModel('anthropic', 'Anthropic', 'sonnet', 'sonnet'),
-  cliModel('anthropic', 'Anthropic', 'opus', 'opus'),
-  cliModel('anthropic', 'Anthropic', 'haiku', 'haiku'),
-];
+/** All pages of `model/list` (cursor / nextCursor). Null when the first page fails. */
+export async function listAllCodexModelPages(c: CodexConn): Promise<unknown[] | null> {
+  const pages: unknown[] = [];
+  let cursor: string | null | undefined;
+  for (let i = 0; i < 20; i++) {
+    const r = await c.ask('model/list', cursor ? { cursor } : {});
+    if ('error' in r) return pages.length > 0 ? pages : null;
+    pages.push(r.result);
+    cursor = (r.result as { nextCursor?: unknown } | null)?.nextCursor as string | null | undefined;
+    if (!cursor) break;
+  }
+  return pages;
+}
 
-function cliModel(vendor: string, vendorName: string, id: string, name: string): AiModel {
-  return {
-    id,
-    name,
-    vendor,
-    vendorName,
-    created: 0,
-    contextLength: null,
-    promptPrice: null,
-    completionPrice: null,
-    tools: true,
-    vision: true,
-    free: false,
-    expires: null,
-  };
+/** When Codex last wrote `models_cache.json` (epoch ms); NaN when unreadable. */
+export async function readModelsCacheFetchedAt(codexHome: string): Promise<number> {
+  try {
+    const j = JSON.parse(await readFile(join(codexHome, 'models_cache.json'), 'utf8')) as {
+      fetched_at?: unknown;
+    };
+    return typeof j.fetched_at === 'string' ? Date.parse(j.fetched_at) : Number.NaN;
+  } catch {
+    return Number.NaN;
+  }
+}
+
+/**
+ * `model/list` serves `CODEX_HOME/models_cache.json` while it is young, and the backend
+ * tailors the catalog to the client's originator. Wait (briefly) until a write newer than
+ * this process's start lands; false when none did, and the first answer stands.
+ */
+export async function waitForModelsCacheRefresh(
+  codexHome: string,
+  sinceMs: number,
+  opts: { timeoutMs?: number; pollMs?: number; read?: (home: string) => Promise<number> } = {},
+): Promise<boolean> {
+  const end = Date.now() + (opts.timeoutMs ?? 3_000);
+  const read = opts.read ?? readModelsCacheFetchedAt;
+  for (;;) {
+    if ((await read(codexHome)) >= sinceMs) return true;
+    if (Date.now() >= end) return false;
+    await new Promise((r) => setTimeout(r, opts.pollMs ?? 100));
+  }
+}
+
+function codexHomeOf(conn: CodexConn): string {
+  return conn.codexHome || codexEnv().CODEX_HOME || join(homedir(), '.codex');
 }
 
 export async function getCliStatus(
   provider: AiCliProvider,
   override: string | undefined,
   cwd: string,
-  deps: ResolveDeps = defaultResolveDeps(),
+  deps?: ResolveDeps,
 ): Promise<AiCliStatus> {
   const name = BIN[provider];
   const human = cliProviderName(provider);
-  const found = await resolveBinary(name, override, deps);
+  await ensureShellEnv();
+  const found = await resolveBinary(name, override, deps ?? defaultResolveDeps());
   if (!found) {
     return {
       provider,
@@ -190,10 +349,26 @@ export async function getCliStatus(
         : `${human} is not installed.`,
     };
   }
-  const ver = await run(found.path, ['--version'], 8_000);
-  const version = ver.ok ? parseVersion(ver.stdout) : undefined;
+  const fromVersionFlag = async () => {
+    const ver = await run(found.path, ['--version'], 8_000);
+    return ver.ok ? parseVersion(ver.stdout) : undefined;
+  };
   if (provider === 'claude-code') {
+    const version = await fromVersionFlag();
     const r = await run(found.path, ['auth', 'status'], 10_000);
+    // A non-zero exit is normal when signed out: only output that is not the JSON answer means it could not run.
+    const answered = /^\s*\{/.test(r.stdout);
+    if (!answered) {
+      return {
+        provider,
+        installed: true,
+        ...(version ? { version } : {}),
+        signedIn: false,
+        unreachable: true,
+        path: found.path,
+        error: `${human} did not answer: ${runFailure(r)}`,
+      };
+    }
     const auth = parseClaudeAuth(r.stdout);
     return {
       provider,
@@ -206,49 +381,162 @@ export async function getCliStatus(
     };
   }
   const res = await codexQuery(found.path, cwd, [['account/read', {}]]);
-  const auth = res ? parseCodexAccount(res[0]) : { signedIn: false as const };
+  if (!res.ok) {
+    const version = await fromVersionFlag();
+    return {
+      provider,
+      installed: true,
+      ...(version ? { version } : {}),
+      signedIn: false,
+      unreachable: true,
+      path: found.path,
+      error: `${human} did not answer: ${res.reason}`,
+    };
+  }
+  const version = versionFromUserAgent(res.userAgent) ?? (await fromVersionFlag());
+  if (res.errors[0]) {
+    return {
+      provider,
+      installed: true,
+      ...(version ? { version } : {}),
+      signedIn: false,
+      unreachable: true,
+      path: found.path,
+      error: `${human} did not answer: ${res.errors[0]}`,
+    };
+  }
+  const auth = parseCodexAccount(res.results[0]);
   return {
     provider,
     installed: true,
     ...(version ? { version } : {}),
     signedIn: auth.signedIn,
-    ...('plan' in auth && auth.plan ? { plan: auth.plan } : {}),
+    ...(auth.plan ? { plan: auth.plan } : {}),
     path: found.path,
-    ...(res
-      ? auth.signedIn
-        ? {}
-        : { error: 'Not signed in. Run `codex login` in a terminal.' }
-      : { error: 'Codex did not answer. Update Codex and try again.' }),
+    ...(auth.signedIn ? {} : { error: 'Not signed in. Run `codex login` in a terminal.' }),
   };
+}
+
+/** The account type of an `account/read` result ('chatgpt', 'apiKey', ...). */
+export function parseCodexAccountType(result: unknown): string | undefined {
+  const a = (result as { account?: { type?: unknown } | null } | null)?.account;
+  return typeof a?.type === 'string' ? a.type : undefined;
+}
+
+export interface ClaudeCliInfo {
+  version?: string;
+  /** `claude --help` lists `--effort`. */
+  effort: boolean;
+}
+
+const claudeInfoMemo = new Map<string, ClaudeCliInfo>();
+
+/**
+ * What the installed Claude Code is: its version, and whether it has `--effort`.
+ * Kept per program file (path, size and modification time), so an update is noticed
+ * and a chat does not start two programs each time. A failed read is not kept.
+ */
+export async function claudeCliInfo(file: string): Promise<ClaudeCliInfo> {
+  let key = file;
+  try {
+    const st = await stat(file);
+    key = `${file}\0${st.size}\0${st.mtimeMs}`;
+  } catch {
+    /* keyed by path only */
+  }
+  const hit = claudeInfoMemo.get(key);
+  if (hit) return hit;
+  const [ver, help] = await Promise.all([
+    run(file, ['--version'], 8_000),
+    run(file, ['--help'], 8_000),
+  ]);
+  const version = ver.ok ? parseVersion(ver.stdout) : undefined;
+  const info: ClaudeCliInfo = {
+    ...(version ? { version } : {}),
+    effort: help.ok && /--effort\b/.test(help.stdout),
+  };
+  if (version && help.ok) claudeInfoMemo.set(key, info);
+  return info;
+}
+
+export function resetClaudeCliInfoForTests(): void {
+  claudeInfoMemo.clear();
 }
 
 export async function listCliModels(
   provider: AiCliProvider,
   override: string | undefined,
   cwd: string,
-  deps: ResolveDeps = defaultResolveDeps(),
+  deps?: ResolveDeps,
+  store: ManifestStore = manifestStore(),
+  opts: { cacheWaitMs?: number } = {},
 ): Promise<AiModelsResult> {
-  if (provider === 'claude-code') {
-    return { models: CLAUDE_MODELS, fetchedAt: Date.now(), source: 'live' };
-  }
-  const found = await resolveBinary('codex', override, deps);
+  await ensureShellEnv();
+  const human = cliProviderName(provider);
+  const found = await resolveBinary(BIN[provider], override, deps ?? defaultResolveDeps());
   if (!found) {
     return {
       models: [],
       fetchedAt: 0,
       source: 'none',
-      error: 'Codex is not installed. Add it in Settings, AI.',
+      error: `${human} is not installed. Add it in Settings, AI.`,
     };
   }
-  const res = await codexQuery(found.path, cwd, [['model/list', {}]]);
-  const models = res ? codexModelsFrom(res[0]) : [];
+  // Never waits on the network: the copy in memory (disk or bundle); the refresh runs behind.
+  const manifest = await store.current();
+  store.refreshInBackground();
+
+  if (provider === 'claude-code') {
+    const { version } = await claudeCliInfo(found.path);
+    // Without a readable version nothing is hidden as "too new": the whole list, with a note.
+    const { models, updateRequired } = claudeModelsForVersion(manifest, version);
+    return {
+      models,
+      fetchedAt: Date.now(),
+      source: 'live',
+      ...(version ? {} : { error: 'Could not read the Claude Code version.' }),
+      ...(updateRequired.length > 0 ? { updateRequired } : {}),
+      origin: { kind: 'plasma-list', ...(version ? { cliVersion: version } : {}) },
+    };
+  }
+
+  const res = await codexSession(
+    found.path,
+    cwd,
+    async (c) => {
+      let pages = await listAllCodexModelPages(c);
+      if (!pages) return null;
+      // Only a ChatGPT login gets a catalog tailored to the client (and cached in models_cache.json).
+      const acct = await c.ask('account/read', {});
+      const type = 'result' in acct ? parseCodexAccountType(acct.result) : undefined;
+      if (
+        type === 'chatgpt' &&
+        (await waitForModelsCacheRefresh(codexHomeOf(c), c.spawnedAtMs, {
+          ...(opts.cacheWaitMs !== undefined ? { timeoutMs: opts.cacheWaitMs } : {}),
+        }))
+      ) {
+        pages = (await listAllCodexModelPages(c)) ?? pages;
+      }
+      return pages;
+    },
+    25_000,
+  );
+  const models = res.ok && res.value ? buildCodexModels(res.value, manifest) : [];
   if (models.length === 0) {
     return {
       models: [],
       fetchedAt: 0,
       source: 'none',
-      error: 'Could not read the model list from Codex. Type a model name instead.',
+      error: res.ok
+        ? 'Could not read the model list from Codex. Type a model name instead.'
+        : `Codex did not answer: ${res.reason}`,
     };
   }
-  return { models, fetchedAt: Date.now(), source: 'live' };
+  const version = versionFromUserAgent(res.ok ? res.userAgent : undefined);
+  return {
+    models,
+    fetchedAt: Date.now(),
+    source: 'live',
+    origin: { kind: 'codex', ...(version ? { cliVersion: version } : {}) },
+  };
 }

@@ -160,3 +160,52 @@ describe('buildPickerItems, images only', () => {
     expect(start).not.toContain('Claude Haiku 5');
   });
 });
+
+describe('Codex / Claude Code list', () => {
+  const cliModels: AiModel[] = [
+    m('anthropic', 'Claude Opus 5.5', 0, {
+      id: 'claude-opus-5-5',
+      aliases: ['opus', 'opus-5.5'],
+      isDefault: true,
+    }),
+    m('anthropic', 'Claude Haiku 5.5', 0, {
+      id: 'claude-haiku-5-5',
+      aliases: ['haiku'],
+      badge: 'new',
+    }),
+    m('anthropic', 'Claude Opus 4.8', 0, { id: 'claude-opus-4-8', isLegacy: true }),
+  ];
+  const cli = {
+    updateRequired: [
+      { slug: 'claude-sonnet-5-5', name: 'Claude Sonnet 5.5', minVersion: '2.1.284' },
+    ],
+  };
+  const input: PickerInput = { ...base, models: cliModels, local: true, cli };
+
+  it('current models first, older models collapsed, update-required rows last', () => {
+    const items = buildPickerItems(input);
+    expect(items.map((i) => i.kind)).toEqual(['model', 'model', 'legacy', 'header', 'update']);
+    expect(items[2]).toMatchObject({ label: 'Older models', count: 1, open: false });
+    expect(items[4]).toMatchObject({ slug: 'claude-sonnet-5-5', minVersion: '2.1.284' });
+    const open = buildPickerItems({ ...input, legacyOpen: new Set(['cli']) });
+    expect(open.map((i) => i.kind)).toEqual([
+      'model',
+      'model',
+      'legacy',
+      'model',
+      'header',
+      'update',
+    ]);
+  });
+
+  it('search matches the name, the slug and the aliases, and offers no duplicate "Use" row', () => {
+    const ids = (q: string) =>
+      buildPickerItems({ ...input, query: q })
+        .filter((i) => i.kind === 'model')
+        .map((i) => (i.kind === 'model' ? i.model.id : ''));
+    expect(ids('opus 5.5')).toEqual(['claude-opus-5-5']);
+    expect(ids('claude-haiku')).toEqual(['claude-haiku-5-5']);
+    expect(ids('haiku')).toEqual(['claude-haiku-5-5']);
+    expect(buildPickerItems({ ...input, query: 'opus' }).some((i) => i.kind === 'use')).toBe(false);
+  });
+});

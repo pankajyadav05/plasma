@@ -1,5 +1,6 @@
+import { isSafeModelName, isSafeOptionId } from '@shared/cli-models';
 import { redactCliMessage } from './claude';
-import { cliEnv, spawnCli } from './proc';
+import { codexEnv, spawnCli } from './proc';
 import type { CliProcess } from './proc';
 import type { CliRun, CliRunResult } from './types';
 
@@ -203,7 +204,23 @@ type AttemptResult =
   | { retryWithout: string }
   | { done: CliRunResult; unknownFeature?: undefined };
 
+/** Why the model, effort or tier cannot be sent (null = fine): nothing unvalidated goes into JSON-RPC. */
+export function unsafeCodexChoice(run: Pick<CliRun, 'model' | 'effort' | 'serviceTier'>) {
+  if (run.model && !isSafeModelName(run.model)) {
+    return 'That model name cannot be used. Choose a model in Settings, AI.';
+  }
+  if (run.effort && !isSafeOptionId(run.effort)) {
+    return 'That reasoning level cannot be used. Choose one in Settings, AI.';
+  }
+  if (run.serviceTier && !isSafeOptionId(run.serviceTier)) {
+    return 'That speed cannot be used. Choose one in Settings, AI.';
+  }
+  return null;
+}
+
 export async function runCodex(run: CliRun): Promise<CliRunResult> {
+  const unsafe = unsafeCodexChoice(run);
+  if (unsafe) return { ok: false, message: unsafe };
   const skip = new Set<string>();
   for (let attempt = 0; attempt < 8; attempt++) {
     const r = await runOnce(run, skip);
@@ -255,7 +272,7 @@ async function runOnce(run: CliRun, skip: ReadonlySet<string>): Promise<AttemptR
       ...run.launch.args,
       ...buildCodexArgs({ endpointUrl: run.endpoint?.url ?? null, skipFeatures: skip }),
     ],
-    env: cliEnv(run.endpoint ? { [CODEX_TOKEN_ENV]: run.endpoint.token } : {}),
+    env: codexEnv(run.endpoint ? { [CODEX_TOKEN_ENV]: run.endpoint.token } : {}),
     cwd: run.cwd,
     timeoutMs: run.timeoutMs,
     onLine(line) {
@@ -407,9 +424,19 @@ async function runOnce(run: CliRun, skip: ReadonlySet<string>): Promise<AttemptR
       ],
       ...(run.model ? { model: run.model } : {}),
       ...(run.effort ? { effort: run.effort } : {}),
+      ...(run.serviceTier ? { serviceTier: run.serviceTier } : {}),
     });
     if (turn.error) {
-      throw new Error(String((turn.error as Json).message ?? 'Codex refused the message.'));
+      const text = String((turn.error as Json).message ?? 'Codex refused the message.');
+      if (
+        (run.effort || run.serviceTier) &&
+        /effort|service.?tier|unknown variant|invalid/i.test(text)
+      ) {
+        throw new Error(
+          'Codex did not accept the reasoning level or speed for this model. Change it in Settings, AI.',
+        );
+      }
+      throw new Error(text);
     }
     if (isObj(turn.result) && isObj(turn.result.turn) && typeof turn.result.turn.id === 'string') {
       turnId ||= turn.result.turn.id;

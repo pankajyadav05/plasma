@@ -24,6 +24,8 @@ export const AiCliStatus = z.object({
   plan: z.string().optional(),
   path: z.string().optional(),
   error: z.string().optional(),
+  /** The program is there but did not answer (not the same as signed out). */
+  unreachable: z.boolean().optional(),
 });
 export type AiCliStatus = z.infer<typeof AiCliStatus>;
 
@@ -31,17 +33,27 @@ export function cliProviderName(provider: AiCliProvider): string {
   return provider === 'codex' ? 'Codex' : 'Claude Code';
 }
 
-/** Keyword -> label, first match wins ("self_serve_business_prolite" is a Business plan). */
-const CODEX_PLANS: Array<[RegExp, string]> = [
-  [/enterprise/, 'ChatGPT Enterprise'],
-  [/business/, 'ChatGPT Business'],
-  [/team/, 'ChatGPT Team'],
-  [/edu/, 'ChatGPT Edu'],
-  [/pro/, 'ChatGPT Pro'],
-  [/plus/, 'ChatGPT Plus'],
-  [/\bgo\b/, 'ChatGPT Go'],
-  [/free/, 'ChatGPT Free'],
-];
+/** T3 Code's codexPlanLabel (MIT, Copyright (c) 2026 T3 Tools Inc.): ChatGPT `planType` slug -> label. */
+const CODEX_PLAN_LABELS: Record<string, string> = {
+  free: 'ChatGPT Free Subscription',
+  go: 'ChatGPT Go Subscription',
+  plus: 'ChatGPT Plus Subscription',
+  pro: 'ChatGPT Pro 20x Subscription',
+  prolite: 'ChatGPT Pro 5x Subscription',
+  promax: 'ChatGPT Pro Max Subscription',
+  team: 'ChatGPT Team Subscription',
+  self_serve_business_prolite: 'ChatGPT Business Subscription',
+  self_serve_business_usage_based: 'ChatGPT Business Subscription',
+  business: 'ChatGPT Business Subscription',
+  ent26: 'ChatGPT Enterprise Subscription',
+  enterprise_cbp_automation: 'ChatGPT Enterprise Subscription',
+  enterprise_cbp_usage_based: 'ChatGPT Enterprise Subscription',
+  enterprise: 'ChatGPT Enterprise Subscription',
+  edu: 'ChatGPT Edu Subscription',
+  edu_plus: 'ChatGPT Edu Subscription',
+  edu_pro: 'ChatGPT Edu Subscription',
+  unknown: 'ChatGPT Subscription',
+};
 
 const words = (raw: string) =>
   raw
@@ -49,11 +61,11 @@ const words = (raw: string) =>
     .replace(/[_-]+/g, ' ')
     .replace(/\b\w/g, (c) => c.toUpperCase());
 
-/** "plus" -> "ChatGPT Plus", "max" -> "Claude Max". */
+/** "plus" -> "ChatGPT Plus Subscription", "max" -> "Claude Max". */
 export function cliPlanLabel(provider: AiCliProvider, raw: string): string {
   const key = raw.trim().toLowerCase().replace(/[_-]+/g, ' ');
   if (provider === 'codex') {
-    return CODEX_PLANS.find(([re]) => re.test(key))?.[1] ?? `ChatGPT ${words(key)}`.trim();
+    return CODEX_PLAN_LABELS[raw.trim().toLowerCase()] ?? `ChatGPT ${words(key)}`.trim();
   }
   return `Claude ${words(key)}`.trim();
 }
@@ -66,6 +78,9 @@ export function describeCliStatus(s: AiCliStatus | null): {
   if (!s) return { tone: 'idle', text: 'Checking...' };
   const name = cliProviderName(s.provider);
   if (!s.installed) return { tone: 'warn', text: `${name} is not installed` };
+  if (s.unreachable) {
+    return { tone: 'warn', text: s.error ?? `${name} did not answer` };
+  }
   if (!s.signedIn) {
     return {
       tone: 'warn',

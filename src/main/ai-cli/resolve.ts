@@ -3,6 +3,7 @@ import { constants, accessSync, readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { cliBasenameOk } from '@shared/ai-cli';
+import { shellEnvPatch } from './shell-env';
 
 /**
  * Where is the `codex` / `claude` program? A GUI app does not inherit the shell
@@ -61,7 +62,7 @@ function loginShellLookup(name: string, shell: string | undefined): Promise<stri
 export function defaultResolveDeps(): ResolveDeps {
   return {
     platform: process.platform,
-    env: process.env,
+    env: { ...process.env, ...shellEnvPatch() },
     home: homedir(),
     isExecutable: (p) => isExecutableFile(p),
     loginShellLookup: (name) => loginShellLookup(name, process.env.SHELL),

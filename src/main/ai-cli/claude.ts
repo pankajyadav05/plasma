@@ -1,3 +1,4 @@
+import { isSafeModelName, isSafeOptionId } from '@shared/cli-models';
 import { spawnCli } from './proc';
 import { cliEnv } from './proc';
 import type { CliRun, CliRunResult } from './types';
@@ -17,10 +18,25 @@ export interface ClaudeArgsInput {
   /** Path of the 0600 file holding the MCP config (the token is inside, not on argv). */
   mcpConfigPath: string;
   hasTools: boolean;
+  /** `--effort` value (already mapped through the model's profile); omitted when unset. */
+  effort?: string;
+}
+
+/** Why a model or effort cannot be handed to the program (null = fine). Nothing may look like a flag. */
+export function unsafeClaudeChoice(model: string, effort: string | undefined): string | null {
+  if (model !== '' && !isSafeModelName(model)) {
+    return 'That model name cannot be used. Choose a model in Settings, AI.';
+  }
+  if (effort !== undefined && !isSafeOptionId(effort)) {
+    return 'That reasoning level cannot be used. Choose one in Settings, AI.';
+  }
+  return null;
 }
 
 /** Every safety flag is here, in one place, so a test can pin them. */
 export function buildClaudeArgs(input: ClaudeArgsInput): string[] {
+  const unsafe = unsafeClaudeChoice(input.model, input.effort);
+  if (unsafe) throw new Error(unsafe);
   return [
     '-p',
     '--input-format',
@@ -42,6 +58,7 @@ export function buildClaudeArgs(input: ClaudeArgsInput): string[] {
     '--disable-slash-commands',
     '--model',
     input.model,
+    ...(input.effort ? ['--effort', input.effort] : []),
     ...(input.hasTools ? ['--allowedTools', `mcp__${CLAUDE_MCP_SERVER}`] : []),
   ];
 }
@@ -189,6 +206,8 @@ export function redactCliMessage(text: string): string {
 }
 
 export async function runClaude(run: CliRun): Promise<CliRunResult> {
+  const unsafe = unsafeClaudeChoice(run.model, run.effort);
+  if (unsafe) return { ok: false, message: unsafe };
   const parse = createClaudeParser();
   let result: Extract<ClaudeEvent, { kind: 'result' }> | null = null;
   let blocked: string | null = null;
@@ -205,6 +224,7 @@ export async function runClaude(run: CliRun): Promise<CliRunResult> {
         systemPromptPath: run.systemPromptPath ?? '',
         mcpConfigPath: run.mcpConfigPath ?? '',
         hasTools: run.endpoint !== null,
+        ...(run.effort ? { effort: run.effort } : {}),
       }),
     ],
     env: claudeEnv(),
@@ -271,6 +291,12 @@ export async function runClaude(run: CliRun): Promise<CliRunResult> {
     return { ok: false, message: text || 'Claude Code reported an error.' };
   }
   const tail = redactCliMessage(exit.stderrTail.trim());
+  if (run.effort && /effort/i.test(tail)) {
+    return {
+      ok: false,
+      message: `Claude Code did not accept the reasoning level "${run.effort}" for this model. Change it in Settings, AI.`,
+    };
+  }
   if (/not logged in|\/login/i.test(tail)) {
     return {
       ok: false,

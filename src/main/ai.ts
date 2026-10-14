@@ -189,7 +189,14 @@ export type AiChatOptions = {
    */
   provider?: 'openrouter' | 'local' | 'codex' | 'claude-code';
   /** Provider `codex` / `claude-code`: the model, the program path override and where Plasma keeps its files. */
-  cli?: { model: string; binaryOverride: string; userData: string; appVersion: string };
+  cli?: {
+    model: string;
+    effort?: string;
+    serviceTier?: string;
+    binaryOverride: string;
+    userData: string;
+    appVersion: string;
+  };
   /** Test seam for the CLI runner. */
   cliDeps?: CliChatDeps;
   /** Base URL of the local server (provider `local`). */
@@ -824,6 +831,8 @@ async function pumpCli(
         requestId: req.requestId,
         send,
         model: cli.model.trim(),
+        ...(cli.effort ? { effort: cli.effort } : {}),
+        ...(cli.serviceTier ? { serviceTier: cli.serviceTier } : {}),
         binaryOverride: cli.binaryOverride,
         userData: cli.userData,
         appVersion: cli.appVersion,

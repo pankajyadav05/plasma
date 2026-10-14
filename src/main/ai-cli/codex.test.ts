@@ -239,7 +239,7 @@ describe('runCodex with a fake CLI', () => {
     dir = mkdtempSync(join(tmpdir(), 'plasma-codex-test-'));
   });
   afterEach(() => {
-    unsetEnv('FAKE_MODE', 'FAKE_PID_FILE', 'FAKE_REJECT', 'FAKE_THREAD_OUT');
+    unsetEnv('FAKE_MODE', 'FAKE_PID_FILE', 'FAKE_REJECT', 'FAKE_THREAD_OUT', 'FAKE_TURN_OUT');
     rmSync(dir, { recursive: true, force: true });
   });
 
@@ -323,6 +323,19 @@ describe('runCodex with a fake CLI', () => {
     expect(params.approvalPolicy).toBe('never');
   });
 
+  it('turn/start carries the chosen effort and service tier, and nothing when unset', async () => {
+    process.env.FAKE_TURN_OUT = join(dir, 'turn.json');
+    const { run } = baseRun({ effort: 'high', serviceTier: 'priority' });
+    expect(await runCodex(run)).toEqual({ ok: true });
+    const turn = JSON.parse(readFileSync(join(dir, 'turn.json'), 'utf8'));
+    expect(turn).toMatchObject({ model: 'gpt-6-luna', effort: 'high', serviceTier: 'priority' });
+    const plain = baseRun();
+    expect(await runCodex(plain.run)).toEqual({ ok: true });
+    const t2 = JSON.parse(readFileSync(join(dir, 'turn.json'), 'utf8'));
+    expect(t2).not.toHaveProperty('effort');
+    expect(t2).not.toHaveProperty('serviceTier');
+  });
+
   it('refuses the chat when the Codex configuration cannot be read', async () => {
     process.env.FAKE_MODE = 'config-fails';
     const { run, deltas } = baseRun();
@@ -386,5 +399,31 @@ describe('runCodex with a fake CLI', () => {
     const res = await runCodex(run);
     expect(res).toEqual({ ok: false, message: 'Codex took too long and was stopped.' });
     await waitDead(Number(readFileSync(join(dir, 'pid'), 'utf8')));
+  });
+});
+
+describe('unsafe model, effort and tier values', () => {
+  it('are refused before anything is sent', async () => {
+    const mk = (over: Partial<CliRun>): CliRun => ({
+      launch: { command: '/definitely/not/here', args: [] },
+      cwd: tmpdir(),
+      model: 'gpt-6-luna',
+      system: '',
+      prompt: 'hi',
+      images: [],
+      endpoint: null,
+      onDelta: () => undefined,
+      signal: new AbortController().signal,
+      ...over,
+    });
+    for (const over of [
+      { model: '--oops' },
+      { effort: 'High; rm' },
+      { serviceTier: '-fast' },
+    ] as Array<Partial<CliRun>>) {
+      const r = await runCodex(mk(over));
+      expect(r).toMatchObject({ ok: false });
+      expect((r as { message: string }).message).toMatch(/cannot be used/);
+    }
   });
 });

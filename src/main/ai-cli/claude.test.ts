@@ -45,6 +45,19 @@ describe('buildClaudeArgs', () => {
     expect(arg('--mcp-config')).toBe('/tmp/cfg.json');
   });
 
+  it('--effort only when an effort is chosen', () => {
+    expect(args).not.toContain('--effort');
+    const withEffort = buildClaudeArgs({
+      model: 'claude-haiku-5-5',
+      systemPromptPath: '/s',
+      mcpConfigPath: '/c',
+      hasTools: false,
+      effort: 'high',
+    });
+    expect(withEffort[withEffort.indexOf('--effort') + 1]).toBe('high');
+    expect(withEffort[withEffort.indexOf('--model') + 1]).toBe('claude-haiku-5-5');
+  });
+
   it('pre-approves only the plasma server, and only when there are tools', () => {
     expect(arg('--allowedTools')).toBe('mcp__plasma_chat');
     const none = buildClaudeArgs({
@@ -364,5 +377,33 @@ describe('runClaude with a fake CLI', () => {
     await waitDead(pid);
     expect(alive(pid)).toBe(false);
     expect(existsSync(join(dir, 'pid'))).toBe(true);
+  });
+});
+
+describe('unsafe model and effort values', () => {
+  const base = { systemPromptPath: '/s', mcpConfigPath: '/c', hasTools: false };
+  it('buildClaudeArgs refuses anything that could be read as a flag', () => {
+    expect(() => buildClaudeArgs({ ...base, model: '--dangerously-skip-permissions' })).toThrow();
+    expect(() => buildClaudeArgs({ ...base, model: '-x' })).toThrow();
+    expect(() => buildClaudeArgs({ ...base, model: 'a b' })).toThrow();
+    expect(() => buildClaudeArgs({ ...base, model: 'haiku', effort: '--x' })).toThrow();
+    expect(() => buildClaudeArgs({ ...base, model: 'claude-opus-4-6[1m]' })).not.toThrow();
+  });
+
+  it('runClaude answers with a plain message instead of starting the program', async () => {
+    const run: CliRun = {
+      launch: { command: '/definitely/not/here', args: [] },
+      cwd: tmpdir(),
+      model: '--evil',
+      system: '',
+      prompt: 'hi',
+      images: [],
+      endpoint: null,
+      onDelta: () => undefined,
+      signal: new AbortController().signal,
+    };
+    const r = await runClaude(run);
+    expect(r).toMatchObject({ ok: false });
+    expect((r as { message: string }).message).toMatch(/cannot be used/);
   });
 });

@@ -2054,6 +2054,10 @@ export const SettingsShape = z.object({
   /** Codex / Claude Code providers: the model ('' = the CLI's default) and an optional path to the program. */
   aiCodexModel: z.string().default(''),
   aiClaudeCodeModel: z.string().default('sonnet'),
+  /** Reasoning effort per CLI provider ('' = the model's default) and Codex's service tier ('' = Standard). */
+  aiCodexEffort: z.string().default(''),
+  aiClaudeCodeEffort: z.string().default(''),
+  aiCodexServiceTier: z.string().default(''),
   aiCodexPath: z.string().default(''),
   aiClaudeCodePath: z.string().default(''),
   /** Base URL of a local OpenAI-compatible server; main only talks to loopback addresses. */

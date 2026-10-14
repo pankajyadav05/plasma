@@ -14,6 +14,7 @@ import {
   launchSpec,
   resolveBinary,
 } from './resolve';
+import { ensureShellEnv } from './shell-env';
 import { type ToolEndpoint, createToolEndpoint, mcpToolsFromOpenAi } from './tool-endpoint';
 import type { CliRun, CliRunResult } from './types';
 
@@ -100,6 +101,9 @@ export interface CliChatInput {
   requestId: string;
   send(evt: AiChatEvent): void;
   model: string;
+  /** Reasoning effort / Codex service tier, already checked against the model. */
+  effort?: string;
+  serviceTier?: string;
   /** Settings override of the program's path ('' = find it). */
   binaryOverride: string;
   userData: string;
@@ -135,6 +139,7 @@ export async function runCliChat(input: CliChatInput, deps: CliChatDeps = {}): P
   const bin = provider === 'codex' ? 'codex' : 'claude';
   let found: Resolved | null;
   try {
+    await ensureShellEnv();
     found = await resolveBinary(bin, input.binaryOverride, deps.resolve ?? defaultResolveDeps());
   } catch {
     found = null;
@@ -192,6 +197,8 @@ export async function runCliChat(input: CliChatInput, deps: CliChatDeps = {}): P
       launch: launchSpec(found.path, []),
       cwd,
       model: input.model,
+      ...(input.effort ? { effort: input.effort } : {}),
+      ...(input.serviceTier ? { serviceTier: input.serviceTier } : {}),
       system: input.system,
       prompt,
       images,
