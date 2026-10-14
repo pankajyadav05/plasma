@@ -13,7 +13,7 @@ export * from './feed';
  */
 
 /** package.json version at the last `release:*`; patched by scripts/lib/sync-site-version.mjs. Offline label only. */
-export const PACKAGE_VERSION = '3.2.6';
+export const PACKAGE_VERSION = '3.2.7';
 
 let cached: Promise<Releases> | undefined;
 
