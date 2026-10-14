@@ -4,6 +4,7 @@
  */
 import {
   type AiModel,
+  type CliUpdateRequired,
   OTHER_VENDOR,
   VENDORS,
   groupForVendor,
@@ -18,8 +19,10 @@ export type PickerTab = 'start' | 'results' | string;
 export type PickerItem =
   | { kind: 'header'; key: string; label: string }
   | { kind: 'model'; key: string; model: AiModel }
-  | { kind: 'legacy'; key: string; vendor: string; count: number; open: boolean }
-  | { kind: 'use'; key: string; id: string };
+  | { kind: 'legacy'; key: string; vendor: string; count: number; open: boolean; label?: string }
+  | { kind: 'use'; key: string; id: string }
+  /** Claude Code: a current model the installed version cannot run (shown disabled). */
+  | { kind: 'update'; key: string; name: string; slug: string; minVersion: string };
 
 export type RailEntry = { id: string; name: string; count: number };
 
@@ -52,12 +55,21 @@ export type PickerInput = {
   now: number;
   /** Only models that accept images. */
   visionOnly?: boolean;
+  /** Codex / Claude Code: the CLI's list (current models, "Older models" group, update-required rows). */
+  cli?: { updateRequired: readonly CliUpdateRequired[] };
 };
 
 /** The id offered as "Use …", or null when the query is not a usable id. */
 function useId(input: PickerInput, query: string): string | null {
   if (!query) return null;
-  if (input.models.some((m) => m.id.toLowerCase() === query.toLowerCase())) return null;
+  const q = query.toLowerCase();
+  if (
+    input.models.some(
+      (m) => m.id.toLowerCase() === q || m.aliases?.some((a) => a.toLowerCase() === q),
+    )
+  ) {
+    return null;
+  }
   if (input.local) return query;
   return looksLikeModelId(query) ? query : null;
 }
@@ -83,6 +95,36 @@ export function buildPickerItems(input: PickerInput): PickerItem[] {
     for (const m of found) items.push(modelItem('r', m));
     const id = useId(input, query);
     if (id) items.push({ kind: 'use', key: `use:${id}`, id });
+    return items;
+  }
+
+  if (input.cli) {
+    for (const m of models.filter((x) => !x.isLegacy)) items.push(modelItem('l', m));
+    const older = models.filter((x) => x.isLegacy);
+    if (older.length > 0) {
+      const open = input.legacyOpen.has('cli');
+      items.push({
+        kind: 'legacy',
+        key: 'legacy:cli',
+        vendor: 'cli',
+        count: older.length,
+        open,
+        label: 'Older models',
+      });
+      if (open) for (const m of older) items.push(modelItem('g', m));
+    }
+    if (input.cli.updateRequired.length > 0) {
+      items.push({ kind: 'header', key: 'h:update', label: 'Needs a newer version' });
+      for (const u of input.cli.updateRequired) {
+        items.push({
+          kind: 'update',
+          key: `update:${u.slug}`,
+          name: u.name,
+          slug: u.slug,
+          minVersion: u.minVersion,
+        });
+      }
+    }
     return items;
   }
 

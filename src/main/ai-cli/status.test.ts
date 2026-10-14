@@ -3,17 +3,18 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { AiCliStatus, describeCliStatus } from '@shared/ai-cli';
 import { afterEach, describe, expect, it } from 'vitest';
+import { createManifestStore } from './model-manifest';
 import { defaultResolveDeps } from './resolve';
 import {
-  CLAUDE_MODELS,
-  codexModelsFrom,
   failureReason,
   getCliStatus,
+  listAllCodexModelPages,
   listCliModels,
   parseClaudeAuth,
   parseCodexAccount,
   parseVersion,
   versionFromUserAgent,
+  waitForModelsCacheRefresh,
 } from './status';
 import { FAKE_CLI } from './test-util';
 
@@ -56,9 +57,9 @@ describe('parseCodexAccount', () => {
       parseCodexAccount({
         account: { type: 'chatgpt', email: 'me@example.com', planType: 'plus' },
       }),
-    ).toEqual({ signedIn: true, plan: 'ChatGPT Plus' });
+    ).toEqual({ signedIn: true, plan: 'ChatGPT Plus Subscription' });
     expect(parseCodexAccount({ account: { type: 'chatgpt', planType: 'prolite' } }).plan).toBe(
-      'ChatGPT Pro',
+      'ChatGPT Pro 5x Subscription',
     );
     expect(parseCodexAccount({ account: { type: 'chatgpt', planType: 'weirdnew' } }).plan).toBe(
       'ChatGPT Weirdnew',
@@ -74,22 +75,54 @@ describe('parseCodexAccount', () => {
   });
 });
 
-describe('codexModelsFrom', () => {
-  it('lists visible models by id', () => {
-    const models = codexModelsFrom({
-      data: [
-        { id: 'a', model: 'gpt-6.1-sol', displayName: 'GPT-6.1 Sol', isDefault: true },
-        { id: 'b', model: 'hidden-one', hidden: true },
-        { id: 'gpt-6-luna' },
-        { nothing: true },
-      ],
-    });
-    expect(models.map((m) => m.id)).toEqual(['gpt-6.1-sol', 'gpt-6-luna']);
-    expect(models[0]).toMatchObject({ vendor: 'openai', name: 'GPT-6.1 Sol' });
-    expect(codexModelsFrom(null)).toEqual([]);
+describe('Codex model list plumbing', () => {
+  it('pages through model/list with cursor / nextCursor', async () => {
+    const asked: unknown[] = [];
+    const conn = {
+      spawnedAtMs: 0,
+      async ask(method: string, params: unknown) {
+        asked.push([method, params]);
+        const cursor = (params as { cursor?: string }).cursor;
+        return {
+          result:
+            cursor === 'c2'
+              ? { data: [{ model: 'b' }] }
+              : { data: [{ model: 'a' }], nextCursor: 'c2' },
+        };
+      },
+    };
+    const pages = await listAllCodexModelPages(conn);
+    expect(pages).toHaveLength(2);
+    expect(asked).toEqual([
+      ['model/list', {}],
+      ['model/list', { cursor: 'c2' }],
+    ]);
+    expect(
+      await listAllCodexModelPages({ ...conn, ask: async () => ({ error: 'nope' }) }),
+    ).toBeNull();
   });
-  it('Claude offers the three aliases, sonnet first', () => {
-    expect(CLAUDE_MODELS.map((m) => m.id)).toEqual(['sonnet', 'opus', 'haiku']);
+
+  it('waits until models_cache.json is newer than the spawn, else keeps the first answer', async () => {
+    let n = 0;
+    const read = async () => (++n < 3 ? 100 : 5_000);
+    expect(
+      await waitForModelsCacheRefresh('/x', 1_000, { pollMs: 1, timeoutMs: 1_000, read }),
+    ).toBe(true);
+    expect(n).toBe(3);
+    expect(
+      await waitForModelsCacheRefresh('/x', 1_000, {
+        pollMs: 1,
+        timeoutMs: 20,
+        read: async () => 5,
+      }),
+    ).toBe(false);
+    expect(
+      await waitForModelsCacheRefresh('/x', 1_000, {
+        pollMs: 1,
+        timeoutMs: 20,
+        read: async () => Number.NaN,
+      }),
+    ).toBe(false);
   });
 });
 
@@ -151,6 +184,14 @@ describe('describeCliStatus', () => {
   });
 });
 
+const bundledStore = (dir: string) =>
+  createManifestStore({
+    cachePath: join(dir, 'cache.json'),
+    fetchFn: async () => {
+      throw new Error('offline');
+    },
+  });
+
 describe('getCliStatus with fake programs', () => {
   let dir = '';
   afterEach(() => {
@@ -211,12 +252,10 @@ exec "${process.execPath}" "${FAKE_CLI}" codex "$@"
       installed: true,
       version: '7.7.7',
       signedIn: true,
-      plan: 'ChatGPT Plus',
+      plan: 'ChatGPT Plus Subscription',
       path: fake,
     });
     expect(JSON.stringify(s)).not.toContain('secret@example.com');
-    const models = await listCliModels('codex', fake, dir);
-    expect(models.models.map((m) => m.id)).toEqual(['gpt-fake-1']);
   });
 
   const fakeCodex = (body: string) => {
@@ -314,9 +353,24 @@ echo "9.9.9"
     expect(s.error).toMatch(/Not signed in/);
   });
 
-  it('lists Claude models without starting anything', async () => {
-    const r = await listCliModels('claude-code', '', tmpdir());
-    expect(r.models.map((m) => m.id)).toEqual(['sonnet', 'opus', 'haiku']);
+  it('lists the Claude models the installed version can run, from the manifest', async () => {
+    dir = mkdtempSync(join(tmpdir(), 'plasma-status-'));
+    const fake = join(dir, 'claude');
+    writeFileSync(fake, '#!/bin/sh\necho "2.1.200 (Claude Code)"\n');
+    chmodSync(fake, 0o755);
+    const r = await listCliModels('claude-code', fake, dir, undefined, bundledStore(dir));
+    expect(r.origin).toEqual({ kind: 'plasma-list', cliVersion: '2.1.200' });
+    expect(r.models.map((m) => m.id)).not.toContain('claude-opus-5-5');
+    expect(r.updateRequired?.map((m) => m.slug)).toContain('claude-opus-5-5');
+  });
+
+  it('lists the Codex models through a fake app-server', async () => {
+    const fake = fakeCodex(viaFake);
+    const r = await listCliModels('codex', fake, dir, undefined, bundledStore(dir), {
+      cacheWaitMs: 20,
+    });
+    expect(r.models.map((m) => m.id)).toEqual(['gpt-fake-1']);
+    expect(r.origin?.kind).toBe('codex');
   });
 
   it('says so when the Codex list cannot be read', async () => {

@@ -193,6 +193,8 @@ if (kind === 'codex') {
       });
     if (m.method === 'turn/interrupt') return out({ id: m.id, result: {} });
     if (m.method === 'turn/start') {
+      if (process.env.FAKE_TURN_OUT)
+        writeFileSync(process.env.FAKE_TURN_OUT, JSON.stringify(m.params));
       out({ id: m.id, result: { turn: { id: 'U1' } } });
       out({ method: 'turn/started', params: { threadId: 'T1', turn: { id: 'U1' } } });
       if (mode === 'hang') {

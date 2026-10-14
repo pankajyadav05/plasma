@@ -17,6 +17,8 @@ export interface ClaudeArgsInput {
   /** Path of the 0600 file holding the MCP config (the token is inside, not on argv). */
   mcpConfigPath: string;
   hasTools: boolean;
+  /** `--effort` value (already mapped through the model's profile); omitted when unset. */
+  effort?: string;
 }
 
 /** Every safety flag is here, in one place, so a test can pin them. */
@@ -42,6 +44,7 @@ export function buildClaudeArgs(input: ClaudeArgsInput): string[] {
     '--disable-slash-commands',
     '--model',
     input.model,
+    ...(input.effort ? ['--effort', input.effort] : []),
     ...(input.hasTools ? ['--allowedTools', `mcp__${CLAUDE_MCP_SERVER}`] : []),
   ];
 }
@@ -205,6 +208,7 @@ export async function runClaude(run: CliRun): Promise<CliRunResult> {
         systemPromptPath: run.systemPromptPath ?? '',
         mcpConfigPath: run.mcpConfigPath ?? '',
         hasTools: run.endpoint !== null,
+        ...(run.effort ? { effort: run.effort } : {}),
       }),
     ],
     env: claudeEnv(),

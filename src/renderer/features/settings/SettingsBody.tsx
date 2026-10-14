@@ -28,12 +28,20 @@ import {
   describeCliStatus,
   isAiCliProvider,
 } from '@shared/ai-cli';
+import {
+  EFFORT_OPTION,
+  SERVICE_TIER_OPTION,
+  defaultOption,
+  effectiveOption,
+  findCliModel,
+  selectDescriptor,
+} from '@shared/cli-models';
 import { cheatSheetSections, formatBinding, formatKeys } from '@shared/keymap';
 import { LINT_RULES, LINT_RULE_IDS } from '@shared/pg-migration-lint';
 import type { Settings } from '@shared/protocol';
 import { Download, Loader2, RotateCw } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ModelPicker } from '../ai/ModelPicker';
+import { ModelPicker, useCliModels } from '../ai/ModelPicker';
 import { CliToolField } from './CliToolField';
 import { McpSection } from './McpSection';
 
@@ -913,6 +921,16 @@ function CliProviderRows({ provider }: { provider: AiCliProvider }) {
   const path = settings[pathKey] ?? '';
   const model = provider === 'codex' ? settings.aiCodexModel : settings.aiClaudeCodeModel;
   const name = cliProviderName(provider);
+  const list = useCliModels(provider);
+  // The selected model: a saved alias ("sonnet") or '' (the default) resolves to a listed one.
+  const picked =
+    findCliModel(list?.models ?? [], model.trim()) ??
+    (model.trim() === '' ? list?.models.find((m) => m.isDefault) : undefined);
+  const effortKey = provider === 'codex' ? 'aiCodexEffort' : 'aiClaudeCodeEffort';
+  const effortSelect = selectDescriptor(picked, EFFORT_OPTION);
+  const tierSelect = provider === 'codex' ? selectDescriptor(picked, SERVICE_TIER_OPTION) : null;
+  const optionLabel = (o: { label: string; isDefault?: boolean | undefined }) =>
+    o.isDefault ? `${o.label} (default)` : o.label;
 
   const refresh = useCallback(async () => {
     setBusy(true);
@@ -956,7 +974,7 @@ function CliProviderRows({ provider }: { provider: AiCliProvider }) {
     void ipc.ai
       .listModels()
       .then((r) => {
-        const first = r.models[0]?.id;
+        const first = (r.models.find((m) => m.isDefault) ?? r.models[0])?.id;
         if (live && first) void updateSettings({ aiCodexModel: first });
       })
       .catch(() => undefined);
@@ -1017,13 +1035,52 @@ function CliProviderRows({ provider }: { provider: AiCliProvider }) {
             <>The models {name} offers for your plan. Type a name to use one that is not listed.</>
           ) : (
             <>
-              <code>sonnet</code>, <code>opus</code> or <code>haiku</code>, or a full model name.
+              Plasma&apos;s model list for the {name} you have installed. Type a name to use one
+              that is not listed.
             </>
           )
         }
       >
         <ModelPicker variant="field" />
       </Row>
+      {effortSelect && (
+        <Row
+          label="Reasoning"
+          htmlFor="ai-cli-effort"
+          hint="How much the model thinks before it answers. Higher is slower and uses more of your plan."
+        >
+          <Choice
+            id="ai-cli-effort"
+            value={effectiveOption(picked, EFFORT_OPTION, settings[effortKey]) ?? ''}
+            onChange={(v) =>
+              void updateSettings({
+                [effortKey]: v === defaultOption(effortSelect)?.id ? '' : v,
+              } as Partial<Settings>)
+            }
+            options={effortSelect.options.map((o) => ({ value: o.id, label: optionLabel(o) }))}
+            width="w-[200px]"
+          />
+        </Row>
+      )}
+      {tierSelect && (
+        <Row
+          label="Speed"
+          htmlFor="ai-cli-tier"
+          hint="Fast answers sooner and uses more of your plan."
+        >
+          <Choice
+            id="ai-cli-tier"
+            value={effectiveOption(picked, SERVICE_TIER_OPTION, settings.aiCodexServiceTier) ?? ''}
+            onChange={(v) =>
+              void updateSettings({
+                aiCodexServiceTier: v === defaultOption(tierSelect)?.id ? '' : v,
+              })
+            }
+            options={tierSelect.options.map((o) => ({ value: o.id, label: optionLabel(o) }))}
+            width="w-[200px]"
+          />
+        </Row>
+      )}
       <Row
         label={`${name} program`}
         hint={`Only if Plasma cannot find ${name} by itself. The file must be called ${

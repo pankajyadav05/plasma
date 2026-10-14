@@ -239,7 +239,7 @@ describe('runCodex with a fake CLI', () => {
     dir = mkdtempSync(join(tmpdir(), 'plasma-codex-test-'));
   });
   afterEach(() => {
-    unsetEnv('FAKE_MODE', 'FAKE_PID_FILE', 'FAKE_REJECT', 'FAKE_THREAD_OUT');
+    unsetEnv('FAKE_MODE', 'FAKE_PID_FILE', 'FAKE_REJECT', 'FAKE_THREAD_OUT', 'FAKE_TURN_OUT');
     rmSync(dir, { recursive: true, force: true });
   });
 
@@ -321,6 +321,19 @@ describe('runCodex with a fake CLI', () => {
     });
     expect(params.sandbox).toBe('read-only');
     expect(params.approvalPolicy).toBe('never');
+  });
+
+  it('turn/start carries the chosen effort and service tier, and nothing when unset', async () => {
+    process.env.FAKE_TURN_OUT = join(dir, 'turn.json');
+    const { run } = baseRun({ effort: 'high', serviceTier: 'priority' });
+    expect(await runCodex(run)).toEqual({ ok: true });
+    const turn = JSON.parse(readFileSync(join(dir, 'turn.json'), 'utf8'));
+    expect(turn).toMatchObject({ model: 'gpt-6-luna', effort: 'high', serviceTier: 'priority' });
+    const plain = baseRun();
+    expect(await runCodex(plain.run)).toEqual({ ok: true });
+    const t2 = JSON.parse(readFileSync(join(dir, 'turn.json'), 'utf8'));
+    expect(t2).not.toHaveProperty('effort');
+    expect(t2).not.toHaveProperty('serviceTier');
   });
 
   it('refuses the chat when the Codex configuration cannot be read', async () => {

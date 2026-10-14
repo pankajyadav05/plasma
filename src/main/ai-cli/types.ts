@@ -22,8 +22,10 @@ export interface CliRun {
   onDelta(text: string): void;
   signal: AbortSignal;
   timeoutMs?: number;
-  /** Codex: reasoning effort for the turn, when set. */
+  /** Reasoning effort for the turn, when the user picked one the model offers (Codex: turn/start, Claude: --effort). */
   effort?: string;
+  /** Codex: service tier for the turn (Fast), when picked. */
+  serviceTier?: string;
   /** Codex: called for each flag name the installed version refused. */
   appVersion?: string;
 }

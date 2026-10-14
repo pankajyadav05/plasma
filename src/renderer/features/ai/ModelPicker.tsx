@@ -5,10 +5,11 @@ import { cn } from '@/lib/cn';
 import { ipc } from '@/lib/ipc';
 import { MOD, isMac } from '@/lib/platform';
 import { useSession } from '@/stores/session';
-import { cliProviderName, isAiCliProvider } from '@shared/ai-cli';
+import { type AiCliProvider, cliProviderName, isAiCliProvider } from '@shared/ai-cli';
 import {
   type AiModel,
   type AiModelsResult,
+  type CliUpdateRequired,
   OTHER_VENDOR,
   formatAgo,
   formatContext,
@@ -18,6 +19,7 @@ import {
   stubModel,
   vendorMonogram,
 } from '@shared/ai-models';
+import { findCliModel } from '@shared/cli-models';
 import {
   AlertTriangle,
   Boxes,
@@ -85,6 +87,12 @@ export function useCurrentModelVision(): { name: string; state: 'yes' | 'no' | '
   const found = loaded.get('or')?.models.find((m) => m.id === id);
   if (!found) return { name: id ? stubModel(id).name : 'This model', state: 'unknown' };
   return { name: found.name, state: found.vision ? 'yes' : 'no' };
+}
+
+/** The models the picker has loaded for a CLI provider (the settings read the same list). */
+export function useCliModels(provider: AiCliProvider): AiModelsResult | null {
+  useSyncExternalStore(subscribeLoaded, loadedVersion);
+  return loaded.get(`cli:${provider}`) ?? null;
 }
 
 /** The model list for the active provider; stale-while-revalidate from main's cache. */
@@ -259,10 +267,18 @@ export function ModelPicker({
   );
   const models = result?.models ?? EMPTY_MODELS;
 
-  const current = useMemo(
-    () => models.find((m) => m.id === currentId) ?? (currentId ? stubModel(currentId) : null),
-    [models, currentId],
-  );
+  const current = useMemo(() => {
+    if (cli) {
+      // A saved alias ("sonnet") or '' (the CLI's default) resolves to a listed model.
+      return (
+        findCliModel(models, currentId) ??
+        (currentId ? stubModel(currentId) : (models.find((m) => m.isDefault) ?? null))
+      );
+    }
+    return models.find((m) => m.id === currentId) ?? (currentId ? stubModel(currentId) : null);
+  }, [models, currentId, cli]);
+  // The row to tick: the canonical id, whatever name was saved.
+  const selectedId = cli ? (current?.id ?? currentId) : currentId;
 
   const choose = (id: string) => {
     if (cli) {
@@ -349,7 +365,8 @@ export function ModelPicker({
           local={local}
           localUrl={cli ? `${cliProviderName(cli)} on this computer` : localUrl}
           cliName={cli ? cliProviderName(cli) : null}
-          currentId={currentId}
+          currentId={selectedId}
+          cliList={cli ? { updateRequired: result?.updateRequired ?? [] } : null}
           favorites={favorites}
           recents={recents}
           onChoose={choose}
@@ -374,6 +391,8 @@ type BodyProps = {
   local: boolean;
   localUrl: string;
   cliName: string | null;
+  /** Codex / Claude Code: how their list is laid out. */
+  cliList: { updateRequired: readonly CliUpdateRequired[] } | null;
   currentId: string;
   favorites: string[];
   recents: string[];
@@ -410,15 +429,31 @@ function PickerBody(props: BodyProps) {
         local,
         now,
         visionOnly,
+        ...(props.cliList ? { cli: props.cliList } : {}),
       }),
-    [models, tab, query, favorites, recents, currentId, legacyOpen, local, now, visionOnly],
+    [
+      models,
+      tab,
+      query,
+      favorites,
+      recents,
+      currentId,
+      legacyOpen,
+      local,
+      now,
+      visionOnly,
+      props.cliList,
+    ],
   );
   const rail = useMemo(
     () => railEntries(visionOnly ? models.filter((m) => m.vision) : models),
     [models, visionOnly],
   );
 
-  const selectable = useMemo(() => items.filter((i) => i.kind !== 'header'), [items]);
+  const selectable = useMemo(
+    () => items.filter((i) => i.kind !== 'header' && i.kind !== 'update'),
+    [items],
+  );
   const numbers = useMemo(() => {
     const map = new Map<string, number>();
     for (const i of items) if (i.kind === 'model') map.set(i.key, map.size + 1);
@@ -610,6 +645,7 @@ function PickerBody(props: BodyProps) {
                     number={numbers.get(item.key)}
                     favorite={item.kind === 'model' && favorites.includes(item.model.id)}
                     canFavorite={!local}
+                    cli={props.cliList !== null}
                     now={now}
                     onHover={() => setHiKey(item.key)}
                     onActivate={() => activate(item)}
@@ -639,6 +675,7 @@ function PickerBody(props: BodyProps) {
           loading={loading}
           local={local}
           localUrl={props.localUrl}
+          cliName={props.cliName}
           onRefresh={props.onRefresh}
           now={now}
         />
@@ -757,6 +794,7 @@ function Row({
   number,
   favorite,
   canFavorite,
+  cli,
   now,
   onHover,
   onActivate,
@@ -769,6 +807,8 @@ function Row({
   number: number | undefined;
   favorite: boolean;
   canFavorite: boolean;
+  /** Codex / Claude Code row: name, then the model id in mono. */
+  cli: boolean;
   now: number;
   onHover: () => void;
   onActivate: () => void;
@@ -800,7 +840,35 @@ function Row({
             item.open && 'rotate-90',
           )}
         />
-        <span>Legacy models · {item.count}</span>
+        <span>
+          {item.label ?? 'Legacy models'} · {item.count}
+        </span>
+      </div>
+    );
+  }
+
+  if (item.kind === 'update') {
+    return (
+      <div
+        id={id}
+        data-key={item.key}
+        // biome-ignore lint/a11y/useSemanticElements: an option of the combobox's listbox
+        role="option"
+        aria-selected={false}
+        aria-disabled
+        tabIndex={-1}
+        data-testid="ai-model-update-required"
+        className="flex h-11 w-full cursor-default items-center gap-2 rounded-[6px] px-2 opacity-60"
+      >
+        <span className="w-3.5 shrink-0" />
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-[13px] leading-[18px] text-[var(--wb-text)]">
+            {item.name}
+          </div>
+          <div className="truncate text-[11.5px] leading-[16px] text-[var(--wb-text-3)]">
+            Update Claude Code to v{item.minVersion} to use
+          </div>
+        </div>
       </div>
     );
   }
@@ -834,6 +902,7 @@ function Row({
   const price = formatPrice(m);
   const context = formatContext(m.contextLength);
   const meta = [m.vendorName, context, price].filter(Boolean).join(' · ');
+  const showNew = cli ? m.badge === 'new' : isNew(m, now);
   return (
     // biome-ignore lint/a11y/useKeyWithClickEvents: keyboard goes through the search field (aria-activedescendant)
     <div
@@ -864,12 +933,12 @@ function Row({
           >
             {m.name}
           </span>
-          {isNew(m, now) && (
+          {showNew && (
             <span className="shrink-0 rounded-[4px] bg-[color-mix(in_oklab,var(--wb-accent)_16%,transparent)] px-1 text-[11px] font-semibold leading-[15px] text-[var(--wb-accent-text)] [font-variant-caps:all-small-caps]">
               new
             </span>
           )}
-          {m.tools ? (
+          {cli ? null : m.tools ? (
             <Wrench
               aria-label="Supports tools"
               data-tooltip="Supports tool calling"
@@ -884,7 +953,7 @@ function Row({
               No tools
             </span>
           )}
-          {m.vision && (
+          {!cli && m.vision && (
             <Eye
               aria-label="Accepts images"
               data-tooltip="Accepts images"
@@ -893,8 +962,17 @@ function Row({
           )}
         </div>
         <div className="flex min-w-0 items-center gap-1.5 text-[11.5px] leading-[16px] text-[var(--wb-text-3)]">
-          <VendorMark vendor={m.vendor} name={m.vendorName} modelName={m.name} size={12} />
-          <span className="min-w-0 truncate">{meta}</span>
+          {cli ? (
+            <>
+              <span className="min-w-0 truncate font-mono">{m.id}</span>
+              {m.isDefault && <span className="shrink-0">· Default</span>}
+            </>
+          ) : (
+            <>
+              <VendorMark vendor={m.vendor} name={m.vendorName} modelName={m.name} size={12} />
+              <span className="min-w-0 truncate">{meta}</span>
+            </>
+          )}
         </div>
       </div>
       {number !== undefined && number <= 9 && (
@@ -1006,9 +1084,11 @@ function Footer({
   loading,
   local,
   localUrl,
+  cliName,
   onRefresh,
   now,
 }: {
+  cliName: string | null;
   result: AiModelsResult | null;
   loading: boolean;
   local: boolean;
@@ -1018,7 +1098,13 @@ function Footer({
 }) {
   const when = result && result.fetchedAt > 0 ? formatAgo(result.fetchedAt, now) : null;
   let text: ReactNode;
-  if (local) {
+  if (cliName && result && !result.error) {
+    const v = result?.origin?.cliVersion;
+    text =
+      result?.origin?.kind === 'plasma-list'
+        ? `From Plasma's model list for ${cliName}${v ? ` v${v}` : ''}`
+        : `From ${cliName} on this computer`;
+  } else if (local) {
     text = result?.error ? (
       <span className="text-[var(--status-warn)]">{result.error}</span>
     ) : (

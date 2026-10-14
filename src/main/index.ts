@@ -14,6 +14,7 @@ import {
   isAiCliProvider,
 } from '@shared/ai-cli';
 import { isMemoryEnabled } from '@shared/ai-memory';
+import { AiModelsResultSchema } from '@shared/ai-models';
 import { isAgentReadSql } from '@shared/ai-readonly-sql';
 import { sshUnsupportedReason } from '@shared/connection-endpoint';
 import { CONNECTION_LOST, ConnectionLostError } from '@shared/connection-loss';
@@ -95,8 +96,10 @@ import {
   startAiChat,
   submitAiActionResult,
 } from './ai';
+import { manifestStore } from './ai-cli/model-manifest';
+import { cachedCliModels, resolveCliRunChoices } from './ai-cli/options';
 import { closeCliEndpoint, ensureEmptyDir } from './ai-cli/run';
-import { getCliStatus, listCliModels } from './ai-cli/status';
+import { getCliStatus } from './ai-cli/status';
 import {
   addMemory,
   deleteMemory,
@@ -2164,6 +2167,16 @@ function registerIpcHandlers() {
       saved: Boolean(chatConnectionId && memoryConnectionSaved(chatConnectionId)),
       secrets: () => knownSecretsFor(chatConnectionId),
     });
+    const choices = viaCli
+      ? await resolveCliRunChoices({
+          provider,
+          model: provider === 'codex' ? settings.aiCodexModel : settings.aiClaudeCodeModel,
+          effort: provider === 'codex' ? settings.aiCodexEffort : settings.aiClaudeCodeEffort,
+          serviceTier: provider === 'codex' ? settings.aiCodexServiceTier : '',
+          binaryOverride: provider === 'codex' ? settings.aiCodexPath : settings.aiClaudeCodePath,
+          cwd: await ensureEmptyDir(app.getPath('userData')),
+        }).catch(() => null)
+      : null;
     const result = await startAiChat(mainWindow, parsed, apiKey, settings.openrouterModel, {
       provider,
       memory,
@@ -2173,7 +2186,11 @@ function registerIpcHandlers() {
       ...(viaCli
         ? {
             cli: {
-              model: provider === 'codex' ? settings.aiCodexModel : settings.aiClaudeCodeModel,
+              model:
+                choices?.model ??
+                (provider === 'codex' ? settings.aiCodexModel : settings.aiClaudeCodeModel),
+              ...(choices?.effort ? { effort: choices.effort } : {}),
+              ...(choices?.serviceTier ? { serviceTier: choices.serviceTier } : {}),
               binaryOverride:
                 provider === 'codex' ? settings.aiCodexPath : settings.aiClaudeCodePath,
               userData: app.getPath('userData'),
@@ -2317,6 +2334,9 @@ function registerIpcHandlers() {
     }
   });
 
+  // The CLI model list's manifest keeps its last good copy in userData (cheap: nothing is read until a list is asked for).
+  manifestStore(app.getPath('userData'));
+
   ipcMain.handle(IpcChannel.AiListModels, async (_e, raw: unknown) => {
     const { refresh } = AiListModelsRequest.parse(raw ?? {});
     const settings = SettingsShape.parse(getAllSettings());
@@ -2324,10 +2344,13 @@ function registerIpcHandlers() {
     if (isAiCliProvider(settings.aiProvider)) {
       const codex = settings.aiProvider === 'codex';
       const dir = await ensureEmptyDir(app.getPath('userData'));
-      return listCliModels(
-        settings.aiProvider,
-        codex ? settings.aiCodexPath : settings.aiClaudeCodePath,
-        dir,
+      return AiModelsResultSchema.parse(
+        await cachedCliModels(
+          settings.aiProvider,
+          codex ? settings.aiCodexPath : settings.aiClaudeCodePath,
+          dir,
+          refresh === true,
+        ),
       );
     }
     return listOpenRouterModels(

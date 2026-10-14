@@ -407,6 +407,7 @@ async function runOnce(run: CliRun, skip: ReadonlySet<string>): Promise<AttemptR
       ],
       ...(run.model ? { model: run.model } : {}),
       ...(run.effort ? { effort: run.effort } : {}),
+      ...(run.serviceTier ? { serviceTier: run.serviceTier } : {}),
     });
     if (turn.error) {
       throw new Error(String((turn.error as Json).message ?? 'Codex refused the message.'));

@@ -5,6 +5,33 @@
  */
 import { z } from 'zod';
 
+/** One choice of a model option (a reasoning effort, a service tier). */
+export const CliOptionSchema = z.object({
+  id: z.string().min(1),
+  label: z.string(),
+  description: z.string().optional(),
+  isDefault: z.boolean().optional(),
+});
+export type CliOption = z.infer<typeof CliOptionSchema>;
+
+/** A setting a model offers: a select (effort, tier) or an on/off switch. */
+export const CliOptionDescriptorSchema = z.discriminatedUnion('type', [
+  z.object({
+    id: z.string().min(1),
+    label: z.string(),
+    type: z.literal('select'),
+    options: z.array(CliOptionSchema),
+    currentValue: z.string().optional(),
+  }),
+  z.object({ id: z.string().min(1), label: z.string(), type: z.literal('boolean') }),
+]);
+export type CliOptionDescriptor = z.infer<typeof CliOptionDescriptorSchema>;
+
+export const CliCapabilitiesSchema = z.object({
+  optionDescriptors: z.array(CliOptionDescriptorSchema),
+});
+export type CliCapabilities = z.infer<typeof CliCapabilitiesSchema>;
+
 export const AiModelSchema = z.object({
   id: z.string().min(1),
   /** Display name, vendor prefix stripped ("Claude Sonnet 5.5"). */
@@ -23,16 +50,41 @@ export const AiModelSchema = z.object({
   free: z.boolean(),
   /** Unix seconds, or null when the model does not expire. */
   expires: z.number().nullable(),
+  /** Codex / Claude Code lists only: other names the model answers to ("sonnet"). */
+  aliases: z.array(z.string()).optional(),
+  /** The CLI's (or Plasma's list's) default model. */
+  isDefault: z.boolean().optional(),
+  /** Older model, shown under "Older models". */
+  isLegacy: z.boolean().optional(),
+  badge: z.literal('new').optional(),
+  /** What the model offers: reasoning efforts, service tiers. */
+  capabilities: CliCapabilitiesSchema.optional(),
 });
 export type AiModel = z.infer<typeof AiModelSchema>;
 
-export type AiModelsResult = {
-  models: AiModel[];
+/** A model the installed Claude Code is too old for. */
+export const CliUpdateRequiredSchema = z.object({
+  slug: z.string(),
+  name: z.string(),
+  minVersion: z.string(),
+  badge: z.literal('new').optional(),
+});
+export type CliUpdateRequired = z.infer<typeof CliUpdateRequiredSchema>;
+
+export const AiModelsResultSchema = z.object({
+  models: z.array(AiModelSchema),
   /** Unix ms of the list (0 when there is none). */
-  fetchedAt: number;
-  source: 'live' | 'cache' | 'none';
-  error?: string;
-};
+  fetchedAt: z.number(),
+  source: z.enum(['live', 'cache', 'none']),
+  error: z.string().optional(),
+  /** Claude Code: current models the installed version cannot run yet. */
+  updateRequired: z.array(CliUpdateRequiredSchema).optional(),
+  /** Codex / Claude Code: where the list came from (the picker footer). */
+  origin: z
+    .object({ kind: z.enum(['codex', 'plasma-list']), cliVersion: z.string().optional() })
+    .optional(),
+});
+export type AiModelsResult = z.infer<typeof AiModelsResultSchema>;
 
 export type VendorInfo = { id: string; name: string };
 
@@ -261,12 +313,12 @@ export function groupForVendor(
   return { latest, legacy };
 }
 
-/** Case-insensitive; every word must appear in the name, id or vendor name. */
+/** Case-insensitive; every word must appear in the name, id, an alias or the vendor name. */
 export function searchModels(models: readonly AiModel[], query: string): AiModel[] {
   const words = query.toLowerCase().split(/\s+/).filter(Boolean);
   if (words.length === 0) return [...models];
   return models.filter((m) => {
-    const hay = `${m.name} ${m.id} ${m.vendorName}`.toLowerCase();
+    const hay = `${m.name} ${m.id} ${(m.aliases ?? []).join(' ')} ${m.vendorName}`.toLowerCase();
     return words.every((w) => hay.includes(w));
   });
 }

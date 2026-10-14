@@ -101,6 +101,9 @@ export interface CliChatInput {
   requestId: string;
   send(evt: AiChatEvent): void;
   model: string;
+  /** Reasoning effort / Codex service tier, already checked against the model. */
+  effort?: string;
+  serviceTier?: string;
   /** Settings override of the program's path ('' = find it). */
   binaryOverride: string;
   userData: string;
@@ -194,6 +197,8 @@ export async function runCliChat(input: CliChatInput, deps: CliChatDeps = {}): P
       launch: launchSpec(found.path, []),
       cwd,
       model: input.model,
+      ...(input.effort ? { effort: input.effort } : {}),
+      ...(input.serviceTier ? { serviceTier: input.serviceTier } : {}),
       system: input.system,
       prompt,
       images,

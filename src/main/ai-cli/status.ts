@@ -1,8 +1,13 @@
 import { execFile } from 'node:child_process';
+import { readFile } from 'node:fs/promises';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import type { AiCliProvider, AiCliStatus } from '@shared/ai-cli';
 import { cliPlanLabel, cliProviderName } from '@shared/ai-cli';
-import type { AiModel, AiModelsResult } from '@shared/ai-models';
+import type { AiModelsResult } from '@shared/ai-models';
 import { redactCliMessage } from './claude';
+import { buildCodexModels, claudeModelsForVersion } from './cli-models';
+import { type ManifestStore, manifestStore } from './model-manifest';
 import { type CliExit, cliEnv, codexEnv, spawnCli } from './proc';
 import { type CliName, type ResolveDeps, defaultResolveDeps, resolveBinary } from './resolve';
 import { launchSpec } from './resolve';
@@ -139,17 +144,31 @@ export type CodexAnswer =
     }
   | { ok: false; reason: string };
 
-/** Ask a Codex app-server a few things and stop it. `ok: false` says why it could not answer. */
-export async function codexQuery(
+export interface CodexConn {
+  ask(method: string, params: unknown): Promise<{ result: unknown } | { error: string }>;
+  userAgent?: string;
+  /** `initialize`'s codexHome, when Codex says. */
+  codexHome?: string;
+  /** Epoch ms just before the program was started. */
+  spawnedAtMs: number;
+}
+
+export type CodexSession<T> =
+  | { ok: true; value: T; userAgent?: string }
+  | { ok: false; reason: string };
+
+/** Start `codex app-server`, initialize, run `fn`, stop it. `ok: false` says why it could not answer. */
+export async function codexSession<T>(
   file: string,
   cwd: string,
-  methods: Array<[string, unknown]>,
+  fn: (conn: CodexConn) => Promise<T>,
   timeoutMs = 15_000,
-): Promise<CodexAnswer> {
+): Promise<CodexSession<T>> {
   await ensureShellEnv();
   const spec = launchSpec(file, ['app-server']);
   const ctl = new AbortController();
   const pending = new Map<number, (m: Record<string, unknown>) => void>();
+  const spawnedAtMs = Date.now();
   const proc = spawnCli({
     command: spec.command,
     args: spec.args,
@@ -166,8 +185,10 @@ export async function codexQuery(
       }
     },
   });
-  const ask = (id: number, method: string, params: unknown) =>
+  let nextId = 0;
+  const raw = (method: string, params: unknown) =>
     new Promise<Record<string, unknown>>((resolve) => {
+      const id = ++nextId;
       pending.set(id, resolve);
       proc.write({ id, method, params });
     });
@@ -182,8 +203,8 @@ export async function codexQuery(
   });
   try {
     const out = await Promise.race([
-      (async (): Promise<CodexAnswer | null> => {
-        const init = await ask(1, 'initialize', {
+      (async (): Promise<CodexSession<T> | null> => {
+        const init = await raw('initialize', {
           clientInfo: { name: 'plasma', title: 'Plasma', version: '0' },
           capabilities: null,
         });
@@ -192,17 +213,21 @@ export async function codexQuery(
           return { ok: false, reason: redactCliMessage(String(msg ?? 'initialize failed')) };
         }
         proc.write({ method: 'initialized' });
-        const results: unknown[] = [];
-        const errors: string[] = [];
-        let id = 1;
-        for (const [method, params] of methods) {
-          const r = await ask(++id, method, params);
-          const msg = (r.error as { message?: unknown } | undefined)?.message;
-          results.push(r.error ? null : r.result);
-          errors.push(r.error ? redactCliMessage(String(msg ?? 'failed')) : '');
-        }
-        const ua = (init.result as { userAgent?: unknown } | null)?.userAgent;
-        return { ok: true, ...(typeof ua === 'string' ? { userAgent: ua } : {}), results, errors };
+        const info = (init.result ?? {}) as { userAgent?: unknown; codexHome?: unknown };
+        const userAgent = typeof info.userAgent === 'string' ? info.userAgent : undefined;
+        const value = await fn({
+          async ask(method, params) {
+            const r = await raw(method, params);
+            const msg = (r.error as { message?: unknown } | undefined)?.message;
+            return r.error
+              ? { error: redactCliMessage(String(msg ?? 'failed')) }
+              : { result: r.result };
+          },
+          ...(userAgent ? { userAgent } : {}),
+          ...(typeof info.codexHome === 'string' ? { codexHome: info.codexHome } : {}),
+          spawnedAtMs,
+        });
+        return { ok: true, value, ...(userAgent ? { userAgent } : {}) };
       })(),
       gone,
       give,
@@ -221,42 +246,79 @@ export async function codexQuery(
   }
 }
 
-export function codexModelsFrom(result: unknown): AiModel[] {
-  const data = (result as { data?: unknown } | null)?.data;
-  if (!Array.isArray(data)) return [];
-  const out: AiModel[] = [];
-  for (const raw of data) {
-    const m = raw as { id?: unknown; model?: unknown; displayName?: unknown; hidden?: unknown };
-    const id = typeof m.model === 'string' && m.model ? m.model : m.id;
-    if (typeof id !== 'string' || !id || m.hidden === true) continue;
-    out.push(
-      cliModel('openai', 'OpenAI', id, typeof m.displayName === 'string' ? m.displayName : id),
-    );
-  }
-  return out;
+/** Ask a Codex app-server a few things and stop it. */
+export async function codexQuery(
+  file: string,
+  cwd: string,
+  methods: Array<[string, unknown]>,
+  timeoutMs = 15_000,
+): Promise<CodexAnswer> {
+  const r = await codexSession(
+    file,
+    cwd,
+    async (c) => {
+      const results: unknown[] = [];
+      const errors: string[] = [];
+      for (const [method, params] of methods) {
+        const a = await c.ask(method, params);
+        results.push('result' in a ? a.result : null);
+        errors.push('error' in a ? a.error : '');
+      }
+      return { results, errors };
+    },
+    timeoutMs,
+  );
+  if (!r.ok) return r;
+  return { ok: true, ...(r.userAgent ? { userAgent: r.userAgent } : {}), ...r.value };
 }
 
-export const CLAUDE_MODELS: AiModel[] = [
-  cliModel('anthropic', 'Anthropic', 'sonnet', 'sonnet'),
-  cliModel('anthropic', 'Anthropic', 'opus', 'opus'),
-  cliModel('anthropic', 'Anthropic', 'haiku', 'haiku'),
-];
+/** All pages of `model/list` (cursor / nextCursor). Null when the first page fails. */
+export async function listAllCodexModelPages(c: CodexConn): Promise<unknown[] | null> {
+  const pages: unknown[] = [];
+  let cursor: string | null | undefined;
+  for (let i = 0; i < 20; i++) {
+    const r = await c.ask('model/list', cursor ? { cursor } : {});
+    if ('error' in r) return pages.length > 0 ? pages : null;
+    pages.push(r.result);
+    cursor = (r.result as { nextCursor?: unknown } | null)?.nextCursor as string | null | undefined;
+    if (!cursor) break;
+  }
+  return pages;
+}
 
-function cliModel(vendor: string, vendorName: string, id: string, name: string): AiModel {
-  return {
-    id,
-    name,
-    vendor,
-    vendorName,
-    created: 0,
-    contextLength: null,
-    promptPrice: null,
-    completionPrice: null,
-    tools: true,
-    vision: true,
-    free: false,
-    expires: null,
-  };
+/** When Codex last wrote `models_cache.json` (epoch ms); NaN when unreadable. */
+export async function readModelsCacheFetchedAt(codexHome: string): Promise<number> {
+  try {
+    const j = JSON.parse(await readFile(join(codexHome, 'models_cache.json'), 'utf8')) as {
+      fetched_at?: unknown;
+    };
+    return typeof j.fetched_at === 'string' ? Date.parse(j.fetched_at) : Number.NaN;
+  } catch {
+    return Number.NaN;
+  }
+}
+
+/**
+ * `model/list` serves `CODEX_HOME/models_cache.json` while it is young, and the backend
+ * tailors the catalog to the client's originator. Wait (briefly) until a write newer than
+ * this process's start lands; false when none did, and the first answer stands.
+ */
+export async function waitForModelsCacheRefresh(
+  codexHome: string,
+  sinceMs: number,
+  opts: { timeoutMs?: number; pollMs?: number; read?: (home: string) => Promise<number> } = {},
+): Promise<boolean> {
+  const end = Date.now() + (opts.timeoutMs ?? 3_000);
+  const read = opts.read ?? readModelsCacheFetchedAt;
+  for (;;) {
+    if ((await read(codexHome)) >= sinceMs) return true;
+    if (Date.now() >= end) return false;
+    await new Promise((r) => setTimeout(r, opts.pollMs ?? 100));
+  }
+}
+
+function codexHomeOf(conn: CodexConn): string {
+  return conn.codexHome || codexEnv().CODEX_HOME || join(homedir(), '.codex');
 }
 
 export async function getCliStatus(
@@ -352,29 +414,70 @@ export async function listCliModels(
   override: string | undefined,
   cwd: string,
   deps?: ResolveDeps,
+  store: ManifestStore = manifestStore(),
+  opts: { cacheWaitMs?: number } = {},
 ): Promise<AiModelsResult> {
   await ensureShellEnv();
-  if (provider === 'claude-code') {
-    return { models: CLAUDE_MODELS, fetchedAt: Date.now(), source: 'live' };
-  }
-  const found = await resolveBinary('codex', override, deps ?? defaultResolveDeps());
+  const human = cliProviderName(provider);
+  const found = await resolveBinary(BIN[provider], override, deps ?? defaultResolveDeps());
   if (!found) {
     return {
       models: [],
       fetchedAt: 0,
       source: 'none',
-      error: 'Codex is not installed. Add it in Settings, AI.',
+      error: `${human} is not installed. Add it in Settings, AI.`,
     };
   }
-  const res = await codexQuery(found.path, cwd, [['model/list', {}]]);
-  const models = res.ok ? codexModelsFrom(res.results[0]) : [];
+  // Never waits on the network: the copy in memory (disk or bundle); the refresh runs behind.
+  const manifest = await store.current();
+  store.refreshInBackground();
+
+  if (provider === 'claude-code') {
+    const ver = await run(found.path, ['--version'], 8_000);
+    const version = ver.ok ? parseVersion(ver.stdout) : undefined;
+    const { models, updateRequired } = claudeModelsForVersion(manifest, version);
+    return {
+      models,
+      fetchedAt: Date.now(),
+      source: 'live',
+      ...(updateRequired.length > 0 ? { updateRequired } : {}),
+      origin: { kind: 'plasma-list', ...(version ? { cliVersion: version } : {}) },
+    };
+  }
+
+  const res = await codexSession(
+    found.path,
+    cwd,
+    async (c) => {
+      let pages = await listAllCodexModelPages(c);
+      if (!pages) return null;
+      if (
+        await waitForModelsCacheRefresh(codexHomeOf(c), c.spawnedAtMs, {
+          ...(opts.cacheWaitMs !== undefined ? { timeoutMs: opts.cacheWaitMs } : {}),
+        })
+      ) {
+        pages = (await listAllCodexModelPages(c)) ?? pages;
+      }
+      return pages;
+    },
+    25_000,
+  );
+  const models = res.ok && res.value ? buildCodexModels(res.value, manifest) : [];
   if (models.length === 0) {
     return {
       models: [],
       fetchedAt: 0,
       source: 'none',
-      error: 'Could not read the model list from Codex. Type a model name instead.',
+      error: res.ok
+        ? 'Could not read the model list from Codex. Type a model name instead.'
+        : `Codex did not answer: ${res.reason}`,
     };
   }
-  return { models, fetchedAt: Date.now(), source: 'live' };
+  const version = versionFromUserAgent(res.ok ? res.userAgent : undefined);
+  return {
+    models,
+    fetchedAt: Date.now(),
+    source: 'live',
+    origin: { kind: 'codex', ...(version ? { cliVersion: version } : {}) },
+  };
 }

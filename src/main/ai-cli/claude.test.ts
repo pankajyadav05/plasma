@@ -45,6 +45,19 @@ describe('buildClaudeArgs', () => {
     expect(arg('--mcp-config')).toBe('/tmp/cfg.json');
   });
 
+  it('--effort only when an effort is chosen', () => {
+    expect(args).not.toContain('--effort');
+    const withEffort = buildClaudeArgs({
+      model: 'claude-haiku-5-5',
+      systemPromptPath: '/s',
+      mcpConfigPath: '/c',
+      hasTools: false,
+      effort: 'high',
+    });
+    expect(withEffort[withEffort.indexOf('--effort') + 1]).toBe('high');
+    expect(withEffort[withEffort.indexOf('--model') + 1]).toBe('claude-haiku-5-5');
+  });
+
   it('pre-approves only the plasma server, and only when there are tools', () => {
     expect(arg('--allowedTools')).toBe('mcp__plasma_chat');
     const none = buildClaudeArgs({
