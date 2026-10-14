@@ -1,5 +1,5 @@
 import { redactCliMessage } from './claude';
-import { cliEnv, spawnCli } from './proc';
+import { codexEnv, spawnCli } from './proc';
 import type { CliProcess } from './proc';
 import type { CliRun, CliRunResult } from './types';
 
@@ -255,7 +255,7 @@ async function runOnce(run: CliRun, skip: ReadonlySet<string>): Promise<AttemptR
       ...run.launch.args,
       ...buildCodexArgs({ endpointUrl: run.endpoint?.url ?? null, skipFeatures: skip }),
     ],
-    env: cliEnv(run.endpoint ? { [CODEX_TOKEN_ENV]: run.endpoint.token } : {}),
+    env: codexEnv(run.endpoint ? { [CODEX_TOKEN_ENV]: run.endpoint.token } : {}),
     cwd: run.cwd,
     timeoutMs: run.timeoutMs,
     onLine(line) {

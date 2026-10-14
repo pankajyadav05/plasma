@@ -24,6 +24,8 @@ export const AiCliStatus = z.object({
   plan: z.string().optional(),
   path: z.string().optional(),
   error: z.string().optional(),
+  /** The program is there but did not answer (not the same as signed out). */
+  unreachable: z.boolean().optional(),
 });
 export type AiCliStatus = z.infer<typeof AiCliStatus>;
 
@@ -66,6 +68,9 @@ export function describeCliStatus(s: AiCliStatus | null): {
   if (!s) return { tone: 'idle', text: 'Checking...' };
   const name = cliProviderName(s.provider);
   if (!s.installed) return { tone: 'warn', text: `${name} is not installed` };
+  if (s.unreachable) {
+    return { tone: 'warn', text: s.error ?? `${name} did not answer` };
+  }
   if (!s.signedIn) {
     return {
       tone: 'warn',

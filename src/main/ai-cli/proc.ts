@@ -1,4 +1,5 @@
 import { type ChildProcess, spawn } from 'node:child_process';
+import { shellEnvPatch } from './shell-env';
 
 /**
  * One CLI child process: argv array (never a shell), stdout cut into lines with
@@ -193,12 +194,18 @@ export function spawnCli(opts: SpawnOptions): CliProcess {
   };
 }
 
-/** The environment a CLI child gets: ours, minus what must not leak into it. */
+/** The environment a CLI child gets: ours plus the login shell's, minus what must not leak into it. */
 export function cliEnv(extra: Record<string, string> = {}): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   for (const [key, value] of Object.entries(process.env)) {
     if (key === 'ELECTRON_RUN_AS_NODE' || key.startsWith('PLASMA_')) continue;
     env[key] = value;
   }
-  return { ...env, ...extra };
+  // The login shell's PATH and friends (read once, see shell-env.ts); a Dock-launched app lacks them.
+  return { ...env, ...shellEnvPatch(), ...extra };
+}
+
+/** `codex app-server` is named "Plasma" to the backend unless the user already set their own name. */
+export function codexEnv(extra: Record<string, string> = {}): NodeJS.ProcessEnv {
+  return { CODEX_INTERNAL_ORIGINATOR_OVERRIDE: 'Plasma', ...cliEnv(extra) };
 }

@@ -130,7 +130,8 @@ if (kind === 'codex') {
       waiting.get(m.id)?.(m);
       return;
     }
-    if (m.method === 'initialize') return out({ id: m.id, result: { userAgent: 'fake' } });
+    if (m.method === 'initialize')
+      return out({ id: m.id, result: { userAgent: process.env.FAKE_UA ?? 'fake' } });
     if (m.method === 'config/read') {
       if (mode === 'config-fails') return out({ id: m.id, error: { message: 'nope' } });
       return out({
@@ -165,7 +166,13 @@ if (kind === 'codex') {
         });
       return;
     }
-    if (m.method === 'account/read')
+    if (m.method === 'account/read') {
+      if (mode === 'account-error')
+        return out({ id: m.id, error: { message: 'account service down' } });
+      if (mode === 'signed-out')
+        return out({ id: m.id, result: { account: null, requiresOpenaiAuth: true } });
+      if (mode === 'no-auth-needed')
+        return out({ id: m.id, result: { account: null, requiresOpenaiAuth: false } });
       return out({
         id: m.id,
         result: {
@@ -173,6 +180,7 @@ if (kind === 'codex') {
           requiresOpenaiAuth: false,
         },
       });
+    }
     if (m.method === 'model/list')
       return out({
         id: m.id,

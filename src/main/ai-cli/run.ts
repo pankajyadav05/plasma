@@ -14,6 +14,7 @@ import {
   launchSpec,
   resolveBinary,
 } from './resolve';
+import { ensureShellEnv } from './shell-env';
 import { type ToolEndpoint, createToolEndpoint, mcpToolsFromOpenAi } from './tool-endpoint';
 import type { CliRun, CliRunResult } from './types';
 
@@ -135,6 +136,7 @@ export async function runCliChat(input: CliChatInput, deps: CliChatDeps = {}): P
   const bin = provider === 'codex' ? 'codex' : 'claude';
   let found: Resolved | null;
   try {
+    await ensureShellEnv();
     found = await resolveBinary(bin, input.binaryOverride, deps.resolve ?? defaultResolveDeps());
   } catch {
     found = null;

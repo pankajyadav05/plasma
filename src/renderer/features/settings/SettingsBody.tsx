@@ -1033,10 +1033,11 @@ function CliProviderRows({ provider }: { provider: AiCliProvider }) {
         <div className="flex min-h-[26px] flex-wrap items-center gap-2">
           <span
             className="min-w-0 max-w-[360px] truncate font-mono text-[12px] text-[var(--wb-text-2)]"
-            title={path || undefined}
+            title={path || status?.path || undefined}
             data-testid="ai-cli-path"
           >
-            {path || 'Found automatically'}
+            {path ||
+              (status?.path ? `Found automatically · ${status.path}` : 'Found automatically')}
           </span>
           <Button type="button" variant="secondary" size="sm" onClick={() => void choose(false)}>
             Choose…

@@ -7,11 +7,13 @@ import { defaultResolveDeps } from './resolve';
 import {
   CLAUDE_MODELS,
   codexModelsFrom,
+  failureReason,
   getCliStatus,
   listCliModels,
   parseClaudeAuth,
   parseCodexAccount,
   parseVersion,
+  versionFromUserAgent,
 } from './status';
 import { FAKE_CLI } from './test-util';
 
@@ -88,6 +90,33 @@ describe('codexModelsFrom', () => {
   });
   it('Claude offers the three aliases, sonnet first', () => {
     expect(CLAUDE_MODELS.map((m) => m.id)).toEqual(['sonnet', 'opus', 'haiku']);
+  });
+});
+
+describe('Codex account and version, the way T3 reads them', () => {
+  it('signed out only for account null with requiresOpenaiAuth true', () => {
+    expect(parseCodexAccount({ account: null, requiresOpenaiAuth: true }).signedIn).toBe(false);
+    expect(parseCodexAccount({ account: null, requiresOpenaiAuth: false }).signedIn).toBe(true);
+    expect(parseCodexAccount({ account: null })).toEqual({ signedIn: false });
+  });
+
+  it('takes the version from the userAgent', () => {
+    expect(versionFromUserAgent('codex_cli_rs/0.162.1 (Mac OS 15.1; arm64) iTerm')).toBe('0.162.1');
+    expect(versionFromUserAgent('Plasma/0.162.1')).toBe('0.162.1');
+    expect(versionFromUserAgent('fake')).toBeUndefined();
+    expect(versionFromUserAgent(undefined)).toBeUndefined();
+  });
+
+  it('words why a program did not answer, redacted', () => {
+    const base = { code: null, signal: null, stderrTail: '', timedOut: false };
+    expect(failureReason({ ...base, spawnError: 'ENOENT' })).toMatch(/ENOENT/);
+    expect(
+      failureReason({ ...base, code: 127, stderrTail: 'env: node: No such file or directory\n' }),
+    ).toBe('env: node: No such file or directory');
+    expect(failureReason({ ...base, code: 2, stderrTail: 'boom Bearer abcdefghijklmnop\n' })).toBe(
+      'exited with code 2: boom Bearer [redacted]',
+    );
+    expect(failureReason({ ...base, timedOut: true })).toBe('no answer in time');
   });
 });
 
@@ -188,6 +217,101 @@ exec "${process.execPath}" "${FAKE_CLI}" codex "$@"
     expect(JSON.stringify(s)).not.toContain('secret@example.com');
     const models = await listCliModels('codex', fake, dir);
     expect(models.models.map((m) => m.id)).toEqual(['gpt-fake-1']);
+  });
+
+  const fakeCodex = (body: string) => {
+    dir = mkdtempSync(join(tmpdir(), 'plasma-status-'));
+    const fake = join(dir, 'codex');
+    writeFileSync(fake, body);
+    chmodSync(fake, 0o755);
+    return fake;
+  };
+  const viaFake = `#!/bin/sh
+if [ "$1" = "--version" ]; then echo "codex-cli 7.7.7"; exit 0; fi
+exec "${process.execPath}" "${FAKE_CLI}" codex "$@"
+`;
+
+  it('Codex: version from the userAgent, no --version needed', async () => {
+    const fake = fakeCodex(`#!/bin/sh
+exec "${process.execPath}" "${FAKE_CLI}" codex "$@"
+`);
+    process.env.FAKE_UA = 'codex_cli_rs/0.162.1 (Linux)';
+    try {
+      const s = await getCliStatus('codex', fake, dir);
+      expect(s).toMatchObject({ version: '0.162.1', signedIn: true });
+    } finally {
+      Reflect.deleteProperty(process.env, 'FAKE_UA');
+    }
+  });
+
+  it('Codex: account null + requiresOpenaiAuth true is signed out; false is not', async () => {
+    const fake = fakeCodex(viaFake);
+    process.env.FAKE_MODE = 'signed-out';
+    try {
+      const out = await getCliStatus('codex', fake, dir);
+      expect(out).toMatchObject({ installed: true, signedIn: false });
+      expect(out.unreachable).toBeUndefined();
+      expect(out.error).toMatch(/codex login/);
+      process.env.FAKE_MODE = 'no-auth-needed';
+      expect((await getCliStatus('codex', fake, dir)).signedIn).toBe(true);
+    } finally {
+      Reflect.deleteProperty(process.env, 'FAKE_MODE');
+    }
+  });
+
+  it('Codex: an account/read error is "did not answer", not "not signed in"', async () => {
+    const fake = fakeCodex(viaFake);
+    process.env.FAKE_MODE = 'account-error';
+    try {
+      const s = await getCliStatus('codex', fake, dir);
+      expect(s).toMatchObject({
+        installed: true,
+        signedIn: false,
+        unreachable: true,
+        version: '7.7.7',
+      });
+      expect(s.error).toBe('Codex did not answer: account service down');
+      expect(describeCliStatus(s).text).toBe('Codex did not answer: account service down');
+    } finally {
+      Reflect.deleteProperty(process.env, 'FAKE_MODE');
+    }
+  });
+
+  it('Codex: a program that dies at start says why', async () => {
+    const fake = fakeCodex(`#!/bin/sh
+echo "env: node: No such file or directory" >&2
+exit 127
+`);
+    const s = await getCliStatus('codex', fake, dir);
+    expect(s).toMatchObject({ installed: true, signedIn: false, unreachable: true });
+    expect(s.error).toBe('Codex did not answer: env: node: No such file or directory');
+  });
+
+  it('Claude: a program that cannot run is not "signed out"', async () => {
+    dir = mkdtempSync(join(tmpdir(), 'plasma-status-'));
+    const fake = join(dir, 'claude');
+    writeFileSync(fake, '#!/bin/sh\necho "env: node: No such file or directory" >&2\nexit 127\n');
+    chmodSync(fake, 0o755);
+    const s = await getCliStatus('claude-code', fake, dir);
+    expect(s).toMatchObject({ signedIn: false, unreachable: true });
+    expect(s.error).toBe('Claude Code did not answer: env: node: No such file or directory');
+  });
+
+  it('Claude: signed out (exit 1 with the JSON answer) stays "not signed in"', async () => {
+    dir = mkdtempSync(join(tmpdir(), 'plasma-status-'));
+    const fake = join(dir, 'claude');
+    writeFileSync(
+      fake,
+      `#!/bin/sh
+if [ "$1" = "auth" ]; then echo '{"loggedIn":false}'; exit 1; fi
+echo "9.9.9"
+`,
+    );
+    chmodSync(fake, 0o755);
+    const s = await getCliStatus('claude-code', fake, dir);
+    expect(s.signedIn).toBe(false);
+    expect(s.unreachable).toBeUndefined();
+    expect(s.error).toMatch(/Not signed in/);
   });
 
   it('lists Claude models without starting anything', async () => {
