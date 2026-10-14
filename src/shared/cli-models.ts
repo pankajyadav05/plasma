@@ -125,3 +125,15 @@ export function cliTraits(
 export function storedOption(options: OptionList, picked: string): string {
   return options.find((o) => o.isDefault)?.id === picked ? '' : picked;
 }
+
+/**
+ * A short name for the composer chip: the model's own `shortName`, else its name without
+ * the maker's word ("Claude Haiku 5.5" -> "Haiku 5.5"; "GPT-6 Luna" stays).
+ */
+export function shortModelName(
+  m: Pick<AiModel, 'name'> & { shortName?: string | undefined },
+): string {
+  if (m.shortName) return m.shortName;
+  const short = m.name.replace(/^(Claude|Anthropic)\s+/i, '').trim();
+  return short || m.name;
+}

@@ -31,7 +31,7 @@ import {
   useState,
 } from 'react';
 import { ImagePreview, imageLabel } from './AiImages';
-import { CompactControlsMenu, Group, Item, Rule, TraitsChip, useCliTraitsState } from './CliTraits';
+import { CompactControlsMenu, Group, Item, TraitsChip, useCliTraitsState } from './CliTraits';
 import { ModelPicker, useCurrentModelVision } from './ModelPicker';
 
 const ACCEPT = 'image/png,image/jpeg,image/webp,image/gif';
@@ -84,8 +84,9 @@ export function AiComposer({
   const hasTraits = useCliTraitsState() !== null;
   const controlsRef = useRef<HTMLDivElement>(null);
   const controlsWidth = useElementWidth(controlsRef);
-  // Narrow panels fold choices into one "..." menu: Views and Row data first, the traits last.
-  const tight = controlsWidth > 0 && controlsWidth < 340;
+  // Folding in steps: labels, then icon-only Views / Row data, then the traits chip drops its
+  // chevron and dividers (tight), then traits and Views move into one "..." menu (narrow).
+  const tight = controlsWidth < 380 && controlsWidth > 0;
   const narrow = controlsWidth > 0 && controlsWidth < 240;
   const noVision = images.length > 0 && vision.state === 'no';
   const slots = AI_MAX_IMAGES_PER_MESSAGE - images.length - processing.length;
@@ -331,11 +332,15 @@ export function AiComposer({
         />
         <div
           ref={controlsRef}
-          className="@container/controls flex min-w-0 items-center gap-0.5 px-2 pb-2"
+          className={cn(
+            '@container/controls flex min-w-0 items-center gap-0.5 pb-2',
+            tight ? 'px-1.5' : 'px-2',
+          )}
         >
           <div className="flex min-w-0 flex-1 items-center gap-0.5 overflow-hidden">
             <ModelPicker
               className="min-w-0 shrink"
+              dense={tight}
               open={pickerOpen}
               onOpenChange={setPickerOpen}
               imagesAttached={images.length > 0}
@@ -346,27 +351,18 @@ export function AiComposer({
                 <TraitsChip dense={tight} />
               </>
             )}
-            {!tight && (
+            {agent && !narrow && (
               <>
-                {agent && (
-                  <>
-                    <Divider />
-                    <ViewsControl />
-                  </>
-                )}
-                <Divider />
-                <RowDataControl />
+                {!tight && <Divider />}
+                <ViewsControl dense={tight} />
               </>
             )}
-            {/* A narrow panel folds the choices into one menu. */}
-            {(tight || (hasTraits && narrow)) && (
-              <>
-                <Divider />
-                <CompactControlsMenu
-                  withTraits={narrow}
-                  extra={tight ? <FoldedChoices agent={agent} /> : undefined}
-                />
-              </>
+            {/* Row data is a safety indicator: its icon stays at every width. */}
+            {!tight && <Divider />}
+            <RowDataControl dense={tight} />
+            {/* Only a very narrow panel folds the traits and Views into one menu. */}
+            {narrow && (hasTraits || agent) && (
+              <CompactControlsMenu withTraits extra={agent ? <FoldedViews /> : undefined} />
             )}
           </div>
           <input
@@ -395,7 +391,7 @@ export function AiComposer({
             disabled={!enabled || slots <= 0}
             onClick={() => fileRef.current?.click()}
             className={cn(
-              'ml-1 grid h-7 w-7 shrink-0 cursor-pointer place-items-center rounded-full text-[var(--wb-text-2)] transition-colors duration-100',
+              'ml-0.5 grid h-7 w-7 shrink-0 cursor-pointer place-items-center rounded-full text-[var(--wb-text-2)] transition-colors duration-100',
               'hover:bg-[var(--wb-control-hover)] hover:text-[var(--wb-text)]',
               'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
               'disabled:cursor-default disabled:opacity-45 disabled:hover:bg-transparent disabled:hover:text-[var(--wb-text-2)]',
@@ -493,7 +489,7 @@ function RoundButton({
       onClick={onClick}
       disabled={disabled}
       className={cn(
-        'ml-1 grid h-7 w-7 shrink-0 cursor-pointer place-items-center rounded-full transition-[background-color,opacity,transform] duration-150 active:scale-95',
+        'ml-0.5 grid h-7 w-7 shrink-0 cursor-pointer place-items-center rounded-full transition-[background-color,opacity,transform] duration-150 active:scale-95',
         'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-[var(--wb-field)]',
         tone === 'stop'
           ? 'bg-[var(--wb-text)] text-[var(--wb-field)] hover:opacity-85'
@@ -513,7 +509,9 @@ function Chip({
   ariaLabel,
   children,
   testId,
+  dense = false,
 }: {
+  dense?: boolean;
   icon: ReactNode;
   label: string;
   ariaLabel: string;
@@ -529,10 +527,11 @@ function Chip({
           title={label}
           data-testid={testId}
           className={cn(
-            'inline-flex h-6 shrink-0 items-center gap-1.5 rounded-[6px] px-1.5 text-[12px] leading-none text-[var(--wb-text-2)] transition-colors duration-100',
+            'inline-flex h-6 shrink-0 items-center gap-1.5 rounded-[6px] text-[12px] leading-none text-[var(--wb-text-2)] transition-colors duration-100',
             'hover:bg-[var(--wb-control-hover)] hover:text-[var(--wb-text)]',
             'data-[state=open]:bg-[var(--wb-control)] data-[state=open]:text-[var(--wb-text)]',
             'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+            dense ? 'px-1' : 'px-1.5',
           )}
         >
           <span className="shrink-0 [&_svg]:h-3.5 [&_svg]:w-3.5">{icon}</span>
@@ -596,7 +595,7 @@ function Option({
 }
 
 /** How the agent's view changes (columns, sort, filters, rows) apply. */
-function ViewsControl() {
+function ViewsControl({ dense }: { dense: boolean }) {
   const auto = useSession((s) => s.settings.aiAutoApplyViews === true);
   const updateSettings = useSession((s) => s.updateSettings);
   return (
@@ -605,6 +604,7 @@ function ViewsControl() {
       label={auto ? 'Views: apply' : 'Views: ask'}
       ariaLabel={`View changes: ${auto ? 'applied at once' : 'ask first'}. Change`}
       testId="ai-views-control"
+      dense={dense}
     >
       <div role="menu" aria-label="View changes">
         <Option
@@ -627,7 +627,7 @@ function ViewsControl() {
 }
 
 /** Per-connection opt-in: may tool results and query results carry rows to the model? */
-function RowDataControl() {
+function RowDataControl({ dense }: { dense: boolean }) {
   const id = useSession((s) => s.activeConfig?.id ?? null);
   const name = useSession((s) => s.activeConfig?.name ?? 'this connection');
   const prod = useSession((s) => (id ? s.settings.connectionTags?.[id] === 'prod' : false));
@@ -644,6 +644,7 @@ function RowDataControl() {
       label={on ? 'Row data on' : 'Row data off'}
       ariaLabel={`Row data for the AI: ${on ? 'on' : 'off'} for ${name}. Change`}
       testId="ai-rowdata-control"
+      dense={dense}
     >
       <div role="menu" aria-label="Row data">
         <Option
@@ -670,36 +671,23 @@ function RowDataControl() {
   );
 }
 
-/** The Views and Row data choices as menu groups, for the folded narrow-panel menu. */
-function FoldedChoices({ agent }: { agent: boolean }) {
+/** The Views choice as a menu group, for the folded very-narrow-panel menu. */
+function FoldedViews() {
   const auto = useSession((s) => s.settings.aiAutoApplyViews === true);
-  const id = useSession((s) => s.activeConfig?.id ?? null);
-  const map = useSession((s) => s.settings.connectionAiRowData);
-  const on = id ? map?.[id] === true : false;
   const updateSettings = useSession((s) => s.updateSettings);
-  const setRows = (v: boolean) => {
-    if (id) void updateSettings({ connectionAiRowData: { ...(map ?? {}), [id]: v } });
-  };
   return (
-    <div role="menu" aria-label="Other controls">
-      {agent && (
-        <Group label="View changes">
-          <Item
-            selected={!auto}
-            label="Ask first"
-            onSelect={() => void updateSettings({ aiAutoApplyViews: false })}
-          />
-          <Item
-            selected={auto}
-            label="Apply at once"
-            onSelect={() => void updateSettings({ aiAutoApplyViews: true })}
-          />
-        </Group>
-      )}
-      {agent && <Rule />}
-      <Group label="Row data">
-        <Item selected={!on} label="Names only" onSelect={() => setRows(false)} />
-        <Item selected={on} label="Let the AI read rows" onSelect={() => setRows(true)} />
+    <div role="menu" aria-label="View changes">
+      <Group label="View changes">
+        <Item
+          selected={!auto}
+          label="Ask first"
+          onSelect={() => void updateSettings({ aiAutoApplyViews: false })}
+        />
+        <Item
+          selected={auto}
+          label="Apply at once"
+          onSelect={() => void updateSettings({ aiAutoApplyViews: true })}
+        />
       </Group>
     </div>
   );

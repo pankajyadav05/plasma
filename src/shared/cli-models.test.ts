@@ -5,6 +5,7 @@ import {
   SERVICE_TIER_OPTION,
   cliTraits,
   explicitOption,
+  shortModelName,
   storedOption,
 } from './cli-models';
 
@@ -72,5 +73,14 @@ describe('storedOption', () => {
     // What the chip stores is what the run sends: nothing for '', the pick otherwise.
     expect(explicitOption(model, EFFORT_OPTION, storedOption(options, 'high'))).toBe('high');
     expect(explicitOption(model, EFFORT_OPTION, storedOption(options, 'medium'))).toBeUndefined();
+  });
+});
+
+describe('shortModelName', () => {
+  it('drops the maker word, keeps GPT names, prefers an explicit short name', () => {
+    expect(shortModelName({ name: 'Claude Haiku 5.5' })).toBe('Haiku 5.5');
+    expect(shortModelName({ name: 'GPT-6 Luna' })).toBe('GPT-6 Luna');
+    expect(shortModelName({ name: 'Claude' })).toBe('Claude');
+    expect(shortModelName({ name: 'Claude Haiku 5.5', shortName: 'Haiku' })).toBe('Haiku');
   });
 });

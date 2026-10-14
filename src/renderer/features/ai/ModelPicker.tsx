@@ -19,7 +19,7 @@ import {
   stubModel,
   vendorMonogram,
 } from '@shared/ai-models';
-import { findCliModel } from '@shared/cli-models';
+import { findCliModel, shortModelName } from '@shared/cli-models';
 import {
   AlertTriangle,
   Boxes,
@@ -232,7 +232,10 @@ export function ModelPicker({
   open: openProp,
   onOpenChange,
   imagesAttached = false,
+  dense: denseProp = false,
 }: {
+  /** Composer chip in a tight panel: no logo or chevron, so the name stays whole. */
+  dense?: boolean;
   /** `composer`: a quiet chip under the chat input. `field`: a full-width settings field. */
   variant?: 'composer' | 'field';
   className?: string;
@@ -254,6 +257,8 @@ export function ModelPicker({
   // A CLI provider lists its own models like a local server does: one flat list, no stars.
   const cli = isAiCliProvider(provider) ? provider : null;
   const local = provider === 'local' || cli !== null;
+  // Only a CLI chip has a short name; the others keep their logo and chevron.
+  const dense = denseProp && cli !== null;
   const currentId = (cli ? cliModel : provider === 'local' ? localModel : orModel)?.trim() ?? '';
   const [openState, setOpenState] = useState(false);
   const open = openProp ?? openState;
@@ -310,18 +315,19 @@ export function ModelPicker({
             aria-label={`Model: ${label}. Change model`}
             data-testid="ai-model-trigger"
             className={cn(
-              'inline-flex h-6 min-w-[4.5rem] max-w-full items-center gap-1.5 rounded-[6px] pl-1 pr-1.5 text-[12px] leading-none text-[var(--wb-text-2)] transition-colors duration-100',
+              'inline-flex h-6 min-w-0 max-w-full items-center gap-1.5 rounded-[6px] pl-1 pr-1.5 text-[12px] leading-none text-[var(--wb-text-2)] transition-colors duration-100',
               'hover:bg-[var(--wb-control-hover)] hover:text-[var(--wb-text)]',
               'data-[state=open]:bg-[var(--wb-control)] data-[state=open]:text-[var(--wb-text)]',
               'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+              dense && 'px-1.5',
               className,
             )}
           >
-            <VendorMark vendor={vendorKey} name={markName} modelName={current?.name} />
+            {!dense && <VendorMark vendor={vendorKey} name={markName} modelName={current?.name} />}
             <span className="truncate" title={label}>
-              {cli && current ? current.name : label}
+              {cli && current ? shortModelName(current) : label}
             </span>
-            <ChevronDown className="h-3 w-3 shrink-0 opacity-70" />
+            {!dense && <ChevronDown className="h-3 w-3 shrink-0 opacity-70" />}
           </button>
         ) : (
           <button
