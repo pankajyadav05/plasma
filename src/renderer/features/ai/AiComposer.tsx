@@ -24,12 +24,14 @@ import {
   type DragEvent,
   type KeyboardEvent,
   type ReactNode,
+  type RefObject,
   type SetStateAction,
   useLayoutEffect,
   useRef,
   useState,
 } from 'react';
 import { ImagePreview, imageLabel } from './AiImages';
+import { CompactControlsMenu, Group, Item, Rule, TraitsChip, useCliTraitsState } from './CliTraits';
 import { ModelPicker, useCurrentModelVision } from './ModelPicker';
 
 const ACCEPT = 'image/png,image/jpeg,image/webp,image/gif';
@@ -79,6 +81,12 @@ export function AiComposer({
   const [preview, setPreview] = useState<number | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
   const vision = useCurrentModelVision();
+  const hasTraits = useCliTraitsState() !== null;
+  const controlsRef = useRef<HTMLDivElement>(null);
+  const controlsWidth = useElementWidth(controlsRef);
+  // Narrow panels fold choices into one "..." menu: Views and Row data first, the traits last.
+  const tight = controlsWidth > 0 && controlsWidth < 340;
+  const narrow = controlsWidth > 0 && controlsWidth < 240;
   const noVision = images.length > 0 && vision.state === 'no';
   const slots = AI_MAX_IMAGES_PER_MESSAGE - images.length - processing.length;
 
@@ -321,7 +329,10 @@ export function AiComposer({
           aria-label="Message the assistant"
           className="min-h-[52px] w-full resize-none border-0 bg-transparent px-3.5 pb-1 pt-3 text-[13px] leading-[1.5] text-[var(--wb-text)] outline-none placeholder:text-[var(--wb-text-3)] disabled:cursor-not-allowed"
         />
-        <div className="@container/controls flex min-w-0 items-center gap-0.5 px-2 pb-2">
+        <div
+          ref={controlsRef}
+          className="@container/controls flex min-w-0 items-center gap-0.5 px-2 pb-2"
+        >
           <div className="flex min-w-0 flex-1 items-center gap-0.5 overflow-hidden">
             <ModelPicker
               className="min-w-0 shrink"
@@ -329,14 +340,34 @@ export function AiComposer({
               onOpenChange={setPickerOpen}
               imagesAttached={images.length > 0}
             />
-            {agent && (
+            {hasTraits && !narrow && (
               <>
-                <Divider />
-                <ViewsControl />
+                {!tight && <Divider />}
+                <TraitsChip dense={tight} />
               </>
             )}
-            <Divider />
-            <RowDataControl />
+            {!tight && (
+              <>
+                {agent && (
+                  <>
+                    <Divider />
+                    <ViewsControl />
+                  </>
+                )}
+                <Divider />
+                <RowDataControl />
+              </>
+            )}
+            {/* A narrow panel folds the choices into one menu. */}
+            {(tight || (hasTraits && narrow)) && (
+              <>
+                <Divider />
+                <CompactControlsMenu
+                  withTraits={narrow}
+                  extra={tight ? <FoldedChoices agent={agent} /> : undefined}
+                />
+              </>
+            )}
           </div>
           <input
             ref={fileRef}
@@ -401,6 +432,20 @@ export function AiComposer({
       </div>
     </div>
   );
+}
+
+/** The width of an element, kept up to date as the panel is resized. */
+function useElementWidth(ref: RefObject<HTMLElement | null>): number {
+  const [width, setWidth] = useState(0);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    setWidth(el.clientWidth);
+    const ro = new ResizeObserver(() => setWidth(el.clientWidth));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [ref]);
+  return width;
 }
 
 /** The tray's right side: the schema and tab parts of the sends line. */
@@ -622,5 +667,40 @@ function RowDataControl() {
         )}
       </div>
     </Chip>
+  );
+}
+
+/** The Views and Row data choices as menu groups, for the folded narrow-panel menu. */
+function FoldedChoices({ agent }: { agent: boolean }) {
+  const auto = useSession((s) => s.settings.aiAutoApplyViews === true);
+  const id = useSession((s) => s.activeConfig?.id ?? null);
+  const map = useSession((s) => s.settings.connectionAiRowData);
+  const on = id ? map?.[id] === true : false;
+  const updateSettings = useSession((s) => s.updateSettings);
+  const setRows = (v: boolean) => {
+    if (id) void updateSettings({ connectionAiRowData: { ...(map ?? {}), [id]: v } });
+  };
+  return (
+    <div role="menu" aria-label="Other controls">
+      {agent && (
+        <Group label="View changes">
+          <Item
+            selected={!auto}
+            label="Ask first"
+            onSelect={() => void updateSettings({ aiAutoApplyViews: false })}
+          />
+          <Item
+            selected={auto}
+            label="Apply at once"
+            onSelect={() => void updateSettings({ aiAutoApplyViews: true })}
+          />
+        </Group>
+      )}
+      {agent && <Rule />}
+      <Group label="Row data">
+        <Item selected={!on} label="Names only" onSelect={() => setRows(false)} />
+        <Item selected={on} label="Let the AI read rows" onSelect={() => setRows(true)} />
+      </Group>
+    </div>
   );
 }

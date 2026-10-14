@@ -81,3 +81,47 @@ export function findCliModel<T extends Pick<AiModel, 'id' | 'aliases'>>(
     models.find((m) => m.aliases?.some((a) => a.toLowerCase() === v.toLowerCase()))
   );
 }
+
+type OptionList = SelectDescriptor['options'];
+
+/** What the composer's reasoning / speed control shows for a CLI model. */
+export type CliTraits = {
+  effort: { options: OptionList; value: string } | null;
+  tier: { options: OptionList; value: string } | null;
+  /** Chip text: "Medium", "High · Fast". Empty when the model offers neither. */
+  label: string;
+};
+
+/**
+ * The reasoning and speed choices of `model` with the saved values applied. Speed
+ * is a Codex-only choice. The label names the reasoning level, and the speed only
+ * when it is not the model's default ("High · Fast").
+ */
+export function cliTraits(
+  provider: 'codex' | 'claude-code',
+  model: Pick<AiModel, 'capabilities'> | null | undefined,
+  saved: { effort?: string | undefined; serviceTier?: string | undefined },
+): CliTraits {
+  const e = selectDescriptor(model, EFFORT_OPTION);
+  const t = provider === 'codex' ? selectDescriptor(model, SERVICE_TIER_OPTION) : null;
+  const effort = e
+    ? { options: e.options, value: effectiveOption(model, EFFORT_OPTION, saved.effort) ?? '' }
+    : null;
+  const tier = t
+    ? {
+        options: t.options,
+        value: effectiveOption(model, SERVICE_TIER_OPTION, saved.serviceTier) ?? '',
+      }
+    : null;
+  const nameOf = (x: { options: OptionList; value: string } | null) =>
+    x?.options.find((o) => o.id === x.value);
+  const parts = [nameOf(effort)?.label];
+  const tierOpt = nameOf(tier);
+  if (tierOpt && !tierOpt.isDefault) parts.push(tierOpt.label);
+  return { effort, tier, label: parts.filter(Boolean).join(' · ') };
+}
+
+/** The value to store for a pick: '' for the model's default (so a newer default applies). */
+export function storedOption(options: OptionList, picked: string): string {
+  return options.find((o) => o.isDefault)?.id === picked ? '' : picked;
+}
