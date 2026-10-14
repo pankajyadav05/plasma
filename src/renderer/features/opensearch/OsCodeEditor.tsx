@@ -1,3 +1,4 @@
+import { ResizeIndicator } from '@/components/ui/resize-indicator';
 import { PLASMA_THEME_ID, registerMonacoThemes } from '@/features/editor/paperTheme';
 import { cn } from '@/lib/cn';
 import { useSession } from '@/stores/session';
@@ -263,6 +264,7 @@ export function SplitHandle({
   max?: number;
 }) {
   return (
+    // biome-ignore lint/a11y/useSemanticElements: an <hr> can't hold the resize grip
     <div
       role="separator"
       aria-orientation="horizontal"
@@ -286,7 +288,9 @@ export function SplitHandle({
         window.addEventListener('pointermove', move);
         window.addEventListener('pointerup', up);
       }}
-      className="h-1 shrink-0 cursor-row-resize bg-transparent hover:bg-[var(--wb-separator)] focus-visible:bg-[var(--wb-accent)] focus-visible:outline-none"
-    />
+      className="group/rz relative h-[7px] shrink-0 cursor-row-resize outline-none"
+    >
+      <ResizeIndicator orientation="horizontal" />
+    </div>
   );
 }

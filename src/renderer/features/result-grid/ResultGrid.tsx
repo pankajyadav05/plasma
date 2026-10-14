@@ -1,4 +1,5 @@
 import { Button } from '@/components/ui/button';
+import { ResizeIndicator } from '@/components/ui/resize-indicator';
 import { FixWithAi } from '@/features/ai/FixWithAi';
 import { RunOutcomePanel } from '@/features/editor/RunStatus';
 import { useGridMasking } from '@/features/presentation/presentation';
@@ -2077,9 +2078,14 @@ export function ResultGrid() {
                       autoFitColumn(origIdx);
                     }}
                     title="Drag to resize · double-click to fit"
-                    className="group/resize absolute right-0 top-0 z-10 flex h-full w-2 cursor-col-resize items-stretch justify-center"
+                    className="group/rz absolute -right-[5px] top-0 z-10 h-full w-[9px] cursor-col-resize"
                   >
-                    <div className="h-full w-px bg-transparent transition-colors group-hover/resize:bg-[var(--wb-accent)] group-active/resize:bg-[var(--wb-accent)]" />
+                    {/* Grip shows while the header is hovered so a wide result
+                        doesn't fill every column edge with handles. */}
+                    <ResizeIndicator
+                      orientation="vertical"
+                      gripClassName="opacity-0 group-hover/header:opacity-90"
+                    />
                   </div>
                 </th>
               );

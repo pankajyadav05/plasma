@@ -1,3 +1,4 @@
+import { ResizeIndicator } from '@/components/ui/resize-indicator';
 import { ipc } from '@/lib/ipc';
 import { useSession } from '@/stores/session';
 import { useCallback } from 'react';
@@ -101,11 +102,11 @@ export function SidebarResizer({ side = 'left' }: { side?: Side }) {
           persist();
         }
       }}
-      className="group/resizer relative z-20 -mx-[3px] flex h-full w-[6px] shrink-0 cursor-col-resize items-stretch justify-center outline-none"
+      className="group/rz relative z-20 -mx-[3px] flex h-full w-[6px] shrink-0 cursor-col-resize items-stretch justify-center outline-none"
     >
-      {/* The 1px pane separator is the sidebar's own border; this line only
-          appears on hover / drag, drawn on top of it. */}
-      <div className="h-full w-px bg-transparent transition-colors duration-instant group-hover/resizer:bg-[var(--wb-accent)] group-focus-visible/resizer:bg-[var(--wb-accent)] group-active/resizer:bg-[var(--wb-accent)]" />
+      {/* The 1px pane separator is the sidebar's own border; the indicator
+          draws its grip and hover line on top of it. */}
+      <ResizeIndicator orientation="vertical" />
     </div>
   );
 }

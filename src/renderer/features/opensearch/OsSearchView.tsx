@@ -1,5 +1,6 @@
 import { type DataColumn, DataTable } from '@/components/ui/data-table';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { ResizeIndicator } from '@/components/ui/resize-indicator';
 import { EmptyState, ViewFooter } from '@/components/ui/view-parts';
 import { IconButton, MenuItem, Pill, Segmented } from '@/components/ui/workbench';
 import { SidebarSearch, SidebarSearchRow, sidebarRowClass } from '@/features/sidebar/sidebar-parts';
@@ -1079,6 +1080,7 @@ function FieldPane({
         {statsLoading && <Loader2 className="h-3 w-3 animate-spin" aria-label="Loading stats" />}
       </div>
       {/* Resize handle (O22) */}
+      {/* biome-ignore lint/a11y/useSemanticElements: an <hr> can't hold the resize grip */}
       <div
         role="separator"
         aria-orientation="vertical"
@@ -1101,8 +1103,10 @@ function FieldPane({
           window.addEventListener('pointermove', move);
           window.addEventListener('pointerup', up);
         }}
-        className="absolute inset-y-0 right-0 w-1 cursor-col-resize hover:bg-[var(--wb-separator)] focus-visible:bg-[var(--wb-accent)] focus-visible:outline-none"
-      />
+        className="group/rz absolute inset-y-0 -right-[3px] z-10 w-[7px] cursor-col-resize outline-none"
+      >
+        <ResizeIndicator orientation="vertical" />
+      </div>
     </aside>
   );
 }
