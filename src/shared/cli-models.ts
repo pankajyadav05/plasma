@@ -45,9 +45,17 @@ export function effectiveOption(
   return defaultOption(d)?.id;
 }
 
+/** A model name that is safe to hand to a program as an argument (never starts with "-"). */
+export const SAFE_MODEL_RE = /^[A-Za-z0-9][\w.:@/[\]-]{0,127}$/;
+/** A reasoning effort or service tier id. */
+export const SAFE_OPTION_RE = /^[a-z][a-z0-9_-]{0,31}$/;
+export const isSafeModelName = (v: string) => SAFE_MODEL_RE.test(v);
+export const isSafeOptionId = (v: string) => SAFE_OPTION_RE.test(v);
+
 /**
- * What to put on the wire: nothing unless the user picked a value that differs from
- * the model's default (a '' setting follows the model, so a newer default applies at once).
+ * What to put on the wire: nothing for '' (the model's default, so a newer default applies
+ * at once), else the value the user picked, even when it equals the model's default today.
+ * A value the model does not offer is dropped.
  */
 export function explicitOption(
   model: Pick<AiModel, 'capabilities'> | null | undefined,
@@ -58,7 +66,7 @@ export function explicitOption(
   if (!wanted) return undefined;
   const d = selectDescriptor(model, id);
   if (!d || !d.options.some((o) => o.id === wanted)) return undefined;
-  return wanted === defaultOption(d)?.id ? undefined : wanted;
+  return wanted;
 }
 
 /** Find a model by id or alias (case-insensitive for aliases). */

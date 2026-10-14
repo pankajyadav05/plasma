@@ -1,5 +1,5 @@
-import { execFile } from 'node:child_process';
-import { userInfo } from 'node:os';
+import { type ChildProcess, spawn } from 'node:child_process';
+import { homedir, userInfo } from 'node:os';
 
 /**
  * The login shell's environment, the way T3 Code reads it (MIT, Copyright (c) 2026
@@ -32,7 +32,37 @@ export const LOGIN_SHELL_ENV_NAMES = [
   // Where the CLIs keep their sign-in, when the user moved it.
   'CODEX_HOME',
   'CLAUDE_CONFIG_DIR',
+  // How the CLIs sign in and reach their service (an API key, Bedrock, Vertex, a gateway, a proxy).
+  'ANTHROPIC_API_KEY',
+  'ANTHROPIC_BASE_URL',
+  'ANTHROPIC_AUTH_TOKEN',
+  'CLAUDE_CODE_USE_BEDROCK',
+  'CLAUDE_CODE_USE_VERTEX',
+  'AWS_PROFILE',
+  'AWS_REGION',
+  'AWS_DEFAULT_REGION',
+  'CLOUD_ML_REGION',
+  'ANTHROPIC_VERTEX_PROJECT_ID',
+  'OPENAI_API_KEY',
+  'HTTPS_PROXY',
+  'HTTP_PROXY',
+  'NO_PROXY',
+  'https_proxy',
+  'http_proxy',
+  'no_proxy',
+  'NODE_EXTRA_CA_CERTS',
+  'SSL_CERT_FILE',
+  'SSL_CERT_DIR',
 ] as const;
+
+/** Names whose value is a folder that a shell may have written with a leading "~". */
+const HOME_RELATIVE_NAMES = new Set(['CODEX_HOME', 'CLAUDE_CONFIG_DIR']);
+
+/** "~" and "~/x" -> the home folder; anything else unchanged. */
+export function expandHome(value: string, home: string): string {
+  if (value === '~') return home;
+  return value.startsWith('~/') ? `${home}${value.slice(1)}` : value;
+}
 
 export const LOGIN_SHELL_TIMEOUT_MS = 5_000;
 export const LAUNCHCTL_TIMEOUT_MS = 2_000;
@@ -111,13 +141,14 @@ export function mergeLoginEnv(
   base: NodeJS.ProcessEnv,
   login: Readonly<Record<string, string>>,
   platform: NodeJS.Platform,
+  home: string = homedir(),
 ): Record<string, string> {
   const patch: Record<string, string> = {};
   const path = mergePathEntries(login.PATH, base.PATH ?? base.Path, platform);
   if (path) patch.PATH = path;
   for (const [name, value] of Object.entries(login)) {
     if (name === 'PATH' || base[name]) continue;
-    patch[name] = value;
+    patch[name] = HOME_RELATIVE_NAMES.has(name) ? expandHome(value, home) : value;
   }
   return patch;
 }
@@ -152,6 +183,64 @@ export async function probeLoginShellEnv(deps: ShellEnvDeps): Promise<Record<str
   return found;
 }
 
+const POSIX = (platform: NodeJS.Platform) => platform === 'darwin' || platform === 'linux';
+
+/**
+ * Runs `file args` the way VS Code reads a shell environment: in its own process group
+ * with no stdin (an rc file that prompts cannot hang on a terminal), and on a timeout the
+ * whole group is killed, so nothing the rc file started outlives it and the app's own
+ * foreground group is never touched.
+ */
+export function runDetached(
+  file: string,
+  args: string[],
+  timeoutMs: number,
+): Promise<string | null> {
+  return new Promise((resolve) => {
+    let child: ChildProcess;
+    try {
+      child = spawn(file, args, {
+        detached: true,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        windowsHide: true,
+      });
+    } catch {
+      resolve(null);
+      return;
+    }
+    let out = '';
+    let settled = false;
+    const finish = (value: string | null) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(value);
+    };
+    const killGroup = () => {
+      try {
+        if (child.pid !== undefined) process.kill(-child.pid, 'SIGKILL');
+      } catch {
+        child.kill('SIGKILL');
+      }
+    };
+    const timer = setTimeout(() => {
+      killGroup();
+      finish(null);
+    }, timeoutMs);
+    timer.unref?.();
+    child.stdout?.on('data', (d: Buffer) => {
+      out += d.toString('utf8');
+      if (out.length > 256 * 1024) {
+        killGroup();
+        finish(null);
+      }
+    });
+    child.stderr?.resume();
+    child.once('error', () => finish(null));
+    child.once('close', (code) => finish(code === 0 ? out : null));
+  });
+}
+
 function realDeps(): ShellEnvDeps {
   let userShell: string | undefined;
   try {
@@ -159,51 +248,82 @@ function realDeps(): ShellEnvDeps {
   } catch {
     userShell = undefined;
   }
-  const run = (file: string, args: string[], timeout: number) =>
-    new Promise<string | null>((resolve) => {
-      execFile(
-        file,
-        args,
-        { timeout, windowsHide: true, maxBuffer: 256 * 1024, killSignal: 'SIGKILL' },
-        (err, stdout) => resolve(err ? null : String(stdout)),
-      );
-    });
   return {
     platform: process.platform,
     env: process.env,
     ...(userShell ? { userShell } : {}),
     runShell: (shell, script, timeout) =>
-      /^[\w/.+-]+$/.test(shell) ? run(shell, ['-ilc', script], timeout) : Promise.resolve(null),
-    launchctlPath: (timeout) => run('/bin/launchctl', ['getenv', 'PATH'], timeout),
+      /^[\w/.+-]+$/.test(shell)
+        ? runDetached(shell, ['-ilc', script], timeout)
+        : Promise.resolve(null),
+    launchctlPath: (timeout) => runDetached('/bin/launchctl', ['getenv', 'PATH'], timeout),
   };
 }
 
-let cached: Promise<Record<string, string>> | null = null;
-let patch: Record<string, string> = {};
+/** The merged patch for `deps` and whether the shell (or launchctl) answered with a PATH. Never rejects. */
+export async function loadShellEnvChecked(
+  deps: ShellEnvDeps,
+): Promise<{ patch: Record<string, string>; ok: boolean }> {
+  try {
+    const login = await probeLoginShellEnv(deps);
+    return {
+      patch: mergeLoginEnv(deps.env, login, deps.platform),
+      ok: !POSIX(deps.platform) || Boolean(login.PATH),
+    };
+  } catch {
+    return { patch: {}, ok: false };
+  }
+}
 
 /** The merged patch for `deps`; never rejects. */
-export function loadShellEnvPatch(deps: ShellEnvDeps): Promise<Record<string, string>> {
-  return probeLoginShellEnv(deps)
-    .then((login) => mergeLoginEnv(deps.env, login, deps.platform))
-    .catch(() => ({}) as Record<string, string>);
+export async function loadShellEnvPatch(deps: ShellEnvDeps): Promise<Record<string, string>> {
+  return (await loadShellEnvChecked(deps)).patch;
 }
 
-/** Reads the login shell once; later calls share the answer. Never rejects, never blocks start-up (call it when a CLI is first needed). */
-export function ensureShellEnv(): Promise<void> {
-  cached ??= loadShellEnvPatch(realDeps()).then((v) => {
-    patch = v;
-    return v;
-  });
-  return cached.then(() => undefined);
+export const SHELL_ENV_RETRY_MS = 60_000;
+
+/**
+ * A loader that reads the login shell once: only a success is kept. After a failure the
+ * next call tries again, but not more than once a minute. Calls share one run in flight.
+ */
+export function createShellEnvLoader(getDeps: () => ShellEnvDeps, now: () => number = Date.now) {
+  let patch: Record<string, string> = {};
+  let done = false;
+  let failedAt: number | null = null;
+  let inflight: Promise<void> | null = null;
+  return {
+    ensure(): Promise<void> {
+      if (done) return Promise.resolve();
+      if (inflight) return inflight;
+      if (failedAt !== null && now() - failedAt < SHELL_ENV_RETRY_MS) return Promise.resolve();
+      inflight = loadShellEnvChecked(getDeps())
+        .then((r) => {
+          patch = r.patch;
+          if (r.ok) done = true;
+          else failedAt = now();
+        })
+        .finally(() => {
+          inflight = null;
+        });
+      return inflight;
+    },
+    patch: (): Readonly<Record<string, string>> => patch,
+    reset() {
+      patch = {};
+      done = false;
+      failedAt = null;
+      inflight = null;
+    },
+  };
 }
+
+const loader = createShellEnvLoader(realDeps);
+
+/** Reads the login shell once (lazily; never at start-up). Never rejects. */
+export const ensureShellEnv = (): Promise<void> => loader.ensure();
 
 /** The merged values once `ensureShellEnv` has finished (empty before, or when nothing answered). */
-export function shellEnvPatch(): Readonly<Record<string, string>> {
-  return patch;
-}
+export const shellEnvPatch = (): Readonly<Record<string, string>> => loader.patch();
 
 /** For tests. */
-export function resetShellEnvForTests(): void {
-  cached = null;
-  patch = {};
-}
+export const resetShellEnvForTests = (): void => loader.reset();

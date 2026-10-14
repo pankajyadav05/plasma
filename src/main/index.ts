@@ -2174,7 +2174,6 @@ function registerIpcHandlers() {
           effort: provider === 'codex' ? settings.aiCodexEffort : settings.aiClaudeCodeEffort,
           serviceTier: provider === 'codex' ? settings.aiCodexServiceTier : '',
           binaryOverride: provider === 'codex' ? settings.aiCodexPath : settings.aiClaudeCodePath,
-          cwd: await ensureEmptyDir(app.getPath('userData')),
         }).catch(() => null)
       : null;
     const result = await startAiChat(mainWindow, parsed, apiKey, settings.openrouterModel, {

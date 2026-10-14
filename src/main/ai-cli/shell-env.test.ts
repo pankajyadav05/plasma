@@ -1,15 +1,23 @@
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   LOGIN_SHELL_ENV_NAMES,
+  SHELL_ENV_RETRY_MS,
   type ShellEnvDeps,
   captureCommand,
+  createShellEnvLoader,
+  expandHome,
   listLoginShellCandidates,
   loadShellEnvPatch,
   mergeLoginEnv,
   mergePathEntries,
   parseMarkedEnv,
   probeLoginShellEnv,
+  runDetached,
 } from './shell-env';
+import { alive, waitDead } from './test-util';
 
 const marked = (vars: Record<string, string>, banner = 'Welcome back\n') =>
   `${banner}${Object.entries(vars)
@@ -60,8 +68,32 @@ describe('marked output', () => {
     expect(LOGIN_SHELL_ENV_NAMES).toContain('CODEX_HOME');
     expect(LOGIN_SHELL_ENV_NAMES).toContain('CLAUDE_CONFIG_DIR');
     expect(LOGIN_SHELL_ENV_NAMES).toContain('SSH_AUTH_SOCK');
-    expect(LOGIN_SHELL_ENV_NAMES).not.toContain('OPENAI_API_KEY');
-    const out = marked({ PATH: '/a', OPENAI_API_KEY: 'sk-secretsecretsecret' });
+    for (const n of [
+      'ANTHROPIC_API_KEY',
+      'ANTHROPIC_BASE_URL',
+      'ANTHROPIC_AUTH_TOKEN',
+      'CLAUDE_CODE_USE_BEDROCK',
+      'CLAUDE_CODE_USE_VERTEX',
+      'AWS_PROFILE',
+      'AWS_REGION',
+      'AWS_DEFAULT_REGION',
+      'CLOUD_ML_REGION',
+      'ANTHROPIC_VERTEX_PROJECT_ID',
+      'OPENAI_API_KEY',
+      'HTTPS_PROXY',
+      'HTTP_PROXY',
+      'NO_PROXY',
+      'https_proxy',
+      'http_proxy',
+      'no_proxy',
+      'NODE_EXTRA_CA_CERTS',
+      'SSL_CERT_FILE',
+      'SSL_CERT_DIR',
+    ]) {
+      expect(LOGIN_SHELL_ENV_NAMES).toContain(n);
+    }
+    // Only listed names are read, whatever else the shell prints.
+    const out = marked({ PATH: '/a', GITHUB_TOKEN: 'ghp_secretsecret' });
     expect(parseMarkedEnv(out, LOGIN_SHELL_ENV_NAMES)).toEqual({ PATH: '/a' });
   });
 });
@@ -130,5 +162,88 @@ describe('probe', () => {
 
   it('does nothing on Windows', async () => {
     expect(await probeLoginShellEnv(deps({ platform: 'win32' }))).toEqual({});
+  });
+});
+
+describe('home folders', () => {
+  it('expands a leading ~ in CODEX_HOME and CLAUDE_CONFIG_DIR only', () => {
+    expect(expandHome('~/.codex', '/home/u')).toBe('/home/u/.codex');
+    expect(expandHome('~', '/home/u')).toBe('/home/u');
+    expect(expandHome('/x/~y', '/home/u')).toBe('/x/~y');
+    expect(expandHome('~other/x', '/home/u')).toBe('~other/x');
+    const patch = mergeLoginEnv(
+      {},
+      { CODEX_HOME: '~/.codex-alt', CLAUDE_CONFIG_DIR: '~/c', SSL_CERT_FILE: '~/ca.pem' },
+      'linux',
+      '/home/u',
+    );
+    expect(patch).toEqual({
+      CODEX_HOME: '/home/u/.codex-alt',
+      CLAUDE_CONFIG_DIR: '/home/u/c',
+      SSL_CERT_FILE: '~/ca.pem',
+    });
+  });
+});
+
+describe('the loader keeps only a success', () => {
+  it('a success is read once; a failure is retried at most once a minute', async () => {
+    let calls = 0;
+    let t = 0;
+    let answer: string | null = null;
+    const loader = createShellEnvLoader(
+      () => ({
+        platform: 'linux',
+        env: { PATH: '/usr/bin' },
+        runShell: async () => {
+          calls++;
+          return answer;
+        },
+        launchctlPath: async () => null,
+      }),
+      () => t,
+    );
+    await loader.ensure();
+    expect(calls).toBe(1);
+    await loader.ensure();
+    t += SHELL_ENV_RETRY_MS - 1;
+    await loader.ensure();
+    expect(calls).toBe(1);
+    t += 2;
+    answer = marked({ PATH: '/opt/n/bin' });
+    await loader.ensure();
+    expect(calls).toBe(2);
+    expect(loader.patch().PATH).toBe('/opt/n/bin:/usr/bin');
+    await loader.ensure();
+    await loader.ensure();
+    expect(calls).toBe(2);
+  });
+});
+
+describe('runDetached', () => {
+  it('returns the output of a normal run', async () => {
+    expect(await runDetached('/bin/sh', ['-c', 'echo hi'], 5_000)).toBe('hi\n');
+    expect(await runDetached('/bin/sh', ['-c', 'exit 3'], 5_000)).toBeNull();
+    expect(await runDetached('/definitely/not/here', [], 5_000)).toBeNull();
+  });
+
+  it('kills the whole process group on a timeout, including what the shell started', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'plasma-detach-'));
+    const pidFile = join(dir, 'pid');
+    try {
+      const started = Date.now();
+      const out = await runDetached(
+        '/bin/sh',
+        ['-c', `sleep 30 & echo $! > '${pidFile}'; wait`],
+        400,
+      );
+      expect(out).toBeNull();
+      expect(Date.now() - started).toBeLessThan(5_000);
+      const pid = Number(readFileSync(pidFile, 'utf8').trim());
+      expect(pid).toBeGreaterThan(0);
+      await waitDead(pid, 3_000);
+      expect(alive(pid)).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

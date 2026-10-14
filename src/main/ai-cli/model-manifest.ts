@@ -14,6 +14,7 @@
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import bundledJson from '@shared/cli-model-manifest.json';
+import { SAFE_MODEL_RE, SAFE_OPTION_RE } from '@shared/cli-models';
 import { z } from 'zod';
 import { parseSemver } from './semver';
 
@@ -27,9 +28,17 @@ export const MANIFEST_FETCH_TIMEOUT_MS = 10_000;
 const MANIFEST_MAX_BYTES = 1024 * 1024;
 
 const nonEmpty = z.string().trim().min(1);
+/** A model slug or alias: it ends up as an argument of a program, so it never starts with "-". */
+const slugName = z.string().regex(SAFE_MODEL_RE);
+/** An effort or service-tier id. */
+const optionId = z.string().regex(SAFE_OPTION_RE);
+
+const MAX_MODELS = 200;
+const MAX_ALIASES = 20;
+const MAX_FUTURE_MS = 24 * 3600_000;
 
 const OptionSchema = z.object({
-  id: nonEmpty,
+  id: optionId,
   label: z.string(),
   description: z.string().optional(),
   isDefault: z.boolean().optional(),
@@ -51,7 +60,7 @@ const ClaudeProfileAdapter = z.object({
   claudeCode: z
     .object({
       /** Effort id the UI shows -> the value `--effort` gets (null: send nothing). */
-      effortMap: z.record(nonEmpty, nonEmpty.nullable()).optional(),
+      effortMap: z.record(optionId, optionId.nullable()).optional(),
       fixedContextWindowTokens: z.number().optional(),
     })
     .optional(),
@@ -65,9 +74,9 @@ const ModelAdapter = z.object({
 });
 
 const ModelSchema = z.object({
-  slug: nonEmpty,
+  slug: slugName,
   name: nonEmpty,
-  aliases: z.array(nonEmpty).optional(),
+  aliases: z.array(slugName).max(MAX_ALIASES).optional(),
   status: z.enum(['current', 'legacy']),
   badge: z.literal('new').optional(),
   profile: nonEmpty.optional(),
@@ -75,7 +84,7 @@ const ModelSchema = z.object({
 });
 
 const CatalogSchema = z.object({
-  defaults: z.object({ chat: nonEmpty.optional() }).optional(),
+  defaults: z.object({ chat: slugName.optional() }).optional(),
   profiles: z.record(
     z.string(),
     z.object({
@@ -83,14 +92,20 @@ const CatalogSchema = z.object({
       adapter: ClaudeProfileAdapter.optional(),
     }),
   ),
-  models: z.array(ModelSchema),
+  models: z.array(ModelSchema).max(MAX_MODELS),
 });
 
 export const ManifestSchema = z
   .object({
     version: z.literal(1),
     /** ISO date of the last edit: an older copy never outranks a newer one. */
-    updatedAt: z.string().optional(),
+    updatedAt: z
+      .string()
+      .refine((v) => {
+        const t = Date.parse(v);
+        return !Number.isNaN(t) && t <= Date.now() + MAX_FUTURE_MS;
+      }, 'a valid date, not more than a day ahead')
+      .optional(),
     providers: z.object({ codex: CatalogSchema, 'claude-code': CatalogSchema }),
   })
   .refine(
@@ -172,12 +187,25 @@ export interface ManifestStore {
   refreshInBackground(): void;
 }
 
+/** Reads the body as JSON, aborting as soon as it passes 1 MB. */
 async function readCapped(res: Response): Promise<unknown> {
   const declared = Number(res.headers.get('content-length') ?? 0);
   if (declared > MANIFEST_MAX_BYTES) throw new Error('too large');
-  const text = await res.text();
-  if (text.length > MANIFEST_MAX_BYTES) throw new Error('too large');
-  return JSON.parse(text);
+  if (!res.body) throw new Error('empty');
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > MANIFEST_MAX_BYTES) {
+      await reader.cancel().catch(() => undefined);
+      throw new Error('too large');
+    }
+    chunks.push(value);
+  }
+  return JSON.parse(Buffer.concat(chunks).toString('utf8'));
 }
 
 export function createManifestStore(opts: ManifestStoreOptions): ManifestStore {

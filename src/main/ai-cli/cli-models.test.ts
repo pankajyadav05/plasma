@@ -227,7 +227,7 @@ describe('Claude Code catalog', () => {
     expect(current.models.map((m) => m.id)).toContain('claude-haiku-5-5');
   });
 
-  it('compares versions numerically, honours maxVersionExclusive, hides gated models without a version', () => {
+  it('compares versions numerically and honours maxVersionExclusive', () => {
     const m = manifestWith((x) => {
       x.providers['claude-code'].models[0]!.adapter = {
         claudeCode: { minVersion: '2.1.9', maxVersionExclusive: '2.1.100' },
@@ -239,31 +239,51 @@ describe('Claude Code catalog', () => {
     expect(has('2.1.10')).toBe(true);
     expect(has('2.1.8')).toBe(false);
     expect(has('2.1.100')).toBe(false);
-    expect(has(undefined)).toBe(false);
+  });
+
+  it('without a readable version nothing is hidden and nothing is "update required"', () => {
+    const r = claudeModelsForVersion(BUNDLED_MANIFEST, undefined);
+    expect(r.models.length).toBe(claudeCatalog(BUNDLED_MANIFEST).length);
+    expect(r.updateRequired).toEqual([]);
   });
 
   it('resolves a saved alias to the canonical slug, and "" to the default', () => {
-    expect(resolveClaudeSlug(BUNDLED_MANIFEST, 'sonnet')).toBe('claude-sonnet-5-5');
-    expect(resolveClaudeSlug(BUNDLED_MANIFEST, 'Opus')).toBe('claude-opus-5-5');
-    expect(resolveClaudeSlug(BUNDLED_MANIFEST, 'haiku')).toBe('claude-haiku-5-5');
-    expect(resolveClaudeSlug(BUNDLED_MANIFEST, 'claude-opus-4-7')).toBe('claude-opus-4-7');
-    expect(resolveClaudeSlug(BUNDLED_MANIFEST, '')).toBe('claude-fable-5-1');
+    const v = '2.1.296';
+    expect(resolveClaudeSlug(BUNDLED_MANIFEST, 'sonnet', v)).toBe('claude-sonnet-5-5');
+    expect(resolveClaudeSlug(BUNDLED_MANIFEST, 'Opus', v)).toBe('claude-opus-5-5');
+    expect(resolveClaudeSlug(BUNDLED_MANIFEST, 'haiku', v)).toBe('claude-haiku-5-5');
+    expect(resolveClaudeSlug(BUNDLED_MANIFEST, 'claude-opus-4-7', v)).toBe('claude-opus-4-7');
+    expect(resolveClaudeSlug(BUNDLED_MANIFEST, '', v)).toBe('claude-fable-5-1');
     // Not in the list: sent as typed.
-    expect(resolveClaudeSlug(BUNDLED_MANIFEST, 'claude-opus-9-9')).toBe('claude-opus-9-9');
+    expect(resolveClaudeSlug(BUNDLED_MANIFEST, 'claude-opus-9-9', v)).toBe('claude-opus-9-9');
   });
 
-  it('effort: the pick maps through the profile; a default, unknown or unoffered pick sends nothing', () => {
-    // opus-4-7 shows "Extra High" but the CLI wants max.
-    expect(claudeEffortArg(BUNDLED_MANIFEST, 'claude-opus-4-7', 'xhigh')).toBeUndefined(); // its default
+  it('an alias resolves only to a model the installed version supports', () => {
+    // 2.1.270 cannot run Sonnet 5.5 (needs 2.1.284): the CLI gets the alias and resolves it itself.
+    expect(resolveClaudeSlug(BUNDLED_MANIFEST, 'sonnet', '2.1.270')).toBe('sonnet');
+    expect(resolveClaudeSlug(BUNDLED_MANIFEST, 'opus', '2.1.270')).toBe('opus');
+    expect(resolveClaudeSlug(BUNDLED_MANIFEST, 'fable', '2.1.270')).toBe('claude-fable-5-1');
+    // No readable version: nothing gated is picked.
+    expect(resolveClaudeSlug(BUNDLED_MANIFEST, 'sonnet', undefined)).toBe('sonnet');
+    expect(resolveClaudeSlug(BUNDLED_MANIFEST, '', '2.1.100')).toBe('sonnet');
+  });
+
+  it('effort: an explicit pick maps through the profile, even when it equals the default', () => {
+    // opus-4-7 shows "Extra High" (its default) but the CLI wants max.
+    expect(claudeEffortArg(BUNDLED_MANIFEST, 'claude-opus-4-7', 'xhigh')).toBe('max');
     expect(claudeEffortArg(BUNDLED_MANIFEST, 'claude-opus-4-7', 'low')).toBe('low');
-    expect(claudeEffortArg(BUNDLED_MANIFEST, 'claude-sonnet-4-6', 'high')).toBeUndefined();
-    // sonnet-4-6 has no xhigh: a saved xhigh falls back to the default (nothing sent).
+    expect(claudeEffortArg(BUNDLED_MANIFEST, 'claude-sonnet-4-6', 'high')).toBe('high');
+    // sonnet-4-6 has no xhigh: a saved xhigh the model does not offer sends nothing.
     expect(claudeEffortArg(BUNDLED_MANIFEST, 'claude-sonnet-4-6', 'xhigh')).toBeUndefined();
     expect(claudeEffortArg(BUNDLED_MANIFEST, 'claude-sonnet-4-6', 'max')).toBe('high');
-    expect(claudeEffortArg(BUNDLED_MANIFEST, 'claude-opus-5-5', 'high')).toBe('high');
+    expect(claudeEffortArg(BUNDLED_MANIFEST, 'claude-opus-5-5', 'medium')).toBe('medium');
     expect(claudeEffortArg(BUNDLED_MANIFEST, 'opus', 'max')).toBe('max');
+    // '' follows the model's default: nothing is sent.
     expect(claudeEffortArg(BUNDLED_MANIFEST, 'claude-opus-5-5', '')).toBeUndefined();
     expect(claudeEffortArg(BUNDLED_MANIFEST, 'claude-haiku-4-5', 'high')).toBeUndefined();
+    // A model the manifest does not know: only the levels the CLI documents.
+    expect(claudeEffortArg(BUNDLED_MANIFEST, 'claude-opus-9-9', 'high')).toBe('high');
+    expect(claudeEffortArg(BUNDLED_MANIFEST, 'claude-opus-9-9', '--x')).toBeUndefined();
   });
 });
 
@@ -279,9 +299,10 @@ describe('effort and tier fallback', () => {
     expect(effectiveOption(luna, 'nothing', 'x')).toBeUndefined();
   });
 
-  it('turn/start gets an effort and tier only for a non-default pick the model offers', () => {
+  it('turn/start gets an explicit effort and tier the model offers; "" sends nothing', () => {
     expect(codexEffortArg(sol, 'low')).toBe('low');
-    expect(codexEffortArg(sol, 'medium')).toBeUndefined();
+    expect(codexEffortArg(sol, 'medium')).toBe('medium');
+    expect(codexEffortArg(sol, '')).toBeUndefined();
     expect(codexEffortArg(sol, 'ultra')).toBeUndefined();
     expect(codexEffortArg(undefined, 'low')).toBeUndefined();
     expect(codexServiceTierArg(sol, 'priority')).toBe('priority');

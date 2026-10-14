@@ -401,3 +401,29 @@ describe('runCodex with a fake CLI', () => {
     await waitDead(Number(readFileSync(join(dir, 'pid'), 'utf8')));
   });
 });
+
+describe('unsafe model, effort and tier values', () => {
+  it('are refused before anything is sent', async () => {
+    const mk = (over: Partial<CliRun>): CliRun => ({
+      launch: { command: '/definitely/not/here', args: [] },
+      cwd: tmpdir(),
+      model: 'gpt-6-luna',
+      system: '',
+      prompt: 'hi',
+      images: [],
+      endpoint: null,
+      onDelta: () => undefined,
+      signal: new AbortController().signal,
+      ...over,
+    });
+    for (const over of [
+      { model: '--oops' },
+      { effort: 'High; rm' },
+      { serviceTier: '-fast' },
+    ] as Array<Partial<CliRun>>) {
+      const r = await runCodex(mk(over));
+      expect(r).toMatchObject({ ok: false });
+      expect((r as { message: string }).message).toMatch(/cannot be used/);
+    }
+  });
+});

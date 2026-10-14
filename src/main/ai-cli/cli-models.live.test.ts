@@ -88,7 +88,6 @@ suite('model lists, live', () => {
         effort: c.effort,
         serviceTier: '',
         binaryOverride: '',
-        cwd: dir,
       });
       console.log(`${c.provider} run choices:`, JSON.stringify(choices));
       const events: Array<{ kind: string; text?: string; message?: string }> = [];

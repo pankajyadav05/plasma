@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { readFile } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { AiCliProvider, AiCliStatus } from '@shared/ai-cli';
@@ -102,7 +102,14 @@ export function failureReason(
   return last ? `${how}: ${last}` : how;
 }
 
-type RunResult = { ok: boolean; stdout: string; stderr: string; code: unknown };
+type RunResult = {
+  ok: boolean;
+  stdout: string;
+  stderr: string;
+  code: unknown;
+  /** The program was stopped for taking too long. */
+  timedOut: boolean;
+};
 
 function run(file: string, args: string[], timeoutMs: number): Promise<RunResult> {
   const spec = launchSpec(file, args);
@@ -117,6 +124,7 @@ function run(file: string, args: string[], timeoutMs: number): Promise<RunResult
           stdout: String(stdout),
           stderr: String(stderr),
           code: (err as NodeJS.ErrnoException | null)?.code,
+          timedOut: Boolean((err as { killed?: boolean } | null)?.killed),
         }),
     );
   });
@@ -129,7 +137,7 @@ function runFailure(r: RunResult): string {
     signal: null,
     stderrTail: r.stderr,
     spawnError: typeof r.code === 'string' ? r.code : undefined,
-    timedOut: false,
+    timedOut: r.timedOut,
   });
 }
 
@@ -409,6 +417,52 @@ export async function getCliStatus(
   };
 }
 
+/** The account type of an `account/read` result ('chatgpt', 'apiKey', ...). */
+export function parseCodexAccountType(result: unknown): string | undefined {
+  const a = (result as { account?: { type?: unknown } | null } | null)?.account;
+  return typeof a?.type === 'string' ? a.type : undefined;
+}
+
+export interface ClaudeCliInfo {
+  version?: string;
+  /** `claude --help` lists `--effort`. */
+  effort: boolean;
+}
+
+const claudeInfoMemo = new Map<string, ClaudeCliInfo>();
+
+/**
+ * What the installed Claude Code is: its version, and whether it has `--effort`.
+ * Kept per program file (path, size and modification time), so an update is noticed
+ * and a chat does not start two programs each time. A failed read is not kept.
+ */
+export async function claudeCliInfo(file: string): Promise<ClaudeCliInfo> {
+  let key = file;
+  try {
+    const st = await stat(file);
+    key = `${file}\0${st.size}\0${st.mtimeMs}`;
+  } catch {
+    /* keyed by path only */
+  }
+  const hit = claudeInfoMemo.get(key);
+  if (hit) return hit;
+  const [ver, help] = await Promise.all([
+    run(file, ['--version'], 8_000),
+    run(file, ['--help'], 8_000),
+  ]);
+  const version = ver.ok ? parseVersion(ver.stdout) : undefined;
+  const info: ClaudeCliInfo = {
+    ...(version ? { version } : {}),
+    effort: help.ok && /--effort\b/.test(help.stdout),
+  };
+  if (version && help.ok) claudeInfoMemo.set(key, info);
+  return info;
+}
+
+export function resetClaudeCliInfoForTests(): void {
+  claudeInfoMemo.clear();
+}
+
 export async function listCliModels(
   provider: AiCliProvider,
   override: string | undefined,
@@ -433,13 +487,14 @@ export async function listCliModels(
   store.refreshInBackground();
 
   if (provider === 'claude-code') {
-    const ver = await run(found.path, ['--version'], 8_000);
-    const version = ver.ok ? parseVersion(ver.stdout) : undefined;
+    const { version } = await claudeCliInfo(found.path);
+    // Without a readable version nothing is hidden as "too new": the whole list, with a note.
     const { models, updateRequired } = claudeModelsForVersion(manifest, version);
     return {
       models,
       fetchedAt: Date.now(),
       source: 'live',
+      ...(version ? {} : { error: 'Could not read the Claude Code version.' }),
       ...(updateRequired.length > 0 ? { updateRequired } : {}),
       origin: { kind: 'plasma-list', ...(version ? { cliVersion: version } : {}) },
     };
@@ -451,10 +506,14 @@ export async function listCliModels(
     async (c) => {
       let pages = await listAllCodexModelPages(c);
       if (!pages) return null;
+      // Only a ChatGPT login gets a catalog tailored to the client (and cached in models_cache.json).
+      const acct = await c.ask('account/read', {});
+      const type = 'result' in acct ? parseCodexAccountType(acct.result) : undefined;
       if (
-        await waitForModelsCacheRefresh(codexHomeOf(c), c.spawnedAtMs, {
+        type === 'chatgpt' &&
+        (await waitForModelsCacheRefresh(codexHomeOf(c), c.spawnedAtMs, {
           ...(opts.cacheWaitMs !== undefined ? { timeoutMs: opts.cacheWaitMs } : {}),
-        })
+        }))
       ) {
         pages = (await listAllCodexModelPages(c)) ?? pages;
       }

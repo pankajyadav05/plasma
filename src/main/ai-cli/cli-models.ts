@@ -307,37 +307,47 @@ export function claudeModelsForVersion(
   version: string | null | undefined,
 ): { models: AiModel[]; updateRequired: CliUpdateRequired[] } {
   const all = claudeCatalog(manifest);
+  // Without a readable version nothing can be said to be too new: show the whole list.
+  if (!version) return { models: all.map((c) => c.model), updateRequired: [] };
   const models = all.filter((c) => supportedBy(c.entry, version)).map((c) => c.model);
   const updateRequired: CliUpdateRequired[] = [];
-  if (version) {
-    for (const { model, entry } of all) {
-      const min = entry.adapter?.claudeCode?.minVersion;
-      if (model.isLegacy || !min || (compareSemver(version, min) ?? 0) >= 0) continue;
-      updateRequired.push({
-        slug: model.id,
-        name: model.name,
-        minVersion: min,
-        ...(model.badge ? { badge: model.badge } : {}),
-      });
-    }
+  for (const { model, entry } of all) {
+    const min = entry.adapter?.claudeCode?.minVersion;
+    if (model.isLegacy || !min || (compareSemver(version, min) ?? 0) >= 0) continue;
+    updateRequired.push({
+      slug: model.id,
+      name: model.name,
+      minVersion: min,
+      ...(model.badge ? { badge: model.badge } : {}),
+    });
   }
   return { models, updateRequired };
 }
 
 /**
  * The canonical slug for a saved model: 'sonnet' -> 'claude-sonnet-5-5', '' -> the
- * manifest's chat default. A name the manifest does not know (a full model name
- * the user typed) goes through unchanged.
+ * manifest's chat default. Only a model the installed Claude Code supports is picked:
+ * otherwise (too old, version unknown, or a name the manifest does not know) the name
+ * goes through unchanged, so the CLI resolves its own alias. '' then becomes 'sonnet'.
  */
-export function resolveClaudeSlug(manifest: Manifest, saved: string | undefined): string {
+export function resolveClaudeSlug(
+  manifest: Manifest,
+  saved: string | undefined,
+  version?: string | null,
+): string {
   const v = saved?.trim() ?? '';
-  const catalog = claudeCatalog(manifest).map((c) => c.model);
-  if (!v)
-    return (
-      manifest.providers['claude-code'].defaults?.chat ?? catalog.find((m) => m.isDefault)?.id ?? ''
-    );
-  return findCliModel(catalog, v)?.id ?? v;
+  const entries = claudeCatalog(manifest);
+  const usable = entries.filter((c) => supportedBy(c.entry, version));
+  const models = usable.map((c) => c.model);
+  if (!v) {
+    const chat = manifest.providers['claude-code'].defaults?.chat;
+    return models.find((m) => m.id === chat)?.id ?? 'sonnet';
+  }
+  return findCliModel(models, v)?.id ?? v;
 }
+
+/** Effort levels `claude --effort` documents, for a model the manifest does not know. */
+const CLAUDE_EFFORTS = new Set(['low', 'medium', 'high', 'xhigh', 'max']);
 
 /** The value for `--effort`: the user's pick when this model offers it, mapped through the profile; else nothing. */
 export function claudeEffortArg(
@@ -351,14 +361,18 @@ export function claudeEffortArg(
     slugOrAlias,
   );
   const entry = entries.find((c) => c.model.id === found?.id);
-  const picked = explicitOption(entry?.model, EFFORT_OPTION, saved);
-  if (!picked || !entry) return undefined;
+  if (!entry) {
+    const v = saved?.trim();
+    return v && CLAUDE_EFFORTS.has(v) ? v : undefined;
+  }
+  const picked = explicitOption(entry.model, EFFORT_OPTION, saved);
+  if (!picked) return undefined;
   const map = entry.effortMap;
   if (Object.hasOwn(map, picked)) return map[picked] ?? undefined;
   return picked;
 }
 
-/** Codex: the effort to send on turn/start (only a non-default pick the model offers). */
+/** Codex: the effort to send on turn/start (an explicit pick the model offers). */
 export function codexEffortArg(model: AiModel | undefined, saved: string | undefined) {
   return explicitOption(model, EFFORT_OPTION, saved);
 }
