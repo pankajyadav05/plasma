@@ -5,7 +5,7 @@ import { formatDuration } from '@/lib/format';
 import { useActiveTabSansSql, useSession } from '@/stores/session';
 import type { PgNotice, QueryResult } from '@shared/protocol';
 import { AlertCircle, CheckCircle2, MessageSquareWarning } from 'lucide-react';
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { hasPartialResults, hideErrorTab, isErrorTabActive, showErrorTab } from './result-view';
 
 type StatementRow = { index: number; result: QueryResult; notices: PgNotice[] };
@@ -70,11 +70,22 @@ export function ResultTabs() {
     return () => window.removeEventListener('keydown', onKey);
   }, [multi, cycleActiveResult]);
 
+  // Tabs keep their natural width and the strip scrolls, so bring the
+  // selected one into view (⌥←/→ can land on a tab past the edge).
+  const stripRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!multi) return;
+    stripRef.current
+      ?.querySelector<HTMLElement>('[aria-selected="true"]')
+      ?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
+  }, [multi, active, errorActive]);
+
   if (!multi) return null;
 
   return (
     <div className="flex h-[34px] shrink-0 items-stretch border-b border-[var(--wb-separator)] bg-[var(--wb-tabbar)]">
       <div
+        ref={stripRef}
         className="scrollbar-none flex min-w-0 flex-1 items-stretch gap-1 overflow-x-auto px-1 py-1"
         role="tablist"
         aria-label="Statement results · ⌥←/→ to switch"
@@ -90,7 +101,7 @@ export function ResultTabs() {
               onClick={() => selectResult(index)}
               title={`${summarizeResult(result)} — ⌥←/→ to switch`}
               className={cn(
-                'flex min-w-[120px] flex-1 items-center justify-center gap-1.5 rounded-[7px] px-3 text-[13px] transition-colors',
+                'flex min-w-[120px] flex-[1_0_auto] items-center justify-center gap-1.5 whitespace-nowrap rounded-[7px] px-3 text-[13px] transition-colors',
                 isActive
                   ? 'bg-[var(--wb-control-active)] text-[var(--wb-text)]'
                   : 'text-[var(--wb-text-2)] hover:bg-[var(--wb-control-hover)] hover:text-[var(--wb-text)]',
@@ -115,7 +126,7 @@ export function ResultTabs() {
             title={cleanIpcError(tab.queryError ?? '')}
             data-testid="result-tab-error"
             className={cn(
-              'flex min-w-[120px] flex-1 items-center justify-center gap-1.5 rounded-[7px] px-3 text-[13px] transition-colors',
+              'flex min-w-[120px] flex-[1_0_auto] items-center justify-center gap-1.5 whitespace-nowrap rounded-[7px] px-3 text-[13px] transition-colors',
               errorActive
                 ? 'bg-[var(--wb-control-active)] text-[var(--wb-text)]'
                 : 'text-[var(--wb-text-2)] hover:bg-[var(--wb-control-hover)] hover:text-[var(--wb-text)]',
