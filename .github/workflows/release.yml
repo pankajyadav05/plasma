@@ -235,10 +235,8 @@ jobs:
     if: contains(fromJSON('["all","mac"]'), inputs.platforms)
     runs-on: macos-latest
     env:
-      # Developer ID signing: electron-builder imports the base64 .p12 into a
-      # temporary keychain. Notarization runs when the Apple ID trio is set.
-      CSC_LINK: ${{ secrets.CSC_LINK }}
-      CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+      # Notarization runs when the Apple ID trio is set. Signing uses the
+      # identity imported by the step below (found by name, not CSC_LINK).
       APPLE_ID: ${{ secrets.APPLE_ID }}
       APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
       APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
@@ -262,7 +260,32 @@ jobs:
       - name: Install
         run: pnpm install --frozen-lockfile
 
+      # electron-builder 26.8.1 cannot import CSC_LINK itself: it runs
+      # `set-key-partition-list` with the .p12 password instead of its
+      # keychain's ("SecKeychainUnlock: The user name or passphrase you
+      # entered is not correct"). So the Developer ID goes into our own
+      # keychain here, and the build picks it by CSC_NAME.
+      - name: Import Developer ID certificate
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+        run: |
+          KC="$RUNNER_TEMP/signing.keychain-db"
+          KP="$(openssl rand -base64 32)"
+          P12="$RUNNER_TEMP/devid.p12"
+          printf %s "$CSC_LINK" | base64 --decode > "$P12"
+          security create-keychain -p "$KP" "$KC"
+          security set-keychain-settings -lut 21600 "$KC"
+          security unlock-keychain -p "$KP" "$KC"
+          security import "$P12" -k "$KC" -P "$CSC_KEY_PASSWORD" -T /usr/bin/codesign -T /usr/bin/productbuild
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KP" "$KC" >/dev/null
+          rm -f "$P12"
+          security list-keychains -d user -s "$KC" $(security list-keychains -d user | tr -d '"')
+          security find-identity -v -p codesigning "$KC"
+
       - name: Build macOS
+        env:
+          CSC_NAME: "Pankaj Yadav (88LKBXATSW)"
         run: pnpm run dist:mac
 
       # A Developer ID build that is not notarized is blocked by Gatekeeper on
