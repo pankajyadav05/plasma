@@ -49,6 +49,9 @@ One-time setup (repo → Settings):
 - **Secrets and variables → Actions**: `R2_ACCESS_KEY_ID`,
   `R2_SECRET_ACCESS_KEY`, and `PLASMA_UPDATE_SIGNING_KEY` (the value from your
   `.env.local`).
+- macOS signing and notarization: `MAC_CERT_P12_BASE64`, `MAC_CERT_PASSWORD`,
+  `APPLE_API_KEY_P8_BASE64`, `APPLE_API_KEY_ID`, `APPLE_API_ISSUER` (see
+  docs/mac-auto-update.md). Without them the macOS build fails.
 - Optional `VERCEL_DEPLOY_HOOK` secret (Vercel → project → Settings → Git →
   Deploy Hooks, branch `main`): the publish job calls it after the upload so
   the site rebuilds with the new version.
@@ -209,3 +212,16 @@ version and files. Every referenced file is HEAD-checked and the build fails
 if one is missing; a platform without a manifest renders "coming soon". After
 a release, redeploy the site (Vercel) so the links follow. The release scripts
 only patch the `PACKAGE_VERSION` offline label there.
+
+## Pruning old versions
+
+Versioned files are never overwritten, so every release stays in the bucket.
+`scripts/prune-releases.mjs` deletes every `Plasma-<version>…` artifact whose
+version the live feed (`latest*.yml`) does not serve; manifests, `.sig` files
+and unknown keys stay. It is a dry run unless given `--delete`.
+
+- Locally: `pnpm release:prune` (R2 keys in `.env.local`), then
+  `pnpm release:prune --delete`.
+- From GitHub: Actions → Prune old releases → Run workflow (tick "Delete for
+  real" after checking a dry run). It shares the release lock, so it never runs
+  during a publish.

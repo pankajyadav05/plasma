@@ -29,7 +29,7 @@ SecStaticCodeCheckValidityWithErrors(newApp,
     req, &error);                                      // downloaded app
 ```
 
-Releases are packaged with `identity: null` (plus `CSC_IDENTITY_AUTO_DISCOVERY:
+Releases up to 3.2.7 were packaged with `identity: null` (plus `CSC_IDENTITY_AUTO_DISCOVERY:
 false` in CI), so electron-builder logs `skipped macOS code signing` and never
 signs the assembled bundle. What actually ships (verified on the published
 `Plasma-0.0.20-*.zip` artifacts):
@@ -148,28 +148,35 @@ running from a dmg or from Downloads, and builds without a verified manifest get
 When `mac-signature.ts` reports `certificate` (a future Developer ID build),
 Squirrel.Mac is used again, behind the same "Restart to update" button.
 
-## Enabling real auto-update
+## Developer ID signing (enabled)
 
-1. Get an Apple Developer Program membership and a **Developer ID Application**
-   certificate; export it as `.p12`.
-2. Add repo secrets `CSC_LINK` (base64 of the `.p12`) and `CSC_KEY_PASSWORD`.
-   For notarization add `APPLE_API_KEY`, `APPLE_API_KEY_ID`, `APPLE_API_ISSUER`
-   (App Store Connect API key).
-3. In `electron-builder.yml`, drop `identity: null` from the `mac` block (keep
-   `hardenedRuntime: true`, which is a no-op until signing happens) and add
-   `notarize: true`.
-4. In `.github/workflows/release.yml`, remove `CSC_IDENTITY_AUTO_DISCOVERY:
-   false` from the `build-macos` env and pass the secrets above instead.
-5. Verify the produced app before publishing:
+Release builds are signed with a **Developer ID Application** certificate and
+notarized. `electron-builder.yml` no longer sets `identity: null`, and the
+`build-macos` job in `.github/workflows/release.yml` reads these repo secrets
+(it fails if any is missing, so an unsigned Mac build cannot ship):
 
-   ```sh
-   codesign -dv --verbose=4 release/mac-arm64/Plasma.app   # Authority=Developer ID Application: …
-   codesign --verify --strict --deep release/mac-arm64/Plasma.app
-   spctl -a -vvv -t install release/mac-arm64/Plasma.app    # accepted, notarized
-   ```
+| secret | value |
+| --- | --- |
+| `MAC_CERT_P12_BASE64` | `base64 -i DeveloperID.p12` (certificate + private key, exported from Keychain Access) |
+| `MAC_CERT_PASSWORD` | the `.p12` export password |
+| `APPLE_API_KEY_P8_BASE64` | `base64 -i AuthKey_XXXXXXXXXX.p8` (App Store Connect → Users and Access → Integrations → Team Keys, role Developer) |
+| `APPLE_API_KEY_ID` | that key's ID |
+| `APPLE_API_ISSUER` | the issuer ID shown above the key list |
 
-**One manual hop is unavoidable.** The requirement Squirrel enforces comes from
-the *installed* app, so builds already in the field (unsigned or ad-hoc) can
-never auto-install the first signed release — every existing macOS user has to
-download that one build by hand. From the first signed build onward,
-`mac-signature.ts` reports `certificate` and updates install themselves.
+After the build the job checks the bundle before anything is published:
+
+```sh
+codesign -dv --verbose=4 release/mac-arm64/Plasma.app   # Authority=Developer ID Application: …
+codesign --verify --strict --deep release/mac-arm64/Plasma.app
+spctl -a -vvv -t exec release/mac-arm64/Plasma.app       # accepted, source=Notarized Developer ID
+xcrun stapler validate release/mac-arm64/Plasma.app
+```
+
+**The first signed release.** Squirrel's requirement comes from the
+*installed* app, so ad-hoc builds already in the field cannot install it
+through Squirrel. They do not use Squirrel, though: their own self-install
+(above) only needs `codesign --verify --deep --strict` to pass, which a
+Developer ID bundle does, so they move to the signed build like any other
+update (expect the one-time keychain prompt). From the first signed build
+onward, `mac-signature.ts` reports `certificate` and Squirrel.Mac installs
+updates.

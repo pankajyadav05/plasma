@@ -1,0 +1,43 @@
+name: Prune old releases
+
+# Deletes every versioned artifact from the R2 bucket except the version(s)
+# the live feed serves (scripts/prune-releases.mjs). Started by hand; the
+# default is a dry run that only lists what would go.
+on:
+  workflow_dispatch:
+    inputs:
+      delete:
+        description: Delete for real (unchecked = dry run)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+# Shares the release lock on main: never prune while a release is uploading
+# binaries ahead of its manifest.
+concurrency:
+  group: release-refs/heads/main
+  cancel-in-progress: false
+
+jobs:
+  prune:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Prune R2
+        env:
+          R2_ACCOUNT_ID: 945bc8f64778fda12f098a60e0ed122f
+          R2_BUCKET: plasma
+          R2_PUBLIC_BASE_URL: https://pub-05a2064511bc41689f299b542b07b67f.r2.dev
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        run: node scripts/prune-releases.mjs ${{ inputs.delete && '--delete' || '' }}

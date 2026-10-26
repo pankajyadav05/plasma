@@ -121,25 +121,29 @@ portable:
 # Apple Silicon (arm64) only: Intel Macs are not supported from 3.1.2.
 # The x64 native bindings are left out of the bundle below.
 #
-# `identity: null` produces an unsigned build so `pnpm run dist:mac`
-# works on a stock developer machine without an Apple Developer ID in
-# the keychain. Trade-off: Gatekeeper will quarantine the .app on first
-# launch — users right-click → Open, or run
-#   xattr -cr /Applications/Plasma.app
+# Signed with a Developer ID Application certificate and notarized. CI passes
+# the certificate as CSC_LINK + CSC_KEY_PASSWORD and the App Store Connect API
+# key as APPLE_API_KEY / APPLE_API_KEY_ID / APPLE_API_ISSUER (see
+# .github/workflows/release.yml); electron-builder notarizes whenever those
+# APPLE_* variables are set. Locally, `pnpm run dist:mac` signs with any
+# Developer ID it finds in the keychain, and on a machine without one falls
+# back to the ad-hoc signature after-pack.cjs makes (Gatekeeper then
+# quarantines the .app: right-click → Open, or `xattr -cr`).
 #
-# It also means macOS auto-update CANNOT install: Squirrel.Mac validates
-# each download against the designated requirement of the installed app,
-# and an unsigned (or ad-hoc) bundle has no requirement a later release
-# can satisfy — it failed with "code has no resources but signature
-# indicates they must be present". The app detects this at launch
-# (src/main/mac-signature.ts) and offers a manual .dmg download instead
-# of downloading a payload ShipIt rejects. `hardenedRuntime` below only
-# takes effect once signing is enabled; docs/mac-auto-update.md has the
-# switch-over steps (Developer ID + notarization).
+# Why it matters: Squirrel.Mac validates each update against the designated
+# requirement of the installed app, which only a certificate signature keeps
+# stable across builds (docs/mac-auto-update.md). Builds already in the field
+# (ad-hoc) install the first signed release through Plasma's own self-update
+# (src/main/mac-self-update.ts); from then on src/main/mac-signature.ts reports
+# `certificate` and Squirrel.Mac installs updates.
 #
 # Signing also secures updates (C20): Squirrel.Mac only installs an update
 # whose code signature matches the running app, so a tampered bucket can't
 # push a foreign binary.
+#
+# Hardened runtime uses electron-builder's default entitlements (allow-jit,
+# allow-unsigned-executable-memory, disable-library-validation), which Electron
+# and the DuckDB/better-sqlite3 native modules need.
 mac:
   # Platform `files` must lead with a positive pattern: a list that starts with
   # `!` gets `**/*` prepended and would pull the whole repo into the asar.
@@ -160,7 +164,6 @@ mac:
   artifactName: ${productName}-${version}-${arch}.${ext}
   hardenedRuntime: true
   gatekeeperAssess: false
-  identity: null
 
 # ── Linux ─────────────────────────────────────────────────────────────
 # AppImage self-updates (latest-linux.yml); the deb is a manual install.

@@ -234,9 +234,6 @@ jobs:
     needs: [verify, version]
     if: contains(fromJSON('["all","mac"]'), inputs.platforms)
     runs-on: macos-latest
-    env:
-      # Unsigned builds (identity: null in electron-builder.yml)
-      CSC_IDENTITY_AUTO_DISCOVERY: false
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -257,8 +254,61 @@ jobs:
       - name: Install
         run: pnpm install --frozen-lockfile
 
-      - name: Build macOS
+      # Developer ID signing + notarization (docs/mac-auto-update.md). Secrets:
+      #   MAC_CERT_P12_BASE64      base64 of the "Developer ID Application" .p12
+      #   MAC_CERT_PASSWORD        its export password
+      #   APPLE_API_KEY_P8_BASE64  base64 of the App Store Connect AuthKey_XXXX.p8
+      #   APPLE_API_KEY_ID         that key's ID
+      #   APPLE_API_ISSUER         the issuer ID (App Store Connect → Users and Access → Integrations)
+      # A release never ships an unsigned Mac build: missing secrets fail here.
+      - name: Prepare signing and notarization
+        env:
+          MAC_CERT_P12_BASE64: ${{ secrets.MAC_CERT_P12_BASE64 }}
+          MAC_CERT_PASSWORD: ${{ secrets.MAC_CERT_PASSWORD }}
+          APPLE_API_KEY_P8_BASE64: ${{ secrets.APPLE_API_KEY_P8_BASE64 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: |
+          set -euo pipefail
+          missing=""
+          for v in MAC_CERT_P12_BASE64 MAC_CERT_PASSWORD APPLE_API_KEY_P8_BASE64 APPLE_API_KEY_ID APPLE_API_ISSUER; do
+            [ -n "${!v}" ] || missing="$missing $v"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::Mac signing secrets not set:$missing (repo → Settings → Secrets and variables → Actions)"
+            exit 1
+          fi
+          # Files, not env values: a base64 secret pasted with line breaks
+          # would break $GITHUB_ENV.
+          CERT="$RUNNER_TEMP/developer-id.p12"
+          KEY="$RUNNER_TEMP/AuthKey_${APPLE_API_KEY_ID}.p8"
+          printf '%s' "$MAC_CERT_P12_BASE64" | tr -d ' \r\n' | base64 --decode > "$CERT"
+          printf '%s' "$APPLE_API_KEY_P8_BASE64" | tr -d ' \r\n' | base64 --decode > "$KEY"
+          {
+            echo "CSC_LINK=$CERT"
+            echo "CSC_KEY_PASSWORD=$MAC_CERT_PASSWORD"
+            echo "APPLE_API_KEY=$KEY"
+            echo "APPLE_API_KEY_ID=$APPLE_API_KEY_ID"
+            echo "APPLE_API_ISSUER=$APPLE_API_ISSUER"
+          } >> "$GITHUB_ENV"
+
+      - name: Build macOS (signed + notarized)
         run: pnpm run dist:mac
+
+      # Fail before publishing if the bundle is not Developer ID signed,
+      # notarized and stapled.
+      - name: Verify signature and notarization
+        run: |
+          set -euo pipefail
+          APP=release/mac-arm64/Plasma.app
+          codesign -dv --verbose=4 "$APP" 2>&1 | tee codesign.txt
+          grep -q '^Authority=Developer ID Application:' codesign.txt
+          grep -q '^TeamIdentifier=' codesign.txt
+          grep -q 'flags=.*runtime' codesign.txt
+          codesign --verify --deep --strict --verbose=2 "$APP"
+          spctl -a -vvv -t exec "$APP"
+          xcrun stapler validate "$APP"
+          xcrun stapler validate release/Plasma-*-arm64.dmg || echo "::warning::dmg is not stapled (the app inside is)"
 
       - name: Upload macOS artifacts
         uses: actions/upload-artifact@v4
