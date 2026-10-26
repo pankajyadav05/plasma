@@ -23,9 +23,9 @@ const FUSES = {
   // Electron honours this on macOS and Windows only; Linux ignores the fuse.
   enableEmbeddedAsarIntegrityValidation: true,
   // Flipping fuses edits the Electron framework after its (linker, ad-hoc)
-  // signature was made, and mac builds are not signed afterwards
-  // (`mac.identity: null`), so macOS killed 3.1.2 at launch ("Code Signature
-  // Invalid"). This re-signs the .app ad-hoc; a no-op on other platforms.
+  // signature was made, so an unsigned mac build was killed at launch (3.1.2,
+  // "Code Signature Invalid"). This re-signs the .app ad-hoc; with a Developer
+  // ID, electron-builder signs over it afterwards. A no-op on other platforms.
   resetAdHocDarwinSignature: true,
 };
 

@@ -29,10 +29,10 @@ SecStaticCodeCheckValidityWithErrors(newApp,
     req, &error);                                      // downloaded app
 ```
 
-Releases are packaged with `identity: null` (plus `CSC_IDENTITY_AUTO_DISCOVERY:
-false` in CI), so electron-builder logs `skipped macOS code signing` and never
-signs the assembled bundle. What actually ships (verified on the published
-`Plasma-0.0.20-*.zip` artifacts):
+Releases up to 3.2.7 were packaged with `identity: null` (plus
+`CSC_IDENTITY_AUTO_DISCOVERY: false` in CI), so electron-builder logged `skipped
+macOS code signing` and never signed the assembled bundle. What shipped
+(verified on the published `Plasma-0.0.20-*.zip` artifacts):
 
 | artifact | `Contents/_CodeSignature/CodeResources` | main executable signature |
 | --- | --- | --- |
@@ -145,31 +145,50 @@ running from a dmg or from Downloads, and builds without a verified manifest get
 
 ### Certificate-signed builds
 
-When `mac-signature.ts` reports `certificate` (a future Developer ID build),
-Squirrel.Mac is used again, behind the same "Restart to update" button.
+Local releases are signed with the Developer ID Application certificate
+(`Pankaj Yadav (88LKBXATSW)`) and notarized. `mac-signature.ts` reports
+`certificate` for them, so Squirrel.Mac is used again, behind the same
+"Restart to update" button.
 
-## Enabling real auto-update
+## Signing and notarizing a release
 
-1. Get an Apple Developer Program membership and a **Developer ID Application**
-   certificate; export it as `.p12`.
-2. Add repo secrets `CSC_LINK` (base64 of the `.p12`) and `CSC_KEY_PASSWORD`.
-   For notarization add `APPLE_API_KEY`, `APPLE_API_KEY_ID`, `APPLE_API_ISSUER`
-   (App Store Connect API key).
-3. In `electron-builder.yml`, drop `identity: null` from the `mac` block (keep
-   `hardenedRuntime: true`, which is a no-op until signing happens) and add
-   `notarize: true`.
-4. In `.github/workflows/release.yml`, remove `CSC_IDENTITY_AUTO_DISCOVERY:
-   false` from the `build-macos` env and pass the secrets above instead.
-5. Verify the produced app before publishing:
+1. The Developer ID Application certificate (with its private key) is in the
+   login keychain. `electron-builder.yml` leaves `mac.identity` unset, so it is
+   auto-discovered (`security find-identity -v -p codesigning` lists it).
+2. Notarization uses the `notary` keychain profile, shared with the other apps
+   signed by this team (`xcrun notarytool history --keychain-profile notary`
+   checks it). On a new machine, create it once:
+
+   ```sh
+   xcrun notarytool store-credentials notary \
+     --apple-id <apple id> --team-id 88LKBXATSW --password <app-specific password>
+   ```
+
+   and build with `APPLE_KEYCHAIN_PROFILE=notary` in the env (shell or
+   `.env.local` is not read by electron-builder, so export it). An App Store
+   Connect API key (`APPLE_API_KEY`, `APPLE_API_KEY_ID`, `APPLE_API_ISSUER`)
+   works too. Without credentials electron-builder signs but skips
+   notarization, and `upload-release.mjs` refuses to publish that build.
+3. `APPLE_KEYCHAIN_PROFILE=notary pnpm release:mac`
+4. Check the app before or after publishing:
 
    ```sh
    codesign -dv --verbose=4 release/mac-arm64/Plasma.app   # Authority=Developer ID Application: …
    codesign --verify --strict --deep release/mac-arm64/Plasma.app
-   spctl -a -vvv -t install release/mac-arm64/Plasma.app    # accepted, notarized
+   spctl -a -vvv -t exec release/mac-arm64/Plasma.app      # accepted, source=Notarized Developer ID
    ```
 
-**One manual hop is unavoidable.** The requirement Squirrel enforces comes from
-the *installed* app, so builds already in the field (unsigned or ad-hoc) can
-never auto-install the first signed release — every existing macOS user has to
-download that one build by hand. From the first signed build onward,
-`mac-signature.ts` reports `certificate` and updates install themselves.
+**GitHub release workflow.** `build-macos` signs and notarizes from repository
+secrets: `CSC_LINK` (base64 `.p12` holding only the Developer ID identity),
+`CSC_KEY_PASSWORD`, `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD` (from
+appleid.apple.com) and `APPLE_TEAM_ID` (`88LKBXATSW`). The keychain profile
+above does not exist on the runner. The step after the build fails the release
+unless the app carries the Developer ID signature, a stapled ticket and
+`spctl`'s `source=Notarized Developer ID`.
+
+**No manual hop for existing users.** Apps already in the field (ad-hoc, up to
+3.2.7) never use Squirrel: they install the first signed release through
+Plasma's own installer above, whose `codesign --verify --deep --strict` check a
+Developer ID bundle passes. From then on `mac-signature.ts` reports
+`certificate` and Squirrel takes over. Expect the one-time "Plasma Safe
+Storage" keychain prompt on that update.

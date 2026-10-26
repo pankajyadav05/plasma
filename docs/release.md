@@ -7,7 +7,7 @@ How a build gets from this repo to users, and what protects the update channel.
 | Platform | Build | Artifacts | Manifest |
 |---|---|---|---|
 | Windows | `pnpm dist:win` | `Plasma-Setup-<v>-x64.exe`, `Plasma-Portable-<v>-x64.exe` | `latest.yml` |
-| macOS | `pnpm dist:mac` | `Plasma-<v>-arm64.{dmg,zip}` (Apple Silicon only) | `latest-mac.yml` |
+| macOS | `pnpm dist:mac` | `Plasma-<v>-arm64.{dmg,zip}` (Apple Silicon only, Developer ID signed + notarized, see docs/mac-auto-update.md) | `latest-mac.yml` |
 | Linux | `pnpm dist:linux` | `Plasma-<v>-x86_64.AppImage`, `Plasma-<v>-amd64.deb` | `latest-linux.yml` |
 
 Everything lands in the Cloudflare R2 bucket behind
@@ -19,7 +19,7 @@ Local flow (the usual one):
 ```bash
 pnpm release:patch        # bump package.json (and the site's offline label)
 pnpm dist:win && pnpm release:upload      # Windows (+ any mac/linux files already in release/)
-pnpm release:mac          # dist:mac + upload --mac-only
+APPLE_KEYCHAIN_PROFILE=notary pnpm release:mac   # dist:mac (signed + notarized) + upload --mac-only
 pnpm release:linux        # dist:linux + upload --linux-only
 pnpm release:verify       # read-only check of what the feed serves
 ```
@@ -48,7 +48,9 @@ One-time setup (repo → Settings):
 
 - **Secrets and variables → Actions**: `R2_ACCESS_KEY_ID`,
   `R2_SECRET_ACCESS_KEY`, and `PLASMA_UPDATE_SIGNING_KEY` (the value from your
-  `.env.local`).
+  `.env.local`). macOS signing and notarization: `CSC_LINK`,
+  `CSC_KEY_PASSWORD`, `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`,
+  `APPLE_TEAM_ID` (docs/mac-auto-update.md).
 - Optional `VERCEL_DEPLOY_HOOK` secret (Vercel → project → Settings → Git →
   Deploy Hooks, branch `main`): the publish job calls it after the upload so
   the site rebuilds with the new version.

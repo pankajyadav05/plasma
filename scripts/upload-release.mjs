@@ -45,6 +45,7 @@ import {
   sign,
   verify,
 } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
 import { createReadStream, existsSync, readFileSync, statSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -221,6 +222,29 @@ const toUpload = verifyOnly
       }
       return true;
     });
+
+// A Developer ID build that was not notarized is rejected by Gatekeeper on
+// download, so it must never reach the feed. Ad-hoc builds (no certificate,
+// e.g. CI) still publish: they update through Plasma's own installer. Checked
+// on the .app electron-builder left next to the zip/dmg, when it is here.
+const macApp = resolve(releaseDir, 'mac-arm64', 'Plasma.app');
+if (
+  process.platform === 'darwin' &&
+  existsSync(macApp) &&
+  toUpload.some((a) => a.name === 'latest-mac.yml')
+) {
+  const sig = spawnSync('codesign', ['-dv', '--verbose=2', macApp], { encoding: 'utf8' });
+  if (/^Authority=Developer ID Application:/m.test(sig.stderr)) {
+    const staple = spawnSync('xcrun', ['stapler', 'validate', macApp], { encoding: 'utf8' });
+    if (staple.status !== 0) {
+      console.error('[upload] the macOS build is Developer ID signed but not notarized:');
+      console.error(`  ${(staple.stdout + staple.stderr).trim().split('\n').pop()}`);
+      console.error('[upload] set APPLE_KEYCHAIN_PROFILE (see electron-builder.yml) and rebuild with `pnpm dist:mac`');
+      process.exit(1);
+    }
+    console.log('[upload] macOS build: Developer ID signed and notarized');
+  }
+}
 
 const fmtMB = (bytes) => `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 

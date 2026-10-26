@@ -235,8 +235,13 @@ jobs:
     if: contains(fromJSON('["all","mac"]'), inputs.platforms)
     runs-on: macos-latest
     env:
-      # Unsigned builds (identity: null in electron-builder.yml)
-      CSC_IDENTITY_AUTO_DISCOVERY: false
+      # Developer ID signing: electron-builder imports the base64 .p12 into a
+      # temporary keychain. Notarization runs when the Apple ID trio is set.
+      CSC_LINK: ${{ secrets.CSC_LINK }}
+      CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -259,6 +264,25 @@ jobs:
 
       - name: Build macOS
         run: pnpm run dist:mac
+
+      # A Developer ID build that is not notarized is blocked by Gatekeeper on
+      # download, and an unsigned one cannot use Squirrel: refuse both.
+      - name: Signed with Developer ID and notarized
+        run: |
+          APP=release/mac-arm64/Plasma.app
+          SIG=$(codesign -dv --verbose=2 "$APP" 2>&1 || true)
+          if ! grep -q '^Authority=Developer ID Application: .*(88LKBXATSW)$' <<<"$SIG"; then
+            echo "$SIG"
+            echo "::error::Plasma.app is not signed with the Developer ID (check CSC_LINK / CSC_KEY_PASSWORD)"
+            exit 1
+          fi
+          if ! xcrun stapler validate "$APP"; then
+            echo "::error::Plasma.app is not notarized (check APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD / APPLE_TEAM_ID)"
+            exit 1
+          fi
+          GK=$(spctl -a -vvv -t exec "$APP" 2>&1 || true)
+          echo "$GK"
+          grep -q 'source=Notarized Developer ID' <<<"$GK" || { echo "::error::Gatekeeper rejects Plasma.app"; exit 1; }
 
       - name: Upload macOS artifacts
         uses: actions/upload-artifact@v4
