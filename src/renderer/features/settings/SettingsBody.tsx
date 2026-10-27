@@ -486,16 +486,18 @@ function TableSection() {
 
 function AppearanceSection() {
   const settings = useSession((s) => s.settings);
+  const resolvedTheme = useSession((s) => s.resolvedTheme);
   const updateSettings = useSession((s) => s.updateSettings);
   return (
     <Rows>
-      <Row label="Appearance">
-        <Segmented<'light' | 'dark'>
+      <Row label="Appearance" hint="System follows your computer's light or dark setting.">
+        <Segmented<Settings['theme']>
           ariaLabel="Appearance"
           variant="track"
           value={settings.theme}
           onChange={(v) => void updateSettings({ theme: v })}
           options={[
+            { value: 'system', label: 'System' },
             { value: 'light', label: 'Light' },
             { value: 'dark', label: 'Dark' },
           ]}
@@ -505,7 +507,7 @@ function AppearanceSection() {
         <PalettePicker
           id="theme-palette"
           value={settings.themeName}
-          mode={settings.theme}
+          mode={resolvedTheme}
           onChange={(v) => void updateSettings({ themeName: v })}
         />
       </Row>

@@ -73,6 +73,7 @@ export function ResultTabs() {
   // Tabs keep their natural width and the strip scrolls, so bring the
   // selected one into view (⌥←/→ can land on a tab past the edge).
   const stripRef = useRef<HTMLDivElement>(null);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: re-runs when the selection moves
   useEffect(() => {
     if (!multi) return;
     stripRef.current

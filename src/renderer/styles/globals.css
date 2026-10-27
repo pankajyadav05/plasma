@@ -1420,9 +1420,11 @@
   padding-right: 20px;
 }
 /* Traffic lights sit at x=18 (main/window.ts) and end near 78px on
-   current macOS; 92px keeps a ~14px gap before the first capsule. */
+   current macOS; 92px keeps a ~14px gap before the first capsule. The
+   buttons don't scale with ⌘+/⌘−, so divide by the interface zoom
+   (main/zoom.ts sets --ui-zoom) to keep 92 screen pixels. */
 :root[data-platform="darwin"] .topbar-pad {
-  padding-left: 92px;
+  padding-left: calc(92px / var(--ui-zoom, 1));
 }
 /* Win/Linux: custom titlebar buttons live inside the topbar (right edge),
    they bring their own width — no extra padding needed. */

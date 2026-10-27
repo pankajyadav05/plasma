@@ -42,6 +42,7 @@ import { LiveAnnouncer } from './LiveAnnouncer';
 import { UpdateBadge } from './UpdateBadge';
 import { UpdateToasts } from './UpdateToasts';
 import { WindowControls } from './WindowControls';
+import { useEditModeActive } from './use-edit-mode';
 
 const isMac = window.plasma?.platform === 'darwin';
 
@@ -91,6 +92,7 @@ export function TopBar() {
   const overlayOpen = useSession(
     (s) => s.paletteOpen || s.settingsOpen || s.historyOpen || s.deleteConfirmConnectionId !== null,
   );
+  const editing = useEditModeActive();
 
   return (
     <header
@@ -108,6 +110,15 @@ export function TopBar() {
       <RightClusters connected={connected} />
 
       {!isMac && <WindowControls />}
+      {/* Edit mode: an amber stripe along the whole window edge, so the state
+          reads at a glance from anywhere on screen. */}
+      {editing && (
+        <span
+          aria-hidden
+          data-testid="edit-mode-stripe"
+          className="pointer-events-none absolute inset-x-0 -bottom-px h-[2px] bg-[var(--status-warn)]"
+        />
+      )}
       <LiveAnnouncer />
       <UpdateToasts />
     </header>
@@ -287,11 +298,23 @@ function SessionCluster({ sql }: { sql: boolean }) {
         }
         disabled={readOnlyConn}
         active={editMode && !readOnlyConn}
-        tone={editMode && !readOnlyConn ? 'accent' : 'default'}
         onClick={toggleEditMode}
         data-testid="toolbar-safety"
+        // Edit mode is a labelled amber pill, not just a different glyph.
+        className={
+          editMode && !readOnlyConn
+            ? 'flex gap-1.5 bg-[color-mix(in_oklab,var(--status-warn)_20%,transparent)] pr-[10px] text-[var(--status-warn)] shadow-[inset_0_0_0_1px_color-mix(in_oklab,var(--status-warn)_55%,transparent)] hover:bg-[color-mix(in_oklab,var(--status-warn)_28%,transparent)] hover:text-[var(--status-warn)]'
+            : undefined
+        }
       >
-        {editMode && !readOnlyConn ? <Pencil /> : <Lock />}
+        {editMode && !readOnlyConn ? (
+          <>
+            <Pencil />
+            <span className="text-[12px] font-semibold">Editing</span>
+          </>
+        ) : (
+          <Lock />
+        )}
       </ToolbarButton>
       <ConnectionSwitcher
         trigger={

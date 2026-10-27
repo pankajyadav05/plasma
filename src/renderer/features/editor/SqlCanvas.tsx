@@ -63,7 +63,7 @@ export function SqlCanvas({ expanded = false }: { expanded?: boolean }) {
   const wordWrap = useWorkbench((s) => s.wordWrap);
   const focusNonce = useWorkbench((s) => s.editorFocusNonce);
   const aiAsk = useSession((s) => s.aiAsk);
-  const theme = useSession((s) => s.settings.theme);
+  const theme = useSession((s) => s.resolvedTheme);
   const fontSize = useSession((s) => s.settings.editorFontSize);
   const editorHeightPx = useSession((s) => s.settings.editorHeightPx);
   const setEditorCursor = useWorkbench((s) => s.setEditorCursor);

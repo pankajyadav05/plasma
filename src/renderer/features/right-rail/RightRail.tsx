@@ -244,7 +244,7 @@ function QueryPanel() {
   const setMode = useSession((s) => s.setRightPanelMode);
   const setSidebarMode = useWorkbench((s) => s.setSidebarMode);
   const formatActiveSql = useSession((s) => s.formatActiveSql);
-  const theme = useSession((s) => s.settings.theme);
+  const theme = useSession((s) => s.resolvedTheme);
   const fontSize = useSession((s) => s.settings.editorFontSize);
   const hasApiKey = useSession((s) => aiConfigured(s.settings));
 

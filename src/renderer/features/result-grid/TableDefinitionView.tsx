@@ -24,7 +24,7 @@ export function TableDefinitionView() {
   const setEditorExpanded = useSession((s) => s.setEditorExpanded);
   const addTab = useSession((s) => s.addTab);
   const fontSize = useSession((s) => s.settings.editorFontSize);
-  const theme = useSession((s) => s.settings.theme);
+  const theme = useSession((s) => s.resolvedTheme);
   const engine = useSession((s) => s.activeConfig?.engine ?? 'postgres');
   const [ddl, setDdl] = useState<string>('');
   const [loading, setLoading] = useState(true);

@@ -17,6 +17,7 @@ import {
   Map as MapIcon,
   Minus,
   MoreHorizontal,
+  Pencil,
   Plus,
   RefreshCw,
   Search,
@@ -210,6 +211,14 @@ export function ResultFooter() {
 
       {canWrite && tableData && (
         <>
+          <span
+            className="flex shrink-0 items-center gap-1 rounded-full bg-[color-mix(in_oklab,var(--status-warn)_18%,transparent)] px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-[var(--status-warn)]"
+            title="Edit mode — changes to rows are staged until you commit. Turn it off with the pencil in the toolbar."
+            data-testid="edit-mode-badge"
+          >
+            <Pencil className="h-3 w-3" />
+            <span className="@max-[560px]:hidden">Edit mode</span>
+          </span>
           <Pill onClick={() => setInsertOpen(true)} title="Add a new row (queued until you commit)">
             <Plus />
             <span className="@max-[560px]:hidden">Row</span>

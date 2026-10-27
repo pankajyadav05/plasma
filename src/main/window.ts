@@ -1,9 +1,10 @@
 import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { BrowserWindow, app } from 'electron';
+import { BrowserWindow, app, nativeTheme } from 'electron';
 import { getSetting, setSetting } from './settings';
 import type { RendererEntry } from './web-security';
+import { attachZoom } from './zoom';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -46,15 +47,26 @@ interface WindowBounds {
   height: number;
 }
 
-type Theme = 'light' | 'dark';
+type Theme = 'system' | 'light' | 'dark';
+
+/**
+ * Mirror the Appearance setting into Chromium/the OS: native chrome
+ * (vibrancy, scrollbars, dialogs, context menus) follows it, and with
+ * "system" the renderer's `prefers-color-scheme` tracks the OS live.
+ */
+export function syncNativeTheme(theme: Theme): void {
+  // Only on change: assigning fires nativeTheme 'updated', which repaints.
+  if (nativeTheme.themeSource !== theme) nativeTheme.themeSource = theme;
+}
 
 /**
  * Read the persisted theme and compute the native window background
  * color. Called at window creation and (via `applyThemeToWindow`)
- * whenever the renderer flips theme in settings.
+ * whenever the theme changes, including an OS flip under "system".
  */
 export function themeColors(theme: Theme) {
-  if (theme === 'dark') {
+  const dark = theme === 'system' ? nativeTheme.shouldUseDarkColors : theme === 'dark';
+  if (dark) {
     return { background: '#1a1a1a' };
   }
   return { background: '#e9e9e9' };
@@ -70,6 +82,7 @@ export const USES_VIBRANCY = process.platform === 'darwin';
 const TRANSPARENT = '#00000000';
 
 export function applyThemeToWindow(win: BrowserWindow, theme: Theme): void {
+  syncNativeTheme(theme);
   if (USES_VIBRANCY) {
     win.setBackgroundColor(TRANSPARENT);
     return;
@@ -89,7 +102,8 @@ export function rendererEntry(): RendererEntry {
 export function createMainWindow(): BrowserWindow {
   const isMac = process.platform === 'darwin';
   const saved = getSetting<WindowBounds | null>('windowBounds', null);
-  const theme = getSetting<Theme>('theme', 'light');
+  const theme = getSetting<Theme>('theme', 'system');
+  syncNativeTheme(theme);
   const colors = themeColors(theme);
 
   const iconPath = resolveIconPath();
@@ -157,6 +171,17 @@ export function createMainWindow(): BrowserWindow {
   };
   win.on('maximize', () => sendMaximized(true));
   win.on('unmaximize', () => sendMaximized(false));
+
+  attachZoom(win);
+
+  // "System" appearance: keep the native background in step when the OS
+  // flips between light and dark.
+  const onNativeTheme = () => {
+    const theme = getSetting<Theme>('theme', 'system');
+    if (theme === 'system' && !win.isDestroyed()) applyThemeToWindow(win, theme);
+  };
+  nativeTheme.on('updated', onNativeTheme);
+  win.on('closed', () => nativeTheme.off('updated', onNativeTheme));
 
   // window.open / target=_blank and navigation are guarded for every
   // webContents in web-security.ts (http/https/mailto only, via the OS).

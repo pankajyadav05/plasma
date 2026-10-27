@@ -1,5 +1,6 @@
 import { KEYMAP, type KeyId, accelerator } from '@shared/keymap';
 import { BrowserWindow, Menu, type MenuItemConstructorOptions, app, shell } from 'electron';
+import { zoomWindow } from './zoom';
 
 /**
  * Native application menu. Provides proper system shortcuts for
@@ -117,6 +118,33 @@ export function appMenuTemplate(
         { type: 'separator' },
         ...keyItem('refresh', 'Refresh'),
         { type: 'separator' },
+        // Whole-window zoom, as in every browser. `=` (not `Plus`, which
+        // needs Shift on US layouts) plus hidden aliases for ⌘⇧= and keypad.
+        { label: 'Actual Size', accelerator: 'CmdOrCtrl+0', click: () => zoomFocused(0) },
+        { label: 'Zoom In', accelerator: 'CmdOrCtrl+=', click: () => zoomFocused(1) },
+        {
+          label: 'Zoom In',
+          accelerator: 'CmdOrCtrl+Plus',
+          visible: false,
+          acceleratorWorksWhenHidden: true,
+          click: () => zoomFocused(1),
+        },
+        {
+          label: 'Zoom In',
+          accelerator: 'CmdOrCtrl+numadd',
+          visible: false,
+          acceleratorWorksWhenHidden: true,
+          click: () => zoomFocused(1),
+        },
+        { label: 'Zoom Out', accelerator: 'CmdOrCtrl+-', click: () => zoomFocused(-1) },
+        {
+          label: 'Zoom Out',
+          accelerator: 'CmdOrCtrl+numsub',
+          visible: false,
+          acceleratorWorksWhenHidden: true,
+          click: () => zoomFocused(-1),
+        },
+        { type: 'separator' },
         // Reload loses every open tab and DevTools expose the IPC bridge —
         // development builds only, and never on ⌘R.
         ...(isDev
@@ -191,4 +219,8 @@ export function appMenuTemplate(
 function sendToFocusedWindow(channel: string): void {
   const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
   win?.webContents.send(channel);
+}
+
+function zoomFocused(direction: -1 | 0 | 1): void {
+  zoomWindow(BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0], direction);
 }

@@ -1924,9 +1924,9 @@ export const SettingsShape = z.object({
   theme: z
     .preprocess(
       (v) => (v === 'paper' ? 'light' : v === 'midnight' ? 'dark' : v),
-      z.enum(['light', 'dark']),
+      z.enum(['system', 'light', 'dark']),
     )
-    .default('light'),
+    .default('system'),
   themeName: z
     .enum([
       'default',
