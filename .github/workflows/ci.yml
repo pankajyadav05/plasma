@@ -87,7 +87,9 @@ jobs:
       PLASMA_CLICKHOUSE_PASSWORD: clickhouse
     services:
       postgres:
-        image: postgres:16
+        # Same major as the runner's postgresql-client (18 on Ubuntu 26.04): pg_restore from a
+        # newer major writes settings an older server rejects (SET transaction_timeout on 16).
+        image: postgres:18
         env:
           POSTGRES_USER: postgres
           # Distinctive on purpose: leak checks search for the password text.
