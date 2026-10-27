@@ -39,6 +39,9 @@ export type KeyId =
   | 'openFile'
   | 'refresh'
   | 'toggleComment'
+  | 'zoomIn'
+  | 'zoomOut'
+  | 'zoomReset'
   | 'fontBigger'
   | 'fontSmaller'
   | 'fontReset'
@@ -339,23 +342,46 @@ export const KEYMAP: readonly KeyBinding[] = [
     category: 'Editor',
     scope: 'editor',
   },
+  // ⌘+ / ⌘− / ⌘0 zoom the whole window (native View menu, main/zoom.ts),
+  // as in every browser; the editor's own font size moves to ⌥⌘.
+  {
+    id: 'zoomIn',
+    chord: { key: '=', mod: true },
+    label: 'Zoom in',
+    category: 'View',
+    scope: 'view',
+  },
+  {
+    id: 'zoomOut',
+    chord: { key: '-', mod: true },
+    label: 'Zoom out',
+    category: 'View',
+    scope: 'view',
+  },
+  {
+    id: 'zoomReset',
+    chord: { key: '0', mod: true },
+    label: 'Actual size',
+    category: 'View',
+    scope: 'view',
+  },
   {
     id: 'fontBigger',
-    chord: { key: '=', mod: true },
+    chord: { key: '=', mod: true, alt: true },
     label: 'Larger editor font',
     category: 'Editor',
     scope: 'editor',
   },
   {
     id: 'fontSmaller',
-    chord: { key: '-', mod: true },
+    chord: { key: '-', mod: true, alt: true },
     label: 'Smaller editor font',
     category: 'Editor',
     scope: 'editor',
   },
   {
     id: 'fontReset',
-    chord: { key: '0', mod: true },
+    chord: { key: '0', mod: true, alt: true },
     label: 'Reset editor font size',
     category: 'Editor',
     scope: 'editor',

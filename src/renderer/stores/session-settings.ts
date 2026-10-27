@@ -45,7 +45,23 @@ const FONT_MONO_STACKS: Record<string, string> = {
   system: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
 };
 
-function applyTheme(mode: 'light' | 'dark', name: string) {
+export type ThemeMode = 'light' | 'dark';
+
+const DARK_QUERY = '(prefers-color-scheme: dark)';
+
+/** The OS appearance. Main mirrors the Appearance setting into
+ *  `nativeTheme.themeSource`, so with "System" this follows the OS live. */
+function systemMode(): ThemeMode {
+  if (typeof window === 'undefined' || !window.matchMedia) return 'light';
+  return window.matchMedia(DARK_QUERY).matches ? 'dark' : 'light';
+}
+
+/** Light or dark actually shown for an Appearance setting. */
+export function resolveTheme(theme: Settings['theme']): ThemeMode {
+  return theme === 'system' ? systemMode() : theme;
+}
+
+function applyTheme(mode: ThemeMode, name: string) {
   const root = document.documentElement;
   root.classList.toggle('dark', mode === 'dark');
   for (const n of THEME_NAMES) root.classList.remove(`theme-${n}`);
@@ -73,7 +89,7 @@ function applyFonts(sans: string, mono: string) {
 }
 
 export const DEFAULT_SETTINGS: Settings = {
-  theme: 'light',
+  theme: 'system',
   themeName: 'default',
   fontSans: 'theme',
   fontMono: 'theme',
@@ -169,6 +185,9 @@ export function mergeResponse(
 export interface SettingsSlice {
   // ── settings ──
   settings: Settings;
+  /** Light or dark actually on screen: `settings.theme`, with "system"
+   *  resolved against the OS (kept current while the OS flips). */
+  resolvedTheme: ThemeMode;
   loadSettings(): Promise<void>;
   updateSettings(patch: Partial<Settings>): Promise<void>;
   /** Settings → AI: delete the saved API key from the vault. */
@@ -186,137 +205,156 @@ export interface SettingsSlice {
   ): Promise<void>;
 }
 
-export const createSettingsSlice: SliceCreator<SettingsSlice> = (set, get) => ({
-  settings: DEFAULT_SETTINGS,
+export const createSettingsSlice: SliceCreator<SettingsSlice> = (set, get) => {
+  /** Paint the current settings' theme and record what was painted. */
+  const paintTheme = (settings: Settings) => {
+    const mode = resolveTheme(settings.theme);
+    if (get().resolvedTheme !== mode) set({ resolvedTheme: mode });
+    applyTheme(mode, settings.themeName);
+  };
 
-  setSidebarWidth(width) {
-    // Optimistic, no IPC. The caller (resizer pointerup) persists once.
-    if (!Number.isFinite(width)) return;
-    const clamped = Math.max(200, Math.min(520, Math.round(width)));
-    set({ settings: { ...get().settings, sidebarWidth: clamped } });
-  },
+  // "System": repaint when the OS appearance changes (and when main switches
+  // nativeTheme.themeSource after an Appearance change).
+  if (typeof window !== 'undefined' && window.matchMedia) {
+    window.matchMedia(DARK_QUERY).addEventListener?.('change', () => {
+      if (get().settings.theme === 'system') paintTheme(get().settings);
+    });
+  }
 
-  setRightSidebarWidth(width) {
-    // Same contract as setSidebarWidth: optimistic here, persisted on drop.
-    if (!Number.isFinite(width)) return;
-    const clamped = Math.max(240, Math.min(720, Math.round(width)));
-    set({ settings: { ...get().settings, rightSidebarWidth: clamped } });
-  },
+  return {
+    settings: DEFAULT_SETTINGS,
+    resolvedTheme: resolveTheme(DEFAULT_SETTINGS.theme),
 
-  async loadSettings() {
-    try {
-      // Merge over renderer defaults: a main process built before a
-      // setting existed (e.g. `pnpm dev` hot-reloads the renderer but not
-      // main) returns objects without the new keys, and undefined widths /
-      // flags would silently break the features that read them.
-      const settings = withDefaults(await ipc.settings.get());
-      set({ settings });
-      // Apply theme + font overrides immediately on boot
-      applyTheme(settings.theme, settings.themeName);
-      applyFonts(settings.fontSans, settings.fontMono);
-    } catch (err) {
-      console.error('[plasma] settings.get failed', err);
-    }
-  },
+    setSidebarWidth(width) {
+      // Optimistic, no IPC. The caller (resizer pointerup) persists once.
+      if (!Number.isFinite(width)) return;
+      const clamped = Math.max(200, Math.min(520, Math.round(width)));
+      set({ settings: { ...get().settings, sidebarWidth: clamped } });
+    },
 
-  async updateSettings(patch) {
-    try {
-      const response = withDefaults(await ipc.settings.set(patch));
-      // R-17: take only what this write touched (plus server-derived flags)
-      // from the response. Optimistic writers (saved queries, sidebar width,
-      // favourites…) may have changed other keys while this one was in
-      // flight; replacing the whole mirror would roll those back.
-      const next = mergeResponse(get().settings, response, Object.keys(patch));
-      set({ settings: next });
-      applyTheme(next.theme, next.themeName);
-      applyFonts(next.fontSans, next.fontMono);
-    } catch (err) {
-      console.error('[plasma] settings.set failed', err);
-    }
-  },
+    setRightSidebarWidth(width) {
+      // Same contract as setSidebarWidth: optimistic here, persisted on drop.
+      if (!Number.isFinite(width)) return;
+      const clamped = Math.max(240, Math.min(720, Math.round(width)));
+      set({ settings: { ...get().settings, rightSidebarWidth: clamped } });
+    },
 
-  async clearAiApiKey() {
-    try {
-      set({ settings: withDefaults(await ipc.settings.clearApiKey()) });
-    } catch (err) {
-      console.error('[plasma] settings.clearApiKey failed', err);
-    }
-  },
+    async loadSettings() {
+      try {
+        // Merge over renderer defaults: a main process built before a
+        // setting existed (e.g. `pnpm dev` hot-reloads the renderer but not
+        // main) returns objects without the new keys, and undefined widths /
+        // flags would silently break the features that read them.
+        const settings = withDefaults(await ipc.settings.get());
+        set({ settings });
+        // Apply theme + font overrides immediately on boot
+        paintTheme(settings);
+        applyFonts(settings.fontSans, settings.fontMono);
+      } catch (err) {
+        console.error('[plasma] settings.get failed', err);
+      }
+    },
 
-  async toggleSidebar() {
-    // Optimistic UI update first so the panel flips instantly.
-    // Persistence to SQLite is fire-and-forget — any failure is logged
-    // but never blocks the interaction.
-    const next = !get().settings.sidebarCollapsed;
-    set({ settings: { ...get().settings, sidebarCollapsed: next } });
-    try {
-      await ipc.settings.set({ sidebarCollapsed: next });
-    } catch (err) {
-      console.error('[plasma] persist sidebarCollapsed failed', err);
-    }
-  },
+    async updateSettings(patch) {
+      try {
+        const response = withDefaults(await ipc.settings.set(patch));
+        // R-17: take only what this write touched (plus server-derived flags)
+        // from the response. Optimistic writers (saved queries, sidebar width,
+        // favourites…) may have changed other keys while this one was in
+        // flight; replacing the whole mirror would roll those back.
+        const next = mergeResponse(get().settings, response, Object.keys(patch));
+        set({ settings: next });
+        paintTheme(next);
+        applyFonts(next.fontSans, next.fontMono);
+      } catch (err) {
+        console.error('[plasma] settings.set failed', err);
+      }
+    },
 
-  async toggleTheme() {
-    // Optimistic theme flip — apply CSS immediately, persist in background.
-    const next = get().settings.theme === 'light' ? 'dark' : 'light';
-    set({ settings: { ...get().settings, theme: next } });
-    applyTheme(next, get().settings.themeName);
-    try {
-      await ipc.settings.set({ theme: next });
-    } catch (err) {
-      console.error('[plasma] persist theme failed', err);
-    }
-  },
+    async clearAiApiKey() {
+      try {
+        set({ settings: withDefaults(await ipc.settings.clearApiKey()) });
+      } catch (err) {
+        console.error('[plasma] settings.clearApiKey failed', err);
+      }
+    },
 
-  async toggleFavoriteSchema(connectionId: string, schemaName: string) {
-    const current = get().settings.favoriteSchemas ?? {};
-    const forConn = new Set(current[connectionId] ?? []);
-    if (forConn.has(schemaName)) forConn.delete(schemaName);
-    else forConn.add(schemaName);
-    const nextMap = {
-      ...current,
-      [connectionId]: Array.from(forConn).sort(),
-    };
-    // Optimistic
-    set({ settings: { ...get().settings, favoriteSchemas: nextMap } });
-    try {
-      await ipc.settings.set({ favoriteSchemas: nextMap });
-    } catch (err) {
-      console.error('[plasma] persist favoriteSchemas failed', err);
-    }
-  },
+    async toggleSidebar() {
+      // Optimistic UI update first so the panel flips instantly.
+      // Persistence to SQLite is fire-and-forget — any failure is logged
+      // but never blocks the interaction.
+      const next = !get().settings.sidebarCollapsed;
+      set({ settings: { ...get().settings, sidebarCollapsed: next } });
+      try {
+        await ipc.settings.set({ sidebarCollapsed: next });
+      } catch (err) {
+        console.error('[plasma] persist sidebarCollapsed failed', err);
+      }
+    },
 
-  async toggleFavoriteTable(connectionId, schemaName, tableName) {
-    const current = get().settings.favoriteTables ?? {};
-    const key = `${schemaName}.${tableName}`;
-    const forConn = new Set(current[connectionId] ?? []);
-    if (forConn.has(key)) forConn.delete(key);
-    else forConn.add(key);
-    const nextMap = {
-      ...current,
-      [connectionId]: Array.from(forConn).sort(),
-    };
-    set({ settings: { ...get().settings, favoriteTables: nextMap } });
-    try {
-      await ipc.settings.set({ favoriteTables: nextMap });
-    } catch (err) {
-      console.error('[plasma] persist favoriteTables failed', err);
-    }
-  },
+    async toggleTheme() {
+      // Optimistic theme flip — apply CSS immediately, persist in background.
+      // Flips what is on screen, so "System" becomes the opposite fixed mode.
+      const next: ThemeMode = get().resolvedTheme === 'light' ? 'dark' : 'light';
+      set({ settings: { ...get().settings, theme: next } });
+      paintTheme(get().settings);
+      try {
+        await ipc.settings.set({ theme: next });
+      } catch (err) {
+        console.error('[plasma] persist theme failed', err);
+      }
+    },
 
-  async setConnectionTag(connectionId, tag) {
-    const current = get().settings.connectionTags ?? {};
-    const next: Record<string, 'prod' | 'staging' | 'dev' | 'local'> = { ...current };
-    if (tag === null) {
-      delete next[connectionId];
-    } else {
-      next[connectionId] = tag;
-    }
-    set({ settings: { ...get().settings, connectionTags: next } });
-    try {
-      await ipc.settings.set({ connectionTags: next });
-    } catch (err) {
-      console.error('[plasma] persist connectionTags failed', err);
-    }
-  },
-});
+    async toggleFavoriteSchema(connectionId: string, schemaName: string) {
+      const current = get().settings.favoriteSchemas ?? {};
+      const forConn = new Set(current[connectionId] ?? []);
+      if (forConn.has(schemaName)) forConn.delete(schemaName);
+      else forConn.add(schemaName);
+      const nextMap = {
+        ...current,
+        [connectionId]: Array.from(forConn).sort(),
+      };
+      // Optimistic
+      set({ settings: { ...get().settings, favoriteSchemas: nextMap } });
+      try {
+        await ipc.settings.set({ favoriteSchemas: nextMap });
+      } catch (err) {
+        console.error('[plasma] persist favoriteSchemas failed', err);
+      }
+    },
+
+    async toggleFavoriteTable(connectionId, schemaName, tableName) {
+      const current = get().settings.favoriteTables ?? {};
+      const key = `${schemaName}.${tableName}`;
+      const forConn = new Set(current[connectionId] ?? []);
+      if (forConn.has(key)) forConn.delete(key);
+      else forConn.add(key);
+      const nextMap = {
+        ...current,
+        [connectionId]: Array.from(forConn).sort(),
+      };
+      set({ settings: { ...get().settings, favoriteTables: nextMap } });
+      try {
+        await ipc.settings.set({ favoriteTables: nextMap });
+      } catch (err) {
+        console.error('[plasma] persist favoriteTables failed', err);
+      }
+    },
+
+    async setConnectionTag(connectionId, tag) {
+      const current = get().settings.connectionTags ?? {};
+      const next: Record<string, 'prod' | 'staging' | 'dev' | 'local'> = { ...current };
+      if (tag === null) {
+        delete next[connectionId];
+      } else {
+        next[connectionId] = tag;
+      }
+      set({ settings: { ...get().settings, connectionTags: next } });
+      try {
+        await ipc.settings.set({ connectionTags: next });
+      } catch (err) {
+        console.error('[plasma] persist connectionTags failed', err);
+      }
+    },
+  };
+};
