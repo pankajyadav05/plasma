@@ -114,12 +114,15 @@ export type UpdateStatus = import('@shared/protocol').UpdateStatus;
 let lastStatus: UpdateStatus = { kind: 'idle' };
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 let initialTimer: ReturnType<typeof setTimeout> | null = null;
+let squirrelTimer: ReturnType<typeof setTimeout> | null = null;
 
 const POLL_AFTER_LAUNCH_MS = 30_000; // first auto-check 30s after window open
 const POLL_INTERVAL_MS = 6 * 60 * 60 * 1000; // every 6h while running
 const PREPARE_TIMEOUT_MS = 3_000;
 /** Time for `flushStorageData` to reach the disk before the workers stop. */
 const FLUSH_SETTLE_MS = 200;
+/** Squirrel.Mac fetches, unpacks and checks the update before it quits; past this it is stuck. */
+const SQUIRREL_HANDOVER_TIMEOUT_MS = 5 * 60 * 1000;
 
 /**
  * C33: the updater outlives any one window (macOS reopen creates a new
@@ -817,6 +820,20 @@ export function initUpdater(window: WindowSource, updaterHost: UpdaterHost = noo
         throw new Error(problem);
       }
     }
+    if (installer.kind === 'squirrel') {
+      // electron-updater's MacUpdater hands the zip to Squirrel.Mac when the download ends only
+      // if install-on-quit is already on, and quitAndInstall asks Squirrel for it only if it is
+      // off. armInstall turns it on after the download, so with it left on Squirrel is never
+      // asked and the app waits forever on "Restarting".
+      autoUpdater.autoInstallOnAppQuit = false;
+      squirrelTimer = setTimeout(() => {
+        squirrelTimer = null;
+        if (!handoverStarted) return;
+        logger.error('[updater] Squirrel.Mac did not install the update in time');
+        handoverStarted = false;
+        host.relaunchAfterFailedInstall();
+      }, SQUIRREL_HANDOVER_TIMEOUT_MS);
+    }
     logger.info(`[updater] quitAndInstall(silent=${plan.silent}) for ${ready.version}`);
     autoUpdater.quitAndInstall(plan.silent, true);
   }
@@ -938,6 +955,10 @@ export function disposeUpdater(): void {
   if (initialTimer) {
     clearTimeout(initialTimer);
     initialTimer = null;
+  }
+  if (squirrelTimer) {
+    clearTimeout(squirrelTimer);
+    squirrelTimer = null;
   }
   ipcMain.removeHandler('plasma:update:check');
   ipcMain.removeHandler('plasma:update:install');
