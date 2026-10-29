@@ -33,7 +33,6 @@ import { DisconnectedHome } from './DisconnectedHome';
 import { IconRail } from './IconRail';
 import { SidebarResizer } from './SidebarResizer';
 import { TopBar } from './TopBar';
-import { useEditModeActive } from './use-edit-mode';
 
 // Heavy feature modules load on demand so the first-load chunk stays small.
 const ConnectionsCanvas = lazyNamed(
@@ -438,18 +437,8 @@ function PaneCanvas({ pane }: { pane?: PaneId } = {}) {
   const hasResults = hasResultOrError || running || safeRunHere;
   const showEditor = isSqlTab && (!editorHidden || !hasResults);
   const showGrid = !isDiagram && !isListen && !isCompare && (!isSqlTab || hasResults);
-  const editing = useEditModeActive();
-  // Edit mode frames the table's data (grid, filters, footer) in amber.
-  const framed = editing && isTableData;
   return (
-    <main className="relative flex min-h-0 min-w-0 flex-1 flex-col bg-[var(--wb-content)]">
-      {framed && (
-        <div
-          aria-hidden
-          data-testid="edit-mode-frame"
-          className="pointer-events-none absolute inset-0 z-10 shadow-[inset_0_0_0_2px_var(--status-warn)]"
-        />
-      )}
+    <main className="flex min-h-0 min-w-0 flex-1 flex-col bg-[var(--wb-content)]">
       <TabStrip pane={pane} />
       {isDiagram && (
         <Suspense fallback={null}>

@@ -42,7 +42,15 @@ import {
   Undo2,
   X,
 } from 'lucide-react';
-import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  type CSSProperties,
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { FindReplaceDialog, PasteOverflowDialog, SetValueDialog } from './BulkEditDialogs';
 import { type CellDetail, CellDetailDialog } from './CellDetailDialog';
 import { ColumnHeaderMenu } from './ColumnHeaderMenu';
@@ -120,6 +128,11 @@ const SELECTED_ROW_BG = 'bg-[color-mix(in_srgb,var(--wb-accent)_18%,transparent)
 const EDITED_CELL_BG = 'bg-[color-mix(in_srgb,var(--status-staging)_30%,transparent)]';
 const INSERTED_ROW_BG = 'bg-[color-mix(in_srgb,var(--status-local)_20%,transparent)]';
 const DELETED_ROW_BG = 'bg-[color-mix(in_srgb,var(--destructive)_14%,transparent)]';
+/** Edit mode re-points the grid's accent at the warning amber (see the grid root). */
+const EDIT_MODE_GRID_STYLE = {
+  '--wb-accent': 'var(--status-warn)',
+  caretColor: 'var(--status-warn)',
+} as CSSProperties;
 const FAILED_OUTLINE = 'outline outline-2 -outline-offset-2 outline-[var(--destructive)]';
 
 /**
@@ -1974,6 +1987,11 @@ export function ResultGrid() {
         onPaste={onGridPaste}
         onFocus={onGridFocus}
         data-testid="result-grid"
+        data-edit-mode={writable || undefined}
+        // Edit mode: the selection, the range, the row tint and the inline editor
+        // all take the warning amber instead of the theme accent, so the cell
+        // under your hand shows that changes will be written.
+        style={writable ? EDIT_MODE_GRID_STYLE : undefined}
         className={cn(
           'min-w-full select-none border-collapse font-mono text-[13px] tabular-nums text-[var(--grid-text)] outline-none',
           'focus-visible:shadow-[inset_0_0_0_1px_var(--wb-accent)]',
@@ -2140,7 +2158,7 @@ export function ResultGrid() {
                   aria-colindex={1}
                   className={cn(
                     'sticky left-0 z-[2] h-[24px] border-r border-[var(--grid-line)] p-0 text-center align-middle',
-                    rowChecked
+                    rowChecked || (writable && rowSelected)
                       ? 'bg-[color-mix(in_srgb,var(--wb-accent)_30%,var(--wb-content))]'
                       : 'bg-[var(--wb-content)]',
                   )}
@@ -2166,7 +2184,7 @@ export function ResultGrid() {
                       className={cn(
                         'block h-[24px] w-full px-1 text-center font-mono text-[12px] tabular-nums transition-colors',
                         deleted && 'line-through',
-                        rowChecked
+                        rowChecked || (writable && rowSelected)
                           ? 'text-[var(--wb-text)]'
                           : 'text-[var(--wb-text-3)] hover:bg-[var(--wb-control)] hover:text-[var(--wb-text)]',
                       )}

@@ -92,7 +92,6 @@ export function TopBar() {
   const overlayOpen = useSession(
     (s) => s.paletteOpen || s.settingsOpen || s.historyOpen || s.deleteConfirmConnectionId !== null,
   );
-  const editing = useEditModeActive();
 
   return (
     <header
@@ -110,15 +109,6 @@ export function TopBar() {
       <RightClusters connected={connected} />
 
       {!isMac && <WindowControls />}
-      {/* Edit mode: an amber stripe along the whole window edge, so the state
-          reads at a glance from anywhere on screen. */}
-      {editing && (
-        <span
-          aria-hidden
-          data-testid="edit-mode-stripe"
-          className="pointer-events-none absolute inset-x-0 -bottom-px h-[2px] bg-[var(--status-warn)]"
-        />
-      )}
       <LiveAnnouncer />
       <UpdateToasts />
     </header>
@@ -158,35 +148,18 @@ function LeftClusters({ sql }: { sql: boolean }) {
  * carrying three dead buttons the rest of the time.
  */
 function ChangesCluster() {
-  // Edits are per tab: the toolbar shows / commits / discards the ACTIVE tab's.
-  const edits = useSession((s) => editsOf(s.pendingEditsByTab, s.activeTabId));
-  const busy = useSession((s) => s.pendingEditsBusy);
-  const commit = useSession((s) => s.commitPendingEdits);
-  const revert = useSession((s) => s.revertPendingEdits);
-  // Commit failures live in the store (the grid points at the failing cell).
-  const error = useSession((s) =>
-    !s.pendingEditsError?.tabId || s.pendingEditsError.tabId === s.activeTabId
-      ? (s.pendingEditsError?.message ?? null)
-      : null,
-  );
-  const canDetectConflicts = useSession((s) => engineCaps(s.activeConfig?.engine).editConflicts);
-  const has = edits.length > 0;
-  if (!has && !busy && !error) return null;
-
-  const onCommit = async () => {
-    try {
-      await commit();
-    } catch {
-      // surfaced via pendingEditsError (grid banner + this badge)
-    }
-  };
+  const pending = usePendingEdits();
+  // In edit mode the status capsule becomes the edit bar and carries these actions.
+  const editing = useEditModeActive();
+  if (editing || (!pending.has && !pending.busy && !pending.error)) return null;
+  const { edits, has, busy, error } = pending;
 
   return (
     <ToolbarGroup className={cn(has && 'ring-1 ring-[var(--wb-accent)]/50')}>
       <ToolbarButton
         label="Discard pending changes"
         disabled={!has || busy}
-        onClick={() => void revert()}
+        onClick={() => void pending.revert()}
       >
         <X />
       </ToolbarButton>
@@ -196,30 +169,7 @@ function ChangesCluster() {
             <Eye />
           </ToolbarButton>
         </PopoverTrigger>
-        <PopoverContent
-          align="start"
-          sideOffset={8}
-          className={cn(POPOVER, 'w-[560px] max-w-[90vw] overflow-hidden p-0')}
-        >
-          <div className="border-b border-[var(--wb-separator)] px-3 py-2 text-[12px] text-[var(--wb-text-2)]">
-            {summarizeEdits(edits)} — commits as one transaction ({kbd('S')})
-          </div>
-          {!canDetectConflicts && (
-            <div className="border-b border-[var(--wb-separator)] px-3 py-2 text-[12px] text-[var(--wb-text-2)]">
-              Conflicts cannot be detected on this engine. If someone else changed these rows after
-              you loaded them, your changes overwrite theirs.
-            </div>
-          )}
-          {error && (
-            <div
-              className="border-b border-[var(--wb-separator)] px-3 py-2 text-[12px] text-destructive"
-              role="alert"
-            >
-              Commit failed: {error}
-            </div>
-          )}
-          <PendingEditsTable edits={edits} />
-        </PopoverContent>
+        <PendingEditsPopover pending={pending} />
       </Popover>
       <ToolbarButton
         label={has ? `Commit ${edits.length} change${edits.length === 1 ? '' : 's'}` : 'Commit'}
@@ -232,7 +182,7 @@ function ChangesCluster() {
         }
         disabled={!has || busy}
         tone={error ? 'danger' : has ? 'accent' : 'default'}
-        onClick={() => void onCommit()}
+        onClick={() => void pending.commit()}
         data-testid="toolbar-commit"
       >
         {busy ? <Loader2 className="animate-spin" /> : <Check />}
@@ -250,6 +200,61 @@ function ChangesCluster() {
         {has ? (edits.length > 99 ? '99+' : edits.length) : ''}
       </span>
     </ToolbarGroup>
+  );
+}
+
+/** The active tab's staged grid edits, and what can be done with them. */
+function usePendingEdits() {
+  // Edits are per tab: the toolbar shows / commits / discards the ACTIVE tab's.
+  const edits = useSession((s) => editsOf(s.pendingEditsByTab, s.activeTabId));
+  const busy = useSession((s) => s.pendingEditsBusy);
+  const commitEdits = useSession((s) => s.commitPendingEdits);
+  const revert = useSession((s) => s.revertPendingEdits);
+  // Commit failures live in the store (the grid points at the failing cell).
+  const error = useSession((s) =>
+    !s.pendingEditsError?.tabId || s.pendingEditsError.tabId === s.activeTabId
+      ? (s.pendingEditsError?.message ?? null)
+      : null,
+  );
+  const canDetectConflicts = useSession((s) => engineCaps(s.activeConfig?.engine).editConflicts);
+  const commit = async () => {
+    try {
+      await commitEdits();
+    } catch {
+      // surfaced via pendingEditsError (grid banner + the count)
+    }
+  };
+  return { edits, has: edits.length > 0, busy, error, canDetectConflicts, commit, revert };
+}
+
+type PendingEdits = ReturnType<typeof usePendingEdits>;
+
+function PendingEditsPopover({ pending }: { pending: PendingEdits }) {
+  return (
+    <PopoverContent
+      align="start"
+      sideOffset={8}
+      className={cn(POPOVER, 'w-[560px] max-w-[90vw] overflow-hidden p-0')}
+    >
+      <div className="border-b border-[var(--wb-separator)] px-3 py-2 text-[12px] text-[var(--wb-text-2)]">
+        {summarizeEdits(pending.edits)} — commits as one transaction ({kbd('S')})
+      </div>
+      {!pending.canDetectConflicts && (
+        <div className="border-b border-[var(--wb-separator)] px-3 py-2 text-[12px] text-[var(--wb-text-2)]">
+          Conflicts cannot be detected on this engine. If someone else changed these rows after you
+          loaded them, your changes overwrite theirs.
+        </div>
+      )}
+      {pending.error && (
+        <div
+          className="border-b border-[var(--wb-separator)] px-3 py-2 text-[12px] text-destructive"
+          role="alert"
+        >
+          Commit failed: {pending.error}
+        </div>
+      )}
+      <PendingEditsTable edits={pending.edits} />
+    </PopoverContent>
   );
 }
 
@@ -283,39 +288,31 @@ function SessionCluster({ sql }: { sql: boolean }) {
   const readOnlyConn =
     Boolean(activeConfig?.readOnly) || !engineCaps(activeConfig?.engine).rowEdits;
   const noRowEdits = !engineCaps(activeConfig?.engine).rowEdits;
+  // While editing, the edit bar's "Done editing" is the way out.
+  const editing = useEditModeActive();
 
   return (
     <ToolbarGroup>
-      <ToolbarButton
-        label={
-          noRowEdits
-            ? 'Rows are read-only for this engine — write SQL in the editor instead'
-            : readOnlyConn
-              ? 'Read-only connection — writes are disabled'
-              : editMode
-                ? 'Edit mode — writes enabled. Click to lock.'
-                : 'Safe mode — read only. Click to allow edits.'
-        }
-        disabled={readOnlyConn}
-        active={editMode && !readOnlyConn}
-        onClick={toggleEditMode}
-        data-testid="toolbar-safety"
-        // Edit mode is a labelled amber pill, not just a different glyph.
-        className={
-          editMode && !readOnlyConn
-            ? 'flex gap-1.5 bg-[color-mix(in_oklab,var(--status-warn)_20%,transparent)] pr-[10px] text-[var(--status-warn)] shadow-[inset_0_0_0_1px_color-mix(in_oklab,var(--status-warn)_55%,transparent)] hover:bg-[color-mix(in_oklab,var(--status-warn)_28%,transparent)] hover:text-[var(--status-warn)]'
-            : undefined
-        }
-      >
-        {editMode && !readOnlyConn ? (
-          <>
-            <Pencil />
-            <span className="text-[12px] font-semibold">Editing</span>
-          </>
-        ) : (
-          <Lock />
-        )}
-      </ToolbarButton>
+      {!editing && (
+        <ToolbarButton
+          label={
+            noRowEdits
+              ? 'Rows are read-only for this engine — write SQL in the editor instead'
+              : readOnlyConn
+                ? 'Read-only connection — writes are disabled'
+                : editMode
+                  ? 'Edit mode — writes enabled. Click to lock.'
+                  : 'Safe mode — read only. Click to allow edits.'
+          }
+          disabled={readOnlyConn}
+          active={editMode && !readOnlyConn}
+          tone={editMode && !readOnlyConn ? 'accent' : 'default'}
+          onClick={toggleEditMode}
+          data-testid="toolbar-safety"
+        >
+          {editMode && !readOnlyConn ? <Pencil /> : <Lock />}
+        </ToolbarButton>
+      )}
       <ConnectionSwitcher
         trigger={
           <ToolbarButton label="Switch connection or database">
@@ -449,11 +446,17 @@ function StatusCapsule() {
   // whole capsule red (white text) so a production session is never
   // mistaken for a safe one — and nothing else reads as "danger" (F9).
   const prodFill = connected && tag === 'prod';
+  // Edit mode tints the capsule amber and leads it with an EDITING tag: the bar
+  // that says where you are also says that changes will be written. PROD keeps
+  // its red fill and still gets the tag.
+  const editing = useEditModeActive();
   const surface = prodFill
     ? 'var(--status-prod)'
-    : connected
-      ? 'var(--wb-connected)'
-      : 'var(--status-none)';
+    : connected && editing
+      ? 'color-mix(in oklab, var(--status-warn) 20%, var(--wb-content))'
+      : connected
+        ? 'var(--wb-connected)'
+        : 'var(--status-none)';
   const stateLabel =
     connectionState === 'connected'
       ? 'connected'
@@ -496,18 +499,24 @@ function StatusCapsule() {
     <div
       ref={outerRef}
       className={cn(
-        'no-drag flex h-9 min-w-0 flex-1 items-center overflow-hidden rounded-full px-4 font-mono text-[13px] font-semibold leading-none',
-        'shadow-[inset_0_1px_0_rgb(255_255_255/0.08)]',
+        'no-drag flex h-9 min-w-0 flex-1 items-center overflow-hidden rounded-full font-mono text-[13px] font-semibold leading-none',
+        connected && editing ? 'pl-1 pr-1' : 'px-4',
+        connected && editing && !prodFill
+          ? 'shadow-[inset_0_0_0_1px_color-mix(in_oklab,var(--status-warn)_60%,transparent)]'
+          : 'shadow-[inset_0_1px_0_rgb(255_255_255/0.08)]',
         prodFill ? 'text-white' : 'text-[var(--wb-text)]',
       )}
       style={{ backgroundColor: surface }}
       data-testid="status-capsule"
+      data-edit-mode={(connected && editing) || undefined}
     >
       <span className="sr-only" data-testid="status-connection">
         {stateLabel}
       </span>
 
-      {activeConfig && connected ? (
+      {activeConfig && connected && editing ? (
+        <EditBar object={object} connectionName={activeConfig.name} tag={tag} prodFill={prodFill} />
+      ) : activeConfig && connected ? (
         <span ref={innerRef} className="flex min-w-0 items-center">
           {drop < 2 && (
             <>
@@ -595,6 +604,139 @@ function StatusCapsule() {
         <OfflineCapsule />
       )}
     </div>
+  );
+}
+
+/**
+ * The capsule in edit mode: what is being edited, then the staged changes and
+ * what to do with them, then the way out.
+ *
+ *   ✎ EDITING  survey_storage · Resilinc Admin  Dev        3 changes  Discard  Review  Commit ⌘S
+ *   ✎ EDITING  survey_storage · Resilinc Admin  Dev                No changes yet  Done editing
+ *
+ * "Done editing" only shows with nothing staged, so leaving edit mode never
+ * strands changes. PROD keeps its red fill, with white chips.
+ */
+function EditBar({
+  object,
+  connectionName,
+  tag,
+  prodFill,
+}: {
+  object: string | null;
+  connectionName: string;
+  tag: string | undefined;
+  prodFill: boolean;
+}) {
+  const pending = usePendingEdits();
+  const toggleEditMode = useSession((s) => s.toggleEditMode);
+  const { edits, has, busy, error } = pending;
+  const count = `${edits.length.toLocaleString()} change${edits.length === 1 ? '' : 's'}`;
+  const chip = prodFill
+    ? 'bg-white text-[var(--status-prod)]'
+    : 'bg-[var(--status-warn)] text-[var(--wb-content)]';
+  const action =
+    'shrink-0 rounded-full px-2.5 py-[5px] font-sans text-[12px] font-medium transition-colors disabled:opacity-50';
+  return (
+    <span className="flex min-w-0 flex-1 items-center gap-2" data-testid="edit-bar">
+      <span
+        className={cn(
+          'flex shrink-0 items-center gap-1 rounded-full px-2.5 py-[5px] font-sans text-[11px] font-bold tracking-wide',
+          chip,
+        )}
+        title="Edit mode: changes to rows are staged here until you commit."
+      >
+        <Pencil className="h-3 w-3" />
+        EDITING
+      </span>
+      <span className="min-w-0 truncate">
+        {object && <span>{object}</span>}
+        {object && <span className="opacity-60"> · </span>}
+        <span className="font-normal">{connectionName}</span>
+      </span>
+      {tag && (
+        <span
+          className={cn(
+            'shrink-0 rounded-[4px] px-1.5 py-[3px] font-sans text-[11px] font-semibold text-white',
+            prodFill && 'bg-black/25',
+          )}
+          style={prodFill ? undefined : { backgroundColor: TAG_FILL[tag] }}
+        >
+          {TAG_LABEL[tag] ?? tag}
+        </span>
+      )}
+      <span className="flex-1" />
+      {has || busy || error ? (
+        <>
+          <span
+            className={cn(
+              'shrink-0 font-sans text-[12px] font-medium',
+              error
+                ? prodFill
+                  ? 'text-white'
+                  : 'text-destructive'
+                : prodFill
+                  ? 'text-white'
+                  : 'text-[var(--status-warn)]',
+            )}
+            role={error ? 'alert' : undefined}
+            title={error ? `Commit failed: ${error}` : undefined}
+            data-testid="edit-bar-count"
+          >
+            {error ? 'Commit failed' : count}
+          </span>
+          <button
+            type="button"
+            className={cn(action, 'hover:bg-black/15')}
+            disabled={!has || busy}
+            onClick={() => void pending.revert()}
+            data-testid="edit-bar-discard"
+          >
+            Discard
+          </button>
+          <Popover>
+            <PopoverTrigger asChild>
+              <button
+                type="button"
+                className={cn(action, 'bg-black/10 hover:bg-black/20')}
+                disabled={!has}
+                data-testid="edit-bar-review"
+              >
+                Review
+              </button>
+            </PopoverTrigger>
+            <PendingEditsPopover pending={pending} />
+          </Popover>
+          <button
+            type="button"
+            className={cn(action, 'flex items-center gap-1 font-bold', chip)}
+            disabled={!has || busy}
+            onClick={() => void pending.commit()}
+            title={`Commit ${count} as one transaction (${kbd('S')})`}
+            data-testid="toolbar-commit"
+          >
+            {busy && <Loader2 className="h-3 w-3 animate-spin" />}
+            Commit
+            <span className="font-normal opacity-70">{kbd('S')}</span>
+          </button>
+        </>
+      ) : (
+        <>
+          <span className="shrink-0 font-sans text-[12px] font-normal opacity-70">
+            No changes yet
+          </span>
+          <button
+            type="button"
+            className={cn(action, 'bg-black/10 hover:bg-black/20')}
+            onClick={toggleEditMode}
+            title="Leave edit mode (rows become read-only)"
+            data-testid="edit-bar-done"
+          >
+            Done editing
+          </button>
+        </>
+      )}
+    </span>
   );
 }
 
