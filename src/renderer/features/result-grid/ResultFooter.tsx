@@ -8,6 +8,7 @@ import { formatDuration } from '@/lib/format';
 import { LazyOnOpen, lazyNamed } from '@/lib/lazy';
 import { type TableViewMode, useActiveTabSansSql, useSession } from '@/stores/session';
 import { type ResultView, useWorkbench } from '@/stores/workbench';
+import { exportableResults } from '@shared/export-all';
 import type { QueryResult } from '@shared/protocol';
 import { MAX_RESULT_ROWS } from '@shared/result-bounds';
 import {
@@ -328,6 +329,12 @@ export function ResultFooter() {
               filename={tab.title.replace(/\.sql$/i, '')}
               full={fullExport}
               targetTable={isTable ? exportTargetTable(tab.tableSchema, tab.tableName) : undefined}
+              // "Export all results" for a run of several SELECTs (built while the menu is open).
+              allResults={
+                exportOpen && !isTable && tab.queryResults
+                  ? exportableResults(tab.queryResults)
+                  : undefined
+              }
             />
           )}
         </>

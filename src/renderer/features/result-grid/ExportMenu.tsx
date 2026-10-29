@@ -12,8 +12,19 @@ import {
 } from '@/lib/export';
 import { useExportJob } from '@/stores/export-job';
 import { useSession } from '@/stores/session';
+import type { ExportAllFormat, NamedResult } from '@shared/export-all';
 import type { QueryResult } from '@shared/protocol';
-import { Check, Copy, Download, FileJson, FileText, FileType2 } from 'lucide-react';
+import {
+  Check,
+  Copy,
+  Download,
+  FileArchive,
+  FileJson,
+  FileSpreadsheet,
+  FileText,
+  FileType2,
+  Loader2,
+} from 'lucide-react';
 import { useEffect, useState } from 'react';
 
 /**
@@ -30,6 +41,7 @@ export function ExportPopover({
   filename,
   full,
   targetTable,
+  allResults,
 }: {
   open: boolean;
   onOpenChange: (o: boolean) => void;
@@ -40,6 +52,8 @@ export function ExportPopover({
   full?: FullExportSource | null;
   /** Quoted INSERT target for SQL export (table tabs). */
   targetTable?: string;
+  /** Every row-returning result of a multi-statement run; "All results" shows from two. */
+  allResults?: NamedResult[];
 }) {
   const selectedCount = selected.size;
   const hasSelection = selectedCount > 0;
@@ -73,6 +87,13 @@ export function ExportPopover({
         </Pill>
       </PopoverTrigger>
       <PopoverContent align="end" sideOffset={4} className="w-[280px] p-1">
+        {allResults && allResults.length > 1 && (
+          <ExportAllSection
+            results={allResults}
+            filename={filename}
+            onDone={() => onOpenChange(false)}
+          />
+        )}
         {(hasSelection || full) && (
           <div
             className={cn(
@@ -158,6 +179,113 @@ export function ExportPopover({
         </div>
       </PopoverContent>
     </Popover>
+  );
+}
+
+const ALL_FORMATS: {
+  format: ExportAllFormat;
+  label: string;
+  hint: string;
+  icon: React.ReactNode;
+}[] = [
+  {
+    format: 'xlsx',
+    label: 'Excel workbook',
+    hint: '.xlsx',
+    icon: <FileSpreadsheet className="h-3.5 w-3.5 text-[var(--wb-text-2)]" />,
+  },
+  {
+    format: 'csv',
+    label: 'CSV files',
+    hint: '.zip',
+    icon: <FileArchive className="h-3.5 w-3.5 text-[var(--wb-text-2)]" />,
+  },
+  {
+    format: 'json',
+    label: 'JSON files',
+    hint: '.zip',
+    icon: <FileArchive className="h-3.5 w-3.5 text-[var(--wb-text-2)]" />,
+  },
+];
+
+/**
+ * Every result of the run in one file: an Excel workbook with a sheet per
+ * result, or a zip with a CSV / JSON file per result. Uses the rows already
+ * loaded, like "Loaded" above.
+ */
+function ExportAllSection({
+  results,
+  filename,
+  onDone,
+}: {
+  results: NamedResult[];
+  filename: string;
+  onDone: () => void;
+}) {
+  const [busy, setBusy] = useState<ExportAllFormat | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const truncated = results.some((r) => r.truncated);
+
+  const save = async (format: ExportAllFormat) => {
+    setBusy(format);
+    setError(null);
+    try {
+      const res = await window.plasma.export.saveAll({
+        format,
+        defaultPath: `${filename}-all-results`,
+        results: results.map(({ label, columns, rows }) => ({ label, columns, rows })),
+      });
+      if (res.ok) onDone();
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '')
+          : String(err),
+      );
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <div data-testid="export-all">
+      <div className="px-2 pb-0.5 pt-1 text-[11px] text-[var(--wb-text-3)]">
+        All {results.length} results in one file
+      </div>
+      {ALL_FORMATS.map(({ format, label, hint, icon }) => (
+        <button
+          key={format}
+          type="button"
+          disabled={busy !== null}
+          onClick={() => void save(format)}
+          className="flex w-full items-center gap-2 rounded-[5px] px-2 py-1 text-left text-[13px] text-[var(--wb-text)] transition-colors hover:bg-[var(--wb-control)] disabled:opacity-60"
+          data-testid={`export-all-${format}`}
+        >
+          {icon}
+          <span className="truncate">{label}</span>
+          <span className="ml-1 font-mono text-[12px] text-[var(--wb-text-3)]">{hint}</span>
+          <span className="ml-auto">
+            {busy === format ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Download className="h-3.5 w-3.5 text-[var(--wb-text-2)]" />
+            )}
+          </span>
+        </button>
+      ))}
+      {truncated && (
+        <div className="px-2 pb-1 text-[12px] text-[var(--wb-text-2)]">
+          Some results were cut at the row limit; their loaded rows are exported.
+        </div>
+      )}
+      {error && (
+        <div className="px-2 pb-1 text-[12px] text-destructive" role="alert">
+          {error}
+        </div>
+      )}
+      <div className="my-1 h-px bg-[var(--wb-separator)]" />
+      <div className="px-2 pb-0.5 pt-1 text-[11px] text-[var(--wb-text-3)]">This result</div>
+    </div>
   );
 }
 

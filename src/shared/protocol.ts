@@ -871,6 +871,28 @@ export const ExportSaveRequest = z.object({
 });
 export type ExportSaveRequest = z.infer<typeof ExportSaveRequest>;
 
+/**
+ * "Export all results": every result set of a multi-statement run in one file,
+ * an .xlsx workbook (one sheet per result) or a .zip of CSV / JSON files.
+ * The rows are the ones already loaded in the window.
+ */
+export const ExportAllRequest = z.object({
+  format: z.enum(['xlsx', 'csv', 'json']),
+  /** Suggested filename stem for the save dialog. */
+  defaultPath: z.string().min(1),
+  results: z
+    .array(
+      z.object({
+        label: z.string().min(1).max(200),
+        columns: z.array(ColumnMeta),
+        rows: z.array(z.array(z.unknown())),
+      }),
+    )
+    .min(1)
+    .max(500),
+});
+export type ExportAllRequest = z.infer<typeof ExportAllRequest>;
+
 // ─── Structure editing + import (wave 2) ─────────────────────────────
 
 /** Statements from the structure editor / create-table dialog (built by `pg-ddl`). */
@@ -2626,6 +2648,7 @@ export const IpcChannel = {
   ImportCancel: 'plasma:import:cancel',
   ImportProgressEvent: 'plasma:import:progress',
   ExportCancel: 'plasma:export:cancel',
+  ExportAll: 'plasma:export:all',
   ExportProgressEvent: 'plasma:export:progress',
   QueryCancelAux: 'plasma:query:cancelAux',
   // OpenSearch ops
@@ -3066,6 +3089,8 @@ export interface PlasmaAPI {
     save(req: ExportSaveRequest): Promise<ExportSaveResult>;
     /** Stop the export started with this `jobId` (C30). */
     cancel(jobId: string): Promise<void>;
+    /** Save dialog, then every result in one .xlsx / .zip file. */
+    saveAll(req: ExportAllRequest): Promise<ExportSaveResult>;
   };
   structure: {
     /**

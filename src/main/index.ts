@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { readFile, realpath, stat } from 'node:fs/promises';
+import { readFile, realpath, stat, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -18,6 +18,7 @@ import { AiModelsResultSchema } from '@shared/ai-models';
 import { isAgentReadSql } from '@shared/ai-readonly-sql';
 import { sshUnsupportedReason } from '@shared/connection-endpoint';
 import { CONNECTION_LOST, ConnectionLostError } from '@shared/connection-loss';
+import { exportAllExtension } from '@shared/export-all';
 import { assertOsSingleIndexName, isReadOnlyOsSql } from '@shared/os-write-policy';
 import {
   type AdminJobEvent,
@@ -46,6 +47,7 @@ import {
   type DataFilePickResult,
   type EditConflict,
   ExplainRequest,
+  ExportAllRequest,
   ExportSaveRequest,
   type ExportSaveResult,
   type HistoryEntry,
@@ -129,6 +131,7 @@ import {
 } from './data-files';
 import { closeDb, getDb } from './db';
 import { registerE2EHooks } from './e2e-hooks';
+import { buildExportAll } from './export-all';
 import {
   clearHistory,
   deleteHistoryEntry,
@@ -1990,6 +1993,30 @@ function registerIpcHandlers() {
         return { ok: false, canceled: true };
       throw err;
     }
+  });
+
+  // "Export all results": the rows are already in the window, so main writes the
+  // .xlsx / .zip itself (export-all.ts); nothing re-runs on the server.
+  ipcMain.handle(IpcChannel.ExportAll, async (_e, raw: unknown): Promise<ExportSaveResult> => {
+    const req = ExportAllRequest.parse(raw);
+    const extension = exportAllExtension(req.format);
+    const defaultPath = req.defaultPath.toLowerCase().endsWith(`.${extension}`)
+      ? req.defaultPath
+      : `${req.defaultPath}.${extension}`;
+    const picked = await dialog.showSaveDialog({
+      defaultPath,
+      filters: [
+        req.format === 'xlsx'
+          ? { name: 'Excel workbook', extensions: ['xlsx'] }
+          : { name: `${req.format.toUpperCase()} files (zip)`, extensions: ['zip'] },
+      ],
+    });
+    if (picked.canceled || !picked.filePath) return { ok: false, canceled: true };
+    const { data, rowCount } = buildExportAll(req.format, req.results, {
+      csv: req.format === 'csv' ? getPublicSettings().csvExport : undefined,
+    });
+    await writeFile(picked.filePath, data);
+    return { ok: true, filePath: picked.filePath, rowCount, bytesWritten: data.length };
   });
 
   ipcMain.handle(IpcChannel.ExportCancel, async (_e, jobId: unknown): Promise<void> => {
