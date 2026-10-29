@@ -72,6 +72,7 @@ const api: PlasmaAPI = {
   export: {
     save: (req) => ipcRenderer.invoke(IpcChannel.ExportSave, req),
     cancel: (jobId) => ipcRenderer.invoke(IpcChannel.ExportCancel, jobId),
+    saveAll: (req) => ipcRenderer.invoke(IpcChannel.ExportAll, req),
   },
   structure: {
     apply: (req) => ipcRenderer.invoke(IpcChannel.StructureApply, req),
