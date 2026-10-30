@@ -1,3 +1,4 @@
+import { jsonReplacer, rowToObject } from './export-format';
 import type { ColumnMeta, QueryResult } from './protocol';
 
 /**
@@ -93,4 +94,23 @@ export function zipEntryNames(labels: readonly string[], extension: string): str
 /** The file the save dialog suggests: `.xlsx` for a workbook, `.zip` for the rest. */
 export function exportAllExtension(format: ExportAllFormat): 'xlsx' | 'zip' {
   return format === 'xlsx' ? 'xlsx' : 'zip';
+}
+
+/**
+ * Every result as one JSON document for the clipboard, keyed by result:
+ *
+ *   { "Result 1 · orders": [{ "id": 1, … }], "Result 2": [{ "n": 12 }] }
+ *
+ * Rows are objects like the single-result JSON export; keys stay unique.
+ */
+export function formatAllResultsJson(results: readonly NamedResult[]): string {
+  const doc: Record<string, Record<string, unknown>[]> = {};
+  const used = new Set<string>();
+  for (const r of results) {
+    let key = r.label;
+    for (let n = 2; used.has(key); n++) key = `${r.label} (${n})`;
+    used.add(key);
+    doc[key] = r.rows.map((row) => rowToObject(r.columns, row));
+  }
+  return JSON.stringify(doc, jsonReplacer, 2);
 }

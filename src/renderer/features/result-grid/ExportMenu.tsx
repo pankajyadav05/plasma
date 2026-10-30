@@ -1,6 +1,7 @@
 import { Button } from '@/components/ui/button';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Pill } from '@/components/ui/workbench';
+import { maskResultForClipboard } from '@/features/presentation/presentation';
 import { cn } from '@/lib/cn';
 import {
   type ClipboardFormat,
@@ -12,7 +13,7 @@ import {
 } from '@/lib/export';
 import { useExportJob } from '@/stores/export-job';
 import { useSession } from '@/stores/session';
-import type { ExportAllFormat, NamedResult } from '@shared/export-all';
+import { type ExportAllFormat, type NamedResult, formatAllResultsJson } from '@shared/export-all';
 import type { QueryResult } from '@shared/protocol';
 import {
   Check,
@@ -247,31 +248,73 @@ function ExportAllSection({
     }
   };
 
+  const [copied, setCopied] = useState(false);
+  /** JSON is the one format where every result fits one clipboard text. */
+  const copyJson = async () => {
+    setError(null);
+    try {
+      // Presentation mode masks the clipboard copy here too.
+      const masked = results.map((r) => ({
+        ...r,
+        rows: maskResultForClipboard({
+          columns: r.columns,
+          rows: r.rows,
+          rowCount: r.rows.length,
+          durationMs: 0,
+        }).rows,
+      }));
+      await navigator.clipboard.writeText(formatAllResultsJson(masked));
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1200);
+    } catch {
+      setError('Could not copy to the clipboard.');
+    }
+  };
+
   return (
     <div data-testid="export-all">
-      <div className="px-2 pb-0.5 pt-1 text-[11px] text-[var(--wb-text-3)]">
-        All {results.length} results in one file
+      <div className="grid grid-cols-[1fr_auto_auto] items-center gap-x-1 px-2 pb-1 pt-1 text-[11px] text-[var(--wb-text-3)]">
+        <span>All {results.length} results</span>
+        <span className="px-1 text-center">copy</span>
+        <span className="px-1 text-center">file</span>
       </div>
       {ALL_FORMATS.map(({ format, label, hint, icon }) => (
-        <button
+        <div
           key={format}
-          type="button"
-          disabled={busy !== null}
-          onClick={() => void save(format)}
-          className="flex w-full items-center gap-2 rounded-[5px] px-2 py-1 text-left text-[13px] text-[var(--wb-text)] transition-colors hover:bg-[var(--wb-control)] disabled:opacity-60"
-          data-testid={`export-all-${format}`}
+          className="grid grid-cols-[1fr_auto_auto] items-center gap-x-1 rounded-[5px] px-2 py-0.5 transition-colors hover:bg-[var(--wb-control)]"
         >
-          {icon}
-          <span className="truncate">{label}</span>
-          <span className="ml-1 font-mono text-[12px] text-[var(--wb-text-3)]">{hint}</span>
-          <span className="ml-auto">
-            {busy === format ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <Download className="h-3.5 w-3.5 text-[var(--wb-text-2)]" />
-            )}
-          </span>
-        </button>
+          <div className="flex min-w-0 items-center gap-2 text-[13px] text-[var(--wb-text)]">
+            {icon}
+            <span className="truncate">{label}</span>
+            <span className="ml-1 font-mono text-[12px] text-[var(--wb-text-3)]">{hint}</span>
+          </div>
+          {format === 'json' ? (
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              onClick={() => void copyJson()}
+              title={`Copy all ${results.length} results as one JSON object`}
+              aria-label="Copy all results as JSON"
+              data-testid="export-all-copy-json"
+            >
+              {copied ? <Check /> : <Copy />}
+            </Button>
+          ) : (
+            // A workbook or a zip is a file; there is no clipboard form of it.
+            <span className="w-6" aria-hidden />
+          )}
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            disabled={busy !== null}
+            onClick={() => void save(format)}
+            title={`Download every result as ${label.toLowerCase()} (${hint})`}
+            aria-label={`Download all results as ${label}`}
+            data-testid={`export-all-${format}`}
+          >
+            {busy === format ? <Loader2 className="animate-spin" /> : <Download />}
+          </Button>
+        </div>
       ))}
       {truncated && (
         <div className="px-2 pb-1 text-[12px] text-[var(--wb-text-2)]">
