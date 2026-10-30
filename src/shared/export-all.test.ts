@@ -3,6 +3,7 @@ import {
   exportAllExtension,
   exportableResults,
   firstTableOf,
+  formatAllResultsJson,
   sheetNames,
   zipEntryNames,
 } from './export-all';
@@ -64,5 +65,21 @@ describe('exportAllExtension', () => {
     expect(exportAllExtension('xlsx')).toBe('xlsx');
     expect(exportAllExtension('csv')).toBe('zip');
     expect(exportAllExtension('json')).toBe('zip');
+  });
+});
+
+describe('formatAllResultsJson', () => {
+  it('keys every result by its label, rows as objects', () => {
+    const col = (name: string) => ({ name, dataTypeID: 0, dataTypeName: 'text' });
+    const json = formatAllResultsJson([
+      { label: 'Result 1 · orders', columns: [col('id'), col('id')], rows: [[1, 2]] },
+      { label: 'Result 2', columns: [col('n')], rows: [[12n], [Number.NaN]] },
+      { label: 'Result 2', columns: [col('x')], rows: [] },
+    ]);
+    expect(JSON.parse(json)).toEqual({
+      'Result 1 · orders': [{ id: 1, id_2: 2 }],
+      'Result 2': [{ n: '12' }, { n: 'NaN' }],
+      'Result 2 (2)': [],
+    });
   });
 });

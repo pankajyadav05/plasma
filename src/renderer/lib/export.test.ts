@@ -1,6 +1,6 @@
 import type { QueryResult } from '@shared/protocol';
 import { describe, expect, it } from 'vitest';
-import { formatResultAs } from './export';
+import { formatAllResultsAs, formatResultAs } from './export';
 
 const result: QueryResult = {
   columns: [
@@ -39,6 +39,44 @@ describe('formatResultAs', () => {
   it('renders TSV with whitespace-collapsed cells', () => {
     expect(formatResultAs(result, 'tsv')).toBe(
       ['id\tnote', '1\ta|b', '2\t', '3\tline1 line2 <x>'].join('\n'),
+    );
+  });
+});
+
+describe('formatAllResultsAs', () => {
+  const two = [
+    { label: 'Result 1 · orders', columns: result.columns, rows: [[1, 'a']] },
+    { label: 'Result 2 <x>', columns: [result.columns[0]!], rows: [[7]] },
+  ];
+
+  it('puts a Markdown heading above each table', () => {
+    expect(formatAllResultsAs(two, 'markdown')).toBe(
+      [
+        '### Result 1 · orders',
+        '',
+        '| id | note |',
+        '| --- | --- |',
+        '| 1 | a |',
+        '',
+        '### Result 2 <x>',
+        '',
+        '| id |',
+        '| --- |',
+        '| 7 |',
+      ].join('\n'),
+    );
+  });
+
+  it('puts an escaped HTML heading above each table', () => {
+    const html = formatAllResultsAs(two, 'html');
+    expect(html).toContain('<h3>Result 1 · orders</h3>\n<table>');
+    expect(html).toContain('<h3>Result 2 &lt;x&gt;</h3>');
+    expect(html.match(/<table>/g)).toHaveLength(2);
+  });
+
+  it('stacks TSV blocks with a title line and a blank line between', () => {
+    expect(formatAllResultsAs(two, 'tsv')).toBe(
+      ['Result 1 · orders', 'id\tnote', '1\ta', '', 'Result 2 <x>', 'id', '7'].join('\n'),
     );
   });
 });
