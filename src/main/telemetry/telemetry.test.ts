@@ -1,7 +1,7 @@
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { IpcChannel } from '@shared/protocol';
+import { IpcChannel, SettingsShape } from '@shared/protocol';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AnalyticsService } from './analytics';
 import { resolveTelemetryConfig } from './config';
@@ -213,6 +213,18 @@ describe('AnalyticsService opt-out', () => {
     await service.shutdown(5);
     service.record('app.launched', { previousExit: 'clean' });
     expect(service.hasPending()).toBe(false);
+  });
+});
+
+describe('the usage data setting', () => {
+  it('ignores the false that old builds saved by default', () => {
+    const settings = SettingsShape.parse({ telemetryEnabled: false });
+    expect(settings.usageDataEnabled !== false).toBe(true);
+  });
+
+  it('keeps an opt-out made with the current setting', () => {
+    const settings = SettingsShape.parse({ usageDataEnabled: false });
+    expect(settings.usageDataEnabled !== false).toBe(false);
   });
 });
 

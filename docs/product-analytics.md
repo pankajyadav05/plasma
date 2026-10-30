@@ -21,8 +21,10 @@ Analytics runs when all of these allow it:
   (E2E and the release smoke launch would each count as a new install), no
   `DO_NOT_TRACK`. `PLASMA_TELEMETRY_ENABLED` overrides this either way, so set it
   to `true` to test from `pnpm dev`;
-- the user's setting, Settings → Advanced → Usage data (`telemetryEnabled`, on
-  unless set to false). Turning it off also drops whatever had not been sent.
+- the user's setting, Settings → Advanced → Usage data (`usageDataEnabled`, on
+  unless set to false). Turning it off also drops whatever had not been sent. Old
+  builds saved `telemetryEnabled` as false by default, so that key is ignored and
+  must not be read again; a `telemetryEnabled` row left in the database is harmless.
 
 ## Identity
 

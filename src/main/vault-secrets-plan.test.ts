@@ -74,7 +74,7 @@ describe('redactSettingsWithPresence (U07)', () => {
     editorHeightPx: 280,
     defaultPageSize: 50,
     queryTimeoutMs: 0,
-    telemetryEnabled: false,
+    usageDataEnabled: false,
     openrouterApiKey: 'SHOULD_NOT_LEAK',
     openrouterModel: 'anthropic/claude-sonnet-4.5',
     claudeApiKey: 'SHOULD_NOT_LEAK',
