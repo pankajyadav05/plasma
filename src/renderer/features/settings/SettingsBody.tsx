@@ -1200,8 +1200,8 @@ function AdvancedSection() {
           label="Usage data"
           text="Send anonymous usage data"
           hint="Which features get used and how long queries take, with a random install id. Never your SQL, data, table names, hosts or connection names."
-          checked={settings.telemetryEnabled !== false}
-          onChange={(v) => void updateSettings({ telemetryEnabled: v })}
+          checked={settings.usageDataEnabled !== false}
+          onChange={(v) => void updateSettings({ usageDataEnabled: v })}
         />
       </Rows>
       <SubHeading>About</SubHeading>

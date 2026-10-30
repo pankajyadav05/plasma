@@ -2054,7 +2054,11 @@ export const SettingsShape = z.object({
    * at most 256). A result past it is cut and shown as truncated (P2-3).
    */
   resultMaxMegabytes: z.number().int().min(1).max(256).catch(32).optional(),
-  telemetryEnabled: z.boolean().optional(),
+  /**
+   * Settings → Advanced → Usage data: on unless set to false. Not `telemetryEnabled`: builds before
+   * September 2026 saved that as false by default, so it says nothing about what the user wants.
+   */
+  usageDataEnabled: z.boolean().optional(),
   /**
    * AI provider config. Plasma uses OpenRouter as the unified gateway —
    * one key gives access to Claude, GPT, Gemini, Qwen, etc. Key stored

@@ -424,7 +424,7 @@ app
       logger.error('[plasma] vault: re-migration of plaintext secrets failed:', err);
     }
 
-    initAnalytics(SettingsShape.parse(getAllSettings()).telemetryEnabled !== false);
+    initAnalytics(SettingsShape.parse(getAllSettings()).usageDataEnabled !== false);
     recordAnalytics('app.launched', { previousExit: previousExit.kind });
 
     await workerSupervisor.start(join(__dirname, 'workers/index.js'));
@@ -2543,7 +2543,7 @@ function registerIpcHandlers() {
       void mcpReapply?.();
     }
     mcpRecheck?.();
-    setAnalyticsEnabled(merged.telemetryEnabled !== false);
+    setAnalyticsEnabled(merged.usageDataEnabled !== false);
     return merged;
   });
 
