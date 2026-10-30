@@ -127,6 +127,38 @@ export function formatResultAs(result: QueryResult, format: ClipboardFormat): st
   }
 }
 
+/**
+ * Every result of a run as one clipboard text, each under its label:
+ * Markdown `### Result 1 · orders` headings, HTML `<h3>` headings, or TSV
+ * blocks (title line, table, blank line) that paste into one spreadsheet.
+ * Rows are masked like the single-result copy in presentation mode.
+ */
+export function formatAllResultsAs(
+  results: readonly { label: string; columns: QueryResult['columns']; rows: unknown[][] }[],
+  format: ClipboardFormat,
+): string {
+  const blocks = results.map((r) => {
+    const table = formatResultAs(
+      maskResultForClipboard({
+        columns: r.columns,
+        rows: r.rows,
+        rowCount: r.rows.length,
+        durationMs: 0,
+      }),
+      format,
+    );
+    switch (format) {
+      case 'markdown':
+        return `### ${r.label}\n\n${table}`;
+      case 'html':
+        return `<h3>${escapeHtml(r.label)}</h3>\n${table}`;
+      case 'tsv':
+        return `${r.label.replace(/[\t\r\n]+/g, ' ')}\n${table}`;
+    }
+  });
+  return blocks.join('\n\n');
+}
+
 function plainCell(value: unknown): string {
   if (value === null || value === undefined) return '';
   if (typeof value === 'object') {

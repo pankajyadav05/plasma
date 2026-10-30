@@ -9,6 +9,7 @@ import {
   type FullExportSource,
   copyResultAs,
   copyResultToClipboard,
+  formatAllResultsAs,
   pickRows,
 } from '@/lib/export';
 import { useExportJob } from '@/stores/export-job';
@@ -174,9 +175,9 @@ export function ExportPopover({
         <div className="my-1 h-px bg-[var(--wb-separator)]" />
         <div className="px-2 pb-0.5 pt-1 text-[11px] text-[var(--wb-text-3)]">Copy as</div>
         <div className="flex flex-wrap gap-1 px-2 pb-1.5">
-          <CopyAsChip label="Markdown" format="markdown" result={effectiveResult} />
-          <CopyAsChip label="HTML" format="html" result={effectiveResult} />
-          <CopyAsChip label="TSV" format="tsv" result={effectiveResult} />
+          <CopyAsChip label="Markdown" onCopy={() => copyResultAs(effectiveResult, 'markdown')} />
+          <CopyAsChip label="HTML" onCopy={() => copyResultAs(effectiveResult, 'html')} />
+          <CopyAsChip label="TSV" onCopy={() => copyResultAs(effectiveResult, 'tsv')} />
         </div>
       </PopoverContent>
     </Popover>
@@ -206,6 +207,21 @@ const ALL_FORMATS: {
     label: 'JSON files',
     hint: '.zip',
     icon: <FileArchive className="h-3.5 w-3.5 text-[var(--wb-text-2)]" />,
+  },
+];
+
+/** Clipboard text that holds every result, each under its own heading. */
+const COPY_ALL_FORMATS: { format: ClipboardFormat; label: string; title: string }[] = [
+  {
+    format: 'markdown',
+    label: 'Markdown',
+    title: 'Copy every result as Markdown tables with headings',
+  },
+  { format: 'html', label: 'HTML', title: 'Copy every result as HTML tables with headings' },
+  {
+    format: 'tsv',
+    label: 'TSV',
+    title: 'Copy every result as TSV: pastes into Excel or Sheets, one block per result',
   },
 ];
 
@@ -316,6 +332,18 @@ function ExportAllSection({
           </Button>
         </div>
       ))}
+      <div className="px-2 pb-0.5 pt-1 text-[11px] text-[var(--wb-text-3)]">Copy all as</div>
+      <div className="flex flex-wrap gap-1 px-2 pb-1.5">
+        {COPY_ALL_FORMATS.map(({ format, label, title }) => (
+          <CopyAsChip
+            key={format}
+            label={label}
+            title={title}
+            testId={`export-all-copy-${format}`}
+            onCopy={() => navigator.clipboard.writeText(formatAllResultsAs(results, format))}
+          />
+        ))}
+      </div>
       {truncated && (
         <div className="px-2 pb-1 text-[12px] text-[var(--wb-text-2)]">
           Some results were cut at the row limit; their loaded rows are exported.
@@ -367,19 +395,21 @@ function ScopeTab({
 /** Clipboard-only formats — handy for pasting into docs, tickets, sheets. */
 function CopyAsChip({
   label,
-  format,
-  result,
+  onCopy,
+  title,
+  testId,
 }: {
   label: string;
-  format: ClipboardFormat;
-  result: QueryResult;
+  onCopy: () => Promise<void>;
+  title?: string;
+  testId?: string;
 }) {
   const [copied, setCopied] = useState(false);
   return (
     <button
       type="button"
       onClick={() => {
-        void copyResultAs(result, format)
+        void onCopy()
           .then(() => {
             setCopied(true);
             setTimeout(() => setCopied(false), 1200);
@@ -388,7 +418,8 @@ function CopyAsChip({
             /* clipboard unavailable */
           });
       }}
-      title={`Copy ${label} to clipboard`}
+      title={title ?? `Copy ${label} to clipboard`}
+      data-testid={testId}
       className="flex h-6 items-center gap-1 rounded-[6px] bg-[var(--wb-control)] px-2 text-[13px] text-[var(--wb-text)] transition-colors hover:bg-[var(--wb-control-hover)]"
     >
       {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
