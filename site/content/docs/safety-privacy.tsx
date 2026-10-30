@@ -248,7 +248,7 @@ export const safetyPrivacy: DocPage = {
       body: (
         <>
           <P>
-            Plasma has no account system and no usage analytics or crash-report upload. Beyond the databases you connect to, it talks to the network
+            Plasma has no account system and no crash-report upload. Beyond the databases you connect to, it talks to the network
             in these cases only:
           </P>
           <DocTable
@@ -256,11 +256,12 @@ export const safetyPrivacy: DocPage = {
             rows={[
               ['Your databases', 'When you connect', 'The hosts you configure, directly or through your SSH bastion', 'Your credentials and queries, as the database protocol requires. TLS as you set it.'],
               ['Update check', 'About 30 seconds after launch, every six hours while Plasma runs, and on Check now', "Plasma's release feed (a Cloudflare R2 bucket), over HTTPS", 'A request for the signed manifest and, if there is a newer version, the installer or archive. No data from your databases.'],
+              ['Usage data', <>While Plasma runs, unless you turn it off under <UI>Settings → Advanced → Usage data</UI></>, 'PostHog, over HTTPS', 'A random install id, your Plasma and Electron versions, operating system and processor type, and events: that Plasma started, a connection opened or failed (the engine, and whether it used SSH, TLS or read-only), a query ran (the engine, ok or error, a rough duration), an AI chat started (the provider), an MCP tool ran, and which features were used. Never SQL, row data, table or database names, hosts, usernames, connection names, file paths or error messages. PostHog sees your IP address, as any server does; Plasma asks it not to look up your location. Nothing is sent when the DO_NOT_TRACK environment variable is set, or PLASMA_TELEMETRY_ENABLED=false.'],
               ['What’s new', 'When you click it', 'Your browser', 'Opens the release notes page.'],
               ['AI assistant, tasks and agent', 'Only when you use an AI feature, and only if you configured a provider', 'OpenRouter (and onward to the model vendor), the local server you named, or OpenAI / Anthropic through your own Codex / Claude Code program', 'The items in What is sent. See the AI page. With Codex or Claude Code the program runs on your computer with its shell, file and web tools off, and Plasma keeps no session.'],
               ['Model list', 'When a model picker is shown (the Assistant message box or Settings → AI), even before you add a key', 'OpenRouter (or your local server)', 'A request for the public model list, with no key and none of your data. The OpenRouter list is cached on disk for six hours; a local server is asked each time. For Codex, the program is asked for its list; Claude Code uses a fixed list of three names.'],
               ['DuckDB extensions', 'Only if you agree, the first time you open Excel files or attach PostgreSQL', 'extensions.duckdb.org', 'A one-time download of a signed extension.'],
-              ['MCP server', 'Only if you turn it on', 'Loopback (127.0.0.1) only', 'What your AI tool asks for, as described on the MCP page. Nothing is sent by Plasma to the Internet.'],
+              ['MCP server', 'Only if you turn it on', 'Loopback (127.0.0.1) only', 'What your AI tool asks for, as described on the MCP page. Plasma sends none of it to the Internet; Usage data counts only the tool name and whether the call succeeded.'],
               ['Links you click', 'When you click one', 'Your browser', 'GitHub, release notes. Plasma opens only http, https and mailto links.'],
             ]}
           />
