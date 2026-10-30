@@ -168,6 +168,7 @@ export const settings: DocPage = {
               [<UI key="a">Transactions: Wrap every query in a transaction</UI>, 'Commit or roll back from the toolbar. Edit batches use their own transaction (or a savepoint if one is already open). Off by default.'],
               [<UI key="b">PostgreSQL tools</UI>, 'The folder with pg_dump, pg_restore and psql for backup and restore. Leave it empty to use PATH.'],
               [<UI key="c">Command line</UI>, <>Install the <C>plasma</C>{' '}command (macOS, Linux) or see the instructions to add it to PATH (Windows). See <Doc to="command-line">Command line</Doc>.</>],
+              [<UI key="d">Usage data: Send anonymous usage data</UI>, <>Which features get used and how long queries take. On by default; see <Doc to="safety-privacy#leaves-machine">what is sent</Doc>.</>],
             ]}
           />
           <P>

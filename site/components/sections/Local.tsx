@@ -7,7 +7,7 @@ const LEDGER = [
   ['Connections, history, settings', 'On your computer'],
   ['Saved passwords', 'Your OS keychain'],
   ['Account', 'None'],
-  ['Analytics', 'None'],
+  ['Analytics', 'Anonymous feature counts to PostHog. Never your SQL, data or names. Off in Settings'],
   ['AI', 'Only when you use it, to the provider you chose'],
   ['Model list', 'A public request to OpenRouter when a model picker is shown. No key, no data'],
   ['MCP server', 'Off by default. This computer only'],

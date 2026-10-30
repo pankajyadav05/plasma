@@ -97,7 +97,11 @@ export const SETTINGS_SECTIONS: ReadonlyArray<{
     keywords: 'claude code cursor codex agent external tools token port connections access',
   },
   { id: 'keymap', label: 'Keymap', keywords: 'shortcuts keyboard bindings' },
-  { id: 'advanced', label: 'Advanced', keywords: 'transaction updates version about' },
+  {
+    id: 'advanced',
+    label: 'Advanced',
+    keywords: 'transaction updates version about usage data analytics telemetry privacy',
+  },
 ];
 
 const PALETTES: Array<{ id: ThemeName; label: string }> = [
@@ -1191,6 +1195,14 @@ function AdvancedSection() {
         >
           <CliToolField />
         </Row>
+        <CheckRow
+          id="telemetry-enabled"
+          label="Usage data"
+          text="Send anonymous usage data"
+          hint="Which features get used and how long queries take, with a random install id. Never your SQL, data, table names, hosts or connection names."
+          checked={settings.telemetryEnabled !== false}
+          onChange={(v) => void updateSettings({ telemetryEnabled: v })}
+        />
       </Rows>
       <SubHeading>About</SubHeading>
       <div className="px-4">

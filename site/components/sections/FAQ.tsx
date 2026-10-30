@@ -6,7 +6,7 @@ import { Sheet } from '@/components/sheet';
 const ITEMS = [
   ['Is Plasma free?', 'Yes. Plasma is free and open source under the Apache-2.0 license. The source code is on GitHub.'],
   ['Which databases can I use?', 'PostgreSQL, MySQL, MariaDB, SQLite, ClickHouse, DuckDB, Redis and OpenSearch.'],
-  ['Do I need an account?', 'No. Plasma has no account system and no usage analytics.'],
+  ['Do I need an account?', 'No. Plasma has no account system. It sends anonymous usage analytics, never your SQL, data or names, and you can turn them off in Settings.'],
   ['Is AI required?', 'No. AI stays off until you set up a provider: your own OpenRouter key, or a model that runs on your machine.'],
   [
     'Does the AI see my data?',

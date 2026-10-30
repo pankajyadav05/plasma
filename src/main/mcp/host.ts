@@ -16,6 +16,8 @@ import { appendAudit } from '../audit-log';
 import { getDb } from '../db';
 import { logger } from '../logger';
 import { getSetting } from '../settings';
+import { recordAnalytics } from '../telemetry';
+import { isMcpToolName } from '../telemetry/events';
 import { maskForMcp } from './mask';
 import { type ProposalKind, ProposalStore, accessAllows } from './proposals';
 import { type ScrubSsh, scrubErrorForMcp, scrubValuesFor } from './scrub';
@@ -124,6 +126,9 @@ export function startMcpHost(deps: McpHostDeps): {
     version: deps.version,
     log: (m) => logger.warn(`[plasma] mcp: ${m}`),
     audit: (e: McpAuditInput) => {
+      if (isMcpToolName(e.tool)) {
+        recordAnalytics('mcp.tool.invoked', { tool: e.tool, outcome: e.outcome });
+      }
       try {
         appendAudit(getDb(), {
           connectionId: e.connectionId,

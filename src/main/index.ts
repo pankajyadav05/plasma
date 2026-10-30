@@ -197,6 +197,15 @@ import {
   tunnelForwardError,
 } from './ssh-tunnel';
 import { registerSupportIpc } from './support-ipc';
+import {
+  analyticsHasPending,
+  initAnalytics,
+  observeFeatureUse,
+  recordAnalytics,
+  setAnalyticsEnabled,
+  shutdownAnalytics,
+} from './telemetry';
+import { durationBucket } from './telemetry/events';
 import { evaluateRestartMarker, installHandoverPending, readRestartMarker } from './update-restart';
 import { type UpdaterHost, disposeUpdater, initUpdater } from './updater';
 import {
@@ -370,6 +379,7 @@ app
     // from the app's own page. Before any window or handler exists.
     installWebSecurity(rendererEntry());
     guardIpcSenders(rendererEntry());
+    observeFeatureUse();
     registerE2EHooks(() => workerSupervisor);
     logger.info('[plasma] app ready, version', app.getVersion());
     if (previousExit.kind === 'unclean') {
@@ -413,6 +423,9 @@ app
     } catch (err) {
       logger.error('[plasma] vault: re-migration of plaintext secrets failed:', err);
     }
+
+    initAnalytics(SettingsShape.parse(getAllSettings()).telemetryEnabled !== false);
+    recordAnalytics('app.launched', { previousExit: previousExit.kind });
 
     await workerSupervisor.start(join(__dirname, 'workers/index.js'));
 
@@ -638,17 +651,27 @@ app.on('window-all-closed', () => {
 
 // C32: 'will-quit', not 'before-quit' — a window can still cancel the
 // quit from its close guard, and the worker must survive that.
-app.on('will-quit', () => {
-  // B2: reaching here is a clean quit; a crash never does. (A second instance
-  // that lost the lock must not remove the running one's marker.)
-  if (hasInstanceLock) recovery.end();
-  cancelAllAiChats();
-  void closeCliEndpoint();
-  cancelAllJobs();
-  closeAllTunnels();
-  void mcpService?.stop();
-  workerSupervisor.stop();
-  closeDb();
+let quitCleanupDone = false;
+app.on('will-quit', (e) => {
+  if (!quitCleanupDone) {
+    quitCleanupDone = true;
+    // B2: reaching here is a clean quit; a crash never does. (A second instance
+    // that lost the lock must not remove the running one's marker.)
+    if (hasInstanceLock) recovery.end();
+    cancelAllAiChats();
+    void closeCliEndpoint();
+    cancelAllJobs();
+    closeAllTunnels();
+    void mcpService?.stop();
+    workerSupervisor.stop();
+    closeDb();
+  }
+  // The last events get a moment to go. Shutting analytics down leaves nothing
+  // pending, so the second pass through here quits.
+  if (analyticsHasPending()) {
+    e.preventDefault();
+    void shutdownAnalytics().finally(() => app.quit());
+  }
 });
 
 /** `plasma mcp`: pipe MCP JSON-RPC between stdio and the running Plasma, then exit. */
@@ -822,11 +845,13 @@ const connectionRecovery = new ConnectionRecovery({
     if (recovered.connectionId) activeConnectionId = recovered.connectionId;
     activeEngine = recovered.engine;
     activeServerVersion = recovered.serverVersion;
+    recordAnalytics('connection.recovered', { engine: recovered.engine });
     const payload: ConnectionRecovered = recovered;
     mainWindow?.webContents.send(IpcChannel.ConnectionRecoveredEvent, payload);
   },
   onLost: (reason) => {
     logger.error('[plasma] connection unrecoverable:', reason);
+    recordAnalytics('connection.lost', activeEngine ? { engine: activeEngine } : {});
     const id = activeConnectionId;
     activeConnectionId = null;
     activeEngine = null;
@@ -1033,6 +1058,12 @@ async function establishSession(config: ConnectionConfigType) {
       config: { ...effective, host: config.host, port: config.port },
       tunnelled: Boolean(ssh),
     };
+    recordAnalytics('connection.opened', {
+      engine: res.engine,
+      ssh: Boolean(ssh),
+      tls: Boolean(config.ssl),
+      readOnly: config.readOnly === true,
+    });
     return res;
   };
   return connectOrCleanUp(attempt, async () => {
@@ -1043,6 +1074,7 @@ async function establishSession(config: ConnectionConfigType) {
     if (ssh) closeTunnel(config.id);
     await callWorker({ kind: 'disconnect' }, 'disconnected').catch(() => undefined);
   }).catch((err: unknown) => {
+    recordAnalytics('connection.failed', { engine: config.engine, ssh: Boolean(ssh) });
     // Say what went wrong in plain words: the message carries the diagnosis.
     throw diagnosedError(err, config, {
       ssh,
@@ -1118,6 +1150,7 @@ const updaterHost: UpdaterHost = {
     closeDb();
     // The installer ends this process without 'will-quit': this restart is on purpose.
     recovery.end();
+    await shutdownAnalytics();
   },
   relaunchAfterFailedInstall() {
     logger.error('[plasma] the update did not start; relaunching the current version');
@@ -1663,6 +1696,12 @@ function registerIpcHandlers() {
             ts: executedAt,
           },
         ]);
+        recordAnalytics('query.executed', {
+          ...(activeEngine ? { engine: activeEngine } : {}),
+          status: 'ok',
+          source: auditSource,
+          duration: durationBucket(res.result.durationMs),
+        });
       }
       return res.result;
     } catch (err) {
@@ -1670,6 +1709,11 @@ function registerIpcHandlers() {
       // A bound query variable whose type Postgres could not infer is retried
       // with a literal by the renderer; the first attempt is not a user error.
       if (!internal && !(params && isUninferableParamError(message))) {
+        recordAnalytics('query.executed', {
+          ...(activeEngine ? { engine: activeEngine } : {}),
+          status: 'error',
+          source: auditSource,
+        });
         try {
           recordHistory({
             connectionId: activeConnectionId,
@@ -2203,6 +2247,7 @@ function registerIpcHandlers() {
           binaryOverride: provider === 'codex' ? settings.aiCodexPath : settings.aiClaudeCodePath,
         }).catch(() => null)
       : null;
+    recordAnalytics('ai.chat.started', { provider });
     const result = await startAiChat(mainWindow, parsed, apiKey, settings.openrouterModel, {
       provider,
       memory,
@@ -2498,6 +2543,7 @@ function registerIpcHandlers() {
       void mcpReapply?.();
     }
     mcpRecheck?.();
+    setAnalyticsEnabled(merged.telemetryEnabled !== false);
     return merged;
   });
 
