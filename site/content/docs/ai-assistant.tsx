@@ -234,8 +234,8 @@ export const aiAssistant: DocPage = {
               control that enables row data does it, and it warns that it &ldquo;also sends its schema names&rdquo;.
             </LI>
             <LI>
-              <B>Row data is off by default</B>, per connection. Turn it on or off with the <UI>Row data</UI>{' '}chip in the message box
-              (<UI>Names only</UI>{' '}/ <UI>Let the AI read rows</UI>). The agent&rsquo;s read tool runs your query in a read-only
+              <B>Row data is off by default</B>, per connection. Turn it on or off with the lock in the message box
+              (<UI>Names only</UI>{' '}/ <UI>Let the AI read rows</UI>); the lock opens and is highlighted while it is on. The agent&rsquo;s read tool runs your query in a read-only
               session, so it cannot write, and results over the caps are cut and labelled as truncated.
             </LI>
             <LI>
@@ -303,7 +303,7 @@ export const aiAssistant: DocPage = {
               answered to the model at once; you are never asked about it.
             </LI>
             <LI>
-              <B>Views: ask / apply</B>{' '}(<UI>Settings</UI>{' '}&rarr; <UI>AI</UI>{' '}&rarr; <UI>Agent</UI>, &ldquo;Apply view changes without
+              <B>View changes</B>{' '}(the options button in the message box, or <UI>Settings</UI>{' '}&rarr; <UI>AI</UI>{' '}&rarr; <UI>Agent</UI>, &ldquo;Apply view changes without
               asking&rdquo;) lets <C>show_table</C>{' '}apply at once, with Undo. Running queries and changing data always ask first.
             </LI>
             <LI>

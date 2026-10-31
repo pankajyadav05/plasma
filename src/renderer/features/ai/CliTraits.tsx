@@ -5,7 +5,7 @@ import { useSession } from '@/stores/session';
 import { type AiCliProvider, isAiCliProvider } from '@shared/ai-cli';
 import { type CliTraits, cliTraits, findCliModel, storedOption } from '@shared/cli-models';
 import type { Settings } from '@shared/protocol';
-import { Brain, Check, ChevronDown, Ellipsis } from 'lucide-react';
+import { Check, ChevronDown, SlidersHorizontal } from 'lucide-react';
 import { type KeyboardEvent, type ReactNode, useId, useState } from 'react';
 import { useCliModels } from './ModelPicker';
 
@@ -56,90 +56,59 @@ export function useCliTraitsState(): {
 const TRIGGER =
   'inline-flex h-6 shrink-0 items-center gap-1.5 rounded-[6px] px-1.5 text-[12px] leading-none text-[var(--wb-text-2)] transition-colors duration-100 hover:bg-[var(--wb-control-hover)] hover:text-[var(--wb-text)] data-[state=open]:bg-[var(--wb-control)] data-[state=open]:text-[var(--wb-text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring';
 
-/** The chip next to the model chip: "Medium", "High · Fast". */
-export function TraitsChip({
-  className,
-  dense = false,
+/**
+ * The composer's one options button: reasoning and speed for a CLI model, plus the
+ * other choices (`extra`). It names the reasoning ("Medium", "High · Fast") when the
+ * row has room; the tooltip always says everything that is set.
+ */
+export function ComposerOptions({
+  status,
+  extra,
 }: {
-  className?: string;
-  /** A tight panel: no chevron, so the model chip keeps its name. */
-  dense?: boolean;
+  /** The state of `extra`, for the tooltip. */
+  status?: string | undefined;
+  extra?: ((close: () => void) => ReactNode) | undefined;
 }) {
   const state = useCliTraitsState();
   const [open, setOpen] = useState(false);
-  if (!state) return null;
-  const { traits } = state;
-  return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <button
-          type="button"
-          aria-label={`Reasoning and speed: ${traits.label}. Change`}
-          title={`Reasoning and speed: ${traits.label}`}
-          data-testid="composer-traits"
-          className={cn(TRIGGER, 'max-w-[10rem]', dense && 'gap-1 px-1', className)}
-        >
-          <Brain aria-hidden className="h-3.5 w-3.5 shrink-0" />
-          <span className="truncate">{traits.label}</span>
-          {!dense && <ChevronDown aria-hidden className="h-3 w-3 shrink-0 opacity-70" />}
-        </button>
-      </PopoverTrigger>
-      <PopoverContent
-        align="start"
-        side="top"
-        aria-label="Reasoning and speed"
-        className="w-[236px] p-1"
-        onOpenAutoFocus={focusSelected}
-        onKeyDown={menuKeys}
-      >
-        <TraitsMenu state={state} onDone={() => setOpen(false)} />
-      </PopoverContent>
-    </Popover>
-  );
-}
-
-/**
- * The narrow-composer fold: one "..." button whose menu holds the traits and the
- * other composer choices (`extra`), so a small panel keeps a single quiet control.
- */
-export function CompactControlsMenu({
-  className,
-  withTraits,
-  extra,
-}: {
-  className?: string;
-  /** Include the reasoning / speed groups (the panel is too narrow for their chip). */
-  withTraits: boolean;
-  extra?: ReactNode;
-}) {
-  const found = useCliTraitsState();
-  const state = withTraits ? found : null;
-  const [open, setOpen] = useState(false);
   if (!state && !extra) return null;
+  const close = () => setOpen(false);
+  const summary = [state?.traits.label, status].filter(Boolean).join(' · ');
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
         <button
           type="button"
-          aria-label="More composer controls"
-          title={state ? `More controls · ${state.traits.label}` : 'More controls'}
-          data-testid="composer-more"
-          className={cn(TRIGGER, 'w-6 justify-center px-0', className)}
+          aria-label={`Options: ${summary}. Change`}
+          title={`Options: ${summary}`}
+          data-testid="composer-options"
+          className={TRIGGER}
         >
-          <Ellipsis aria-hidden className="h-3.5 w-3.5" />
+          <SlidersHorizontal aria-hidden className="h-3.5 w-3.5 shrink-0" />
+          {state && (
+            <>
+              <span className="hidden max-w-[10rem] truncate @[320px]/controls:inline">
+                {state.traits.label}
+              </span>
+              <ChevronDown
+                aria-hidden
+                className="hidden h-3 w-3 shrink-0 opacity-70 @[320px]/controls:block"
+              />
+            </>
+          )}
         </button>
       </PopoverTrigger>
       <PopoverContent
         align="start"
         side="top"
-        aria-label="Composer controls"
+        aria-label="Composer options"
         className="w-[236px] p-1"
         onOpenAutoFocus={focusSelected}
         onKeyDown={menuKeys}
       >
-        {state && <TraitsMenu state={state} onDone={() => setOpen(false)} />}
+        {state && <TraitsMenu state={state} onDone={close} />}
         {state && extra && <Rule />}
-        {extra}
+        {extra?.(close)}
       </PopoverContent>
     </Popover>
   );
@@ -225,7 +194,7 @@ function TraitsMenu({
   );
 }
 
-/** A titled group of radio items (also used for the folded Views / Row data choices). */
+/** A titled group of radio items (also used for the View changes choice). */
 export function Group({
   label,
   children,
