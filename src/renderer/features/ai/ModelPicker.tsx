@@ -232,10 +232,7 @@ export function ModelPicker({
   open: openProp,
   onOpenChange,
   imagesAttached = false,
-  dense: denseProp = false,
 }: {
-  /** Composer chip in a tight panel: no logo or chevron, so the name stays whole. */
-  dense?: boolean;
   /** `composer`: a quiet chip under the chat input. `field`: a full-width settings field. */
   variant?: 'composer' | 'field';
   className?: string;
@@ -257,8 +254,6 @@ export function ModelPicker({
   // A CLI provider lists its own models like a local server does: one flat list, no stars.
   const cli = isAiCliProvider(provider) ? provider : null;
   const local = provider === 'local' || cli !== null;
-  // Only a CLI chip has a short name; the others keep their logo and chevron.
-  const dense = denseProp && cli !== null;
   const currentId = (cli ? cliModel : provider === 'local' ? localModel : orModel)?.trim() ?? '';
   const [openState, setOpenState] = useState(false);
   const open = openProp ?? openState;
@@ -319,15 +314,14 @@ export function ModelPicker({
               'hover:bg-[var(--wb-control-hover)] hover:text-[var(--wb-text)]',
               'data-[state=open]:bg-[var(--wb-control)] data-[state=open]:text-[var(--wb-text)]',
               'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-              dense && 'px-1.5',
               className,
             )}
           >
-            {!dense && <VendorMark vendor={vendorKey} name={markName} modelName={current?.name} />}
+            <VendorMark vendor={vendorKey} name={markName} modelName={current?.name} />
             <span className="truncate" title={label}>
               {cli && current ? shortModelName(current) : label}
             </span>
-            {!dense && <ChevronDown className="h-3 w-3 shrink-0 opacity-70" />}
+            <ChevronDown className="h-3 w-3 shrink-0 opacity-70" />
           </button>
         ) : (
           <button

@@ -7,10 +7,7 @@ import {
   AlertTriangle,
   ArrowUp,
   Check,
-  ChevronDown,
   Database,
-  Eye,
-  Hand,
   ImagePlus,
   Lock,
   LockOpen,
@@ -24,22 +21,22 @@ import {
   type DragEvent,
   type KeyboardEvent,
   type ReactNode,
-  type RefObject,
   type SetStateAction,
   useLayoutEffect,
   useRef,
   useState,
 } from 'react';
 import { ImagePreview, imageLabel } from './AiImages';
-import { CompactControlsMenu, Group, Item, TraitsChip, useCliTraitsState } from './CliTraits';
+import { ComposerOptions, Group, Item, useCliTraitsState } from './CliTraits';
 import { ModelPicker, useCurrentModelVision } from './ModelPicker';
 
 const ACCEPT = 'image/png,image/jpeg,image/webp,image/gif';
 
 /**
  * The Assistant's input: one rounded card holding the text area and a control
- * row (model, how views apply, row-data access, send), and under it a quiet
- * tray that says what the next message sends.
+ * row (model, options, row-data access, send), and under it a quiet tray that
+ * says what the next message sends. The row is the same at every panel width:
+ * only the model name and the options label give way.
  */
 export function AiComposer({
   draft,
@@ -82,12 +79,7 @@ export function AiComposer({
   const [pickerOpen, setPickerOpen] = useState(false);
   const vision = useCurrentModelVision();
   const hasTraits = useCliTraitsState() !== null;
-  const controlsRef = useRef<HTMLDivElement>(null);
-  const controlsWidth = useElementWidth(controlsRef);
-  // Folding in steps: labels, then icon-only Views / Row data, then the traits chip drops its
-  // chevron and dividers (tight), then traits and Views move into one "..." menu (narrow).
-  const tight = controlsWidth < 380 && controlsWidth > 0;
-  const narrow = controlsWidth > 0 && controlsWidth < 240;
+  const autoViews = useSession((s) => s.settings.aiAutoApplyViews === true);
   const noVision = images.length > 0 && vision.state === 'no';
   const slots = AI_MAX_IMAGES_PER_MESSAGE - images.length - processing.length;
 
@@ -330,40 +322,28 @@ export function AiComposer({
           aria-label="Message the assistant"
           className="min-h-[52px] w-full resize-none border-0 bg-transparent px-3.5 pb-1 pt-3 text-[13px] leading-[1.5] text-[var(--wb-text)] outline-none placeholder:text-[var(--wb-text-3)] disabled:cursor-not-allowed"
         />
-        <div
-          ref={controlsRef}
-          className={cn(
-            '@container/controls flex min-w-0 items-center gap-0.5 pb-2',
-            tight ? 'px-1.5' : 'px-2',
-          )}
-        >
-          <div className="flex min-w-0 flex-1 items-center gap-0.5 overflow-hidden">
+        <div className="@container/controls flex min-w-0 items-center gap-0.5 px-2 pb-2">
+          <div className="flex min-w-0 flex-1 items-center gap-0.5">
             <ModelPicker
               className="min-w-0 shrink"
-              dense={tight}
               open={pickerOpen}
               onOpenChange={setPickerOpen}
               imagesAttached={images.length > 0}
             />
-            {hasTraits && !narrow && (
+            {(hasTraits || agent) && (
               <>
-                {!tight && <Divider />}
-                <TraitsChip dense={tight} />
-              </>
-            )}
-            {agent && !narrow && (
-              <>
-                {!tight && <Divider />}
-                <ViewsControl dense={tight} />
+                <Divider />
+                <ComposerOptions
+                  status={agent ? (autoViews ? 'Views: apply' : 'Views: ask') : undefined}
+                  extra={
+                    agent ? (close) => <ViewChanges auto={autoViews} onDone={close} /> : undefined
+                  }
+                />
               </>
             )}
             {/* Row data is a safety indicator: its icon stays at every width. */}
-            {!tight && <Divider />}
-            <RowDataControl dense={tight} />
-            {/* Only a very narrow panel folds the traits and Views into one menu. */}
-            {narrow && (hasTraits || agent) && (
-              <CompactControlsMenu withTraits extra={agent ? <FoldedViews /> : undefined} />
-            )}
+            <Divider />
+            <RowDataControl />
           </div>
           <input
             ref={fileRef}
@@ -430,20 +410,6 @@ export function AiComposer({
   );
 }
 
-/** The width of an element, kept up to date as the panel is resized. */
-function useElementWidth(ref: RefObject<HTMLElement | null>): number {
-  const [width, setWidth] = useState(0);
-  useLayoutEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    setWidth(el.clientWidth);
-    const ro = new ResizeObserver(() => setWidth(el.clientWidth));
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, [ref]);
-  return width;
-}
-
 /** The tray's right side: the schema and tab parts of the sends line. */
 function trayRight(sends: string): string {
   const memory = sends.split(' · ').find((p) => p.startsWith('Memory: '));
@@ -464,8 +430,14 @@ function trayMain(sends: string): string {
   return `${parts.includes('Current tab: sent') ? `${tables} + tab` : tables}${extra}`;
 }
 
+/** Only where the options button has its label: icons alone read fine without one. */
 function Divider() {
-  return <span aria-hidden className="mx-0.5 h-4 w-px shrink-0 bg-[var(--wb-separator)]" />;
+  return (
+    <span
+      aria-hidden
+      className="mx-0.5 hidden h-4 w-px shrink-0 bg-[var(--wb-separator)] @[320px]/controls:block"
+    />
+  );
 }
 
 function RoundButton({
@@ -499,54 +471,6 @@ function RoundButton({
     >
       {children}
     </button>
-  );
-}
-
-/** A quiet control-row chip that opens a small menu. */
-function Chip({
-  icon,
-  label,
-  ariaLabel,
-  children,
-  testId,
-  dense = false,
-}: {
-  dense?: boolean;
-  icon: ReactNode;
-  label: string;
-  ariaLabel: string;
-  children: ReactNode;
-  testId?: string;
-}) {
-  return (
-    <Popover>
-      <PopoverTrigger asChild>
-        <button
-          type="button"
-          aria-label={ariaLabel}
-          title={label}
-          data-testid={testId}
-          className={cn(
-            'inline-flex h-6 shrink-0 items-center gap-1.5 rounded-[6px] text-[12px] leading-none text-[var(--wb-text-2)] transition-colors duration-100',
-            'hover:bg-[var(--wb-control-hover)] hover:text-[var(--wb-text)]',
-            'data-[state=open]:bg-[var(--wb-control)] data-[state=open]:text-[var(--wb-text)]',
-            'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-            dense ? 'px-1' : 'px-1.5',
-          )}
-        >
-          <span className="shrink-0 [&_svg]:h-3.5 [&_svg]:w-3.5">{icon}</span>
-          {/* Narrow panel: icon only (the tooltip and aria-label still say it). */}
-          <span className="hidden min-w-0 truncate @[400px]/controls:inline">{label}</span>
-          <ChevronDown
-            className="hidden h-3 w-3 shrink-0 opacity-70 @[400px]/controls:block"
-            aria-hidden
-          />
-        </button>
-      </PopoverTrigger>
-      <PopoverContent align="start" side="top" className="w-[280px] p-1.5">
-        {children}
-      </PopoverContent>
-    </Popover>
   );
 }
 
@@ -595,39 +519,34 @@ function Option({
 }
 
 /** How the agent's view changes (columns, sort, filters, rows) apply. */
-function ViewsControl({ dense }: { dense: boolean }) {
-  const auto = useSession((s) => s.settings.aiAutoApplyViews === true);
+function ViewChanges({ auto, onDone }: { auto: boolean; onDone: () => void }) {
   const updateSettings = useSession((s) => s.updateSettings);
+  const set = (v: boolean) => {
+    void updateSettings({ aiAutoApplyViews: v });
+    onDone();
+  };
   return (
-    <Chip
-      icon={auto ? <Eye /> : <Hand />}
-      label={auto ? 'Views: apply' : 'Views: ask'}
-      ariaLabel={`View changes: ${auto ? 'applied at once' : 'ask first'}. Change`}
-      testId="ai-views-control"
-      dense={dense}
-    >
-      <div role="menu" aria-label="View changes">
-        <Option
+    <div role="menu" aria-label="View changes">
+      <Group label="View changes">
+        <Item
           selected={!auto}
-          icon={<Hand />}
-          title="Ask first"
-          detail="The agent shows a card. Nothing changes until you approve it."
-          onSelect={() => void updateSettings({ aiAutoApplyViews: false })}
+          label="Ask first"
+          description="The agent shows a card. Nothing changes until you approve it."
+          onSelect={() => set(false)}
         />
-        <Option
+        <Item
           selected={auto}
-          icon={<Eye />}
-          title="Apply view changes at once"
-          detail="Columns, sort, filters and row count change right away, with Undo. Queries and data changes still ask."
-          onSelect={() => void updateSettings({ aiAutoApplyViews: true })}
+          label="Apply at once"
+          description="Columns, sort, filters and row count change right away, with Undo. Queries and data changes still ask."
+          onSelect={() => set(true)}
         />
-      </div>
-    </Chip>
+      </Group>
+    </div>
   );
 }
 
 /** Per-connection opt-in: may tool results and query results carry rows to the model? */
-function RowDataControl({ dense }: { dense: boolean }) {
+function RowDataControl() {
   const id = useSession((s) => s.activeConfig?.id ?? null);
   const name = useSession((s) => s.activeConfig?.name ?? 'this connection');
   const prod = useSession((s) => (id ? s.settings.connectionTags?.[id] === 'prod' : false));
@@ -639,56 +558,48 @@ function RowDataControl({ dense }: { dense: boolean }) {
     void updateSettings({ connectionAiRowData: { ...(map ?? {}), [id]: v } });
   };
   return (
-    <Chip
-      icon={on ? <LockOpen /> : <Lock />}
-      label={on ? 'Row data on' : 'Row data off'}
-      ariaLabel={`Row data for the AI: ${on ? 'on' : 'off'} for ${name}. Change`}
-      testId="ai-rowdata-control"
-      dense={dense}
-    >
-      <div role="menu" aria-label="Row data">
-        <Option
-          selected={!on}
-          icon={<Lock />}
-          title="Names only"
-          detail="The AI sees table and column names, never the values in your rows."
-          onSelect={() => set(false)}
-        />
-        <Option
-          selected={on}
-          icon={<LockOpen />}
-          title="Let the AI read rows"
-          detail={`Results of the agent's queries go to the model, masked and capped at 50 rows. Only for ${name}.`}
-          onSelect={() => set(true)}
-        />
-        {prod && (
-          <p className="mx-2 mb-1 mt-1.5 rounded-[6px] bg-[color-mix(in_oklab,var(--status-warn)_14%,transparent)] px-2 py-1.5 text-[11.5px] leading-snug text-[var(--wb-text)]">
-            This connection is tagged production. Turning this on also sends its schema names.
-          </p>
-        )}
-      </div>
-    </Chip>
-  );
-}
-
-/** The Views choice as a menu group, for the folded very-narrow-panel menu. */
-function FoldedViews() {
-  const auto = useSession((s) => s.settings.aiAutoApplyViews === true);
-  const updateSettings = useSession((s) => s.updateSettings);
-  return (
-    <div role="menu" aria-label="View changes">
-      <Group label="View changes">
-        <Item
-          selected={!auto}
-          label="Ask first"
-          onSelect={() => void updateSettings({ aiAutoApplyViews: false })}
-        />
-        <Item
-          selected={auto}
-          label="Apply at once"
-          onSelect={() => void updateSettings({ aiAutoApplyViews: true })}
-        />
-      </Group>
-    </div>
+    <Popover>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          aria-label={`Row data for the AI: ${on ? 'on' : 'off'} for ${name}. Change`}
+          title={on ? 'Row data on' : 'Row data off'}
+          data-testid="ai-rowdata-control"
+          className={cn(
+            'grid h-6 w-6 shrink-0 place-items-center rounded-[6px] transition-colors duration-100 [&_svg]:h-3.5 [&_svg]:w-3.5',
+            // On means rows leave the machine: the open lock stands out.
+            on ? 'text-[var(--wb-accent-text)]' : 'text-[var(--wb-text-2)]',
+            'hover:bg-[var(--wb-control-hover)] hover:text-[var(--wb-text)]',
+            'data-[state=open]:bg-[var(--wb-control)] data-[state=open]:text-[var(--wb-text)]',
+            'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+          )}
+        >
+          {on ? <LockOpen aria-hidden /> : <Lock aria-hidden />}
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="start" side="top" className="w-[280px] p-1.5">
+        <div role="menu" aria-label="Row data">
+          <Option
+            selected={!on}
+            icon={<Lock />}
+            title="Names only"
+            detail="The AI sees table and column names, never the values in your rows."
+            onSelect={() => set(false)}
+          />
+          <Option
+            selected={on}
+            icon={<LockOpen />}
+            title="Let the AI read rows"
+            detail={`Results of the agent's queries go to the model, masked and capped at 50 rows. Only for ${name}.`}
+            onSelect={() => set(true)}
+          />
+          {prod && (
+            <p className="mx-2 mb-1 mt-1.5 rounded-[6px] bg-[color-mix(in_oklab,var(--status-warn)_14%,transparent)] px-2 py-1.5 text-[11.5px] leading-snug text-[var(--wb-text)]">
+              This connection is tagged production. Turning this on also sends its schema names.
+            </p>
+          )}
+        </div>
+      </PopoverContent>
+    </Popover>
   );
 }
